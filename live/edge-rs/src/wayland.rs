@@ -1124,13 +1124,7 @@ impl App {
         }
     }
 
-    fn apply_touch_actions(
-        &mut self,
-        actions: Vec<TouchAction>,
-        w: f64,
-        h: f64,
-        is_desk: bool,
-    ) {
+    fn apply_touch_actions(&mut self, actions: Vec<TouchAction>, w: f64, h: f64, is_desk: bool) {
         let mut changed = false;
         let mut desk_changed = false;
         for action in actions {
@@ -1569,7 +1563,11 @@ impl TouchHandler for App {
             .surface
             .as_ref()
             .and_then(|s| self.surface_dims(s))
-            .or_else(|| self.outputs.first().map(|o| (o.width as f64, o.height as f64)));
+            .or_else(|| {
+                self.outputs
+                    .first()
+                    .map(|o| (o.width as f64, o.height as f64))
+            });
         if let Some((w, h)) = dims {
             let actions = tracker.on_up(Instant::now());
             let is_desk = tracker.is_desk;
@@ -1595,7 +1593,11 @@ impl TouchHandler for App {
         let dims = surface
             .as_ref()
             .and_then(|s| self.surface_dims(s))
-            .or_else(|| self.outputs.first().map(|o| (o.width as f64, o.height as f64)));
+            .or_else(|| {
+                self.outputs
+                    .first()
+                    .map(|o| (o.width as f64, o.height as f64))
+            });
         let Some((w, h)) = dims else {
             return;
         };

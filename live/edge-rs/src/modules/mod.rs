@@ -1401,7 +1401,11 @@ notifications=42\\tFirefox\\t2m\\tBuild finished\\tAll 20 checks passed on main
         // Wait for all in-flight work to settle
         std::thread::sleep(Duration::from_millis(150));
 
-        assert_eq!(max_in_flight.load(Ordering::SeqCst), 1, "at most 1 in flight");
+        assert_eq!(
+            max_in_flight.load(Ordering::SeqCst),
+            1,
+            "at most 1 in flight"
+        );
         let done = completed.lock().unwrap().clone();
         assert_eq!(
             done,

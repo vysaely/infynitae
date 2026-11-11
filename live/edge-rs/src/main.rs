@@ -2036,11 +2036,10 @@ impl Shell {
                             && x <= mx + mw
                             && y >= my
                             && y <= my + mh
+                            && modules::drag(it, &mut self.world, (mw, mh), (x - mx, y - my))
                         {
-                            if modules::drag(it, &mut self.world, (mw, mh), (x - mx, y - my)) {
-                                changed = true;
-                                break;
-                            }
+                            changed = true;
+                            break;
                         }
                     }
                     return changed;
@@ -2556,11 +2555,7 @@ mod tests {
         assert!(shell_world.memory.window_app_ids.is_empty());
         assert!(widgets_world.memory.window_app_ids.is_empty());
 
-        let app_ids = vec![
-            "firefox".to_string(),
-            "".to_string(),
-            "kitty".to_string(),
-        ];
+        let app_ids = vec!["firefox".to_string(), "".to_string(), "kitty".to_string()];
         wayland::sync_toplevel_app_ids(app_ids, &mut shell_world, &mut widgets_world);
 
         assert_eq!(
@@ -2721,7 +2716,8 @@ mod tests {
 
     #[test]
     fn hover_panel_opened_by_key_stays_open_on_pointer_leave() {
-        let cfg = Config::from_text("PANEL_CONTROL=\"SUPER+A top right 380 hover clock session\"\n");
+        let cfg =
+            Config::from_text("PANEL_CONTROL=\"SUPER+A top right 380 hover clock session\"\n");
         let mut sh = Shell::from_config(cfg);
         let (w, h) = (1920.0, 1080.0);
         sh.last_screen = (w, h);
@@ -2732,7 +2728,10 @@ mod tests {
         assert!(!sh.opened_by_hover);
 
         // Mouse leaves the panel / screen
-        assert!(!sh.pointer_leave(), "pointer_leave should not close panel opened by key");
+        assert!(
+            !sh.pointer_leave(),
+            "pointer_leave should not close panel opened by key"
+        );
         assert!(sh.open.is_some(), "panel must remain open");
 
         // Now close and open by hover strip
@@ -2743,7 +2742,10 @@ mod tests {
         assert!(sh.opened_by_hover);
 
         // Mouse leaves -> now it should close
-        assert!(sh.pointer_leave(), "pointer_leave must close panel opened by hover");
+        assert!(
+            sh.pointer_leave(),
+            "pointer_leave must close panel opened by hover"
+        );
         assert!(sh.open.is_none());
     }
 

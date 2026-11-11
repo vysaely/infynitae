@@ -760,7 +760,10 @@ Notification 10: Older
         // Invoke action on newest notification (id 12, index 0)
         let act = invoke_item_action(&mut d, 0);
         assert!(act.is_some());
-        assert_eq!(d.cleared_id, 0, "cleared_id should only update on Clear all");
+        assert_eq!(
+            d.cleared_id, 0,
+            "cleared_id should only update on Clear all"
+        );
 
         // Next poll returns remaining active notifications 11 and 10
         let remaining_raw = "\
@@ -770,7 +773,11 @@ Notification 10: Older
   App name: App
 ";
         let (new_items, _) = parse_mako(remaining_raw, d.cleared_id);
-        assert_eq!(new_items.len(), 2, "older notifications must not be dropped");
+        assert_eq!(
+            new_items.len(),
+            2,
+            "older notifications must not be dropped"
+        );
         assert_eq!(new_items[0].id, 11);
         assert_eq!(new_items[1].id, 10);
     }

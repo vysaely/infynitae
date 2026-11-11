@@ -232,7 +232,11 @@ fn pointer_set(world: &mut World, size: (f64, f64), pos: (f64, f64)) -> bool {
     if same {
         return false;
     }
-    let key = if on_brightness { "brightness" } else { "volume" };
+    let key = if on_brightness {
+        "brightness"
+    } else {
+        "volume"
+    };
     let cmd = if on_brightness {
         set_brightness_action(&mut world.volume, pct)
     } else {
@@ -286,7 +290,14 @@ pub fn scroll(world: &mut World, size: (f64, f64), pos: (f64, f64), dy: f64) -> 
         let next = (cur + step).clamp(0, 100) as u8;
         set_volume_action(&mut world.volume, next)
     };
-    world.run_coalesced(if on_brightness { "brightness" } else { "volume" }, cmd);
+    world.run_coalesced(
+        if on_brightness {
+            "brightness"
+        } else {
+            "volume"
+        },
+        cmd,
+    );
     true
 }
 

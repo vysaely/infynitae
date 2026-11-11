@@ -91,7 +91,8 @@ pub fn click(world: &mut World, size: (f64, f64), pos: (f64, f64)) -> bool {
     } else if x >= next.0 && x <= next.0 + next.2 && y >= next.1 && y <= next.1 + next.3 {
         world.cal_month += 1;
         true
-    } else if world.cal_month != 0 && x >= PAD_X && x < prev.0 && y >= 0.0 && y <= PAD_Y + 28.0 {
+    } else if world.cal_month != 0 && x >= PAD_X && x < prev.0 && (0.0..=PAD_Y + 28.0).contains(&y)
+    {
         world.cal_month = 0;
         true
     } else {
