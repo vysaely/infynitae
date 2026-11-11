@@ -351,10 +351,19 @@ pub fn scroll(world: &mut World, size: (f64, f64), _pos: (f64, f64), dy: f64) ->
     }
 }
 
+/// The hint for the windows card title: its shortcut key from config (default `"Super+L"`),
+/// or `None` when no key is configured.
+pub fn hint(world: &World) -> Option<String> {
+    crate::config::format_key(world.windows_key.or(world.panel_key))
+}
+
 pub fn draw(cr: &Context, th: &Theme, world: &World, rect: Rect) {
     let (x, y, w, h) = rect;
     draw::card(cr, th, x, y, w, h);
     draw::title(cr, th, x + PAD_X, y + PAD_Y, "Windows");
+    if let Some(h_text) = hint(world) {
+        draw::title_hint(cr, th, x, y, w, "Windows", &h_text);
+    }
 
     let count = world.windows.filtered.len();
     if count == 0 {
@@ -540,5 +549,40 @@ toplevel 11: app_id=\"foot\" title=\"shell\" state=none
         );
         assert_eq!(world.windows.windows.len(), 1);
         assert_eq!(world.windows.windows[0].id, 2);
+    }
+
+    #[test]
+    fn windows_hint_reads_key_from_config_and_omits_when_none() {
+        let mut world = World::now();
+        world.windows_key = Some('l');
+        assert_eq!(hint(&world), Some("Super+L".to_string()));
+
+        world.windows_key = Some('k');
+        assert_eq!(hint(&world), Some("Super+K".to_string()));
+
+        world.windows_key = None;
+        world.panel_key = None;
+        assert_eq!(hint(&world), None);
+
+        // Falls back to panel_key when windows_key is None
+        world.panel_key = Some('w');
+        assert_eq!(hint(&world), Some("Super+W".to_string()));
+    }
+
+    #[test]
+    fn windows_draw_drops_hint_when_card_too_narrow() {
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 80, 100).unwrap();
+        let cr = cairo::Context::new(&surf).unwrap();
+        let th = Theme::from_config(&crate::config::Config::from_text(""));
+        let mut world = World::now();
+        world.windows_key = Some('l');
+
+        // Narrow width 80.0 drops hint without overlapping title
+        draw(&cr, &th, &world, (0.0, 0.0, 80.0, 100.0));
+
+        // Normal width 380.0 draws hint
+        let surf_wide = cairo::ImageSurface::create(cairo::Format::ARgb32, 380, 100).unwrap();
+        let cr_wide = cairo::Context::new(&surf_wide).unwrap();
+        draw(&cr_wide, &th, &world, (0.0, 0.0, 380.0, 100.0));
     }
 }
