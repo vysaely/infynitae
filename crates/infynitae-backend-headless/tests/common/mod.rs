@@ -1892,6 +1892,8 @@ pub struct Lockstep {
     /// The client's single wl_registry (a second one would bind every output twice).
     registry: WlRegistry,
     client: smithay::reexports::wayland_server::Client,
+    /// Temporary directory holding the harness's stub launcher (`launch.sh`).
+    pub live_dir: std::path::PathBuf,
 }
 
 impl Lockstep {
@@ -1901,9 +1903,44 @@ impl Lockstep {
 
     /// A Core with a persisted camera table and the given outputs connected at startup.
     pub fn with(persisted: PersistedCameras, outputs: &[VirtualOutput]) -> Lockstep {
+        static LIVE_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
+        let live_dir = std::env::temp_dir().join(format!(
+            "infynitae-t1-live-{}-{}",
+            std::process::id(),
+            LIVE_DIR_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&live_dir).expect("create test live dir");
+        let launch_sh = live_dir.join("launch.sh");
+        std::fs::write(
+            &launch_sh,
+            b"#!/bin/sh\necho \"$@\" >> \"$(dirname \"$0\")/recorded_args.txt\"\n",
+        )
+        .expect("write stub launch.sh");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&launch_sh, std::fs::Permissions::from_mode(0o755))
+                .expect("chmod stub launch.sh");
+        }
+        let reload_sh = live_dir.join("infynitae-reload");
+        std::fs::write(
+            &reload_sh,
+            b"#!/bin/sh\necho \"$@\" >> \"$(dirname \"$0\")/recorded_reload.txt\"\n",
+        )
+        .expect("write stub infynitae-reload");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&reload_sh, std::fs::Permissions::from_mode(0o755))
+                .expect("chmod stub infynitae-reload");
+        }
+
         let (core, input, shell, token) = Core::new(persisted);
         let display: Display<WaylandState> = Display::new().expect("display");
         let mut state = WaylandState::new(&display.handle(), core);
+        state.live_dir = live_dir.clone();
+        state.portal_runtime_dir = None;
+        state.set_client_env("wayland-test-isolated", None, None);
         // as the run loop does: the ceiling is what the renderer reports (OB-13)
         state
             .report_renderer_limits(&infynitae_backend_headless::HeadlessRenderer::default())
@@ -1935,6 +1972,7 @@ impl Lockstep {
             vblanks: Vec::new(),
             registry,
             client,
+            live_dir,
         };
         ls.state.set_current_time(Duration::ZERO);
         ls.state.idle_notify.last_activity = Duration::ZERO;
@@ -2158,6 +2196,31 @@ impl Lockstep {
 
     pub fn output(&self) -> OutputId {
         self.output.expect("an output was connected")
+    }
+
+    /// Arguments recorded by the harness's stub launcher (`launch.sh`), in order.
+    pub fn recorded_launcher_actions(&self) -> Vec<String> {
+        let path = self.live_dir.join("recorded_args.txt");
+        std::fs::read_to_string(path)
+            .map(|s| s.lines().map(|l| l.trim().to_string()).collect())
+            .unwrap_or_default()
+    }
+
+    /// Waits up to `timeout` for an action starting with `expected` to be recorded by the stub.
+    pub fn wait_for_launcher_action(&self, expected: &str, timeout: Duration) -> bool {
+        let start = std::time::Instant::now();
+        let path = self.live_dir.join("recorded_args.txt");
+        while start.elapsed() < timeout {
+            if let Ok(content) = std::fs::read_to_string(&path)
+                && content
+                    .lines()
+                    .any(|l| l.trim() == expected || l.starts_with(expected))
+            {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        false
     }
 }
 
