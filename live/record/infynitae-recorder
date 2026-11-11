@@ -45,7 +45,7 @@ if [ -z "$REPLAY_DIR" ] || [ "$REPLAY_DIR" = "/dev/shm/infynitae-replay" ]; then
     fi
 fi
 RECORD_FPS="${RECORD_FPS:-60}"
-RECORD_CODEC="${RECORD_CODEC:-auto}" # auto, hevc, av1, h264
+RECORD_CODEC="${RECORD_CODEC:-hevc}" # hevc, auto, av1, h264
 RECORD_AUDIO="${RECORD_AUDIO:-desktop}"
 RECORD_NOTIFY="${RECORD_NOTIFY:-true}"
 

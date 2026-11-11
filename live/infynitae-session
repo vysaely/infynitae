@@ -124,9 +124,14 @@ while true; do
     # looked up at every start, not once: this script runs from boot, and an update can install
     # our patched copy into ~/.local/bin while it runs
     XWLS=""
-    if command -v xwayland-satellite >/dev/null 2>&1; then
-        XWLS="--xwayland-satellite $(command -v xwayland-satellite)"
-    fi
+    case "${XWAYLAND:-true}" in
+        0|false|off|no) ;;
+        *)
+            if command -v xwayland-satellite >/dev/null 2>&1; then
+                XWLS="--xwayland-satellite $(command -v xwayland-satellite)"
+            fi
+            ;;
+    esac
     "$BIN" $TTY_MODE $LOCKED_ARG $XWLS --exec "$SESSION_SCRIPT" "$@" >> "$SESSION_LOG" 2>&1
     STATUS=$?
     # every later start is locked (session.sh): a compositor that crashed, or was quit, while

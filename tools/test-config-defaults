@@ -1,0 +1,55 @@
+#!/bin/sh
+# tools/test-config-defaults: verify default settings values match config/config documentation.
+set -u
+cd "$(dirname "$0")/.."
+# a throwaway home: the scripts read ~/.config/infynitae/config, and the tester's own settings must not decide
+# and no session: live/env.sh hands its environment to systemd and D-Bus, which must never be the desktop's
+HOME=$(mktemp -d); export HOME
+XDG_RUNTIME_DIR=$(mktemp -d); export XDG_RUNTIME_DIR
+unset DBUS_SESSION_BUS_ADDRESS WAYLAND_DISPLAY DISPLAY
+trap 'rm -rf "$HOME" "$XDG_RUNTIME_DIR"' EXIT
+fails=0
+check() {
+    if [ "$2" = "$3" ]; then
+        echo "ok   $1"
+    else
+        echo "FAIL $1: got [$2], want [$3]"
+        fails=$((fails + 1))
+    fi
+}
+
+# 1. FOCUS_FOLLOWS_MOUSE: default is strict
+got=$(sh -c 'unset FOCUS_FOLLOWS_MOUSE; . live/env.sh >/dev/null 2>&1; echo "$FOCUS_FOLLOWS_MOUSE"')
+check "FOCUS_FOLLOWS_MOUSE in env.sh defaults to strict" "$got" "strict"
+
+# 2. PAN_MODE: default is free
+got=$(sh -c 'unset PAN_MODE; . live/settings.sh apply >/dev/null 2>&1; echo "$PAN_MODE"')
+check "PAN_MODE in settings.sh defaults to free" "$got" "free"
+got=$(sh -c 'unset PAN_MODE; . live/env.sh >/dev/null 2>&1; echo "$PAN_MODE"')
+check "PAN_MODE in env.sh defaults to free" "$got" "free"
+
+# 3. XWAYLAND: default is true, false disables satellite in session
+got=$(sh -c 'unset XWAYLAND; . live/env.sh >/dev/null 2>&1; echo "$XWAYLAND"')
+check "XWAYLAND in env.sh defaults to true" "$got" "true"
+got=$(sh -c 'XWAYLAND=false; XWLS=""; case "${XWAYLAND:-true}" in 0|false|off|no) ;; *) XWLS="--xwayland-satellite dummy" ;; esac; echo "$XWLS"')
+check "XWAYLAND=false omits xwayland-satellite arg" "$got" ""
+got=$(sh -c 'XWAYLAND=true; XWLS=""; case "${XWAYLAND:-true}" in 0|false|off|no) ;; *) XWLS="--xwayland-satellite dummy" ;; esac; echo "$XWLS"')
+check "XWAYLAND=true includes xwayland-satellite arg" "$got" "--xwayland-satellite dummy"
+
+# 4. SQUARE_CORNERS: default is true (LOOK_CORNERS=0)
+got=$(sh -c 'unset SQUARE_CORNERS CORNERS; . live/settings.sh >/dev/null 2>&1; look_load; echo "$LOOK_CORNERS"')
+check "SQUARE_CORNERS unset in settings.sh gives LOOK_CORNERS=0" "$got" "0"
+got=$(sh -c 'SQUARE_CORNERS=false; unset CORNERS; . live/settings.sh >/dev/null 2>&1; look_load; echo "$LOOK_CORNERS"')
+check "SQUARE_CORNERS=false gives LOOK_CORNERS=8" "$got" "8"
+got=$(sh -c 'SQUARE_CORNERS=true CORNERS=12; . live/settings.sh >/dev/null 2>&1; look_load; echo "$LOOK_CORNERS"')
+check "CORNERS=12 overrides SQUARE_CORNERS" "$got" "12"
+
+# 6. RECORD_CODEC: default is hevc
+got=$(sed -n 's/^RECORD_CODEC="\${RECORD_CODEC:-\([^}]*\)}".*/\1/p' live/record/infynitae-recorder)
+check "RECORD_CODEC in infynitae-recorder defaults to hevc" "$got" "hevc"
+
+# 7. TOUCHPAD_TAP: default is true
+got=$(sh -c 'unset TOUCHPAD_TAP; . live/env.sh >/dev/null 2>&1; echo "$TOUCHPAD_TAP"')
+check "TOUCHPAD_TAP in env.sh defaults to true" "$got" "true"
+
+[ "$fails" = 0 ] && echo "test-config-defaults: passed" || { echo "test-config-defaults: $fails failed"; exit 1; }

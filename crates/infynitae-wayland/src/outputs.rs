@@ -162,7 +162,9 @@ impl WaylandState {
                     use smithay::input::keyboard::Keycode;
 
                     let mods = self.seat_modifiers();
-                    notify_portal_key(key, pressed, mods);
+                    if let Some(runtime) = self.portal_runtime_dir.as_deref() {
+                        notify_portal_key(runtime, key, pressed, mods);
+                    }
 
                     let kb = self.keyboard_handle();
                     let code = Keycode::new(key + 8);
@@ -354,8 +356,7 @@ impl WaylandState {
 
     /// [`spawn_action`](Self::spawn_action) with any number of arguments, each passed as is.
     pub(crate) fn spawn_action_args(&mut self, action: &str, args: &[&str]) {
-        let home = std::env::var("HOME").unwrap_or_default();
-        let mut cmd = action_command(&home, action, args, self.client_env.as_ref());
+        let mut cmd = action_command(&self.live_dir, action, args, self.client_env.as_ref());
         // the shortcuts that open apps are launches (`launch`): their windows are the user's
         if matches!(
             action,
@@ -602,6 +603,7 @@ impl WaylandState {
 
 /// Notifies the GlobalShortcuts portal backend if the key is bound by an application (Discord, etc.)
 pub(crate) fn notify_portal_key(
+    runtime: &std::path::Path,
     key: u32,
     pressed: bool,
     mods: infynitae_core::input::bindings::Modifiers,
@@ -613,8 +615,7 @@ pub(crate) fn notify_portal_key(
     static LAST_CHECK: AtomicU64 = AtomicU64::new(0);
     static BOUND_KEYS: Mutex<Option<std::collections::HashSet<u32>>> = Mutex::new(None);
 
-    let runtime = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".into());
-    let bound_keys_path = format!("{runtime}/infynitae/bound_keys");
+    let bound_keys_path = runtime.join("infynitae/bound_keys");
 
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -677,7 +678,10 @@ pub(crate) fn notify_portal_key(
         if mods.logo {
             mods_mask |= 1 << 3;
         }
-        let sock_path = format!("{runtime}/infynitae/shortcuts.sock");
+        let sock_path = runtime
+            .join("infynitae/shortcuts.sock")
+            .to_string_lossy()
+            .into_owned();
         let _ = sender.try_send((key, pressed, mods_mask, sock_path));
     }
 }
@@ -697,12 +701,12 @@ pub struct ClientEnv {
 /// `DISPLAY` / `XAUTHORITY` as before. Nothing of the compositor's own launch that would misdirect
 /// the action is passed on (a `WAYLAND_SOCKET` fd, host desktop session variables).
 pub(crate) fn action_command(
-    home: &str,
+    live_dir: &std::path::Path,
     action: &str,
     args: &[&str],
     env: Option<&ClientEnv>,
 ) -> std::process::Command {
-    let script = format!("{home}/infynitae/live/launch.sh");
+    let script = live_dir.join("launch.sh");
     let mut cmd = std::process::Command::new("sh");
     cmd.arg(script).arg(action).args(args);
     match env {
@@ -756,7 +760,12 @@ mod action_env_tests {
             x_display: Some(":3".into()),
             x_authority: Some("/run/user/1000/infynitae-xauth-3".into()),
         };
-        let cmd = action_command("/home/u", "apps", &["x"], Some(&env));
+        let cmd = action_command(
+            std::path::Path::new("/home/u/infynitae/live"),
+            "apps",
+            &["x"],
+            Some(&env),
+        );
         let args: Vec<_> = cmd
             .get_args()
             .map(|a| a.to_string_lossy().into_owned())
@@ -782,7 +791,12 @@ mod action_env_tests {
             x_display: None,
             x_authority: None,
         };
-        let cmd = action_command("/home/u", "terminal", &[], Some(&env));
+        let cmd = action_command(
+            std::path::Path::new("/home/u/infynitae/live"),
+            "terminal",
+            &[],
+            Some(&env),
+        );
         assert_eq!(env_of(&cmd, "DISPLAY"), Some(None));
         assert_eq!(env_of(&cmd, "XAUTHORITY"), Some(None));
     }

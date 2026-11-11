@@ -25,13 +25,24 @@ pub struct Tearing {
     _global: GlobalId,
     /// `TEARING` (on by default; "off" never tears).
     pub(crate) enabled: bool,
-    /// The surfaces with a tearing control object, and whether their hint is `async`.
-    hints: Vec<(WlSurface, bool)>,
+    /// The surfaces with a tearing control object, and their current and pending hints.
+    hints: Vec<TearingHint>,
     /// The windows the user turned tearing on for (Super+Shift+O).
     forced: Vec<ElementId>,
     /// The windows the user turned tearing off for although their app asks (Super+Shift+O on a
     /// game that tears by itself; owner, 2026-11-05: the key seemed to do nothing in CS2).
     refused: Vec<ElementId>,
+}
+
+#[derive(Debug)]
+struct TearingHint {
+    surface: WlSurface,
+    /// Currently committed presentation hint: `true` for `async`, `false` for `vsync`.
+    current: bool,
+    /// Pending presentation hint: applied on the surface's next `commit`.
+    pending: bool,
+    /// the control object was destroyed: back to vsync on the next commit, then the entry goes
+    destroyed: bool,
 }
 
 impl Tearing {
@@ -44,9 +55,28 @@ impl Tearing {
             refused: Vec::new(),
         }
     }
+
+    /// Applies the pending presentation hint for `surface` on `wl_surface.commit`.
+    pub(crate) fn commit(&mut self, surface: &WlSurface) {
+        if let Some(entry) = self.hints.iter_mut().find(|h| &h.surface == surface) {
+            entry.current = entry.pending;
+        }
+        self.hints
+            .retain(|h| !(h.destroyed && &h.surface == surface));
+    }
 }
 
 impl WaylandState {
+    /// Applies the pending presentation hint for `surface` on commit.
+    pub(crate) fn tearing_commit(&mut self, surface: &WlSurface) {
+        self.tearing.commit(surface);
+    }
+
+    /// Cleans up tearing hints when `surface` is destroyed.
+    pub(crate) fn tearing_surface_destroyed(&mut self, surface: &WlSurface) {
+        self.tearing.hints.retain(|h| &h.surface != surface);
+    }
+
     /// Whether `output` tears now: its fullscreen window asked for it or was given it, tearing
     /// is on and the session unlocked. The backend flips async only for a frame scanned out.
     pub fn tears(&self, output: OutputId) -> bool {
@@ -63,7 +93,7 @@ impl WaylandState {
         t.forced.contains(&window)
             || self
                 .window_surface(window)
-                .is_some_and(|s| t.hints.iter().any(|(h, on)| *on && *h == s))
+                .is_some_and(|s| t.hints.iter().any(|h| h.current && h.surface == s))
     }
 
     /// Super+Shift+O (or Super+Shift+T): tearing on or off for the focused window (it tears while fullscreen), with
@@ -87,9 +117,12 @@ impl WaylandState {
     /// Tearing on or off for `window`; whether it is on now. Off holds even when its app asks.
     pub fn toggle_tearing(&mut self, window: ElementId) -> bool {
         let mapped = self.core.stage().mapped_elements();
-        let asks = self
-            .window_surface(window)
-            .is_some_and(|s| self.tearing.hints.iter().any(|(h, on)| *on && *h == s));
+        let asks = self.window_surface(window).is_some_and(|s| {
+            self.tearing
+                .hints
+                .iter()
+                .any(|h| h.current && h.surface == s)
+        });
         let t = &mut self.tearing;
         t.forced.retain(|e| mapped.contains(e));
         t.refused.retain(|e| mapped.contains(e));
@@ -135,15 +168,22 @@ impl Dispatch<WpTearingControlManagerV1, ()> for WaylandState {
     ) {
         if let wp_tearing_control_manager_v1::Request::GetTearingControl { id, surface } = request {
             let hints = &mut state.tearing.hints;
-            hints.retain(|(s, _)| s.is_alive());
-            if hints.iter().any(|(s, _)| *s == surface) {
+            hints.retain(|h| h.surface.is_alive());
+            // a destroyed object waiting for its commit does not count
+            hints.retain(|h| !(h.destroyed && h.surface == surface));
+            if hints.iter().any(|h| h.surface == surface) {
                 resource.post_error(
                     wp_tearing_control_manager_v1::Error::TearingControlExists,
                     "the surface already has a tearing control object",
                 );
                 return;
             }
-            hints.push((surface.clone(), false));
+            hints.push(TearingHint {
+                surface: surface.clone(),
+                current: false,
+                pending: false,
+                destroyed: false,
+            });
             data_init.init(id, surface);
         }
     }
@@ -162,13 +202,26 @@ impl Dispatch<WpTearingControlV1, WlSurface> for WaylandState {
         match request {
             wp_tearing_control_v1::Request::SetPresentationHint { hint } => {
                 let on = matches!(hint, WEnum::Value(PresentationHint::Async));
-                if let Some(entry) = state.tearing.hints.iter_mut().find(|(s, _)| s == surface) {
-                    entry.1 = on;
+                if let Some(entry) = state
+                    .tearing
+                    .hints
+                    .iter_mut()
+                    .find(|h| &h.surface == surface)
+                {
+                    entry.pending = on;
                 }
             }
-            // destroying the object goes back to vsync
+            // destroying the object goes back to vsync on the next commit (the protocol)
             wp_tearing_control_v1::Request::Destroy => {
-                state.tearing.hints.retain(|(s, _)| s != surface);
+                if let Some(entry) = state
+                    .tearing
+                    .hints
+                    .iter_mut()
+                    .find(|h| &h.surface == surface)
+                {
+                    entry.pending = false;
+                    entry.destroyed = true;
+                }
             }
             _ => {}
         }

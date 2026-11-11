@@ -57,7 +57,7 @@ pub fn draw(cr: &Context, th: &Theme, it: &Item, world: &World, rect: Rect) {
         let top = 2.0 * PAD_Y + 86.0;
         draw::card(cr, th, x, y, w, h.max(top));
         draw_face(cr, th, world, x, y);
-        calendar::draw(
+        calendar::draw_content(
             cr,
             th,
             world,
@@ -77,7 +77,11 @@ pub fn click(it: &Item, world: &mut World, size: (f64, f64), pos: (f64, f64)) ->
     let look = look_name(it, (0.0, 0.0, size.0, size.1));
     if look == "calendar" {
         let top = 2.0 * PAD_Y + 86.0 + draw::GAP;
-        calendar::click(world, size.0, (pos.0, pos.1 - top))
+        calendar::click(
+            world,
+            (size.0, (size.1 - top).max(0.0)),
+            (pos.0, pos.1 - top),
+        )
     } else {
         false
     }

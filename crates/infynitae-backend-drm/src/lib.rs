@@ -1180,11 +1180,7 @@ pub fn run_console_with(
                 let key = k.trim();
                 let val = v.trim();
                 if key == "OUTPUT_ORDER" {
-                    output_order = val
-                        .split(',')
-                        .map(|s| s.trim().to_lowercase())
-                        .filter(|s| !s.is_empty())
-                        .collect();
+                    output_order = infynitae_wayland::parse_list(val);
                 } else if key == "OUTPUT_LAYOUT" && val.eq_ignore_ascii_case("right-to-left") {
                     output_layout_reverse = true;
                 } else if key == "IDLE_SLEEP_TIMEOUT_MIN" {
@@ -1267,6 +1263,9 @@ pub fn run_console_with(
     }
 
     if !output_order.is_empty() {
+        if output_layout_reverse {
+            eprintln!("[infynitae] OUTPUT_ORDER overrides OUTPUT_LAYOUT");
+        }
         connected_connectors.sort_by_key(|(_, _, name, debug_name)| {
             output_order
                 .iter()
@@ -3380,6 +3379,16 @@ pub fn calculate_abs_pointer_delta(
     calculate_abs_pointer_delta_scale(abs_px, current_p, scale)
 }
 
+/// Resolves whether touchpad tap-to-click should be enabled.
+/// Unset defaults to true (TOUCHPAD_TAP="true").
+pub fn resolve_touchpad_tap(configured: Option<bool>, env_val: Option<&str>) -> bool {
+    configured
+        .or_else(|| {
+            env_val.map(|t| matches!(t.to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        })
+        .unwrap_or(true)
+}
+
 fn configure_input_device(
     device: &mut smithay::reexports::input::Device,
     config: &infynitae_wayland::InputDeviceConfig,
@@ -3416,16 +3425,11 @@ fn configure_input_device(
         let _ = device.config_accel_set_speed(clamped);
     }
 
-    // 3. Touchpad Tap-to-click
-    let tap = config.touchpad_tap.or_else(|| {
-        std::env::var("TOUCHPAD_TAP")
-            .ok()
-            .map(|t| matches!(t.to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
-    });
-    if let Some(enable) = tap
-        && device.config_tap_finger_count() > 0
-    {
-        let _ = device.config_tap_set_enabled(enable);
+    // 3. Touchpad Tap-to-click (default: true, config/config:64)
+    let env_tap = std::env::var("TOUCHPAD_TAP").ok();
+    let tap = resolve_touchpad_tap(config.touchpad_tap, env_tap.as_deref());
+    if device.config_tap_finger_count() > 0 {
+        let _ = device.config_tap_set_enabled(tap);
     }
 
     // 4. Touchpad Natural Scrolling
@@ -3443,6 +3447,20 @@ fn configure_input_device(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn resolve_touchpad_tap_defaults_to_true() {
+        use super::resolve_touchpad_tap;
+        assert!(resolve_touchpad_tap(None, None));
+        assert!(resolve_touchpad_tap(Some(true), None));
+        assert!(resolve_touchpad_tap(None, Some("true")));
+        assert!(resolve_touchpad_tap(None, Some("1")));
+        assert!(!resolve_touchpad_tap(Some(false), None));
+        assert!(!resolve_touchpad_tap(None, Some("false")));
+        assert!(!resolve_touchpad_tap(None, Some("0")));
+        assert!(resolve_touchpad_tap(Some(true), Some("false")));
+        assert!(!resolve_touchpad_tap(Some(false), Some("true")));
+    }
+
     #[test]
     fn a_slow_turn_names_its_slowest_parts() {
         use std::time::Duration;

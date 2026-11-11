@@ -27,7 +27,7 @@ expand_path() {
 # LOOK_CARD, LOOK_CARD_AA, LOOK_EDGE, LOOK_EDGE_AA, LOOK_TEXT, LOOK_ACCENT... Without the Rust edge,
 # today's values from the colours and SQUARE_CORNERS. Its lines are checked, never run as code.
 look_load() {
-    case "${SQUARE_CORNERS:-false}" in
+    case "${SQUARE_CORNERS:-true}" in
         1|true|yes|on|TRUE|True) LOOK_CORNERS=0 ;;
         *) LOOK_CORNERS=8 ;;
     esac
@@ -108,7 +108,7 @@ MOUSE_ACCEL_PROFILE="${MOUSE_ACCEL_PROFILE:-flat}"
 MOUSE_ACCEL_SPEED="${MOUSE_ACCEL_SPEED:-0.0}"
 KEYBOARD_REPEAT_DELAY="${KEYBOARD_REPEAT_DELAY:-200}"
 KEYBOARD_REPEAT_RATE="${KEYBOARD_REPEAT_RATE:-35}"
-PAN_MODE="${PAN_MODE:-grab}"
+PAN_MODE="${PAN_MODE:-free}"
 SCALING_FILTER="${SCALING_FILTER:-nearest}"
 OUTPUT_SCALE="${OUTPUT_SCALE:-1.0}"
 XKB_DEFAULT_LAYOUT="${XKB_DEFAULT_LAYOUT:-us}"

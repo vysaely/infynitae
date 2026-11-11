@@ -543,16 +543,16 @@ pub fn layout_run(
     if items.is_empty() {
         return (rects, 0.0);
     }
-    if !world.switches.ready {
-        let est = items.len().clamp(1, 6);
-        return (rects, card_height_for_count(est, switch_look));
-    }
-    let vis: Vec<usize> = items
-        .iter()
-        .enumerate()
-        .filter(|(_, it)| visible(it.module, &world.switches))
-        .map(|(i, _)| i)
-        .collect();
+    let vis: Vec<usize> = if world.switches.ready {
+        items
+            .iter()
+            .enumerate()
+            .filter(|(_, it)| visible(it.module, &world.switches))
+            .map(|(i, _)| i)
+            .collect()
+    } else {
+        (0..items.len()).collect()
+    };
     let n = vis.len();
     if n == 0 {
         return (rects, 0.0);
@@ -1026,5 +1026,41 @@ Controller AC:36:1B:F9:5D:AF (public)
         assert!(r_on.contains("ENABLE_REPLAY_BUFFER true"));
         let r_off = toggle_action(Module::Replay, &mut d).unwrap();
         assert!(r_off.contains("ENABLE_REPLAY_BUFFER false"));
+    }
+
+    #[test]
+    fn switch_hitboxes_are_non_zero_before_switches_ready() {
+        let items = vec![
+            Item {
+                module: Module::Wifi,
+                look: None,
+                rect: None,
+                half: false,
+            },
+            Item {
+                module: Module::Bluetooth,
+                look: None,
+                rect: None,
+                half: false,
+            },
+            Item {
+                module: Module::Dnd,
+                look: None,
+                rect: None,
+                half: false,
+            },
+        ];
+        let mut world = World::now();
+        world.switches.ready = false;
+        let pw = 380.0;
+        let y0 = 10.0;
+
+        let (rects, card_h) = layout_run(&items, &world, "pairs", pw, y0);
+        assert!(card_h > 0.0);
+        assert_eq!(rects.len(), 3);
+        for (i, r) in rects.iter().enumerate() {
+            assert!(r.2 > 0.0, "switch {i} width should be non-zero");
+            assert!(r.3 > 0.0, "switch {i} height should be non-zero");
+        }
     }
 }

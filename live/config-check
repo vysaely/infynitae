@@ -44,8 +44,8 @@ problems=$(
         if [ -n "$key" ]; then
             if [ -n "$known" ]; then
                 case "$key" in
-                    # named by the user: keys, commands, edge panels
-                    BIND_*|EXEC_*|PANEL_*) ;;
+                    # named by the user: keys, commands, edge panels, per-output displays
+                    BIND_*|EXEC_*|PANEL_*|OUTPUT_*) ;;
                     *)
                         case "$known" in
                             *" $key "*) ;;
@@ -66,11 +66,22 @@ problems=$(
                         esac
                     done
                     ;;
+                OUTPUT_ORDER)
+                    order_val=$(sh -c "$line"'; eval "printf %s \"\$'"$key"'\""' 2>/dev/null)
+                    order_line=$n
+                    ;;
+                OUTPUT_LAYOUT)
+                    layout_val=$(sh -c "$line"'; eval "printf %s \"\$'"$key"'\""' 2>/dev/null)
+                    layout_line=$n
+                    ;;
             esac
         elif printf '%s' "$trimmed" | grep -qE '^[A-Z][A-Z0-9_]*([[:space:]]|$)'; then
             echo "line $n: \"$(printf '%s' "$trimmed" | cut -c1-40)\" is not a setting (SETTING=\"value\"), skipped"
         fi
     done < "$CONFIG"
+    if [ -n "${order_val:-}" ] && [ "${layout_val:-}" = "right-to-left" ]; then
+        echo "line $layout_line: OUTPUT_ORDER overrides OUTPUT_LAYOUT, ignored"
+    fi
 )
 
 [ -n "$problems" ] && printf '%s\n' "$problems"
