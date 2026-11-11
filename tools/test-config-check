@@ -1,0 +1,68 @@
+#!/bin/sh
+# tools/test-config-check: tests live/config-check with various valid and invalid settings.
+# Verifies that:
+# 1. Setting families read by the code (OUTPUT_<NAME>_*, PANEL_<NAME>, BIND_<ACTION>, EXEC_<NAME>)
+#    are accepted as valid configuration.
+# 2. Known settings from config/config and config-renames are accepted.
+# 3. Truly unknown or misspelled settings are flagged and reported.
+# 4. Unclosed quotes or invalid syntax are caught and reported.
+set -u
+
+REPO=$(pwd)
+T=$(mktemp -d)
+trap 'rm -rf "$T"' EXIT
+
+mkdir -p "$T/infynitae/live" "$T/infynitae/config" "$T/.config/infynitae" "$T/.local/state/infynitae"
+cp live/config.sh live/config-renames live/config-check "$T/infynitae/live/"
+cp config/config "$T/infynitae/config/"
+cfg="$T/.config/infynitae/config"
+
+fails=0
+check() {
+    if [ "$2" = "$3" ]; then
+        echo "ok   $1"
+    else
+        echo "FAIL $1: got [$2], want [$3]"
+        fails=$((fails + 1))
+    fi
+}
+
+# Test 1: Setting families (OUTPUT_*, PANEL_*, BIND_*, EXEC_*) and known settings are accepted
+cat << 'EOF' > "$cfg"
+OUTPUT_DP_1_SCALE="1.25"
+OUTPUT_HDMI_A_1_MODE="1920x1080"
+OUTPUT_DP_1_RATE="144"
+OUTPUT_eDP_1_TRANSFORM="90"
+BIND_TERMINAL="SUPER+RETURN"
+EXEC_BROWSER="SUPER+B:firefox"
+PANEL_CUSTOM="SUPER+P top center apps"
+SURFACE_COLOR="#111317"
+export APP_ENV="test"
+EOF
+
+got=$(HOME=$T sh "$T/infynitae/live/config-check" 2>&1 || true)
+check "families and known settings produce no unknown warnings" "$got" ""
+
+# Test 2: Misspelled setting is caught
+cat << 'EOF' > "$cfg"
+OUTPUT_DP_1_SCALE="1.25"
+TYPO_SETTING="1"
+EOF
+
+got=$(HOME=$T sh "$T/infynitae/live/config-check" 2>&1 || true)
+check "config-check catches typo setting" "$got" "line 2: unknown setting TYPO_SETTING, ignored"
+
+# Test 3: Unclosed quote is caught
+cat << 'EOF' > "$cfg"
+UNCLOSED="abc
+EOF
+
+got=$(HOME=$T sh "$T/infynitae/live/config-check" 2>&1 || true)
+check "config-check catches unclosed quote" "$got" "line 1: cannot be read (a quote left open?), skipped"
+
+if [ "$fails" = 0 ]; then
+    echo "test-config-check: passed"
+else
+    echo "test-config-check: $fails failed"
+    exit 1
+fi
