@@ -528,7 +528,10 @@ impl Shell {
         if let Some(p) = self.cfg.panels.get(idx) {
             self.world.panel_has_clipboard = p.has(config::Module::Clipboard);
             self.world.panel_key = p.key;
-            if p.has(config::Module::Apps) || p.has(config::Module::Favorites) {
+            if p.has(config::Module::Apps)
+                || p.has(config::Module::Favorites)
+                || p.has(config::Module::Windows)
+            {
                 self.world.apps.ensure_loaded(&self.world.search);
             }
             if self.world.apps.favorites.is_empty() && !self.cfg.favorites.is_empty() {
@@ -2220,7 +2223,10 @@ fn render(name: &str, size: &str, out: &str) -> Result<(), String> {
         world.edit_preview = is_editing && !panel.desktop;
         world.panel_has_clipboard = panel.has(config::Module::Clipboard);
         world.panel_key = panel.key;
-        if panel.has(config::Module::Apps) || panel.has(config::Module::Favorites) {
+        if panel.has(config::Module::Apps)
+            || panel.has(config::Module::Favorites)
+            || panel.has(config::Module::Windows)
+        {
             world.apps.ensure_loaded(&world.search);
         }
         if world.apps.favorites.is_empty() && !cfg.favorites.is_empty() {

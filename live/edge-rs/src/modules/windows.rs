@@ -357,6 +357,19 @@ pub fn hint(world: &World) -> Option<String> {
     crate::config::format_key(world.windows_key.or(world.panel_key))
 }
 
+/// Looks up the human-readable app name for `win` from `apps`, falling back to its `app_id`.
+pub fn window_app_name<'a>(
+    apps: &'a [crate::modules::apps::DesktopApp],
+    win: &'a WindowItem,
+) -> &'a str {
+    crate::modules::apps::app_name_for_window(apps, &win.app_id)
+}
+
+/// Returns true if the window's title is equivalent to its app name and should be shown once.
+pub fn title_equals_app_name(title: &str, app_name: &str) -> bool {
+    title == app_name || title.eq_ignore_ascii_case(app_name)
+}
+
 pub fn draw(cr: &Context, th: &Theme, world: &World, rect: Rect) {
     let (x, y, w, h) = rect;
     draw::card(cr, th, x, y, w, h);
@@ -425,35 +438,52 @@ pub fn draw(cr: &Context, th: &Theme, world: &World, rect: Rect) {
         let close_cy = ry + ROW_H / 2.0;
         let max_w = (close_cx - 16.0 - tx).max(20.0);
 
+        let app_name = window_app_name(&world.apps.apps, win);
         let primary = if win.title.is_empty() {
-            &win.app_id
+            app_name
         } else {
             &win.title
         };
-        draw::text_max(
-            cr,
-            tx,
-            ry + 5.0,
-            max_w,
-            &Text {
-                size: 13.0,
-                bold: win.focused || is_sel,
-                color: th.text,
-                text: primary,
-            },
-        );
-        draw::text_max(
-            cr,
-            tx,
-            ry + 23.0,
-            max_w,
-            &Text {
-                size: 11.5,
-                bold: false,
-                color: th.muted,
-                text: &win.app_id,
-            },
-        );
+
+        if title_equals_app_name(primary, app_name) {
+            draw::text_max(
+                cr,
+                tx,
+                ry + (ROW_H - 16.0) / 2.0,
+                max_w,
+                &Text {
+                    size: 13.0,
+                    bold: win.focused || is_sel,
+                    color: th.text,
+                    text: app_name,
+                },
+            );
+        } else {
+            draw::text_max(
+                cr,
+                tx,
+                ry + 5.0,
+                max_w,
+                &Text {
+                    size: 13.0,
+                    bold: win.focused || is_sel,
+                    color: th.text,
+                    text: primary,
+                },
+            );
+            draw::text_max(
+                cr,
+                tx,
+                ry + 23.0,
+                max_w,
+                &Text {
+                    size: 11.5,
+                    bold: false,
+                    color: th.muted,
+                    text: app_name,
+                },
+            );
+        }
 
         // Small stroked 'x' close icon on the right
         draw::set(cr, th.muted);
@@ -584,5 +614,152 @@ toplevel 11: app_id=\"foot\" title=\"shell\" state=none
         let surf_wide = cairo::ImageSurface::create(cairo::Format::ARgb32, 380, 100).unwrap();
         let cr_wide = cairo::Context::new(&surf_wide).unwrap();
         draw(&cr_wide, &th, &world, (0.0, 0.0, 380.0, 100.0));
+    }
+
+    #[test]
+    fn window_app_name_matched_by_desktop_id_startup_wm_class_exec_and_no_match() {
+        use crate::modules::apps::DesktopApp;
+
+        let apps = vec![
+            DesktopApp::new(
+                "Files",
+                "File Manager",
+                "",
+                "nautilus",
+                "org.gnome.Nautilus",
+                "org.gnome.Nautilus.desktop",
+            ),
+            DesktopApp::new(
+                "Discord",
+                "Instant Messaging",
+                "",
+                "discord-bin",
+                "discord",
+                "com.discordapp.Discord.desktop",
+            )
+            .with_startup_wm_class("discord"),
+            DesktopApp::new(
+                "Firefox",
+                "Web Browser",
+                "",
+                "firefox",
+                "firefox",
+                "org.mozilla.firefox.desktop",
+            ),
+        ];
+
+        // 1. Matched by desktop id
+        let win_files = WindowItem {
+            app_id: "org.gnome.Nautilus".to_string(),
+            title: "Files — Home".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(window_app_name(&apps, &win_files), "Files");
+
+        // 2. Matched by StartupWMClass
+        let win_discord = WindowItem {
+            app_id: "discord".to_string(),
+            title: "Discord — #general".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(window_app_name(&apps, &win_discord), "Discord");
+
+        // 3. Matched by Exec
+        let win_firefox = WindowItem {
+            app_id: "firefox".to_string(),
+            title: "Mozilla Firefox — Infynitae".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(window_app_name(&apps, &win_firefox), "Firefox");
+
+        // 4. No match keeps the raw app_id
+        let win_custom = WindowItem {
+            app_id: "custom-term".to_string(),
+            title: "Terminal".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(window_app_name(&apps, &win_custom), "custom-term");
+    }
+
+    #[test]
+    fn window_title_equals_app_name_draws_once_and_distinct_title_draws_both() {
+        use crate::modules::apps::DesktopApp;
+
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 380, 200).unwrap();
+        let cr = cairo::Context::new(&surf).unwrap();
+        let th = Theme::from_config(&crate::config::Config::from_text(""));
+        let mut world = World::now();
+        world.apps.apps = vec![
+            DesktopApp::new(
+                "Files",
+                "File Manager",
+                "",
+                "nautilus",
+                "org.gnome.Nautilus",
+                "org.gnome.Nautilus.desktop",
+            ),
+            DesktopApp::new(
+                "Firefox",
+                "Web Browser",
+                "",
+                "firefox",
+                "firefox",
+                "org.mozilla.firefox.desktop",
+            ),
+        ];
+
+        // Window whose title equals app name ("Files" == "Files") -> single line
+        let win_same = WindowItem {
+            id: 1,
+            app_id: "org.gnome.Nautilus".to_string(),
+            title: "Files".to_string(),
+            focused: true,
+            ..Default::default()
+        };
+        assert!(title_equals_app_name(
+            &win_same.title,
+            window_app_name(&world.apps.apps, &win_same)
+        ));
+
+        // Window whose title differs from app name -> two lines
+        let win_diff = WindowItem {
+            id: 2,
+            app_id: "firefox".to_string(),
+            title: "Mozilla Firefox — Infynitae".to_string(),
+            focused: false,
+            ..Default::default()
+        };
+        assert!(!title_equals_app_name(
+            &win_diff.title,
+            window_app_name(&world.apps.apps, &win_diff)
+        ));
+
+        // Window with unknown app id whose title equals app id -> single line
+        let win_raw_same = WindowItem {
+            id: 3,
+            app_id: "unknown-tool".to_string(),
+            title: "unknown-tool".to_string(),
+            ..Default::default()
+        };
+        assert!(title_equals_app_name(
+            &win_raw_same.title,
+            window_app_name(&world.apps.apps, &win_raw_same)
+        ));
+
+        // Window with unknown app id whose title differs -> two lines
+        let win_raw_diff = WindowItem {
+            id: 4,
+            app_id: "unknown-tool".to_string(),
+            title: "My Output".to_string(),
+            ..Default::default()
+        };
+        assert!(!title_equals_app_name(
+            &win_raw_diff.title,
+            window_app_name(&world.apps.apps, &win_raw_diff)
+        ));
+
+        world.windows.windows = vec![win_same, win_diff, win_raw_same, win_raw_diff];
+        world.windows.filtered = vec![0, 1, 2, 3];
+        draw(&cr, &th, &world, (0.0, 0.0, 380.0, 200.0));
     }
 }
