@@ -156,11 +156,12 @@ esac
 log "formatting $disk ($what) as $fs, label $label"
 notify "Formatting $what" "Everything on it is being erased."
 # every filesystem on it unmounted, every encrypted partition locked
-blk -nro NAME,TYPE,FSTYPE,MOUNTPOINTS "$disk" 2>/dev/null | while read -r n t f m; do
+blk -nro NAME,MOUNTPOINTS "$disk" 2>/dev/null | while read -r n m; do
     [ -n "${m:-}" ] && { udisks unmount --no-user-interaction -b "/dev/$n" >/dev/null 2>&1 \
         || udisks unmount -b "/dev/$n" >/dev/null 2>&1 || true; }
-    [ "$f" = crypto_LUKS ] && udisks lock --no-user-interaction -b "/dev/$n" >/dev/null 2>&1
-    true
+done
+blk -nro NAME,FSTYPE "$disk" 2>/dev/null | while read -r n f; do
+    [ "${f:-}" = crypto_LUKS ] && udisks lock --no-user-interaction -b "/dev/$n" >/dev/null 2>&1 || true
 done
 still=$(blk -nro MOUNTPOINTS "$disk" 2>/dev/null | grep -v '^$' | head -n 1)
 [ -z "$still" ] || fail "$still is still in use: close what is open on it and try again."

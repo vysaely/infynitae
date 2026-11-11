@@ -41,10 +41,26 @@ for a in "\$@"; do case "\$a" in /dev/*) dev="\$a" ;; esac; done
 case "\$*" in
     *PKNAME*) case "\$dev" in /dev/sdx[0-9]) echo sdx ;; /dev/sda[0-9]) echo sda ;; *) echo "" ;; esac ;;
     *SIZE*) echo " 119.5G" ;;
+    *NAME,MOUNTPOINTS*)
+        [ "\$dev" = /dev/sdx ] || exit 0
+        echo "sdx "
+        echo "sdx1 /run/media/me/efi"
+        echo "sdx2 "
+        echo "sdx3 /run/media/me/home" ;;
+    *NAME,FSTYPE*)
+        [ "\$dev" = /dev/sdx ] || exit 0
+        echo "sdx "
+        echo "sdx1 \${SDX1_FSTYPE:-vfat}"
+        echo "sdx2 crypto_LUKS"
+        echo "sdx3 ext4" ;;
     *NAME,TYPE,FSTYPE,MOUNTPOINTS*)
         [ "\$dev" = /dev/sdx ] || exit 0
         echo "sdx disk  "
-        echo "sdx1 part vfat /run/media/me/efi"
+        if [ "\${MISSING_FSTYPE:-0}" = 1 ]; then
+            echo "sdx1 part /run/media/me/efi"
+        else
+            echo "sdx1 part vfat /run/media/me/efi"
+        fi
         echo "sdx2 part crypto_LUKS "
         echo "sdx3 part ext4 /run/media/me/home" ;;
     *MOUNTPOINTS*)
@@ -122,6 +138,10 @@ check "FAT32: label in capitals, safe characters, 11 at most" "called \"0x0c  {}
 # ext4: owned by the user; an empty name becomes USB
 FS=ext4 NAME="" run /dev/sdx3
 check "ext4: from a device path, take-ownership, default name" "called \"0x83  {} ext4 {'label': <'USB'>, 'take-ownership': <true>}\""
+
+# missing filesystem type: unmount still finds its mountpoint
+MISSING_FSTYPE=1 run /run/media/me/home
+check "unmounts a partition with missing filesystem type" 'called "unmount --no-user-interaction -b /dev/sdx1"'
 
 # refusals: nothing is formatted
 CONFIRM=Cancel run /run/media/me/home
