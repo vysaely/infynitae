@@ -21,7 +21,7 @@ if [ -z "$WAYLAND_DISPLAY" ] || [ ! -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ]; th
     sock=$(grep -o 'Listening on Wayland socket: [^ ]*' "$STATE_DIR/session.log" 2>/dev/null | tail -1 | cut -d' ' -f5)
     [ -n "$sock" ] && export WAYLAND_DISPLAY="$sock"
 fi
-if [ -z "$WAYLAND_DISPLAY" ] || ! pgrep -x infynitae >/dev/null 2>&1; then
+if [ -z "$WAYLAND_DISPLAY" ] || ! pgrep -u "$(id -u)" -x infynitae >/dev/null 2>&1; then
     echo "infynitae-reload: no running Infynitae session found" >&2
     exit 1
 fi
@@ -46,6 +46,7 @@ spawn() {
 pids_of() {
     found=1
     for d in /proc/[0-9]*; do
+        [ -O "$d" ] || continue
         [ "${d#/proc/}" = "$$" ] && continue
         set -f
         set -- "$1" $( { tr '\0' ' ' < "$d/cmdline"; } 2>/dev/null)
@@ -81,6 +82,7 @@ pids_matching() {
     want_prog=$1
     want_arg=$2
     for d in /proc/[0-9]*; do
+        [ -O "$d" ] || continue
         [ "${d#/proc/}" = "$$" ] && continue
         set -f
         set -- $( { tr '\0' ' ' < "$d/cmdline"; } 2>/dev/null)
@@ -148,8 +150,8 @@ reload_recorder() {
     fi
     stop_helper infynitae-record-stream
     # its ffmpeg encoder can outlive both; it is the one writing into the replay dir
-    pkill -f "^ffmpeg .*${RUNTIME_DIR}/infynitae-replay/chunk" 2>/dev/null || true
-    pkill -f "^ffmpeg .*/dev/shm/infynitae-replay/chunk" 2>/dev/null || true
+    pkill -u "$(id -u)" -f "^ffmpeg .*${RUNTIME_DIR}/infynitae-replay/chunk" 2>/dev/null || true
+    pkill -u "$(id -u)" -f "^ffmpeg .*/dev/shm/infynitae-replay/chunk" 2>/dev/null || true
     if [ -n "$r" ] && is_true "${ENABLE_REPLAY_BUFFER:-false}"; then
         spawn "$r" supervisor
         echo "recorder: restarted"
@@ -341,13 +343,13 @@ reload_clipboard() {
 }
 
 status() {
-    printf '%-26s %s\n' infynitae "$(pgrep -x infynitae | tr '\n' ' ')"
+    printf '%-26s %s\n' infynitae "$(pgrep -u "$(id -u)" -x infynitae | tr '\n' ' ')"
     for n in infynitae-wallpaper infynitae-edge infynitae-recorder infynitae-record-stream infynitae-portal infynitae-polkit infynitae-lock; do
         pids=$(pids_of "$n" | tr '\n' ' ')
         printf '%-26s %s\n' "$n" "${pids:-not running}"
     done
     # the compositor's file on disk was replaced since it started: a restart picks up the update
-    exe=$(readlink "/proc/$(pgrep -x infynitae | head -1)/exe" 2>/dev/null)
+    exe=$(readlink "/proc/$(pgrep -u "$(id -u)" -x infynitae | head -1)/exe" 2>/dev/null)
     case "$exe" in
         *" (deleted)") echo "compositor: an updated binary is installed; Ctrl+Alt+Backspace loads it" ;;
         *) echo "compositor: running the installed binary" ;;
