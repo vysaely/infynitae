@@ -159,4 +159,31 @@ env -i HOME="$HOMEDIR" PATH="$BIN:/usr/bin:/bin" XDG_RUNTIME_DIR="$RUN" CALL_LOG
     sh -c "sh '$REPO_DIR/live/launch.sh' brightness-up" 2>"$TMP/b_err" || rc=$?
 check "brightness-up with max_brightness=0 does not divide by zero" "$(grep -c 'division by 0' "$TMP/b_err" 2>/dev/null || true)" 0
 
+# remember-window: a per-window toggle kept in the config for the window's app
+remember() {
+    env -i HOME="$HOMEDIR" PATH="$BIN:/usr/bin:/bin" XDG_RUNTIME_DIR="$RUN" ENABLE_EDGE=false \
+        INFYNITAE_SETTINGS_APPLIED=1 sh "$REPO_DIR/live/launch.sh" remember-window "$@" >/dev/null 2>&1 || true
+}
+line() { grep "^$1=" "$HOMEDIR/.config/infynitae/config"; }
+cfg_before=$(cat "$HOMEDIR/.config/infynitae/config" 2>/dev/null || true)
+printf '%s\n' 'PRIVACY_APPS="bitwarden keepassxc"' '    # Hidden from captures, by app' \
+    'KEEP_ON_TOP="Picture-in-Picture, Picture in picture"' > "$HOMEDIR/.config/infynitae/config"
+remember PRIVACY_APPS telegramdesktop on
+check "privacy on adds the app (spaces in the old value read as separators)" "$(line PRIVACY_APPS)" 'PRIVACY_APPS="bitwarden, keepassxc, telegramdesktop"'
+remember PRIVACY_APPS TelegramDesktop on
+check "  the same app twice is kept once" "$(line PRIVACY_APPS)" 'PRIVACY_APPS="bitwarden, keepassxc, telegramdesktop"'
+remember PRIVACY_APPS keepassxc off
+check "privacy off takes it out" "$(line PRIVACY_APPS)" 'PRIVACY_APPS="bitwarden, telegramdesktop"'
+check "  the comment under the line stays" "$(sed -n 2p "$HOMEDIR/.config/infynitae/config")" '    # Hidden from captures, by app'
+remember KEEP_ON_TOP mpv on
+check "keep on top keeps titles with spaces whole" "$(line KEEP_ON_TOP)" 'KEEP_ON_TOP="Picture-in-Picture, Picture in picture, mpv"'
+remember KEEP_ON_TOP "picture in picture" off
+check "  and takes one out by its name, any case" "$(line KEEP_ON_TOP)" 'KEEP_ON_TOP="Picture-in-Picture, mpv"'
+remember DISCORD_KEY_PATCH evil on
+check "any other setting is refused" "$(grep -c DISCORD "$HOMEDIR/.config/infynitae/config" || true)" 0
+printf '%s\n' 'TERMINAL="kitty"' > "$HOMEDIR/.config/infynitae/config"
+remember PRIVACY_APPS bitwarden on
+check "a config without the line gets it" "$(line PRIVACY_APPS)" 'PRIVACY_APPS="bitwarden"'
+printf '%s' "$cfg_before" > "$HOMEDIR/.config/infynitae/config"
+
 exit $fail

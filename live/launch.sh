@@ -551,6 +551,33 @@ case "$ACTION" in
         # keeps its default, and a notification names it
         exec "$HOME/infynitae/live/config-check" --notify >/dev/null 2>&1
         ;;
+    remember-window)
+        # a per-window toggle kept for the window's app (the compositor, Super+Shift+P / Super+Shift+K):
+        # remember-window KEY APP on|off adds the app to the comma list KEY in the config, or takes it out
+        key="${2:-}" app="${3:-}" state="${4:-}"
+        case "$key" in PRIVACY_APPS|KEEP_ON_TOP) ;; *) exit 1 ;; esac
+        [ -n "$app" ] || exit 1
+        cfg="$HOME/.config/infynitae/config"
+        [ -f "$cfg" ] || exit 0
+        tmp=$(mktemp "$cfg.XXXXXX") || exit 1
+        RW_KEY="$key" RW_APP="$app" RW_ON="$state" awk '
+            function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
+            BEGIN { k = ENVIRON["RW_KEY"]; app = tolower(ENVIRON["RW_APP"]); on = ENVIRON["RW_ON"] == "on"; done = 0 }
+            !done && substr($0, 1, length(k) + 2) == k "=\"" {
+                v = substr($0, length(k) + 3); sub(/".*$/, "", v)
+                # PRIVACY_APPS takes commas or spaces; KEEP_ON_TOP holds titles with spaces: commas only
+                n = split(v, parts, k == "PRIVACY_APPS" ? "[, \t]+" : ","); out = ""; have = 0
+                for (i = 1; i <= n; i++) {
+                    p = trim(parts[i]); if (p == "") continue
+                    if (tolower(p) == app) { have = 1; if (!on) continue }
+                    out = out (out == "" ? "" : ", ") p
+                }
+                if (on && !have) out = out (out == "" ? "" : ", ") app
+                print k "=\"" out "\""; done = 1; next
+            }
+            { print }
+            END { if (!done && on) print k "=\"" app "\"" }' "$cfg" > "$tmp" && mv -f "$tmp" "$cfg" || rm -f "$tmp"
+        ;;
     notify-privacy-on)
         # OSD Toast: Privacy Mode Enabled
         if command -v notify-send >/dev/null 2>&1; then

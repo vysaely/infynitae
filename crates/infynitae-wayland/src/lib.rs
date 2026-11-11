@@ -1600,20 +1600,55 @@ impl WaylandState {
         false
     }
 
-    /// Toggles the privacy capture exemption on the currently focused window.
+    /// Toggles the privacy capture exemption on the currently focused window, and remembers it for the
+    /// window's app (`PRIVACY_APPS`): its windows are private from the moment they open, after restarts too
+    /// (owner 2026-11-11: "make the settings for some windows to always save for example privacy").
     pub fn toggle_privacy_focused(&mut self) {
-        if let Some(focused) = self.core.focus().target() {
-            if self.private_elements.contains(&focused) {
-                self.private_elements.remove(&focused);
-                log_line!("[infynitae] Privacy capture exemption DISABLED for window {focused:?}");
-                self.spawn_action("notify-privacy-off");
-            } else {
-                self.private_elements.insert(focused);
-                log_line!(
-                    "[infynitae] Privacy capture exemption ENABLED for window {focused:?} (hidden from screenshots and screenshare)"
-                );
-                self.spawn_action("notify-privacy-on");
+        let Some(focused) = self.core.focus().target() else {
+            return;
+        };
+        let app = self.app_key(focused);
+        if self.is_element_private(focused) {
+            self.private_elements.remove(&focused);
+            // the app's entry goes now too, so the window is not private through it until the config is read
+            if let Some(app) = &app {
+                self.privacy_apps.retain(|p| !app.contains(p.as_str()));
             }
+            log_line!("[infynitae] Privacy capture exemption DISABLED for window {focused:?}");
+            self.spawn_action("notify-privacy-off");
+            self.remember_for_app(focused, "PRIVACY_APPS", false);
+        } else {
+            self.private_elements.insert(focused);
+            if let Some(app) = &app {
+                self.privacy_apps.push(app.clone());
+            }
+            log_line!(
+                "[infynitae] Privacy capture exemption ENABLED for window {focused:?} (hidden from screenshots and screenshare)"
+            );
+            self.spawn_action("notify-privacy-on");
+            self.remember_for_app(focused, "PRIVACY_APPS", true);
+        }
+    }
+
+    /// A window's app as the per-app settings name it: its app id in lowercase (None without one).
+    fn app_key(&self, element: ElementId) -> Option<String> {
+        self.core
+            .stage()
+            .meta(element)
+            .and_then(|m| m.app_id.as_deref())
+            .map(str::trim)
+            .filter(|a| !a.is_empty())
+            .map(str::to_lowercase)
+    }
+
+    /// Writes a per-window toggle into the config line `key` for the window's app (`launch.sh
+    /// remember-window`): added when `on`, taken out when not. A window without an app id is not remembered.
+    pub(crate) fn remember_for_app(&mut self, element: ElementId, key: &str, on: bool) {
+        if let Some(app) = self.app_key(element) {
+            self.spawn_action_args(
+                "remember-window",
+                &[key, &app, if on { "on" } else { "off" }],
+            );
         }
     }
 
