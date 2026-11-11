@@ -1853,11 +1853,14 @@ impl Shell {
         let oy_scrolled = oy - self.world.panel_scroll;
         let mut clicked_module = false;
         let mut changed = false;
-        for (it, r) in panel.items.iter().zip(rects) {
+        for (it, r) in panel.items.iter().zip(rects).rev() {
             let (mx, my, mw, mh) = (ox + r.0, oy_scrolled + r.1, r.2, r.3);
             if mw > 0.0 && mh > 0.0 && x >= mx && x <= mx + mw && y >= my && y <= my + mh {
                 clicked_module = true;
-                changed |= modules::click(it, &mut self.world, (mw, mh), (x - mx, y - my), button);
+                if modules::click(it, &mut self.world, (mw, mh), (x - mx, y - my), button) {
+                    changed = true;
+                    break;
+                }
             }
         }
 
@@ -2021,7 +2024,7 @@ impl Shell {
                     let (ox, oy) = panel_origin(p, w, h, pw, ph);
                     let oy_scrolled = oy - self.world.panel_scroll;
                     let mut changed = false;
-                    for (it, r) in p.items.iter().zip(rects) {
+                    for (it, r) in p.items.iter().zip(rects).rev() {
                         let (mx, my, mw, mh) = (ox + r.0, oy_scrolled + r.1, r.2, r.3);
                         if mw > 0.0
                             && mh > 0.0
@@ -2030,8 +2033,10 @@ impl Shell {
                             && y >= my
                             && y <= my + mh
                         {
-                            changed |=
-                                modules::drag(it, &mut self.world, (mw, mh), (x - mx, y - my));
+                            if modules::drag(it, &mut self.world, (mw, mh), (x - mx, y - my)) {
+                                changed = true;
+                                break;
+                            }
                         }
                     }
                     return changed;
@@ -2581,6 +2586,36 @@ mod tests {
             "steam"
         );
         assert!(modules::memory::close_bg_rect(&shell_world.memory, 380.0).is_some());
+    }
+
+    #[test]
+    fn clicking_overlapping_modules_hits_topmost_card_only() {
+        let mut cfg = Config::from_text("");
+        cfg.widgets = Some(
+            Panel::widgets("session@10,10,300x100 volume@10,10,300x100").expect("widgets panel"),
+        );
+        let mut sh = Shell::from_config(cfg);
+        sh.desktop = true;
+        sh.use_widgets();
+        sh.world
+            .apply("volume", "Volume: 50%\nMute: no\nDescription: Speakers\n");
+
+        let (w, h) = (1920.0, 1080.0);
+        // Click at coordinates that hit both session (lock) and volume (slider)
+        assert!(sh.click(w, h, 50.0, 35.0, 1));
+
+        // Volume (topmost, second item) should receive the click, not session underneath
+        assert!(
+            !sh.world.actions.iter().any(|a| a.contains("lock")),
+            "session underneath should not be clicked when occluded by volume"
+        );
+        assert!(
+            sh.world
+                .actions
+                .iter()
+                .any(|a| a.contains("pactl set-sink-volume")),
+            "topmost module (volume) should receive the click"
+        );
     }
 
     #[test]
