@@ -106,8 +106,8 @@ These pass the test suite but have not run on a real screen or device yet:
   screen changed since its last one, with just what changed; a still screen costs nothing.
 - **Tearing for games** (`TEARING`, Super+Shift+O; Super+Shift+T too): a fullscreen window
   shown directly flips each frame at once (an async page flip) when its app asks
-  (`tearing-control-v1`, a Vulkan or OpenGL game with vsync off) or after Super+Shift+O on it
-  (X11 games, which cannot ask). A
+  (`tearing-control-v1`, a Vulkan or OpenGL game with vsync off; presentation hints apply on the
+  next surface commit) or after Super+Shift+O on it (X11 games, which cannot ask). A
   driver that refuses gets the usual flip. In the test suite; this GPU (amdgpu) reports support,
   not yet seen in a game.
 - **Game mode** (`GAME_MODE`, `--no-gamemode`): a fullscreen window the GPU shows directly is

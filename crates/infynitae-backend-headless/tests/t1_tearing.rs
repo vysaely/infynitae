@@ -126,8 +126,12 @@ fn a_game_that_asks_tears_while_fullscreen() {
     t.hint(&c, w, PresentationHint::Async);
     assert!(t.ls.state.tears(o));
     c.destroy();
+    t.ls.probe.surfaces[w].wl.commit();
     t.adv();
-    assert!(!t.ls.state.tears(o), "the object destroyed: vsync");
+    assert!(
+        !t.ls.state.tears(o),
+        "the object destroyed (and the next commit): vsync"
+    );
 }
 
 #[test]
@@ -193,4 +197,52 @@ fn a_second_tearing_object_for_one_surface_is_a_protocol_error() {
     let _c = t.control(w);
     let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| t.control(w)));
     assert!(res.is_err(), "tearing_control_exists");
+}
+
+#[test]
+fn presentation_hint_applies_on_commit_not_on_request() {
+    let mut t = T::new();
+    let o = t.ls.output();
+    let (w, _) = t.map("game");
+    let c = t.control(w);
+    t.fullscreen(w, true);
+    assert!(!t.ls.state.tears(o), "default vsync: no tearing");
+
+    // set hint to async without commit: tearing must not be in effect yet
+    c.set_presentation_hint(PresentationHint::Async);
+    t.adv();
+    assert!(
+        !t.ls.state.tears(o),
+        "hint is double-buffered: must not take effect before commit"
+    );
+
+    // committing the surface applies the async hint
+    t.ls.probe.surfaces[w].wl.commit();
+    t.adv();
+    assert!(t.ls.state.tears(o), "hint in effect after commit");
+
+    // set hint back to vsync without commit: tearing remains in effect
+    c.set_presentation_hint(PresentationHint::Vsync);
+    t.adv();
+    assert!(
+        t.ls.state.tears(o),
+        "vsync hint must not take effect before commit"
+    );
+
+    // committing the surface applies the vsync hint
+    t.ls.probe.surfaces[w].wl.commit();
+    t.adv();
+    assert!(!t.ls.state.tears(o), "vsync in effect after commit");
+
+    // destroying the control object goes back to vsync on the next commit, not before
+    c.set_presentation_hint(PresentationHint::Async);
+    t.ls.probe.surfaces[w].wl.commit();
+    t.adv();
+    assert!(t.ls.state.tears(o));
+    c.destroy();
+    t.adv();
+    assert!(t.ls.state.tears(o), "destroy applies on the next commit");
+    t.ls.probe.surfaces[w].wl.commit();
+    t.adv();
+    assert!(!t.ls.state.tears(o), "vsync after the commit");
 }

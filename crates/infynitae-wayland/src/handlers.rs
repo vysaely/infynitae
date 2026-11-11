@@ -430,6 +430,7 @@ impl CompositorHandler for WaylandState {
                 state.apply(&fx);
             }
             state.registry.remove(s);
+            state.tearing_surface_destroyed(s);
         });
     }
 
@@ -440,6 +441,7 @@ impl CompositorHandler for WaylandState {
     fn commit(&mut self, surface: &WlSurface) {
         on_commit_buffer_handler::<Self>(surface);
         self.popups.commit(surface);
+        self.tearing_commit(surface);
 
         let has_buffer = with_states(surface, |states| {
             states
