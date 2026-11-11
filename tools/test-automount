@@ -389,6 +389,32 @@ if ! grep -q -- "lock --no-user-interaction -b /dev/dm-0" "$CALLS_LOG"; then
 fi
 echo "PASS: eject decodes hex-escaped backing device path"
 
+# eject with no arguments only unmounts this user's drives
+rm -f "$CALLS_LOG" "$NOTIFY_LOG"
+MOCK_MOUNTS="$TMP/mounts"
+cat > "$MOCK_MOUNTS" <<EOF
+/dev/sdd1 /run/media/testuser/MY_USB ext4 rw 0 0
+/dev/sde1 /run/media/otheruser/OTHER_USB ext4 rw 0 0
+EOF
+PATH="$BIN_DIR:$PATH" \
+USER=testuser \
+XDG_STATE_HOME="$STATE_DIR" \
+XDG_RUNTIME_DIR="$RUN_DIR" \
+INFYNITAE_AUTOMOUNT_UDISKSCTL="$MOCK_UDISKSCTL" \
+INFYNITAE_AUTOMOUNT_MOUNTS="$MOCK_MOUNTS" \
+"$WATCHER" eject
+if grep -q -- "/dev/sde1" "$CALLS_LOG"; then
+    echo "FAIL: eject unmounted another user's drive /dev/sde1" >&2
+    cat "$CALLS_LOG" >&2
+    exit 1
+fi
+if ! grep -q -- "unmount --no-user-interaction -b /dev/sdd1" "$CALLS_LOG"; then
+    echo "FAIL: eject did not unmount current user's drive /dev/sdd1" >&2
+    cat "$CALLS_LOG" >&2
+    exit 1
+fi
+echo "PASS: eject only unmounts current user's drives"
+
 echo "=== Test 5: a label cannot forge udisks lines, and shows as plain text ==="
 rm -f "$CALLS_LOG" "$NOTIFY_LOG" "$LOG_FILE"
 # sdh1's label holds a line break and lines that look like udisks' own: a second entry for the
