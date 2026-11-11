@@ -209,7 +209,7 @@ fn pointer_set(world: &mut World, size: (f64, f64), pos: (f64, f64)) -> bool {
             return false;
         }
         let cmd = set_volume_action(&mut world.volume, pct);
-        world.run(cmd);
+        world.run_coalesced("volume", cmd);
         return true;
     }
     let rows = if world.volume.brightness.is_some() {
@@ -232,12 +232,13 @@ fn pointer_set(world: &mut World, size: (f64, f64), pos: (f64, f64)) -> bool {
     if same {
         return false;
     }
+    let key = if on_brightness { "brightness" } else { "volume" };
     let cmd = if on_brightness {
         set_brightness_action(&mut world.volume, pct)
     } else {
         set_volume_action(&mut world.volume, pct)
     };
-    world.run(cmd);
+    world.run_coalesced(key, cmd);
     true
 }
 
@@ -285,7 +286,7 @@ pub fn scroll(world: &mut World, size: (f64, f64), pos: (f64, f64), dy: f64) -> 
         let next = (cur + step).clamp(0, 100) as u8;
         set_volume_action(&mut world.volume, next)
     };
-    world.run(cmd);
+    world.run_coalesced(if on_brightness { "brightness" } else { "volume" }, cmd);
     true
 }
 
