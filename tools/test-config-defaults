@@ -15,4 +15,10 @@ check() {
 got=$(sh -c 'unset FOCUS_FOLLOWS_MOUSE; . live/env.sh >/dev/null 2>&1; echo "$FOCUS_FOLLOWS_MOUSE"')
 check "FOCUS_FOLLOWS_MOUSE in env.sh defaults to strict" "$got" "strict"
 
+# 2. PAN_MODE: default is free
+got=$(sh -c 'unset PAN_MODE; . live/settings.sh apply >/dev/null 2>&1; echo "$PAN_MODE"')
+check "PAN_MODE in settings.sh defaults to free" "$got" "free"
+got=$(sh -c 'unset PAN_MODE; . live/env.sh >/dev/null 2>&1; echo "$PAN_MODE"')
+check "PAN_MODE in env.sh defaults to free" "$got" "free"
+
 [ "$fails" = 0 ] && echo "test-config-defaults: passed" || { echo "test-config-defaults: $fails failed"; exit 1; }
