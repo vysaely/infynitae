@@ -1562,6 +1562,7 @@ impl Shell {
             self.edit_exit();
             self.world.child.open = false;
             self.world.tray.open_menu = None;
+            self.world.media.pending_seek_us = None;
             self.pointer_down = false;
             return was;
         }
@@ -1570,6 +1571,7 @@ impl Shell {
         }
         self.world.child.open = false;
         self.world.tray.open_menu = None;
+        self.world.media.pending_seek_us = None;
         self.pointer_down = false;
         if self.open.is_some() {
             self.open = None;
@@ -1885,10 +1887,19 @@ impl Shell {
 
     pub fn pointer_release(&mut self) -> bool {
         self.pointer_down = false;
-        if self.edit.active {
-            return self.edit_release();
+        let mut changed = false;
+        if let Some(seek_us) = self.world.media.pending_seek_us.take() {
+            let bus = self.world.media.bus_name.clone();
+            self.world.note(format!("media:seek:{seek_us}"));
+            if self.world.live && !bus.is_empty() {
+                modules::media::execute_media_seek(&bus, seek_us);
+            }
+            changed = true;
         }
-        false
+        if self.edit.active {
+            return self.edit_release() || changed;
+        }
+        changed
     }
 
     pub fn scroll(&mut self, w: f64, h: f64, x: f64, y: f64, dy: f64) -> bool {
@@ -2829,6 +2840,44 @@ mod tests {
             Some("tray:menu-action:discord:20")
         );
         assert_eq!(sh.world.tray.open_menu, None);
+    }
+
+    #[test]
+    fn dragging_media_progress_bar_commits_seek_on_pointer_release() {
+        let cfg = Config::from_text("PANEL_MEDIA=\"SUPER+M top right media\"\n");
+        let mut sh = Shell::from_config(cfg);
+        sh.world.apply(
+            "media",
+            "status=Playing\ntitle=Starless\nartist=King Crimson\nplayer=Melodyae\nbus_name=org.mpris.MediaPlayer2.melodyae\nposition=100000000\nduration=500000000\nlyrics_current=Line\n",
+        );
+        let (w, h) = (1920.0, 1080.0);
+        assert!(sh.toggle_named("media"));
+        let panel = sh.cfg.panels[sh.open.unwrap()].clone();
+        let pw = panel_width(&panel, w);
+        let (rects, ph) = layout_in(&panel, pw, &sh.world, &sh.theme);
+        let (ox, oy) = panel_origin(&panel, w, h, pw, ph);
+        let r_media = rects[0];
+
+        // Press down inside panel so pointer_down is true
+        sh.click(w, h, ox + 10.0, oy + 10.0, 1);
+        assert!(sh.pointer_down);
+
+        // Progress bar cy in Medium size: PAD_Y(8) + 64 + 10 + 18 (current lyric) + 6 = 106
+        let bar_y = oy + r_media.1 + 106.0;
+        let bar_center_x = ox + r_media.0 + r_media.2 / 2.0;
+        assert!(sh.pointer_motion(w, h, bar_center_x, bar_y));
+        assert!(sh.world.media.pending_seek_us.is_some());
+
+        // Pointer release commits the seek
+        assert!(sh.pointer_release());
+        assert_eq!(sh.world.media.pending_seek_us, None);
+        assert!(
+            sh.world
+                .actions
+                .iter()
+                .any(|a| a.starts_with("media:seek:")),
+            "media seek action should have been emitted"
+        );
     }
 
     #[test]
