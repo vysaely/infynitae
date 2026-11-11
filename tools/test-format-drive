@@ -155,7 +155,9 @@ check "ext4: from a device path, take-ownership, default name" "called \"0x83  {
 
 # drives larger than 2 TB use GPT partition table
 BIG_DRIVE=1 run /run/media/me/home
-check "drives over 2 TB use GPT partition table" 'called "Block.Format gpt" && called "CreatePartitionAndFormat 0 0   {} exfat"'
+check "drives over 2 TB use GPT partition table" 'called "Block.Format gpt" && called "CreatePartitionAndFormat 0 0 ebd0a0a2-b9e5-4433-87c0-68b6b72699c7  {} exfat"'
+FS=ext4 BIG_DRIVE=1 run /run/media/me/home
+check "  an ext4 one is typed for Linux" 'called "CreatePartitionAndFormat 0 0 0fc63daf-8483-4772-8e79-3d69d8477de4  {} ext4"'
 BIG_DRIVE=0
 
 # missing filesystem type: unmount still finds its mountpoint

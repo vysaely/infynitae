@@ -174,12 +174,16 @@ still=$(blk -nro MOUNTPOINTS "$disk" 2>/dev/null | grep -v '^$' | head -n 1)
 [ -z "$still" ] || fail "$still is still in use: close what is open on it and try again."
 
 obj="/org/freedesktop/UDisks2/block_devices/$name_of_disk"
-# drives up to 2 TB use MBR (dos) which every system reads; drives over 2 TB need GPT
+# MBR, which every system reads, holds up to 2 TiB; a bigger drive gets GPT, its partition typed for Windows
+# (basic data) or Linux (ext4)
 ptable="dos"
 size_bytes=$(blk -bndo SIZE "$disk" 2>/dev/null || echo 0)
 if [ "$size_bytes" -gt 2199023255552 ] 2>/dev/null; then
     ptable="gpt"
-    type=""
+    case "$fs" in
+        ext4) type=0fc63daf-8483-4772-8e79-3d69d8477de4 ;;
+        *) type=ebd0a0a2-b9e5-4433-87c0-68b6b72699c7 ;;
+    esac
 fi
 # no 'tear-down': it also rewrites /etc/fstab and /etc/crypttab, which asks for the admin password; everything
 # on the drive is already unmounted and locked above, so a removable drive is formatted without a password
