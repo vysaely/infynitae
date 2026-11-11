@@ -36,6 +36,15 @@ resolve_terminal() {
 
 TERM_CMD=$(resolve_terminal)
 
+INFYNITAE_BIN="${INFYNITAE_BIN:-}"
+if [ -z "$INFYNITAE_BIN" ]; then
+    if command -v infynitae >/dev/null 2>&1; then
+        INFYNITAE_BIN="infynitae"
+    else
+        INFYNITAE_BIN="$HOME/.local/bin/infynitae"
+    fi
+fi
+
 # The edge (ENABLE_EDGE) serves Super+W, Super+L, Super+A and Super+V when it is on and installed
 # (EDGE_BIN; its name before 2026-10-31, infynitae-island, until an update builds the new one)
 edge_on() {
@@ -204,8 +213,8 @@ case "$ACTION" in
         ;;
     overview|radar)
         # Super+Shift+Tab: the overview, a menu of the windows to go to
-        if command -v infynitae >/dev/null 2>&1; then
-            exec infynitae msg overview
+        if command -v "$INFYNITAE_BIN" >/dev/null 2>&1; then
+            exec "$INFYNITAE_BIN" msg overview
         elif command -v fuzzel >/dev/null 2>&1; then
             exec fuzzel
         fi
@@ -270,7 +279,7 @@ case "$ACTION" in
             if [ "${FREEZE_SCREENSHOT:-true}" = true ] && [ -x "$FREEZER" ]; then
                 FREEZE_DIR=$(mktemp -d "${XDG_RUNTIME_DIR:-/tmp}/infynitae-freeze.XXXXXX")
                 # the output names are the only "name" keys of the snapshot
-                for out in $("${INFYNITAE_BIN:-$HOME/.local/bin/infynitae}" msg snapshot 2>/dev/null \
+                for out in $("$INFYNITAE_BIN" msg snapshot 2>/dev/null \
                     | grep -o '"name":"[^"]*"' | cut -d'"' -f4); do
                     grim -o "$out" "$FREEZE_DIR/$out.png" 2>/dev/null || continue
                     "$FREEZER" --overlay --output "$out" "$FREEZE_DIR/$out.png" stretch &
@@ -526,13 +535,13 @@ case "$ACTION" in
     mute|toggle-mute)
         # Trigger Discord / App Global Shortcuts portal (in-app mute only, zero OS hardware muting)
         if [ -S "$XDG_RUNTIME_DIR/infynitae/shortcuts.sock" ]; then
-            infynitae msg shortcut mute 2>/dev/null || true
+            "$INFYNITAE_BIN" msg shortcut mute 2>/dev/null || true
         fi
         ;;
     deafen|toggle-deafen)
         # Trigger Discord / App Global Shortcuts portal (in-app deafen only, zero OS hardware muting)
         if [ -S "$XDG_RUNTIME_DIR/infynitae/shortcuts.sock" ]; then
-            infynitae msg shortcut deafen 2>/dev/null || true
+            "$INFYNITAE_BIN" msg shortcut deafen 2>/dev/null || true
         fi
         ;;
     config-check)
@@ -584,13 +593,13 @@ case "$ACTION" in
     toggle-idle-inhibit|inhibit-idle)
         # Send keypress or signal to compositor to toggle idle inhibit
         if [ -S "$XDG_RUNTIME_DIR/infynitae/shortcuts.sock" ]; then
-            infynitae msg shortcut idle_inhibit 2>/dev/null || true
+            "$INFYNITAE_BIN" msg shortcut idle_inhibit 2>/dev/null || true
         fi
         ;;
     toggle-privacy|privacy)
         # Send keypress or signal to compositor to toggle privacy
         if [ -S "$XDG_RUNTIME_DIR/infynitae/shortcuts.sock" ]; then
-            infynitae msg shortcut privacy 2>/dev/null || true
+            "$INFYNITAE_BIN" msg shortcut privacy 2>/dev/null || true
         fi
         ;;
     save-replay|clip-save|clip)

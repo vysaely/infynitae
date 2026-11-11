@@ -104,7 +104,36 @@ check "screenshot command with spaces executes" "$(grep -c '^shot: ' "$LOG" 2>/d
 run_action game-mode "on 4321"
 check "game-mode calls RegisterGame with PID" "$(grep -c 'com.feralinteractive.GameMode.RegisterGame 4321' "$LOG" 2>/dev/null || true)" 1
 
-# 7. Finding 5: Brightness divide by zero check (verify max_brightness 0 does not divide by zero)
+# 7. Finding 20: Shortcut socket messages invoke infynitae via fallback path when not in PATH
+mkdir -p "$RUN/infynitae" "$HOMEDIR/.local/bin"
+python3 -c "import socket; s = socket.socket(socket.AF_UNIX); s.bind('$RUN/infynitae/shortcuts.sock')"
+cat << 'EOF' > "$HOMEDIR/.local/bin/infynitae"
+#!/bin/sh
+echo "infynitae-bin: $*" >> "$CALL_LOG"
+EOF
+chmod +x "$HOMEDIR/.local/bin/infynitae"
+
+: > "$LOG"
+run_action mute ""
+check "mute falls back to ~/.local/bin/infynitae when PATH lacks it" \
+    "$(grep -c 'infynitae-bin: msg shortcut mute' "$LOG" 2>/dev/null || true)" 1
+
+: > "$LOG"
+run_action deafen ""
+check "deafen falls back to ~/.local/bin/infynitae when PATH lacks it" \
+    "$(grep -c 'infynitae-bin: msg shortcut deafen' "$LOG" 2>/dev/null || true)" 1
+
+: > "$LOG"
+run_action toggle-idle-inhibit ""
+check "toggle-idle-inhibit falls back to ~/.local/bin/infynitae when PATH lacks it" \
+    "$(grep -c 'infynitae-bin: msg shortcut idle_inhibit' "$LOG" 2>/dev/null || true)" 1
+
+: > "$LOG"
+run_action toggle-privacy ""
+check "toggle-privacy falls back to ~/.local/bin/infynitae when PATH lacks it" \
+    "$(grep -c 'infynitae-bin: msg shortcut privacy' "$LOG" 2>/dev/null || true)" 1
+
+# 8. Finding 5: Brightness divide by zero check (verify max_brightness 0 does not divide by zero)
 sys_dir="$TMP/sys/class/backlight/panel"
 mkdir -p "$sys_dir"
 echo 0 > "$sys_dir/brightness"
