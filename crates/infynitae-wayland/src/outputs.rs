@@ -312,6 +312,21 @@ impl WaylandState {
                 }
             }
         }
+        if effects.iter().any(|e| {
+            matches!(
+                e,
+                Effect::KeyboardFocus(_)
+                    | Effect::LayerKeyboardFocus(_)
+                    | Effect::ToplevelConfigure(_)
+                    | Effect::ToplevelConfigureSize { .. }
+                    | Effect::OutputAdded(_)
+                    | Effect::OutputChanged(_)
+                    | Effect::OutputRemoved(_)
+                    | Effect::InitialConfigure(_)
+            )
+        }) {
+            self.wlr_toplevels.dirty = true;
+        }
         self.drop_constraints_smithay_destroyed();
         self.sync_wlr_toplevels();
     }

@@ -214,3 +214,46 @@ fn activating_is_the_users_only_from_a_bar_they_are_using() {
         "activated by the bar the user is using"
     );
 }
+
+#[test]
+fn pointer_motion_sends_no_toplevel_events_when_nothing_changed() {
+    let (mut s, w1, _) = S::new();
+    s.focus(Some(s.e[0]));
+    s.bind();
+    let _ = s.take_log();
+    let sync_before = s.ls.state.wlr_toplevel_sync_count();
+
+    for i in 0..20 {
+        s.t += 1000;
+        let p = 500.0 + (i as f64);
+        pointer_motion(
+            &mut s.ls.state,
+            &mut s.ls.input,
+            (p, p),
+            (p, p),
+            s.t,
+        )
+        .expect("motion");
+        s.pump();
+    }
+    assert_eq!(
+        s.take_log(),
+        Vec::<String>::new(),
+        "pointer motion emits no toplevel events when nothing changed"
+    );
+    assert_eq!(
+        s.ls.state.wlr_toplevel_sync_count(),
+        sync_before,
+        "sync_wlr_toplevels does nothing when nothing changed"
+    );
+
+    let t1 = s.ls.probe.surfaces[w1].toplevel.clone().unwrap();
+    t1.set_title("renamed".into());
+    s.pump();
+    assert_eq!(s.take_log(), ["title renamed", "done"], "a title change");
+    assert_eq!(
+        s.ls.state.wlr_toplevel_sync_count(),
+        sync_before + 1,
+        "title change triggers a sync"
+    );
+}
