@@ -69,4 +69,8 @@ check "SCREENSHARE_ASK=false gives chooser_type=none" "$got" "chooser_type=none"
 got=$(sed -n 's/^RECORD_CODEC="\${RECORD_CODEC:-\([^}]*\)}".*/\1/p' live/record/infynitae-recorder)
 check "RECORD_CODEC in infynitae-recorder defaults to hevc" "$got" "hevc"
 
+# 7. TOUCHPAD_TAP: default is true
+got=$(sh -c 'unset TOUCHPAD_TAP; . live/env.sh >/dev/null 2>&1; echo "$TOUCHPAD_TAP"')
+check "TOUCHPAD_TAP in env.sh defaults to true" "$got" "true"
+
 [ "$fails" = 0 ] && echo "test-config-defaults: passed" || { echo "test-config-defaults: $fails failed"; exit 1; }
