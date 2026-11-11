@@ -6,27 +6,320 @@ use crate::draw::{self, Text, PAD_X, PAD_Y};
 use crate::modules::{is_left_button, Rect, World};
 use crate::theme::{Rgba, Theme};
 use cairo::Context;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 pub const COLS_H: f64 = 80.0;
 pub const LAB_ROW_H: f64 = 34.0;
 
-pub const CMDS: &[(&str, &str)] = &[(
-    "system",
-    "for d in /sys/class/drm/card[0-9]*/device; do [ -d \"$d\" ] || continue; \
-     [ -f \"$d/gpu_busy_percent\" ] || [ -f \"$d/mem_info_vram_used\" ] || ls \"$d\"/hwmon/hwmon*/temp1_input >/dev/null 2>&1 || continue; \
-     echo \"gpu_busy=$(cat \"$d/gpu_busy_percent\" 2>/dev/null)\"; \
-     echo \"vram_used=$(cat \"$d/mem_info_vram_used\" 2>/dev/null)\"; \
-     echo \"vram_total=$(cat \"$d/mem_info_vram_total\" 2>/dev/null)\"; \
-     echo \"temp=$(cat \"$d\"/hwmon/hwmon*/temp1_input 2>/dev/null | head -n 1)\"; \
-     echo \"product_name=$(cat \"$d/product_name\" 2>/dev/null)\"; \
-     dev=$(sed 's/^0x//' \"$d/device\" 2>/dev/null | tr 'a-f' 'A-F'); \
-     rev=$(sed 's/^0x//' \"$d/revision\" 2>/dev/null | tr 'a-f' 'A-F'); \
-     [ -n \"$dev\" ] && [ -f /usr/share/libdrm/amdgpu.ids ] && grep -i \"^$dev,[[:space:]]*$rev,\" /usr/share/libdrm/amdgpu.ids 2>/dev/null | head -n 1; \
-     break; done; \
-     lspci 2>/dev/null | grep -iE 'vga|3d|display' | head -n 1; \
-     for f in $(ls -t \"$HOME\"/aevyternae-mind/logs/lab*.log 2>/dev/null); do \
-     if grep -q '^=== ' \"$f\" 2>/dev/null; then grep -E '^=== |^LAB .*DONE|^LAB DONE|^FAILED ' \"$f\" 2>/dev/null; break; fi; done",
-)];
+pub const CMDS: &[(&str, &str)] = &[("system", "__sysfs_system__")];
+
+/// Parses temperature input (millidegrees C or raw degrees C) from a hwmon `temp*_input` file into integer degrees C.
+pub fn parse_hwmon_temp(temp_input: &str) -> Option<i32> {
+    temp_input
+        .trim()
+        .trim_end_matches("°C")
+        .trim_end_matches('C')
+        .trim()
+        .parse::<i64>()
+        .ok()
+        .map(|n| {
+            if n.abs() >= 1000 {
+                ((n + 500) / 1000) as i32
+            } else {
+                n as i32
+            }
+        })
+}
+
+/// Discovers a hwmon directory and temperature file inside `hwmon_parent`, optionally matching `expected_name`.
+pub fn find_hwmon_temp_file(hwmon_parent: &Path, expected_name: Option<&str>) -> Option<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(hwmon_parent) else {
+        return None;
+    };
+    let mut dirs: Vec<PathBuf> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|s| s.starts_with("hwmon"))
+        })
+        .collect();
+    dirs.sort();
+
+    for dir in dirs {
+        if let Some(expected) = expected_name {
+            let name_path = dir.join("name");
+            if let Ok(name) = std::fs::read_to_string(name_path) {
+                if !name.trim().eq_ignore_ascii_case(expected) {
+                    continue;
+                }
+            }
+        }
+        let t1 = dir.join("temp1_input");
+        if t1.is_file() {
+            return Some(t1);
+        }
+        if let Ok(files) = std::fs::read_dir(&dir) {
+            let mut temps: Vec<PathBuf> = files
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| {
+                    p.file_name()
+                        .and_then(|n| n.to_str())
+                        .is_some_and(|s| s.starts_with("temp") && s.ends_with("_input"))
+                })
+                .collect();
+            temps.sort();
+            if let Some(first_temp) = temps.into_iter().next() {
+                return Some(first_temp);
+            }
+        }
+    }
+    None
+}
+
+/// Reads temperature from a hwmon directory tree under `hwmon_parent`.
+pub fn read_hwmon_temp(hwmon_parent: &Path) -> Option<i32> {
+    let file = find_hwmon_temp_file(hwmon_parent, None)?;
+    let content = std::fs::read_to_string(file).ok()?;
+    parse_hwmon_temp(&content)
+}
+
+/// Looks up `dev` and `rev` (hex strings) in `/usr/share/libdrm/amdgpu.ids` text format.
+pub fn lookup_amdgpu_ids(ids_text: &str, dev: &str, rev: &str) -> Option<String> {
+    let dev_clean = dev
+        .trim()
+        .strip_prefix("0x")
+        .unwrap_or(dev.trim())
+        .to_ascii_uppercase();
+    let rev_clean = rev
+        .trim()
+        .strip_prefix("0x")
+        .unwrap_or(rev.trim())
+        .to_ascii_uppercase();
+    if dev_clean.is_empty() {
+        return None;
+    }
+    for line in ids_text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let parts: Vec<&str> = trimmed.splitn(3, ',').collect();
+        if parts.len() == 3
+            && parts[0].trim().eq_ignore_ascii_case(&dev_clean)
+            && parts[1].trim().eq_ignore_ascii_case(&rev_clean)
+        {
+            return Some(trimmed.to_string());
+        }
+    }
+    None
+}
+
+/// Discovers the first DRM card device path with telemetry in `drm_dir` (e.g. `/sys/class/drm`).
+pub fn find_drm_card_device(drm_dir: &Path) -> Option<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(drm_dir) else {
+        return None;
+    };
+    let mut card_paths: Vec<(u32, PathBuf)> = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(s) = name.to_str() else {
+            continue;
+        };
+        if let Some(num_str) = s.strip_prefix("card") {
+            if !num_str.is_empty() && num_str.chars().all(|c| c.is_ascii_digit()) {
+                if let Ok(num) = num_str.parse::<u32>() {
+                    card_paths.push((num, entry.path()));
+                }
+            }
+        }
+    }
+    card_paths.sort_by_key(|(num, _)| *num);
+
+    for (_, card_path) in card_paths {
+        let d = card_path.join("device");
+        if !d.is_dir() {
+            continue;
+        }
+        let has_busy = d.join("gpu_busy_percent").is_file();
+        let has_vram = d.join("mem_info_vram_used").is_file();
+        let has_temp = find_hwmon_temp_file(&d.join("hwmon"), None).is_some();
+        if has_busy || has_vram || has_temp {
+            return Some(d);
+        }
+    }
+    None
+}
+
+/// Reads the latest running training lab lines from `lab_dir` (`~/aevyternae-mind/logs/lab*.log`).
+pub fn read_recent_lab_log(lab_dir: &Path) -> Option<String> {
+    let Ok(entries) = std::fs::read_dir(lab_dir) else {
+        return None;
+    };
+    let mut logs: Vec<(std::time::SystemTime, PathBuf)> = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(s) = name.to_str() else {
+            continue;
+        };
+        if s.starts_with("lab") && s.ends_with(".log") {
+            let path = entry.path();
+            if let Ok(meta) = path.metadata() {
+                if let Ok(mtime) = meta.modified() {
+                    logs.push((mtime, path));
+                }
+            }
+        }
+    }
+    logs.sort_by_key(|a| std::cmp::Reverse(a.0));
+
+    for (_, path) in logs {
+        let Ok(content) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        if content.contains("=== ") {
+            let mut lines = Vec::new();
+            for raw in content.lines() {
+                let line = raw.trim();
+                if line.starts_with("=== ")
+                    || (line.starts_with("LAB ") && line.ends_with("DONE"))
+                    || line.starts_with("LAB DONE")
+                    || line.starts_with("FAILED ")
+                {
+                    lines.push(line.to_string());
+                }
+            }
+            if !lines.is_empty() {
+                return Some(lines.join("\n"));
+            }
+            break;
+        }
+    }
+    None
+}
+
+/// Reads system telemetry directly from DRM sysfs, hwmon, libdrm amdgpu.ids, and lab logs without spawning shells.
+pub fn fetch_system_from(
+    drm_dir: &Path,
+    amdgpu_ids_path: &Path,
+    lab_logs_dir: Option<&Path>,
+) -> String {
+    let mut out = String::new();
+    let mut found_gpu_name = false;
+
+    if let Some(d) = find_drm_card_device(drm_dir) {
+        if let Ok(busy) = std::fs::read_to_string(d.join("gpu_busy_percent")) {
+            out.push_str("gpu_busy=");
+            out.push_str(busy.trim());
+            out.push('\n');
+        } else {
+            out.push_str("gpu_busy=\n");
+        }
+        if let Ok(vram_used) = std::fs::read_to_string(d.join("mem_info_vram_used")) {
+            out.push_str("vram_used=");
+            out.push_str(vram_used.trim());
+            out.push('\n');
+        } else {
+            out.push_str("vram_used=\n");
+        }
+        if let Ok(vram_total) = std::fs::read_to_string(d.join("mem_info_vram_total")) {
+            out.push_str("vram_total=");
+            out.push_str(vram_total.trim());
+            out.push('\n');
+        } else {
+            out.push_str("vram_total=\n");
+        }
+        if let Some(temp) = read_hwmon_temp(&d.join("hwmon")) {
+            out.push_str("temp=");
+            out.push_str(&temp.to_string());
+            out.push('\n');
+        } else {
+            out.push_str("temp=\n");
+        }
+        if let Ok(prod) = std::fs::read_to_string(d.join("product_name")) {
+            let trimmed = prod.trim();
+            out.push_str("product_name=");
+            out.push_str(trimmed);
+            out.push('\n');
+            if !trimmed.is_empty() {
+                found_gpu_name = true;
+            }
+        } else {
+            out.push_str("product_name=\n");
+        }
+
+        let dev_raw = std::fs::read_to_string(d.join("device")).unwrap_or_default();
+        let dev = dev_raw
+            .trim()
+            .strip_prefix("0x")
+            .unwrap_or(dev_raw.trim())
+            .to_ascii_uppercase();
+        let rev_raw = std::fs::read_to_string(d.join("revision")).unwrap_or_default();
+        let rev = rev_raw
+            .trim()
+            .strip_prefix("0x")
+            .unwrap_or(rev_raw.trim())
+            .to_ascii_uppercase();
+
+        if !found_gpu_name && !dev.is_empty() && amdgpu_ids_path.is_file() {
+            if let Ok(ids_text) = std::fs::read_to_string(amdgpu_ids_path) {
+                if let Some(match_line) = lookup_amdgpu_ids(&ids_text, &dev, &rev) {
+                    out.push_str(&match_line);
+                    out.push('\n');
+                    found_gpu_name = true;
+                }
+            }
+        }
+    }
+
+    if !found_gpu_name {
+        if let Some(lspci_line) = fetch_lspci_fallback() {
+            out.push_str(&lspci_line);
+            out.push('\n');
+        }
+    }
+
+    if let Some(lab_dir) = lab_logs_dir {
+        if let Some(lab_text) = read_recent_lab_log(lab_dir) {
+            out.push_str(&lab_text);
+            out.push('\n');
+        }
+    }
+
+    out
+}
+
+fn fetch_lspci_fallback() -> Option<String> {
+    let o = Command::new("lspci")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&o.stdout);
+    for line in text.lines() {
+        let lower = line.to_ascii_lowercase();
+        if (lower.contains("vga") || lower.contains("3d") || lower.contains("display"))
+            && line.contains(':')
+        {
+            return Some(line.to_string());
+        }
+    }
+    None
+}
+
+/// Returns the formatted system string for consumption by [`parse_system`].
+pub fn fetch_string() -> String {
+    let home = std::env::var("HOME").ok();
+    let lab_dir = home.map(|h| PathBuf::from(h).join("aevyternae-mind/logs"));
+    fetch_system_from(
+        Path::new("/sys/class/drm"),
+        Path::new("/usr/share/libdrm/amdgpu.ids"),
+        lab_dir.as_deref(),
+    )
+}
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SystemData {
@@ -155,20 +448,7 @@ pub fn parse_drm_sysfs(
         (used, total)
     });
 
-    let temp = temp_input
-        .trim()
-        .trim_end_matches("°C")
-        .trim_end_matches('C')
-        .trim()
-        .parse::<i64>()
-        .ok()
-        .map(|n| {
-            if n.abs() >= 1000 {
-                ((n + 500) / 1000) as i32
-            } else {
-                n as i32
-            }
-        });
+    let temp = parse_hwmon_temp(temp_input);
 
     (busy, vram, temp)
 }
@@ -570,5 +850,52 @@ LAB A5b DONE
             sh.world.actions.last().map(String::as_str),
             Some("pkill -TERM -x firefox")
         );
+    }
+
+    #[test]
+    fn parses_hwmon_tree_in_temp_dir() {
+        let dir = std::env::temp_dir().join(format!("test_hwmon_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let hwmon0 = dir.join("hwmon0");
+        std::fs::create_dir_all(&hwmon0).unwrap();
+        std::fs::write(hwmon0.join("name"), "amdgpu\n").unwrap();
+        std::fs::write(hwmon0.join("temp1_input"), "57000\n").unwrap();
+
+        let temp = read_hwmon_temp(&dir);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(temp, Some(57));
+    }
+
+    #[test]
+    fn parses_drm_sysfs_tree_in_temp_dir() {
+        let dir = std::env::temp_dir().join(format!("test_drm_sysfs_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let card1_dev = dir.join("card1/device");
+        let hwmon2 = card1_dev.join("hwmon/hwmon2");
+        std::fs::create_dir_all(&hwmon2).unwrap();
+
+        std::fs::write(card1_dev.join("gpu_busy_percent"), "67\n").unwrap();
+        std::fs::write(card1_dev.join("mem_info_vram_used"), "7807320064\n").unwrap();
+        std::fs::write(card1_dev.join("mem_info_vram_total"), "17095983104\n").unwrap();
+        std::fs::write(card1_dev.join("device"), "0x7550\n").unwrap();
+        std::fs::write(card1_dev.join("revision"), "0xc0\n").unwrap();
+        std::fs::write(hwmon2.join("name"), "amdgpu\n").unwrap();
+        std::fs::write(hwmon2.join("temp1_input"), "57000\n").unwrap();
+
+        let amdgpu_ids = dir.join("amdgpu.ids");
+        std::fs::write(&amdgpu_ids, "7550,\tC0,\tAMD Radeon RX 9070 XT\n").unwrap();
+
+        let out = fetch_system_from(&dir, &amdgpu_ids, None);
+        let d = parse_system(&out);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(d.gpu_busy, Some(67));
+        assert_eq!(d.gpu_name, "Radeon RX 9070 XT");
+        assert_eq!(d.temp_c, Some(57));
+        let vram_used = d.vram_used_gb.unwrap();
+        let vram_total = d.vram_total_gb.unwrap();
+        assert!((vram_used - 7.271).abs() < 0.01);
+        assert!((vram_total - 15.922).abs() < 0.01);
     }
 }
