@@ -97,22 +97,33 @@ pub fn click(world: &mut World, w: f64, pos: (f64, f64)) -> bool {
 /// - `h >= 310.0`: the month and events
 /// - otherwise: the month
 pub fn draw(cr: &Context, th: &Theme, world: &World, rect: Rect) {
+    draw_inner(cr, th, world, rect, true);
+}
+
+/// Draws the calendar content without rendering an outer card background (for embedding in clock).
+pub fn draw_content(cr: &Context, th: &Theme, world: &World, rect: Rect) {
+    draw_inner(cr, th, world, rect, false);
+}
+
+fn draw_inner(cr: &Context, th: &Theme, world: &World, rect: Rect, with_card: bool) {
     let (x, y, w, h) = rect;
     let effective_h = if h > 0.0 { h } else { height() };
 
     if effective_h < 140.0 {
-        draw_today_only(cr, th, world, (x, y, w, effective_h));
+        draw_today_only(cr, th, world, (x, y, w, effective_h), with_card);
     } else if effective_h >= 310.0 {
-        draw_month_and_events(cr, th, world, (x, y, w, effective_h));
+        draw_month_and_events(cr, th, world, (x, y, w, effective_h), with_card);
     } else {
-        draw_month(cr, th, world, (x, y, w, effective_h));
+        draw_month(cr, th, world, (x, y, w, effective_h), with_card);
     }
 }
 
 /// Draws "today only" view (compact).
-fn draw_today_only(cr: &Context, th: &Theme, world: &World, rect: Rect) {
+fn draw_today_only(cr: &Context, th: &Theme, world: &World, rect: Rect, with_card: bool) {
     let (x, y, w, h) = rect;
-    draw::card(cr, th, x, y, w, h);
+    if with_card {
+        draw::card(cr, th, x, y, w, h);
+    }
     let today = world.now.date();
 
     let weekday = today.format("%A").to_string();
@@ -234,16 +245,20 @@ fn draw_month_grid(cr: &Context, th: &Theme, world: &World, x: f64, y: f64, w: f
 }
 
 /// Draws the standard month view.
-fn draw_month(cr: &Context, th: &Theme, world: &World, rect: Rect) {
+fn draw_month(cr: &Context, th: &Theme, world: &World, rect: Rect, with_card: bool) {
     let (x, y, w, h) = rect;
-    draw::card(cr, th, x, y, w, h);
+    if with_card {
+        draw::card(cr, th, x, y, w, h);
+    }
     draw_month_grid(cr, th, world, x, y, w);
 }
 
 /// Draws the month grid and the events section below.
-fn draw_month_and_events(cr: &Context, th: &Theme, world: &World, rect: Rect) {
+fn draw_month_and_events(cr: &Context, th: &Theme, world: &World, rect: Rect, with_card: bool) {
     let (x, y, w, h) = rect;
-    draw::card(cr, th, x, y, w, h);
+    if with_card {
+        draw::card(cr, th, x, y, w, h);
+    }
     draw_month_grid(cr, th, world, x, y, w);
 
     let events_y = y + PAD_Y + 28.0 + 22.0 + 6.0 * CAL_ROW + 12.0;
@@ -338,5 +353,14 @@ mod tests {
         assert_eq!(evs[1].title, "Code Review");
         assert_eq!(evs[2].time, "");
         assert_eq!(evs[2].title, "All-day Holiday");
+    }
+
+    #[test]
+    fn calendar_draw_content_renders_without_card_background() {
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 380, 240).unwrap();
+        let cr = cairo::Context::new(&surf).unwrap();
+        let th = Theme::from_config(&crate::config::Config::from_text(""));
+        let world = World::now();
+        draw_content(&cr, &th, &world, (0.0, 0.0, 380.0, 240.0));
     }
 }

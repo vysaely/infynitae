@@ -57,7 +57,7 @@ pub fn draw(cr: &Context, th: &Theme, it: &Item, world: &World, rect: Rect) {
         let top = 2.0 * PAD_Y + 86.0;
         draw::card(cr, th, x, y, w, h.max(top));
         draw_face(cr, th, world, x, y);
-        calendar::draw(
+        calendar::draw_content(
             cr,
             th,
             world,
