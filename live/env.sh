@@ -226,10 +226,10 @@ if [ -z "$WAYLAND_DISPLAY" ] && [ -n "$XDG_RUNTIME_DIR" ]; then
     fi
 fi
 
-# Resolve DISPLAY: prioritize active unix socket
-if [ -z "$DISPLAY" ] || [ ! -S "/tmp/.X11-unix/X${DISPLAY#*:}" ]; then
+# Resolve DISPLAY: prioritize active unix socket owned by the current user
+if [ -z "$DISPLAY" ] || [ ! -S "/tmp/.X11-unix/X${DISPLAY#*:}" ] || [ ! -O "/tmp/.X11-unix/X${DISPLAY#*:}" ]; then
     for xsock in /tmp/.X11-unix/X*; do
-        if [ -S "$xsock" ]; then
+        if [ -S "$xsock" ] && [ -O "$xsock" ]; then
             num="${xsock##*/X}"
             export DISPLAY=":$num"
             break

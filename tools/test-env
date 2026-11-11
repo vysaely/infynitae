@@ -1,0 +1,45 @@
+#!/bin/sh
+# tools/test-env: tests for live/env.sh environment resolution and security.
+set -eu
+
+REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
+ENV_SCRIPT="$REPO_DIR/live/env.sh"
+
+TMP=$(mktemp -d "/tmp/infynitae-test-env.XXXXXX")
+trap 'rm -rf "$TMP"' EXIT INT TERM
+
+# ----------------------------------------------------------------------
+# 1. Finding 6: DISPLAY auto-detection ignores foreign X11 sockets
+# ----------------------------------------------------------------------
+mkdir -p "$TMP/.X11-unix"
+# /etc/pacman.d/gnupg/S.gpg-agent is an existing socket not owned by the test user
+FOREIGN_SOCK="/etc/pacman.d/gnupg/S.gpg-agent"
+if [ -S "$FOREIGN_SOCK" ] && [ ! -O "$FOREIGN_SOCK" ]; then
+    ln -s "$FOREIGN_SOCK" "$TMP/.X11-unix/X0"
+else
+    echo "Warning: cannot find foreign socket; skipping socket ownership check"
+fi
+
+# Create user's own socket on display :1
+python3 -c "import socket; s = socket.socket(socket.AF_UNIX); s.bind('$TMP/.X11-unix/X1')"
+
+# Sourcing env.sh with /tmp/.X11-unix containing foreign X0 and own X1
+export HOME="$TMP/home"
+export XDG_RUNTIME_DIR="$TMP/run"
+mkdir -p "$HOME" "$XDG_RUNTIME_DIR"
+unset DISPLAY
+rm -rf /tmp/.X11-unix
+mkdir -p /tmp/.X11-unix
+ln -s "$FOREIGN_SOCK" /tmp/.X11-unix/X0
+python3 -c "import socket; s = socket.socket(socket.AF_UNIX); s.bind('/tmp/.X11-unix/X1')"
+
+set +eu
+. "$ENV_SCRIPT" >/dev/null 2>&1
+rc=$?
+set -eu
+
+if [ "$DISPLAY" != ":1" ]; then
+    echo "FAIL Finding 6: expected DISPLAY ':1' (skipping foreign :0), got '$DISPLAY'"
+    exit 1
+fi
+echo "ok Finding 6: DISPLAY auto-detect skips foreign X11 sockets"

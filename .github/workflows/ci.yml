@@ -58,6 +58,7 @@ jobs:
       - run: sh tools/test-firefox-theme
       - run: sh tools/test-qt-theme
       - run: sh tools/test-portal-settings
+      - run: sh tools/test-env
 
   # The edge in Rust (docs/EDGE_RUST.md): its own crate in live/edge-rs, built, tested, and compared
   # with the C edge.
