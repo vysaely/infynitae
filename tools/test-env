@@ -43,3 +43,32 @@ if [ "$DISPLAY" != ":1" ]; then
     exit 1
 fi
 echo "ok Finding 6: DISPLAY auto-detect skips foreign X11 sockets"
+
+# ----------------------------------------------------------------------
+# 2. Finding 7: Insecure predictable temporary files in shared /tmp
+# ----------------------------------------------------------------------
+# A: When /tmp/infynitae-runtime-$(id -u) exists as a regular file (attacker blocked it),
+# env.sh must create a secure fallback directory instead of reusing the file.
+blocker="/tmp/infynitae-runtime-$(id -u)"
+rm -rf "$blocker"
+touch "$blocker"
+res_dir=$(
+    unset XDG_RUNTIME_DIR
+    export HOME="$TMP/home2"
+    mkdir -p "$HOME"
+    set +eu
+    . "$ENV_SCRIPT" >/dev/null 2>&1
+    set -eu
+    echo "$XDG_RUNTIME_DIR"
+)
+rm -f "$blocker"
+
+if [ ! -d "$res_dir" ]; then
+    echo "FAIL Finding 7: XDG_RUNTIME_DIR is not a directory when $blocker exists: got '$res_dir'"
+    exit 1
+fi
+if [ "$res_dir" = "$blocker" ]; then
+    echo "FAIL Finding 7: XDG_RUNTIME_DIR pointed to blocked regular file path"
+    exit 1
+fi
+echo "ok Finding 7: safe fallback directory created when predictable runtime path is blocked"

@@ -67,12 +67,14 @@ if [ -z "$XDG_RUNTIME_DIR" ]; then
         export XDG_RUNTIME_DIR="/run/user/$(id -u)"
     else
         FALLBACK_DIR="/tmp/infynitae-runtime-$(id -u)"
-        if [ -d "$FALLBACK_DIR" ] && [ ! -O "$FALLBACK_DIR" ]; then
-            FALLBACK_DIR=$(mktemp -d -t "infynitae-runtime-$(id -u)-XXXXXX")
+        if [ -d "$FALLBACK_DIR" ] && [ -O "$FALLBACK_DIR" ]; then
+            chmod 0700 "$FALLBACK_DIR"
+        elif mkdir -m 0700 "$FALLBACK_DIR" 2>/dev/null; then
+            :
         else
-            mkdir -p -m 0700 "$FALLBACK_DIR"
+            FALLBACK_DIR=$(mktemp -d -t "infynitae-runtime-$(id -u)-XXXXXX")
+            chmod 0700 "$FALLBACK_DIR"
         fi
-        chmod 0700 "$FALLBACK_DIR"
         export XDG_RUNTIME_DIR="$FALLBACK_DIR"
     fi
 fi
@@ -192,7 +194,7 @@ done
 # one instance. Every Super+key runs this file, so the running portal is found by the PID it was
 # started with (a shell builtin read, no process scan: pgrep -f cost 14 ms a press), and only
 # when that is gone by its program path (kernel process names stop at 15 characters).
-_infy_portal_pid="${XDG_RUNTIME_DIR:-/tmp}/infynitae-portal.pid"
+_infy_portal_pid="${XDG_RUNTIME_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/infynitae}/infynitae-portal.pid"
 _infy_portal_up=false
 if [ -r "$_infy_portal_pid" ] && read -r _infy_p < "$_infy_portal_pid" 2>/dev/null \
     && [ -n "$_infy_p" ] && [ -r "/proc/$_infy_p/comm" ] && read -r _infy_c < "/proc/$_infy_p/comm" \
@@ -274,7 +276,7 @@ fi
 # 9. Notify D-Bus / systemd activation environment if available: once per session and again only
 # when a pushed value changed (an Xwayland restart: new DISPLAY or XAUTHORITY), not on every Super+key
 _infy_env_key="$WAYLAND_DISPLAY|$DISPLAY|$XAUTHORITY|$XDG_CURRENT_DESKTOP|$XCURSOR_THEME|$XCURSOR_SIZE|$DCONF_PROFILE|$BROWSER"
-_infy_env_stamp="${XDG_RUNTIME_DIR:-/tmp}/infynitae-env-pushed"
+_infy_env_stamp="${XDG_RUNTIME_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/infynitae}/infynitae-env-pushed"
 _infy_env_old=""
 [ -r "$_infy_env_stamp" ] && read -r _infy_env_old < "$_infy_env_stamp" 2>/dev/null
 if [ "$_infy_env_old" != "$_infy_env_key" ]; then
