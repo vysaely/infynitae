@@ -207,13 +207,15 @@ fn write_capturing(path: &std::path::Path, names: &[String]) {
 impl WaylandState {
     /// A client asked for a capture frame: the mark shows (unless the client is left out).
     pub(crate) fn note_capture(&mut self, client: &Client) {
-        if !self.capture_indicator.names.contains_key(&client.id()) {
-            let name = client
-                .get_data::<crate::ClientState>()
-                .and_then(|s| s.identity().map(|i| i.app_name()))
-                .unwrap_or_else(|| "An app".to_string());
-            self.capture_indicator.names.insert(client.id(), name);
-        }
+        self.capture_indicator
+            .names
+            .entry(client.id())
+            .or_insert_with(|| {
+                client
+                    .get_data::<crate::ClientState>()
+                    .and_then(|s| s.identity().map(|i| i.app_name()))
+                    .unwrap_or_else(|| "An app".to_string())
+            });
         self.capture_indicator
             .seen
             .note(client.id(), Instant::now(), || {
