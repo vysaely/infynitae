@@ -595,6 +595,17 @@ pub fn layout_run(
     (rects, card_h)
 }
 
+pub const HINT: &str = "Right click: more";
+
+/// The hint for the Quick settings card title (docs/design/EDGE_DESIGN.md).
+pub fn hint(switch_look: &str) -> Option<&'static str> {
+    if switch_look != "icons" && switch_look != "tiles" {
+        Some(HINT)
+    } else {
+        None
+    }
+}
+
 /// Draws the shared card background (and `"Quick settings"` title or `"..."` placeholder) for a
 /// consecutive run of switches.
 pub fn draw_card(cr: &Context, th: &Theme, world: &World, rect: Rect) {
@@ -618,6 +629,9 @@ pub fn draw_card(cr: &Context, th: &Theme, world: &World, rect: Rect) {
         );
     } else if th.switch_look != "icons" && th.switch_look != "tiles" {
         draw::title(cr, th, x + PAD_X, y + PAD_Y, "Quick settings");
+        if let Some(h_text) = hint(&th.switch_look) {
+            draw::title_hint(cr, th, x, y, w, "Quick settings", h_text);
+        }
     }
 }
 
@@ -1062,5 +1076,27 @@ Controller AC:36:1B:F9:5D:AF (public)
             assert!(r.2 > 0.0, "switch {i} width should be non-zero");
             assert!(r.3 > 0.0, "switch {i} height should be non-zero");
         }
+    }
+
+    #[test]
+    fn switches_hint_shows_right_click_more_in_row_look() {
+        assert_eq!(hint("rows"), Some("Right click: more"));
+        assert_eq!(hint(""), Some("Right click: more"));
+        assert_eq!(hint("icons"), None);
+        assert_eq!(hint("tiles"), None);
+
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 380, 200).unwrap();
+        let cr = cairo::Context::new(&surf).unwrap();
+        let th = Theme::from_config(&crate::config::Config::from_text(""));
+        let mut world = World::now();
+        world.switches.ready = true;
+
+        // Wide card (380.0) renders title and hint
+        draw_card(&cr, &th, &world, (0.0, 0.0, 380.0, 200.0));
+
+        // Narrow card (140.0) drops hint to prevent overlap with title
+        let surf_narrow = cairo::ImageSurface::create(cairo::Format::ARgb32, 140, 200).unwrap();
+        let cr_narrow = cairo::Context::new(&surf_narrow).unwrap();
+        draw_card(&cr_narrow, &th, &world, (0.0, 0.0, 140.0, 200.0));
     }
 }
