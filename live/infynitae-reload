@@ -47,7 +47,9 @@ pids_of() {
     found=1
     for d in /proc/[0-9]*; do
         [ "${d#/proc/}" = "$$" ] && continue
+        set -f
         set -- "$1" $( { tr '\0' ' ' < "$d/cmdline"; } 2>/dev/null)
+        set +f
         [ $# -ge 2 ] || continue
         prog=${2##*/}
         case "$prog" in
@@ -80,7 +82,9 @@ pids_matching() {
     want_arg=$2
     for d in /proc/[0-9]*; do
         [ "${d#/proc/}" = "$$" ] && continue
+        set -f
         set -- $( { tr '\0' ' ' < "$d/cmdline"; } 2>/dev/null)
+        set +f
         [ $# -ge 1 ] || continue
         prog=${1##*/}
         case "$prog" in

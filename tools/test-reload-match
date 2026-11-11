@@ -5,8 +5,10 @@ set -u
 here=$(cd "$(dirname "$0")/.." && pwd)
 tmp=$(mktemp -d)
 trap 'kill $a $b 2>/dev/null; rm -rf "$tmp"' EXIT
-sed -n '/^pids_matching() {/,/^}/p' "$here/live/infynitae-reload" > "$tmp/fn"
-. "$tmp/fn"
+sed -n '/^pids_of() {/,/^}/p' "$here/live/infynitae-reload" > "$tmp/fn_of"
+sed -n '/^pids_matching() {/,/^}/p' "$here/live/infynitae-reload" > "$tmp/fn_matching"
+. "$tmp/fn_of"
+. "$tmp/fn_matching"
 cp "$(command -v sleep)" "$tmp/infynitae"
 "$tmp/infynitae" 300 5 & a=$!
 "$tmp/infynitae" 300 7 & b=$!
@@ -15,3 +17,32 @@ got=$(pids_matching infynitae 7)
 [ "$got" = "$b" ] || { echo "FAIL: expected only $b, got: $got (other copy is $a)"; exit 1; }
 if pids_matching infynitae 9 >/dev/null; then echo "FAIL: no copy has that argument"; exit 1; fi
 echo "ok: only the matching copy"
+
+# ----------------------------------------------------------------------
+# Finding 12: Wildcard path expansion when scanning process cmdlines
+# ----------------------------------------------------------------------
+# In a directory with local files matching a glob, pids_of and pids_matching
+# must not expand cmdline arguments against the local directory.
+wild_dir="$tmp/wild"
+mkdir -p "$wild_dir"
+touch "$wild_dir/match1" "$wild_dir/match2"
+
+# Start a process whose argument is '*'
+cat > "$tmp/arg_holder" <<'EOF'
+#!/bin/sh
+sleep 300
+EOF
+chmod +x "$tmp/arg_holder"
+"$tmp/arg_holder" '*' & c=$!
+sleep 0.2
+
+# Inside wild_dir (containing match1, match2), the argument '*' must NOT expand to match1
+# So searching for match1 must return nothing
+if (cd "$wild_dir" && pids_matching arg_holder "match1" >/dev/null); then
+    echo "FAIL Finding 12: cmdline '*' expanded to local file 'match1'"
+    kill $c 2>/dev/null || true
+    exit 1
+fi
+
+kill $c 2>/dev/null || true
+echo "ok Finding 12: process cmdline wildcard expansion prevented by set -f"
