@@ -2083,13 +2083,11 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
             }
         }
         // a card held near the edited panel's edge: it keeps scrolling, a step a frame
-        if app.shell.edit.flow_drag.is_some_and(|d| d.moved) {
-            if app.shell.drag_autoscroll() {
-                app.sync_all();
-                timeout = Some(timeout.map_or(Duration::from_millis(16), |t| {
-                    t.min(Duration::from_millis(16))
-                }));
-            }
+        if app.shell.drag_autoscroll() {
+            app.sync_all();
+            timeout = Some(timeout.map_or(Duration::from_millis(16), |t| {
+                t.min(Duration::from_millis(16))
+            }));
         }
         event_loop
             .dispatch(timeout, &mut app)

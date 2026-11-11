@@ -200,7 +200,18 @@ mod hint_tests {
         let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 400, 60).unwrap();
         let cr = cairo::Context::new(&surf).unwrap();
         assert!(title_hint(&cr, &th, 0.0, 0.0, 380.0, "Apps", "Recent first") > 0.0);
-        assert_eq!(title_hint(&cr, &th, 0.0, 0.0, 120.0, "Quick settings", "Right click: more"), 0.0);
+        assert_eq!(
+            title_hint(
+                &cr,
+                &th,
+                0.0,
+                0.0,
+                120.0,
+                "Quick settings",
+                "Right click: more"
+            ),
+            0.0
+        );
         assert_eq!(title_hint(&cr, &th, 0.0, 0.0, 380.0, "Apps", ""), 0.0);
     }
 }
