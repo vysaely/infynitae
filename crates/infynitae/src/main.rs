@@ -131,6 +131,7 @@ fn main() -> ExitCode {
     let mut max_frames: Option<u64> = None;
     let mut xwayland_satellite: Option<std::path::PathBuf> = None;
     let mut no_xwayland = false;
+    let mut cli_no_xwayland = false;
     let mut locked = false;
     let mut activation_policy = infynitae_core::input::focus::ActivationPolicy::Strict;
     let mut shell_socket = shell::default_path();
@@ -288,6 +289,7 @@ fn main() -> ExitCode {
             "--no-shell" => shell_socket = None,
             "--locked" => locked = true,
             "--no-xwayland" => {
+                cli_no_xwayland = true;
                 no_xwayland = true;
                 xwayland_satellite = None;
             }
@@ -384,6 +386,13 @@ fn main() -> ExitCode {
                 let key = key.trim();
                 let val = val.trim();
                 match key {
+                    "XWAYLAND" => {
+                        if matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no") {
+                            xwayland_satellite = None;
+                        } else if !cli_no_xwayland && xwayland_satellite.is_none() {
+                            xwayland_satellite = find_xwayland_satellite();
+                        }
+                    }
                     "PAN_MODE" => core.set_pan_mode(parse_pan_mode(val)),
                     "FOCUS_FOLLOWS_MOUSE" => {
                         let (enabled, strict) = parse_focus_follows_mouse(val);
