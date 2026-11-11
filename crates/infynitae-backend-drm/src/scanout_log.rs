@@ -5,6 +5,8 @@
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use infynitae_wayland::log_line;
+
 use tracing::callsite::Identifier;
 use tracing::field::{Field, Visit};
 use tracing::span::{Attributes, Id, Record};
@@ -30,7 +32,7 @@ pub(crate) fn watch(on: bool) {
 pub(crate) fn install() {
     let installed = tracing::subscriber::set_global_default(Refusals).is_ok();
     // a silent log must say why: a build that compiled trace lines out can never explain a refusal
-    println!(
+    log_line!(
         "[infynitae] Direct scanout log: listening {installed}, built with trace lines up to {}",
         tracing::level_filters::STATIC_MAX_LEVEL
     );
@@ -93,7 +95,7 @@ impl Subscriber for Refusals {
         let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
         if !seen.contains(&callsite) {
             seen.push(callsite);
-            println!("[infynitae] Not shown directly: {}", message.0);
+            log_line!("[infynitae] Not shown directly: {}", message.0);
         }
     }
 

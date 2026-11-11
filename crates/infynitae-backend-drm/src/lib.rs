@@ -31,7 +31,7 @@ use infynitae_core::output::{OutputDescriptor, OutputId, OutputKey, Transform};
 use infynitae_core::{Core, InputPort, OutputLifecycleToken, PhysicalEvent};
 use infynitae_wayland::output_management::{HeadChange, HeadInfo, HeadMode};
 use infynitae_wayland::session::{Session, SessionOptions};
-use infynitae_wayland::{WaylandState, convert};
+use infynitae_wayland::{WaylandState, convert, log_line};
 
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::allocator::gbm::{GbmAllocator, GbmBufferFlags, GbmDevice};
@@ -505,6 +505,8 @@ struct LoopData {
     loop_busy_max: Duration,
     /// The last LATENCY_STATS summary.
     latency_logged: Option<std::time::Instant>,
+    /// When the last slow turn was reported (rate bounded to at most one per second).
+    slow_turn_logged: Option<std::time::Instant>,
     dpms_active: bool,
     idle_sleep_timeout_min: u32,
     idle_auto_lock: bool,
@@ -575,13 +577,14 @@ fn update_virtual_screen(data: &mut LoopData) {
                         id,
                         screencopy_texture: None,
                     });
-                    println!(
+                    log_line!(
                         "[infynitae] No screen connected: a virtual {}x{} screen stands in (VIRTUAL_SCREEN)",
-                        VIRTUAL_SCREEN_SIZE.0, VIRTUAL_SCREEN_SIZE.1
+                        VIRTUAL_SCREEN_SIZE.0,
+                        VIRTUAL_SCREEN_SIZE.1
                     );
                     data.session.request_frame();
                 }
-                Err(e) => eprintln!("[infynitae] The virtual screen could not be set up: {e:?}"),
+                Err(e) => log_line!("[infynitae] The virtual screen could not be set up: {e:?}"),
             }
         }
         Some(false) => {
@@ -593,10 +596,10 @@ fn update_virtual_screen(data: &mut LoopData) {
                 {
                     Ok(fx) => data.state.apply(&fx),
                     Err(e) => {
-                        eprintln!("[infynitae] The virtual screen could not be removed: {e:?}")
+                        log_line!("[infynitae] The virtual screen could not be removed: {e:?}")
                     }
                 }
-                println!("[infynitae] A screen is connected: the virtual screen is gone");
+                log_line!("[infynitae] A screen is connected: the virtual screen is gone");
             }
         }
         None => {}
@@ -629,7 +632,7 @@ fn gles_renderer(gbm: &GbmDevice<DrmDeviceFd>) -> Result<GlesRenderer, Box<dyn E
         &display,
         smithay::backend::egl::context::ContextPriority::High,
     )?;
-    println!("[infynitae] GPU context priority: {:?}", context.priority());
+    log_line!("[infynitae] GPU context priority: {:?}", context.priority());
     // SAFETY: the context was just made and is current on no other thread; the renderer takes it
     // over and is used on this thread only.
     let renderer = unsafe { GlesRenderer::new(context) }?;
@@ -777,9 +780,9 @@ fn rescan_screens(data: &mut LoopData) {
             .output_disconnected(&mut data.output_token, id)
         {
             Ok(fx) => data.state.apply(&fx),
-            Err(e) => eprintln!("[infynitae] Screen {id:?} could not be disconnected: {e:?}"),
+            Err(e) => log_line!("[infynitae] Screen {id:?} could not be disconnected: {e:?}"),
         }
-        println!("[infynitae] Screen {id:?} disconnected");
+        log_line!("[infynitae] Screen {id:?} disconnected");
     }
     for (handle, conn) in connected {
         if data.screens.iter().any(|s| s.connector == handle) {
@@ -796,11 +799,11 @@ fn rescan_screens(data: &mut LoopData) {
             &conn,
         ) {
             Ok(Some(screen)) => {
-                println!("[infynitae] Screen {:?} connected", screen.id);
+                log_line!("[infynitae] Screen {:?} connected", screen.id);
                 data.screens.push(screen);
             }
             Ok(None) => {}
-            Err(e) => eprintln!("[infynitae] A connected screen could not be set up: {e}"),
+            Err(e) => log_line!("[infynitae] A connected screen could not be set up: {e}"),
         }
     }
     update_virtual_screen(data);
@@ -877,7 +880,7 @@ fn connect_screen(
         .collect();
     let mode_idx = choose_mode_custom(&infos, target_size, target_rate).or_else(|| {
         if target_size.is_some() || target_rate.is_some() {
-            eprintln!(
+            log_line!(
                 "[infynitae] Screen {name}: requested custom mode {:?} @ {:?} not found, falling back to preferred mode",
                 target_size, target_rate
             );
@@ -896,7 +899,7 @@ fn connect_screen(
         .flat_map(|e| resources.filter_crtcs(e.possible_crtcs()))
         .find(|c| !used.contains(c));
     let Some(crtc) = crtc else {
-        println!("[infynitae] No free CRTC for {:?}", conn.interface());
+        log_line!("[infynitae] No free CRTC for {:?}", conn.interface());
         return Ok(None);
     };
     let (w, h) = mode.size();
@@ -906,7 +909,7 @@ fn connect_screen(
         mode.vsync().2,
         mode.vrefresh(),
     );
-    println!(
+    log_line!(
         "[infynitae] Screen {name}: {w}x{h} @ {}.{:03} Hz (scale: {:.2}x)",
         refresh / 1000,
         refresh % 1000,
@@ -960,7 +963,7 @@ fn connect_screen(
         .vrr_supported(handle)
         .is_ok_and(|s| !matches!(s, smithay::backend::drm::VrrSupport::NotSupported));
     if !vrr_supported {
-        println!(
+        log_line!(
             "[infynitae] Screen {name}: no VRR (FreeSync off on the monitor, or not supported)"
         );
     }
@@ -969,10 +972,10 @@ fn connect_screen(
         (false, _) => {}
         (true, Some(true)) => {
             vrr_on = compositor.use_vrr(true).is_ok();
-            println!("[infynitae] Screen {name}: VRR always on");
+            log_line!("[infynitae] Screen {name}: VRR always on");
         }
-        (true, Some(false)) => println!("[infynitae] Screen {name}: VRR off"),
-        (true, None) => println!("[infynitae] Screen {name}: VRR while a window is fullscreen"),
+        (true, Some(false)) => log_line!("[infynitae] Screen {name}: VRR off"),
+        (true, None) => log_line!("[infynitae] Screen {name}: VRR while a window is fullscreen"),
     }
     let screen = Screen {
         id,
@@ -1077,14 +1080,14 @@ pub fn run_console_with(
     state.enable_session_lock();
     if options.locked {
         state.start_locked();
-        println!("[infynitae] Started locked: waiting for the lock screen");
+        log_line!("[infynitae] Started locked: waiting for the lock screen");
     }
 
     // the seat first: without it nothing can be opened
     let (mut seat, seat_notifier) = LibSeatSession::new()
         .map_err(|e| format!("no seat (is this a console you are logged in on?): {e}"))?;
     let seat_name = seat.seat();
-    println!("[infynitae] Seat {seat_name}");
+    log_line!("[infynitae] Seat {seat_name}");
 
     let gpu = std::env::var("INFYNITAE_DRM_DEVICE")
         .or_else(|_| std::env::var("WLR_DRM_DEVICES"))
@@ -1102,7 +1105,7 @@ pub fn run_console_with(
                 .and_then(|g| g.into_iter().next())
         })
         .ok_or("no GPU on this seat")?;
-    println!("[infynitae] GPU {}", gpu.display());
+    log_line!("[infynitae] GPU {}", gpu.display());
     let fd = seat.open(
         &gpu,
         OFlags::RDWR | OFlags::CLOEXEC | OFlags::NOCTTY | OFlags::NONBLOCK,
@@ -1125,7 +1128,7 @@ pub fn run_console_with(
             .iter()
             .copied()
             .collect();
-        println!(
+        log_line!(
             "[infynitae] Client buffers on GPU node {node} ({} formats/modifiers)",
             formats.len()
         );
@@ -1141,7 +1144,7 @@ pub fn run_console_with(
     if filter != "linear"
         && let Err(e) = renderer.upscale_filter(TextureFilter::Nearest)
     {
-        eprintln!("[infynitae] Warning: failed to set upscale filter to Nearest: {e:?}");
+        log_line!("[infynitae] Warning: failed to set upscale filter to Nearest: {e:?}");
     }
     let smooth_program = if filter == "fast" {
         None
@@ -1199,7 +1202,7 @@ pub fn run_console_with(
                         if let Some(s_120) = validate_scale(s) {
                             custom_scales.insert(conn_name.to_lowercase(), s_120);
                         } else {
-                            eprintln!(
+                            log_line!(
                                 "[infynitae] OUTPUT_{}_SCALE={s} outside accepted range (0.25..8.0), ignoring",
                                 conn_name
                             );
@@ -1214,7 +1217,7 @@ pub fn run_console_with(
                         Some(t) => {
                             custom_transforms.insert(conn_name.to_lowercase(), t);
                         }
-                        None => eprintln!(
+                        None => log_line!(
                             "[infynitae] OUTPUT_{conn_name}_TRANSFORM={val}: not a rotation (normal, 90, 180, 270, flipped, flipped-90, flipped-180, flipped-270), ignoring"
                         ),
                     }
@@ -1264,7 +1267,7 @@ pub fn run_console_with(
 
     if !output_order.is_empty() {
         if output_layout_reverse {
-            eprintln!("[infynitae] OUTPUT_ORDER overrides OUTPUT_LAYOUT");
+            log_line!("[infynitae] OUTPUT_ORDER overrides OUTPUT_LAYOUT");
         }
         connected_connectors.sort_by_key(|(_, _, name, debug_name)| {
             output_order
@@ -1305,7 +1308,7 @@ pub fn run_console_with(
     }
     if screens.is_empty() {
         // a monitor that is off or asleep at boot can report no connection: wait for it (hotplug)
-        println!("[infynitae] No connected screen yet: waiting for one");
+        log_line!("[infynitae] No connected screen yet: waiting for one");
     }
     state.set_gamma_handler(Arc::new(Mutex::new(DrmGammaHandler {
         drm_fd: drm.device_fd().clone(),
@@ -1365,7 +1368,7 @@ pub fn run_console_with(
     handle
         .insert_source(seat_notifier, |event, _, data| match event {
             SeatEvent::PauseSession => {
-                println!("[infynitae] Session paused (VT switched away)");
+                log_line!("[infynitae] Session paused (VT switched away)");
                 data.libinput.suspend();
                 data.drm.pause();
                 data.active = false;
@@ -1375,12 +1378,12 @@ pub fn run_console_with(
                 }
             }
             SeatEvent::ActivateSession => {
-                println!("[infynitae] Session resumed");
+                log_line!("[infynitae] Session resumed");
                 if data.libinput.resume().is_err() {
-                    eprintln!("[infynitae] libinput did not resume");
+                    log_line!("[infynitae] libinput did not resume");
                 }
                 if let Err(e) = data.drm.activate(false) {
-                    eprintln!("[infynitae] DRM did not resume: {e}");
+                    log_line!("[infynitae] DRM did not resume: {e}");
                 }
                 for s in &mut data.screens {
                     let _ = s.compositor.reset_state();
@@ -1428,7 +1431,7 @@ pub fn run_console_with(
                         let (on, changed) = s.relief.step(s.schedule.counts(), hz);
                         if changed {
                             data.state.core_mut().set_frame_relief(id, on);
-                            println!(
+                            log_line!(
                                 "[infynitae] GPU relief on screen {id:?}: {}",
                                 if on {
                                     "refreshes missed, windows out of use slow down"
@@ -1452,7 +1455,7 @@ pub fn run_console_with(
                     data.session.request_frame();
                 }
             }
-            DrmEvent::Error(e) => eprintln!("[infynitae] DRM error: {e}"),
+            DrmEvent::Error(e) => log_line!("[infynitae] DRM error: {e}"),
         })
         .map_err(|e| format!("DRM events: {e}"))?;
     handle
@@ -1478,7 +1481,7 @@ pub fn run_console_with(
                 })
                 .map_err(|e| format!("udev events: {e}"))?;
         }
-        Err(e) => eprintln!("[infynitae] No udev monitor, screens are not hotplugged: {e}"),
+        Err(e) => log_line!("[infynitae] No udev monitor, screens are not hotplugged: {e}"),
     }
 
     let cfg_path = std::env::var("HOME")
@@ -1520,6 +1523,7 @@ pub fn run_console_with(
         last_config_mtime: initial_mtime,
         last_user_activity: std::time::Instant::now(),
         latency_logged: None,
+        slow_turn_logged: None,
         dpms_active: false,
         idle_sleep_timeout_min: idle_timeout_min,
         idle_auto_lock,
@@ -1544,7 +1548,7 @@ pub fn run_console_with(
         scanout_log::install();
     }
 
-    println!("[infynitae] Compositor running. Ctrl+Alt+Backspace quits.");
+    log_line!("[infynitae] Compositor running. Ctrl+Alt+Backspace quits.");
     data.session.follow_display();
     let mut turn_started = std::time::Instant::now();
     let mut turn = TurnClock::new(turn_started);
@@ -1593,7 +1597,7 @@ pub fn run_console_with(
         // where "refresh to submit" also counts a quiet screen
         let busy = turn_started.elapsed();
         data.loop_busy_max = data.loop_busy_max.max(busy);
-        turn.report_if_slow(busy);
+        turn.report_if_slow(busy, &mut data.slow_turn_logged);
         event_loop.dispatch(timeout, &mut data)?;
         turn_started = std::time::Instant::now();
         turn = TurnClock::new(turn_started);
@@ -1631,7 +1635,7 @@ pub fn run_console_with(
             {
                 if data.last_config_mtime.is_some() && data.last_config_mtime != Some(mtime) {
                     data.last_config_mtime = Some(mtime);
-                    println!(
+                    log_line!(
                         "[infynitae] Config change detected (~/.config/infynitae/config). Live reloading..."
                     );
                     data.state.reload_config();
@@ -1673,7 +1677,7 @@ pub fn run_console_with(
                     >= Duration::from_secs((data.idle_sleep_timeout_min as u64) * 60)
                 && !logind_inhibits_idle_now(&mut data)
             {
-                println!(
+                log_line!(
                     "[infynitae] Inactivity timeout reached ({} min). Entering DPMS sleep / screen blanking...",
                     data.idle_sleep_timeout_min
                 );
@@ -1694,7 +1698,7 @@ pub fn run_console_with(
                         .as_mut()
                         .is_some_and(|p| matches!(p.try_wait(), Ok(None)));
                     if !is_running && !data.state.is_locked() {
-                        println!("[infynitae] Auto-locking session with infynitae-lock...");
+                        log_line!("[infynitae] Auto-locking session with infynitae-lock...");
                         // locked first, by the compositor itself: if the locker fails to start or
                         // never takes the lock, waking the screen shows black, not the desktop, and
                         // the locker is started again (`restart_dead_locker`)
@@ -1721,7 +1725,7 @@ pub fn run_console_with(
                             });
                         match child {
                             Ok(c) => data.lock_process = Some(c),
-                            Err(e) => eprintln!("[infynitae] Auto-lock could not start: {e}"),
+                            Err(e) => log_line!("[infynitae] Auto-lock could not start: {e}"),
                         }
                     }
                 }
@@ -1929,8 +1933,7 @@ pub fn run_console_with(
             .any(|s| s.deferred.is_some_and(|t| t <= now));
         turn.mark("new windows");
         if (data.session.frame_due() || has_screencopy || deferred_due) && data.active {
-            render(&mut data);
-            turn.mark("render");
+            render(&mut data, &mut turn);
         }
         let now = infynitae_wayland::presentation_clock_now();
         let next_deferred = data.screens.iter().filter_map(|s| s.deferred).min();
@@ -1948,7 +1951,7 @@ pub fn run_console_with(
         turn.mark("flush");
     }
 
-    println!("[infynitae] Shutting down compositor...");
+    log_line!("[infynitae] Shutting down compositor...");
     data.state.background_restore_all();
     drop(xwayland);
     data.session.shutdown_with(&mut data.state);
@@ -1962,7 +1965,7 @@ pub fn run_console_with(
         }
     }
     data.session.flush();
-    println!("[infynitae] Compositor exited cleanly.");
+    log_line!("[infynitae] Compositor exited cleanly.");
     Ok(())
 }
 
@@ -1979,13 +1982,13 @@ fn recover_renderer(data: &mut LoopData) {
         return;
     }
     data.renderer_recovered_at = Some(now);
-    eprintln!(
+    log_line!(
         "[infynitae] The GPU reset or ran out of memory: making a new renderer (windows stay open)"
     );
     let mut renderer = match gles_renderer(&data.factory.gbm) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("[infynitae] No new renderer yet ({e}): trying again in a second");
+            log_line!("[infynitae] No new renderer yet ({e}): trying again in a second");
             return;
         }
     };
@@ -2017,7 +2020,7 @@ const TEARING_RETRY: Duration = Duration::from_secs(5);
 
 /// One frame on every screen that is not waiting for its vblank. A screen whose frame changed
 /// nothing completes its frame callbacks now; a queued one at its vblank.
-fn render(data: &mut LoopData) {
+fn render(data: &mut LoopData, turn: &mut TurnClock) {
     let locked = data.state.is_locked();
     let clear = if locked {
         convert::LOCKED_CLEAR
@@ -2104,7 +2107,7 @@ fn render(data: &mut LoopData) {
         let (elements, k) = match frame {
             Ok(r) => r,
             Err(e) => {
-                eprintln!("[infynitae] Frame elements: {e}");
+                log_line!("[infynitae] Frame elements: {e}");
                 continue;
             }
         };
@@ -2112,6 +2115,7 @@ fn render(data: &mut LoopData) {
             .into_iter()
             .map(|e| smooth::Smoothed::new(e, data.smooth_program.clone()))
             .collect();
+        turn.mark("element building");
         // VRR auto: on while this screen shows a fullscreen window
         let want_vrr = data.screens[i]
             .vrr_mode
@@ -2169,12 +2173,12 @@ fn render(data: &mut LoopData) {
             clear
         };
         scanout_log::watch(presenting);
-        let queued = match s.compositor.render_frame(
-            &mut data.renderer,
-            &elements,
-            clear,
-            frame_flags,
-        ) {
+        turn.mark("scanout decision");
+        let render_result =
+            s.compositor
+                .render_frame(&mut data.renderer, &elements, clear, frame_flags);
+        turn.mark("render_frame");
+        let queued = match render_result {
             Ok(result) if !result.is_empty => {
                 use smithay::backend::drm::compositor::PrimaryPlaneElement;
                 let scanout = matches!(result.primary_element, PrimaryPlaneElement::Element(_));
@@ -2185,7 +2189,7 @@ fn render(data: &mut LoopData) {
                 if s.scanout_logged != Some((presenting, scanout)) {
                     let was = s.scanout_logged.replace((presenting, scanout));
                     match (presenting, scanout) {
-                        (true, true) => println!(
+                        (true, true) => log_line!(
                             "[infynitae] Fullscreen on screen {id:?}: its frames go to the screen as they are (direct scanout)"
                         ),
                         (true, false) => {
@@ -2220,7 +2224,7 @@ fn render(data: &mut LoopData) {
                                     .is_some()
                                 })
                                 .collect();
-                            println!(
+                            log_line!(
                                 "[infynitae] Fullscreen on screen {id:?}: composited, not scanned out ({} elements{}): {geometries:?}{buffer_note}; buffers offered {storage:?}",
                                 elements.len(),
                                 if data.direct_scanout && !scanout_banned {
@@ -2231,7 +2235,7 @@ fn render(data: &mut LoopData) {
                             );
                         }
                         (false, _) if was.is_some_and(|(p, _)| p) => {
-                            println!("[infynitae] Fullscreen off on screen {id:?}")
+                            log_line!("[infynitae] Fullscreen off on screen {id:?}")
                         }
                         (false, _) => {}
                     }
@@ -2259,7 +2263,7 @@ fn render(data: &mut LoopData) {
                 // the compositor drops async itself on a refusal, so this is said on a real change
                 if tear != s.tearing_logged {
                     s.tearing_logged = tear;
-                    println!(
+                    log_line!(
                         "[infynitae] Tearing {} on screen {id:?}",
                         if tear { "on" } else { "off" }
                     );
@@ -2281,7 +2285,7 @@ fn render(data: &mut LoopData) {
                         s.tearing_refused += 1;
                         if s.tearing_refused == TEARING_REFUSALS {
                             s.tearing_retry_at = Some(std::time::Instant::now() + TEARING_RETRY);
-                            eprintln!(
+                            log_line!(
                                 "[infynitae] Tearing refused {TEARING_REFUSALS} times in a row on screen {id:?}: frames wait for the refresh, trying again in {} s",
                                 TEARING_RETRY.as_secs()
                             );
@@ -2297,7 +2301,7 @@ fn render(data: &mut LoopData) {
                     Err(e) => {
                         s.flip_failures += 1;
                         if s.flip_failures % 100 == 1 {
-                            eprintln!(
+                            log_line!(
                                 "[infynitae] Page flip refused ({} in a row): primary={} overlays={overlays} cursor={cursor} elements={}: {e:?}",
                                 s.flip_failures,
                                 if scanout {
@@ -2318,7 +2322,7 @@ fn render(data: &mut LoopData) {
                                     )
                                 })
                                 .collect();
-                            eprintln!("[infynitae] Refused frame's elements: {geometries:?}");
+                            log_line!("[infynitae] Refused frame's elements: {geometries:?}");
                         }
                         if scanout {
                             // the client's buffer may be what the kernel refuses: compose for a while
@@ -2363,7 +2367,7 @@ fn render(data: &mut LoopData) {
                 false
             }
             Err(e) => {
-                eprintln!("[infynitae] Render: {e:?}");
+                log_line!("[infynitae] Render: {e:?}");
                 false
             }
         };
@@ -2372,6 +2376,7 @@ fn render(data: &mut LoopData) {
             // waiting for the retry timer (above); its frame callbacks complete as usual
             let now = infynitae_wayland::presentation_clock_now();
             data.state.frame_tick(id, now);
+            turn.mark("queue");
             continue;
         }
         s.pending = queued;
@@ -2389,6 +2394,7 @@ fn render(data: &mut LoopData) {
             s.empty_since_refresh = true;
             data.state.frame_tick(id, now);
         }
+        turn.mark("queue");
     }
     if let Some(v) = data.virtual_screen.as_mut() {
         serve_captures(
@@ -2481,7 +2487,7 @@ fn serve_captures(
     let (elements, k) = match frame {
         Ok(res) => res,
         Err(e) => {
-            eprintln!("[screencopy] Failed to get elements: {e}");
+            log_line!("[screencopy] Failed to get elements: {e}");
             for p in pending {
                 p.fail();
             }
@@ -2536,7 +2542,7 @@ fn note_capture_path(gpu: bool) {
     use std::sync::atomic::{AtomicBool, Ordering};
     static SAID: [AtomicBool; 2] = [AtomicBool::new(false), AtomicBool::new(false)];
     if !SAID[usize::from(gpu)].swap(true, Ordering::Relaxed) {
-        println!(
+        log_line!(
             "[infynitae] A capture into {}",
             if gpu {
                 "a GPU buffer (dmabuf)"
@@ -2639,7 +2645,7 @@ fn handle_screencopy<E>(
         match Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Argb8888, size.into()) {
             Ok(b) => *screencopy_texture = Some(b),
             Err(e) => {
-                eprintln!("[screencopy] Failed to create offscreen buffer: {e:?}");
+                log_line!("[screencopy] Failed to create offscreen buffer: {e:?}");
                 for p in remaining {
                     p.fail();
                 }
@@ -2652,7 +2658,7 @@ fn handle_screencopy<E>(
     let mut framebuffer = match renderer.bind(offscreen) {
         Ok(fb) => fb,
         Err(e) => {
-            eprintln!("[screencopy] Failed to bind offscreen buffer: {e:?}");
+            log_line!("[screencopy] Failed to bind offscreen buffer: {e:?}");
             for p in remaining {
                 p.fail();
             }
@@ -2663,7 +2669,7 @@ fn handle_screencopy<E>(
     let mut damage_tracker =
         OutputDamageTracker::new(size, smithay::utils::Scale::from(k), draw_transform);
     if let Err(e) = damage_tracker.render_output(renderer, &mut framebuffer, 0, elements, clear) {
-        eprintln!("[screencopy] Failed to render output: {e:?}");
+        log_line!("[screencopy] Failed to render output: {e:?}");
         for p in remaining {
             p.fail();
         }
@@ -2678,7 +2684,7 @@ fn handle_screencopy<E>(
     ) {
         Ok(m) => m,
         Err(e) => {
-            eprintln!("[screencopy] Failed to copy framebuffer: {e:?}");
+            log_line!("[screencopy] Failed to copy framebuffer: {e:?}");
             for p in remaining {
                 p.fail();
             }
@@ -2689,7 +2695,7 @@ fn handle_screencopy<E>(
     let slice = match ExportMem::map_texture(renderer, &mapping) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("[screencopy] Failed to map texture: {e:?}");
+            log_line!("[screencopy] Failed to map texture: {e:?}");
             for p in remaining {
                 p.fail();
             }
@@ -2838,7 +2844,7 @@ struct TurnClock {
 }
 
 /// A turn this long is reported with its parts (about 8 refreshes at 165 Hz).
-const SLOW_TURN: Duration = Duration::from_millis(50);
+const SLOW_TURN: Duration = Duration::from_millis(8);
 
 impl TurnClock {
     fn new(start: std::time::Instant) -> Self {
@@ -2861,12 +2867,15 @@ impl TurnClock {
         if busy < SLOW_TURN {
             return None;
         }
-        let mut parts: Vec<_> = self
-            .phases
-            .iter()
+        let mut phase_totals: HashMap<&'static str, Duration> = HashMap::new();
+        for &(name, d) in &self.phases {
+            *phase_totals.entry(name).or_default() += d;
+        }
+        let mut parts: Vec<(&'static str, Duration)> = phase_totals
+            .into_iter()
             .filter(|(_, d)| *d >= Duration::from_millis(1))
             .collect();
-        parts.sort_by_key(|p| std::cmp::Reverse(p.1));
+        parts.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
         let marked: Duration = self.phases.iter().map(|(_, d)| *d).sum();
         let mut out: Vec<String> = parts
             .iter()
@@ -2883,9 +2892,17 @@ impl TurnClock {
         ))
     }
 
-    fn report_if_slow(&self, busy: Duration) {
+    fn report_if_slow(&self, busy: Duration, last_logged: &mut Option<std::time::Instant>) {
+        if busy < SLOW_TURN {
+            return;
+        }
+        let now = std::time::Instant::now();
+        if last_logged.is_some_and(|t| now.duration_since(t) < Duration::from_secs(1)) {
+            return;
+        }
         if let Some(line) = self.slow_parts(busy) {
-            println!("{line}");
+            *last_logged = Some(now);
+            log_line!("{line}");
         }
     }
 }
@@ -2906,7 +2923,7 @@ fn latency_summary(data: &mut LoopData) {
     data.latency_logged = Some(now);
     let busy = std::mem::take(&mut data.loop_busy_max);
     if busy >= Duration::from_millis(5) {
-        println!(
+        log_line!(
             "[infynitae] Loop busy: longest turn {:.1} ms",
             busy.as_secs_f64() * 1000.0
         );
@@ -2916,7 +2933,7 @@ fn latency_summary(data: &mut LoopData) {
         let (pauses, paused) = s.schedule.pauses();
         if let Some((p50, p95, max, n)) = s.latency.take_summary() {
             let ms = |d: std::time::Duration| d.as_secs_f64() * 1000.0;
-            println!(
+            log_line!(
                 "[infynitae] Latency {:?}: input to screen p50 {:.2} ms, p95 {:.2} ms, max {:.2} ms ({n} frames); budget {:.2} ms, margin {:.2} ms, {misses} of {frames} frames missed their refresh; paused {pauses} times{}",
                 s.id,
                 ms(p50),
@@ -2927,7 +2944,7 @@ fn latency_summary(data: &mut LoopData) {
                 if paused { " (now)" } else { "" },
             );
             if let (Some(sub), Some(flip)) = s.schedule.take_timings() {
-                println!(
+                log_line!(
                     "[infynitae] Frame timing {:?}: refresh to submit p50 {:.2} ms, p95 {:.2} ms, max {:.2} ms; submit to refresh p50 {:.2} ms, p95 {:.2} ms, max {:.2} ms",
                     s.id,
                     ms(sub.0),
@@ -2950,7 +2967,7 @@ fn user_activity(data: &mut LoopData) {
         s.latency.input(now);
     }
     if data.dpms_active {
-        println!("[infynitae] User input detected: waking up screens from DPMS sleep");
+        log_line!("[infynitae] User input detected: waking up screens from DPMS sleep");
         data.dpms_active = false;
         // a screen that read as disconnected while asleep and did not come back is removed then
         data.rescan_at = Some(std::time::Instant::now() + Duration::from_secs(3));
@@ -2989,7 +3006,7 @@ fn handle_input(data: &mut LoopData, event: InputEvent<LibinputInputBackend>) {
         if SwitchToggleEvent::switch(event) == Some(Switch::Lid) {
             let closed = matches!(SwitchToggleEvent::state(event), SwitchState::On);
             if closed != data.lid_closed {
-                println!(
+                log_line!(
                     "[infynitae] Lid {}",
                     if closed { "closed" } else { "opened" }
                 );
@@ -3000,7 +3017,7 @@ fn handle_input(data: &mut LoopData, event: InputEvent<LibinputInputBackend>) {
         // tablet mode (a convertible folded): the on-screen keyboard follows
         if SwitchToggleEvent::switch(event) == Some(Switch::TabletMode) {
             let on = matches!(SwitchToggleEvent::state(event), SwitchState::On);
-            println!("[infynitae] Tablet mode {}", if on { "on" } else { "off" });
+            log_line!("[infynitae] Tablet mode {}", if on { "on" } else { "off" });
             data.state.tablet_mode_changed(on);
         }
         return;
@@ -3043,19 +3060,19 @@ fn handle_input(data: &mut LoopData, event: InputEvent<LibinputInputBackend>) {
                 match console_key(key, m.ctrl, m.alt) {
                     Some(ConsoleKey::Quit) if data.state.is_locked() => {
                         // quitting would restart the session unlocked: not while locked
-                        println!("[infynitae] Ctrl+Alt+Backspace ignored: the session is locked");
+                        log_line!("[infynitae] Ctrl+Alt+Backspace ignored: the session is locked");
                         data.taken.push(key);
                         return;
                     }
                     Some(ConsoleKey::Quit) => {
-                        println!("[infynitae] Ctrl+Alt+Backspace: quitting");
+                        log_line!("[infynitae] Ctrl+Alt+Backspace: quitting");
                         data.quit = true;
                         data.taken.push(key);
                         return;
                     }
                     Some(ConsoleKey::SwitchVt(vt)) => {
                         if let Err(e) = data.seat.change_vt(vt) {
-                            eprintln!("[infynitae] VT {vt}: {e}");
+                            log_line!("[infynitae] VT {vt}: {e}");
                         }
                         data.taken.push(key);
                         return;
@@ -3173,14 +3190,14 @@ fn handle_input(data: &mut LoopData, event: InputEvent<LibinputInputBackend>) {
         InputEvent::DeviceAdded { mut device } => {
             configure_input_device(&mut device, data.state.input_config());
             if device.has_capability(smithay::reexports::input::DeviceCapability::Touch) {
-                println!("[infynitae] Touchscreen: {}", device.name());
+                log_line!("[infynitae] Touchscreen: {}", device.name());
                 data.state.enable_touch();
             }
             let is_kb =
                 device.has_capability(smithay::reexports::input::DeviceCapability::Keyboard);
             let is_ptr =
                 device.has_capability(smithay::reexports::input::DeviceCapability::Pointer);
-            println!(
+            log_line!(
                 "[infynitae] Input device detected: {} (keyboard: {is_kb}, pointer: {is_ptr})",
                 device.name()
             );
@@ -3466,13 +3483,58 @@ mod tests {
             ("background priority", Duration::from_micros(500)),
             ("render", Duration::from_millis(40)),
         ];
-        assert_eq!(c.slow_parts(Duration::from_millis(30)), None);
+        assert_eq!(c.slow_parts(Duration::from_millis(7)), None);
         assert_eq!(
             c.slow_parts(Duration::from_micros(60_500)).as_deref(),
             Some(
                 "[infynitae] Slow turn 60.5 ms: render 40.0 ms, client requests 15.0 ms, other 5.0 ms"
             )
         );
+    }
+
+    #[test]
+    fn slow_turn_aggregates_repeated_phases() {
+        use std::time::Duration;
+        let mut c = super::TurnClock::new(std::time::Instant::now());
+        c.phases = vec![
+            ("element building", Duration::from_millis(3)),
+            ("scanout decision", Duration::from_millis(2)),
+            ("element building", Duration::from_millis(4)),
+            ("render_frame", Duration::from_millis(5)),
+        ];
+        assert_eq!(
+            c.slow_parts(Duration::from_millis(16)).as_deref(),
+            Some(
+                "[infynitae] Slow turn 16.0 ms: element building 7.0 ms, render_frame 5.0 ms, scanout decision 2.0 ms, other 2.0 ms"
+            )
+        );
+    }
+
+    #[test]
+    fn slow_turn_rate_limits_to_one_per_second() {
+        use std::time::{Duration, Instant};
+        let mut c = super::TurnClock::new(Instant::now());
+        c.phases = vec![("render_frame", Duration::from_millis(10))];
+        let mut last_logged = None;
+        c.report_if_slow(Duration::from_millis(10), &mut last_logged);
+        assert!(last_logged.is_some());
+        let first_logged = last_logged;
+        // Immediate second slow turn is suppressed by rate limiter
+        c.report_if_slow(Duration::from_millis(10), &mut last_logged);
+        assert_eq!(last_logged, first_logged);
+        // After 1 second passes, it logs again
+        let mut past_logged = Some(Instant::now() - Duration::from_millis(1100));
+        c.report_if_slow(Duration::from_millis(10), &mut past_logged);
+        assert!(past_logged.unwrap() > first_logged.unwrap());
+    }
+
+    #[test]
+    fn slow_turn_threshold_is_8ms() {
+        use std::time::Duration;
+        let mut c = super::TurnClock::new(std::time::Instant::now());
+        c.phases = vec![("render_frame", Duration::from_millis(5))];
+        assert_eq!(c.slow_parts(Duration::from_millis(7)), None);
+        assert!(c.slow_parts(Duration::from_millis(8)).is_some());
     }
 
     use super::*;
