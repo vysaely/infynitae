@@ -802,7 +802,7 @@ cmd_list() {
             echo "Installed Cursor Themes:"
             find /usr/share/icons "$HOME/.icons" "$HOME/.local/share/icons" \
                 -maxdepth 2 -type d -name "cursors" 2>/dev/null \
-                | sed 's|/cursors$||' | xargs -r -n1 basename | sort -u \
+                | sed 's|/cursors$||' | xargs -r -d '\n' -n1 basename | sort -u \
                 | while read -r theme; do
                     if [ "$theme" = "$CURSOR_THEME" ]; then
                         echo "  * $theme (active)"
@@ -816,7 +816,7 @@ cmd_list() {
             if command -v fc-list >/dev/null 2>&1; then
                 fc-list : family | tr ',' '\n' | sed 's/^[ \t]*//' | sort -u | grep -iE 'mono|code|hack|jetbrains|nerd|dejavu|inter|noto' | head -40
             else
-                find /usr/share/fonts -type f \( -name "*.ttf" -o -name "*.otf" \) 2>/dev/null | xargs -r -n1 basename | sed 's/\.[^.]*$//' | sort -u | head -40
+                find /usr/share/fonts -type f \( -name "*.ttf" -o -name "*.otf" \) 2>/dev/null | xargs -r -d '\n' -n1 basename | sed 's/\.[^.]*$//' | sort -u | head -40
             fi
             ;;
         *)
