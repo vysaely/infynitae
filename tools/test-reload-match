@@ -130,3 +130,50 @@ if [ "$got_cfg_wp" != "$tmp/cfg_test/Wallpapers/nature.png" ]; then
 fi
 
 echo "ok Finding 22: quoted tilde paths in WALLPAPER are safely expanded"
+
+# ----------------------------------------------------------------------
+# Finding 26: Predictable temp file $cfg.new without cleanup trap
+# ----------------------------------------------------------------------
+# Test that reload_screenshare uses mktemp and cleans up on interruption,
+# and does not write to static $cfg.new.
+cfg_dir2="$tmp/portal_wlr/.config/xdg-desktop-portal-wlr"
+mkdir -p "$cfg_dir2"
+cfg_file2="$cfg_dir2/config"
+
+sed -n '/^reload_screenshare() {/,/^}/p' "$here/live/infynitae-reload" > "$tmp/fn_screenshare"
+is_true() { case "$1" in 1|true|yes|on|TRUE|True) return 0 ;; *) return 1 ;; esac; }
+. "$tmp/fn_screenshare"
+
+# Verify that static $cfg.new symlink is not written through
+HOME="$tmp/portal_wlr"
+STATE_DIR="$tmp/portal_wlr/state"
+mkdir -p "$STATE_DIR"
+victim_file="$tmp/victim_file"
+echo "precious data" > "$victim_file"
+static_new="$cfg_file2.new"
+rm -f "$static_new"
+ln -s "$victim_file" "$static_new"
+
+reload_screenshare >/dev/null
+
+if [ "$(cat "$victim_file" 2>/dev/null)" != "precious data" ]; then
+    echo "FAIL Finding 26: reload_screenshare wrote through symlink at predictable $cfg_file2.new"
+    exit 1
+fi
+rm -f "$victim_file" "$static_new"
+
+# Verify that reload_screenshare cleans up temp file when interrupted
+(
+    HOME="$tmp/portal_wlr"
+    # Intercept fuzzel or subshell to trigger exit during generation
+    MENU_PICKER="sh -c 'kill -TERM \$\$'"
+    reload_screenshare >/dev/null 2>&1 || true
+)
+
+leftover_temps=$(ls "$cfg_dir2"/config.* 2>/dev/null || true)
+if [ -n "$leftover_temps" ]; then
+    echo "FAIL Finding 26: leftover temp files in config dir after interruption: $leftover_temps"
+    exit 1
+fi
+
+echo "ok Finding 26: reload_screenshare uses safe temp file with cleanup trap"

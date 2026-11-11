@@ -299,7 +299,9 @@ reload_screenshare() {
         END { print n }' "$STATE_DIR/session.log" 2>/dev/null)
     first=$(echo $screens | cut -d' ' -f1)
     mkdir -p "${cfg%/*}"
-    {
+    _infy_tmp=$(mktemp "${cfg}.XXXXXX") || return 1
+    trap 'rm -f "$_infy_tmp"' EXIT INT TERM
+    if {
         echo "# managed by infynitae: written from SCREENSHARE_ASK in ~/.config/infynitae/config;"
         echo "# delete this line to keep your own settings"
         echo "[screencast]"
@@ -318,7 +320,14 @@ reload_screenshare() {
             echo "chooser_type=none"
             echo "output_name=$first"
         fi
-    } > "$cfg.new" && mv -f "$cfg.new" "$cfg"
+    } > "$_infy_tmp" && mv -f "$_infy_tmp" "$cfg"; then
+        rm -f "$_infy_tmp"
+        trap - EXIT INT TERM
+    else
+        rm -f "$_infy_tmp"
+        trap - EXIT INT TERM
+        return 1
+    fi
     systemctl --user stop xdg-desktop-portal-wlr.service 2>/dev/null || true
     if is_true "${SCREENSHARE_ASK:-false}"; then
         echo "screenshare: pick a screen or a window when an app asks"
