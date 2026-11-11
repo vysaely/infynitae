@@ -85,6 +85,13 @@ OPTIONS:
 }
 
 fn main() -> ExitCode {
+    let code = run();
+    // the log writer thread holds what was logged last (the shutdown): written out before the process ends
+    infynitae_wayland::logger::flush();
+    code
+}
+
+fn run() -> ExitCode {
     // Install panic hook to capture crash backtrace into ~/.local/state/infynitae/crash.log
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {

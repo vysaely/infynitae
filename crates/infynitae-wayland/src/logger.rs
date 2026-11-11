@@ -7,9 +7,8 @@
 
 use std::io::Write;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, TrySendError, sync_channel};
+use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, OnceLock};
-use std::time::Duration;
 
 /// Default capacity of the bounded log channel buffer.
 pub const DEFAULT_CAPACITY: usize = 4096;
@@ -92,44 +91,26 @@ fn write_line<W: Write>(out: &mut W, line: &str) {
 }
 
 fn writer_loop<W: Write>(mut out: W, rx: Receiver<LogCommand>, dropped: Arc<AtomicUsize>) {
-    loop {
-        match rx.recv_timeout(Duration::from_millis(50)) {
-            Ok(LogCommand::Line(entry)) => {
+    // waits for a line (no timer: an idle compositor wakes nothing here); the lines dropped while the queue was
+    // full are counted by the sender and travel with the next line that fits
+    while let Ok(cmd) = rx.recv() {
+        match cmd {
+            LogCommand::Line(entry) => {
                 if entry.dropped_before > 0 {
                     write_dropped(&mut out, entry.dropped_before);
                 }
                 write_line(&mut out, &entry.line);
             }
-            Ok(LogCommand::Flush(ack)) => {
+            LogCommand::Flush(ack) => {
                 let n = dropped.swap(0, Ordering::Relaxed);
                 write_dropped(&mut out, n);
                 let _ = out.flush();
                 let _ = ack.send(());
             }
-            Err(RecvTimeoutError::Timeout) => {
-                let n = dropped.swap(0, Ordering::Relaxed);
-                write_dropped(&mut out, n);
-            }
-            Err(RecvTimeoutError::Disconnected) => {
-                while let Ok(cmd) = rx.try_recv() {
-                    match cmd {
-                        LogCommand::Line(entry) => {
-                            if entry.dropped_before > 0 {
-                                write_dropped(&mut out, entry.dropped_before);
-                            }
-                            write_line(&mut out, &entry.line);
-                        }
-                        LogCommand::Flush(ack) => {
-                            let _ = ack.send(());
-                        }
-                    }
-                }
-                let n = dropped.swap(0, Ordering::Relaxed);
-                write_dropped(&mut out, n);
-                break;
-            }
         }
     }
+    let n = dropped.swap(0, Ordering::Relaxed);
+    write_dropped(&mut out, n);
 }
 
 static GLOBAL_LOGGER: OnceLock<Logger> = OnceLock::new();
@@ -169,6 +150,7 @@ macro_rules! log_line {
 mod tests {
     use super::*;
     use std::sync::{Arc, Barrier, Mutex};
+    use std::time::Duration;
     use std::time::Instant;
 
     struct TestBuffer {
