@@ -23,6 +23,7 @@ use infynitae_core::stage::ElementId;
 use smithay::reexports::rustix::process::{Pid, getpid, getpriority_process, setpriority_process};
 
 use crate::WaylandState;
+use crate::log_line;
 
 /// How long an app's windows are all out of sight before it is lowered.
 pub const HIDE_AFTER: Duration = Duration::from_secs(15);
@@ -199,10 +200,10 @@ impl WaylandState {
                 self.background.game_off_since = None;
                 return;
             }
-            println!("[infynitae] Game mode off for process {cur_pid}");
+            log_line!("[infynitae] Game mode off for process {cur_pid}");
             self.gamemode(false, cur_pid);
         }
-        println!("[infynitae] Game mode on for process {pid}");
+        log_line!("[infynitae] Game mode on for process {pid}");
         self.background.game = Some((window, pid));
         self.background.game_off_since = None;
         self.gamemode(true, pid);
@@ -239,7 +240,7 @@ impl WaylandState {
                     .iter()
                     .any(|o| self.exclusive_window(o.id) == Some(window));
             if let Some(ended_pid) = self.background.update_game(now, still) {
-                println!("[infynitae] Game mode off for process {ended_pid}");
+                log_line!("[infynitae] Game mode off for process {ended_pid}");
                 self.gamemode(false, ended_pid);
             }
         }

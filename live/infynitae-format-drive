@@ -7,13 +7,15 @@
 # Asked like the panels (infynitae-edge ask; fuzzel with an edge from before it): the filesystem
 # (only those whose tools are installed), the name, then an explicit "Erase" (Cancel comes first).
 # Refused for anything not on a removable drive and for a drive that holds the running system
-# (/, /home, /boot, /usr, /var). The whole drive is erased, every partition on it: one partition
-# table (MBR, which every system reads), one partition. The automount watcher mounts it after.
+# (/, /home, /boot, /usr, /var, active swap). The whole drive is erased, every partition on it: one
+# partition table (MBR up to 2 TB, which every system reads; GPT beyond), one partition. The
+# automount watcher mounts it after.
 #   INFYNITAE_FORMAT_UDISKSCTL, INFYNITAE_FORMAT_GDBUS, INFYNITAE_FORMAT_LSBLK,
 #   INFYNITAE_FORMAT_FINDMNT: commands used instead of those tools (tests)
 #   INFYNITAE_FORMAT_ASK: a command printing the answer to a prompt instead of asking; it gets the
 #   prompt's kind (fs, name, confirm) as $1 and the choices on stdin (tests)
 #   INFYNITAE_FORMAT_HAVE: the mkfs tools present, space separated, instead of looking (tests)
+#   INFYNITAE_FORMAT_SWAPS: a swaps file instead of /proc/swaps (tests)
 set -u
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/infynitae"
 LOG="$STATE_DIR/format.log"
@@ -109,8 +111,13 @@ drive=$(udisks info -b "$disk" 2>/dev/null | awk '$1 == "Drive:" { d = $2; gsub(
 drive_info=$(udisks info -p "${drive#/org/freedesktop/UDisks2/}" 2>/dev/null)
 printf '%s\n' "$drive_info" | grep -qE '^[[:space:]]*(Media)?Removable:[[:space:]]+true[[:space:]]*$' \
     || fail "$disk is not a removable drive: only USB drives and cards are formatted here."
-# the running system on it (a system started from a stick): never
-system=$(blk -nro MOUNTPOINTS "$disk" 2>/dev/null | grep -xE '/|/home|/boot|/boot/efi|/efi|/usr|/var' | head -n 1)
+# the running system on it (a system started from a stick, or active swap): never
+if [ -r "${INFYNITAE_FORMAT_SWAPS:-/proc/swaps}" ] \
+        && grep -qE "^${disk}(p?[0-9]+)?[[:space:]]" "${INFYNITAE_FORMAT_SWAPS:-/proc/swaps}" 2>/dev/null; then
+    fail "$disk holds active swap of the running system."
+fi
+system=$(blk -nro MOUNTPOINTS "$disk" 2>/dev/null | grep -v '^$' \
+    | grep -xE '/|/home|/boot|/boot/efi|/efi|/usr|/var|/var/home|/opt|/srv|/root|/etc|\[SWAP\]' | head -n 1)
 [ -z "$system" ] || fail "$disk holds $system of the running system."
 if [ "$can" = 1 ]; then
     echo true
@@ -156,20 +163,32 @@ esac
 log "formatting $disk ($what) as $fs, label $label"
 notify "Formatting $what" "Everything on it is being erased."
 # every filesystem on it unmounted, every encrypted partition locked
-blk -nro NAME,TYPE,FSTYPE,MOUNTPOINTS "$disk" 2>/dev/null | while read -r n t f m; do
+blk -nro NAME,MOUNTPOINTS "$disk" 2>/dev/null | while read -r n m; do
     [ -n "${m:-}" ] && { udisks unmount --no-user-interaction -b "/dev/$n" >/dev/null 2>&1 \
         || udisks unmount -b "/dev/$n" >/dev/null 2>&1 || true; }
-    [ "$f" = crypto_LUKS ] && udisks lock --no-user-interaction -b "/dev/$n" >/dev/null 2>&1
-    true
+done
+blk -nro NAME,FSTYPE "$disk" 2>/dev/null | while read -r n f; do
+    [ "${f:-}" = crypto_LUKS ] && udisks lock --no-user-interaction -b "/dev/$n" >/dev/null 2>&1 || true
 done
 still=$(blk -nro MOUNTPOINTS "$disk" 2>/dev/null | grep -v '^$' | head -n 1)
 [ -z "$still" ] || fail "$still is still in use: close what is open on it and try again."
 
 obj="/org/freedesktop/UDisks2/block_devices/$name_of_disk"
+# MBR, which every system reads, holds up to 2 TiB; a bigger drive gets GPT, its partition typed for Windows
+# (basic data) or Linux (ext4)
+ptable="dos"
+size_bytes=$(blk -bndo SIZE "$disk" 2>/dev/null || echo 0)
+if [ "$size_bytes" -gt 2199023255552 ] 2>/dev/null; then
+    ptable="gpt"
+    case "$fs" in
+        ext4) type=0fc63daf-8483-4772-8e79-3d69d8477de4 ;;
+        *) type=ebd0a0a2-b9e5-4433-87c0-68b6b72699c7 ;;
+    esac
+fi
 # no 'tear-down': it also rewrites /etc/fstab and /etc/crypttab, which asks for the admin password; everything
 # on the drive is already unmounted and locked above, so a removable drive is formatted without a password
 if ! out=$(dbus call --system --timeout 600 --dest org.freedesktop.UDisks2 --object-path "$obj" \
-        --method org.freedesktop.UDisks2.Block.Format dos '{}' 2>&1); then
+        --method org.freedesktop.UDisks2.Block.Format "$ptable" '{}' 2>&1); then
     log "partition table failed: $out"
     fail "The drive refused a new partition table: $(printf '%s' "$out" | tail -n 1 | cut -c 1-160)"
 fi

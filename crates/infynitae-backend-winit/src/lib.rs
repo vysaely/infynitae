@@ -11,7 +11,7 @@ use std::time::Duration;
 use infynitae_core::output::{OutputDescriptor, OutputId, OutputKey, Transform};
 use infynitae_core::{Core, InputPort, OutputLifecycleToken, PhysicalEvent};
 use infynitae_wayland::session::{Session, SessionOptions};
-use infynitae_wayland::{WaylandState, convert};
+use infynitae_wayland::{WaylandState, convert, log_line};
 
 use smithay::backend::input::{
     AbsolutePositionEvent, ButtonState, Event, InputEvent, KeyState, KeyboardKeyEvent,
@@ -259,7 +259,7 @@ pub fn run_nested_with(
     // Scaling filter: nearest-neighbor filtering on upscaled surfaces by default
     let use_nearest = !matches!(options.scaling_filter.as_deref(), Some("linear"));
     if use_nearest && let Err(e) = backend.renderer().upscale_filter(TextureFilter::Nearest) {
-        eprintln!("[infynitae] Warning: failed to set upscale filter to Nearest: {e:?}");
+        log_line!("[infynitae] Warning: failed to set upscale filter to Nearest: {e:?}");
     }
 
     let output_key = OutputKey {
@@ -326,7 +326,7 @@ pub fn run_nested_with(
         })
         .map_err(|e| format!("Failed to register winit event source: {e}"))?;
 
-    println!("[infynitae] Compositor running. Close the window to exit.");
+    log_line!("[infynitae] Compositor running. Close the window to exit.");
     while !data.closed && !data.session.finished() {
         // An open scale-settlement deadline (INV-SCALE-3) wakes the loop by itself; none is
         // armed while no epoch is open (INV-IDLE-1).
@@ -349,7 +349,7 @@ pub fn run_nested_with(
             {
                 if data.last_config_mtime.is_some() && data.last_config_mtime != Some(mtime) {
                     data.last_config_mtime = Some(mtime);
-                    println!(
+                    log_line!(
                         "[infynitae] Config change detected (~/.config/infynitae/config). Live reloading..."
                     );
                     data.state.reload_config();
@@ -469,7 +469,7 @@ pub fn run_nested_with(
         data.session.flush();
     }
 
-    println!("[infynitae] Shutting down compositor...");
+    log_line!("[infynitae] Shutting down compositor...");
     // the satellite first: it is a client of the session, and its display goes with it
     drop(xwayland);
     data.session.shutdown_with(&mut data.state);
@@ -482,7 +482,7 @@ pub fn run_nested_with(
     }
     data.session.flush();
 
-    println!("[infynitae] Compositor exited cleanly.");
+    log_line!("[infynitae] Compositor exited cleanly.");
     Ok(())
 }
 
@@ -661,7 +661,7 @@ fn render_and_present(data: &mut LoopData) {
         Ok(Some(d)) => Some(d),
         Ok(None) => None,
         Err(e) => {
-            eprintln!("[infynitae] Render error: {e:?}");
+            log_line!("[infynitae] Render error: {e:?}");
             // retried at the next cadence point, so clients waiting for a frame are not stalled
             data.session.request_frame();
             return;
@@ -671,7 +671,7 @@ fn render_and_present(data: &mut LoopData) {
     // Submit buffer to GPU/host when damaged
     if let Some(damage_rects) = &damage {
         if let Err(e) = data.backend.submit(Some(damage_rects)) {
-            eprintln!("[infynitae] Submit error: {e:?}");
+            log_line!("[infynitae] Submit error: {e:?}");
             // retried at the next cadence point, so clients waiting for a frame are not stalled
             data.session.request_frame();
             return;

@@ -23,6 +23,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::os::fd::OwnedFd;
 use std::process::Child;
+
+use crate::log_line;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -265,7 +267,7 @@ pub fn end_session_tree(
     }
     for (pid, fd) in &signalled {
         if !exited(fd) {
-            eprintln!(
+            log_line!(
                 "[infynitae] Session process {pid} did not exit within the grace period, sending SIGKILL"
             );
             let _ = pidfd_send_signal(fd, Signal::KILL);

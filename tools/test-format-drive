@@ -40,17 +40,46 @@ dev=""
 for a in "\$@"; do case "\$a" in /dev/*) dev="\$a" ;; esac; done
 case "\$*" in
     *PKNAME*) case "\$dev" in /dev/sdx[0-9]) echo sdx ;; /dev/sda[0-9]) echo sda ;; *) echo "" ;; esac ;;
-    *SIZE*) echo " 119.5G" ;;
+    *-b*SIZE*|*bndo*SIZE*)
+        if [ "\${BIG_DRIVE:-0}" = 1 ]; then
+            echo "4000787030016"
+        else
+            echo "128325785600"
+        fi ;;
+    *SIZE*)
+        if [ "\${BIG_DRIVE:-0}" = 1 ]; then
+            echo " 3.6T"
+        else
+            echo " 119.5G"
+        fi ;;
+    *NAME,MOUNTPOINTS*)
+        [ "\$dev" = /dev/sdx ] || exit 0
+        echo "sdx "
+        echo "sdx1 /run/media/me/efi"
+        echo "sdx2 "
+        echo "sdx3 /run/media/me/home" ;;
+    *NAME,FSTYPE*)
+        [ "\$dev" = /dev/sdx ] || exit 0
+        echo "sdx "
+        echo "sdx1 \${SDX1_FSTYPE:-vfat}"
+        echo "sdx2 crypto_LUKS"
+        echo "sdx3 ext4" ;;
     *NAME,TYPE,FSTYPE,MOUNTPOINTS*)
         [ "\$dev" = /dev/sdx ] || exit 0
         echo "sdx disk  "
-        echo "sdx1 part vfat /run/media/me/efi"
+        if [ "\${MISSING_FSTYPE:-0}" = 1 ]; then
+            echo "sdx1 part /run/media/me/efi"
+        else
+            echo "sdx1 part vfat /run/media/me/efi"
+        fi
         echo "sdx2 part crypto_LUKS "
         echo "sdx3 part ext4 /run/media/me/home" ;;
     *MOUNTPOINTS*)
         if [ "\$dev" = /dev/sda ]; then echo "/mnt/III"; exit 0; fi
         if [ -f "$TMP/unmounted" ] && [ "\${STILL_MOUNTED:-0}" = 0 ]; then echo ""; exit 0; fi
         echo ""; echo "/run/media/me/efi"; echo ""
+        if [ "\${SWAP_MOUNT:-0}" = 1 ]; then echo "[SWAP]"; exit 0; fi
+        if [ "\${ROOT_MOUNT:-0}" = 1 ]; then echo "/root"; exit 0; fi
         if [ "\${MOUNTED_SYSTEM:-0}" = 1 ]; then echo "/"; else echo "/run/media/me/home"; fi ;;
 esac
 EOF
@@ -85,6 +114,7 @@ chmod +x "$BIN"/*
 run() {
     : > "$CALLS"; : > "$NOTES"; rm -f "$TMP/unmounted" "$TMP"/offered-*
     PATH="$BIN:$PATH" XDG_STATE_HOME="$TMP/state" INFYNITAE_FORMAT_ASK="$BIN/ask" \
+        INFYNITAE_FORMAT_SWAPS="${SWAP_FILE:-}" \
         INFYNITAE_FORMAT_HAVE="${HAVE-mkfs.exfat mkfs.vfat mkfs.ext4}" "$FMT" "$@" >"$TMP/out" 2>&1
 }
 
@@ -123,6 +153,17 @@ check "FAT32: label in capitals, safe characters, 11 at most" "called \"0x0c  {}
 FS=ext4 NAME="" run /dev/sdx3
 check "ext4: from a device path, take-ownership, default name" "called \"0x83  {} ext4 {'label': <'USB'>, 'take-ownership': <true>}\""
 
+# drives larger than 2 TB use GPT partition table
+BIG_DRIVE=1 run /run/media/me/home
+check "drives over 2 TB use GPT partition table" 'called "Block.Format gpt" && called "CreatePartitionAndFormat 0 0 ebd0a0a2-b9e5-4433-87c0-68b6b72699c7  {} exfat"'
+FS=ext4 BIG_DRIVE=1 run /run/media/me/home
+check "  an ext4 one is typed for Linux" 'called "CreatePartitionAndFormat 0 0 0fc63daf-8483-4772-8e79-3d69d8477de4  {} ext4"'
+BIG_DRIVE=0
+
+# missing filesystem type: unmount still finds its mountpoint
+MISSING_FSTYPE=1 run /run/media/me/home
+check "unmounts a partition with missing filesystem type" 'called "unmount --no-user-interaction -b /dev/sdx1"'
+
 # refusals: nothing is formatted
 CONFIRM=Cancel run /run/media/me/home
 check "Cancel at the confirmation formats nothing and unmounts nothing" '! formatted && ! called unmount'
@@ -132,6 +173,17 @@ run /mnt/III || true
 check "an internal disk is refused and said so" '! formatted && grep -q "not a removable drive" "$NOTES"'
 MOUNTED_SYSTEM=1 run /run/media/me/home || true
 check "a drive holding the running system is refused" '! formatted && grep -q "running system" "$NOTES"'
+SWAP_FILE="$TMP/mock-swaps"
+printf 'Filename\tType\tSize\tUsed\tPriority\n/dev/sdx2\tpartition\t1048576\t0\t-1\n' > "$SWAP_FILE"
+run /run/media/me/home || true
+check "a drive with active swap in /proc/swaps is refused" '! formatted && grep -q "running system" "$NOTES"'
+SWAP_FILE=""
+SWAP_MOUNT=1 run /run/media/me/home || true
+check "a drive showing [SWAP] in mountpoints is refused" '! formatted && grep -q "running system" "$NOTES"'
+SWAP_MOUNT=0
+ROOT_MOUNT=1 run /run/media/me/home || true
+check "a drive holding /root is refused" '! formatted && grep -q "running system" "$NOTES"'
+ROOT_MOUNT=0
 STILL_MOUNTED=1 run /run/media/me/home || true
 check "a partition still in use stops it before the table is touched" '! formatted && grep -q "still in use" "$NOTES"'
 HAVE="" run /run/media/me/home || true

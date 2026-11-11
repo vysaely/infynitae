@@ -15,6 +15,8 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+use crate::log_line;
+
 use infynitae_core::PhysicalEvent;
 use infynitae_core::input::{Axis, AxisSource};
 use infynitae_core::output::OutputId;
@@ -163,12 +165,12 @@ pub fn usable_keymap_names(layout: &str, options: &str) -> (String, String) {
         return (layout.to_string(), options.to_string());
     }
     if !layout.is_empty() && !options.is_empty() && compiles(layout, "") {
-        eprintln!(
+        log_line!(
             "[infynitae] Keyboard options {options:?} make no keymap: layout {layout:?} without them"
         );
         return (layout.to_string(), String::new());
     }
-    eprintln!(
+    log_line!(
         "[infynitae] Keyboard layout {layout:?} makes no keymap: using \"us\" (set XKB_DEFAULT_LAYOUT)"
     );
     ("us".to_string(), String::new())

@@ -132,11 +132,14 @@ put_file() {
 # at the end; the comment lines under it stay.
 config_write() {
     export CW_KEY="$1" CW_VAL="$2"
+    tmp=$(mktemp "${CONFIG_FILE}.tmp.XXXXXX")
+    trap 'rm -f "$tmp"' EXIT INT TERM
     awk 'BEGIN { k = ENVIRON["CW_KEY"]; v = ENVIRON["CW_VAL"]; found = 0 }
         substr($0, 1, length(k) + 1) == k "=" { print k "=\"" v "\""; found = 1; next }
         { print }
-        END { if (!found) print k "=\"" v "\"" }' "$CONFIG_FILE" > "$CONFIG_FILE.tmp.$$" \
-        && mv -f "$CONFIG_FILE.tmp.$$" "$CONFIG_FILE"
+        END { if (!found) print k "=\"" v "\"" }' "$CONFIG_FILE" > "$tmp" \
+        && mv -f "$tmp" "$CONFIG_FILE"
+    trap - EXIT INT TERM
 }
 
 # The theme colours from an image (infynitae-wallpaper --colors) into the config: the accent alone
@@ -660,7 +663,8 @@ EOF
         cp /etc/xdg/Thunar/uca.xml "$uca"
     fi
     if [ -f "$uca" ] && grep -q 'exo-open --working-directory %f --launch TerminalEmulator' "$uca"; then
-        sed -i "s|<command>exo-open --working-directory %f --launch TerminalEmulator</command>|<command>$term_exec --dir=%f</command>|" "$uca"
+        escaped_exec=$(printf '%s\n' "$term_exec" | sed 's/[&|\\]/\\&/g')
+        sed -i "s|<command>exo-open --working-directory %f --launch TerminalEmulator</command>|<command>$escaped_exec --dir=%f</command>|" "$uca"
     fi
     # Dolphin (KDE): its terminal, unless kdeglobals names one
     if [ -f "$HOME/.config/kdeglobals" ] && ! grep -q '^TerminalApplication=' "$HOME/.config/kdeglobals"; then
@@ -736,6 +740,8 @@ cmd_set() {
 
     # Update or append in config file without sed injection
     export KEY VAL_QUOTED
+    tmp=$(mktemp "${CONFIG_FILE}.tmp.XXXXXX")
+    trap 'rm -f "$tmp"' EXIT INT TERM
     awk '
     BEGIN {
         key = ENVIRON["KEY"]
@@ -753,7 +759,8 @@ cmd_set() {
             print key "=" val
         }
     }
-    ' "$CONFIG_FILE" > "$CONFIG_FILE.tmp.$$" && mv -f "$CONFIG_FILE.tmp.$$" "$CONFIG_FILE"
+    ' "$CONFIG_FILE" > "$tmp" && mv -f "$tmp" "$CONFIG_FILE"
+    trap - EXIT INT TERM
 
     echo "==> Updated $KEY in $CONFIG_FILE"
     . "$CONFIG_FILE"
@@ -802,7 +809,7 @@ cmd_list() {
             echo "Installed Cursor Themes:"
             find /usr/share/icons "$HOME/.icons" "$HOME/.local/share/icons" \
                 -maxdepth 2 -type d -name "cursors" 2>/dev/null \
-                | sed 's|/cursors$||' | xargs -r -n1 basename | sort -u \
+                | sed 's|/cursors$||' | xargs -r -d '\n' -n1 basename | sort -u \
                 | while read -r theme; do
                     if [ "$theme" = "$CURSOR_THEME" ]; then
                         echo "  * $theme (active)"
@@ -816,7 +823,7 @@ cmd_list() {
             if command -v fc-list >/dev/null 2>&1; then
                 fc-list : family | tr ',' '\n' | sed 's/^[ \t]*//' | sort -u | grep -iE 'mono|code|hack|jetbrains|nerd|dejavu|inter|noto' | head -40
             else
-                find /usr/share/fonts -type f \( -name "*.ttf" -o -name "*.otf" \) 2>/dev/null | xargs -r -n1 basename | sed 's/\.[^.]*$//' | sort -u | head -40
+                find /usr/share/fonts -type f \( -name "*.ttf" -o -name "*.otf" \) 2>/dev/null | xargs -r -d '\n' -n1 basename | sed 's/\.[^.]*$//' | sort -u | head -40
             fi
             ;;
         *)

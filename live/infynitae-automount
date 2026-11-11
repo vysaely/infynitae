@@ -9,6 +9,7 @@
 #   INFYNITAE_AUTOMOUNT_MONITOR: a command printing udisks2 signals instead of gdbus (tests)
 #   INFYNITAE_AUTOMOUNT_UDISKSCTL: a command used instead of udisksctl (tests)
 #   INFYNITAE_AUTOMOUNT_ASK: a command printing a passphrase instead of fuzzel (tests)
+#   INFYNITAE_AUTOMOUNT_MOUNTS: a mounts file instead of /proc/mounts (tests)
 set -u
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/infynitae"
 LOG="$STATE_DIR/automount.log"
@@ -45,7 +46,14 @@ notify_actions() {
 # the device under a dm cleartext device (/dev/dm-N), else nothing
 backing_device() {
     run_udisksctl info -b "$1" 2>/dev/null | awk '
-    $1 == "CryptoBackingDevice:" { d = $2; gsub(/\047/, "", d); if (d != "/") { sub(".*/", "/dev/", d); print d } }'
+    $1 == "CryptoBackingDevice:" {
+        d = $2; gsub(/\047/, "", d);
+        if (d != "/") {
+            sub(".*/", "", d);
+            gsub(/_2d/, "-", d);
+            print "/dev/" d;
+        }
+    }'
 }
 
 # unmounts DEVICE, locks its encrypted device and powers the drive off; one notification says
@@ -81,12 +89,13 @@ if [ "${1:-}" = "eject" ]; then
     fi
     rc=0
     found=0
+    user_media="/run/media/${USER:-$(id -un)}"
     # every filesystem udisks mounted for this user
     while read -r src target _; do
         case "$target" in
-            /run/media/*) found=1; eject_device "$src" "$(printf '%b' "${target##*/}")" || rc=1 ;;
+            "$user_media"/*) found=1; eject_device "$src" "$(printf '%b' "${target##*/}")" || rc=1 ;;
         esac
-    done < /proc/mounts
+    done < "${INFYNITAE_AUTOMOUNT_MOUNTS:-/proc/mounts}"
     [ "$found" = 1 ] || notify "No drive to eject"
     exit "$rc"
 fi
