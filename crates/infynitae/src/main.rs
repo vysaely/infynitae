@@ -131,6 +131,7 @@ fn main() -> ExitCode {
     let mut max_frames: Option<u64> = None;
     let mut xwayland_satellite: Option<std::path::PathBuf> = None;
     let mut no_xwayland = false;
+    let mut cli_no_xwayland = false;
     let mut locked = false;
     let mut activation_policy = infynitae_core::input::focus::ActivationPolicy::Strict;
     let mut shell_socket = shell::default_path();
@@ -288,6 +289,7 @@ fn main() -> ExitCode {
             "--no-shell" => shell_socket = None,
             "--locked" => locked = true,
             "--no-xwayland" => {
+                cli_no_xwayland = true;
                 no_xwayland = true;
                 xwayland_satellite = None;
             }
@@ -322,15 +324,12 @@ fn main() -> ExitCode {
     // Composition root: creates Core and authority ports (FOUNDATION_ARCHITECTURE C1.2, C1.5)
     let (mut core, input_port, shell_port, output_token) = Core::new(PersistedCameras::default());
     core.set_activation_policy(activation_policy);
+    core.set_pan_mode(infynitae_core::navigation::PanMode::Free);
     if let Ok(mode) = std::env::var("PAN_MODE") {
-        match mode.to_lowercase().as_str() {
-            "rts" => core.set_pan_mode(infynitae_core::navigation::PanMode::Rts),
-            "free" => core.set_pan_mode(infynitae_core::navigation::PanMode::Free),
-            _ => core.set_pan_mode(infynitae_core::navigation::PanMode::Grab),
-        }
+        core.set_pan_mode(parse_pan_mode(&mode));
     }
     core.set_focus_follows_mouse(true);
-    core.set_focus_follows_mouse_strict(false);
+    core.set_focus_follows_mouse_strict(true);
     core.set_focus_cycle_navigate(true);
     core.set_placement_policy(infynitae_core::PlacementPolicy::ClusterTiling);
     core.set_enter_mode(infynitae_core::EnterMode::Maximize);
@@ -358,20 +357,9 @@ fn main() -> ExitCode {
     }
 
     if let Ok(ffm) = std::env::var("FOCUS_FOLLOWS_MOUSE") {
-        match ffm.to_lowercase().as_str() {
-            "strict" => {
-                core.set_focus_follows_mouse(true);
-                core.set_focus_follows_mouse_strict(true);
-            }
-            "0" | "false" | "off" | "no" | "click" => {
-                core.set_focus_follows_mouse(false);
-                core.set_focus_follows_mouse_strict(false);
-            }
-            _ => {
-                core.set_focus_follows_mouse(true);
-                core.set_focus_follows_mouse_strict(false);
-            }
-        }
+        let (enabled, strict) = parse_focus_follows_mouse(&ffm);
+        core.set_focus_follows_mouse(enabled);
+        core.set_focus_follows_mouse_strict(strict);
     }
     if let Ok(fcn) = std::env::var("FOCUS_CYCLE_NAVIGATE") {
         core.set_focus_cycle_navigate(!matches!(
@@ -398,25 +386,19 @@ fn main() -> ExitCode {
                 let key = key.trim();
                 let val = val.trim();
                 match key {
-                    "PAN_MODE" => match val.to_lowercase().as_str() {
-                        "rts" => core.set_pan_mode(infynitae_core::navigation::PanMode::Rts),
-                        "free" => core.set_pan_mode(infynitae_core::navigation::PanMode::Free),
-                        _ => core.set_pan_mode(infynitae_core::navigation::PanMode::Grab),
-                    },
-                    "FOCUS_FOLLOWS_MOUSE" => match val.to_lowercase().as_str() {
-                        "strict" => {
-                            core.set_focus_follows_mouse(true);
-                            core.set_focus_follows_mouse_strict(true);
+                    "XWAYLAND" => {
+                        if matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no") {
+                            xwayland_satellite = None;
+                        } else if !cli_no_xwayland && xwayland_satellite.is_none() {
+                            xwayland_satellite = find_xwayland_satellite();
                         }
-                        "0" | "false" | "off" | "no" | "click" => {
-                            core.set_focus_follows_mouse(false);
-                            core.set_focus_follows_mouse_strict(false);
-                        }
-                        _ => {
-                            core.set_focus_follows_mouse(true);
-                            core.set_focus_follows_mouse_strict(false);
-                        }
-                    },
+                    }
+                    "PAN_MODE" => core.set_pan_mode(parse_pan_mode(val)),
+                    "FOCUS_FOLLOWS_MOUSE" => {
+                        let (enabled, strict) = parse_focus_follows_mouse(val);
+                        core.set_focus_follows_mouse(enabled);
+                        core.set_focus_follows_mouse_strict(strict);
+                    }
                     "FOCUS_CYCLE_NAVIGATE" => {
                         let enabled =
                             !matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no");
@@ -629,6 +611,22 @@ fn main() -> ExitCode {
 /// Maximum accepted run duration (365 days in seconds).
 const MAX_DURATION_SECS: f64 = 365.0 * 24.0 * 3600.0;
 
+fn parse_pan_mode(val: &str) -> infynitae_core::navigation::PanMode {
+    match val.to_lowercase().as_str() {
+        "rts" => infynitae_core::navigation::PanMode::Rts,
+        "grab" => infynitae_core::navigation::PanMode::Grab,
+        _ => infynitae_core::navigation::PanMode::Free,
+    }
+}
+
+fn parse_focus_follows_mouse(val: &str) -> (bool, bool) {
+    match val.to_lowercase().as_str() {
+        "strict" => (true, true),
+        "0" | "false" | "off" | "no" | "click" => (false, false),
+        _ => (true, false),
+    }
+}
+
 /// Parses a duration argument in seconds.
 ///
 /// Accepts non-negative finite floating-point values up to [`MAX_DURATION_SECS`].
@@ -679,5 +677,38 @@ mod tests {
         // Not a number
         assert!(parse_duration("abc").is_err());
         assert!(parse_duration("").is_err());
+    }
+
+    #[test]
+    fn test_parse_pan_mode() {
+        assert_eq!(
+            parse_pan_mode("rts"),
+            infynitae_core::navigation::PanMode::Rts
+        );
+        assert_eq!(
+            parse_pan_mode("grab"),
+            infynitae_core::navigation::PanMode::Grab
+        );
+        assert_eq!(
+            parse_pan_mode("free"),
+            infynitae_core::navigation::PanMode::Free
+        );
+        assert_eq!(
+            parse_pan_mode(""),
+            infynitae_core::navigation::PanMode::Free
+        );
+        assert_eq!(
+            parse_pan_mode("unknown"),
+            infynitae_core::navigation::PanMode::Free
+        );
+    }
+
+    #[test]
+    fn test_parse_focus_follows_mouse() {
+        assert_eq!(parse_focus_follows_mouse("strict"), (true, true));
+        assert_eq!(parse_focus_follows_mouse("sloppy"), (true, false));
+        assert_eq!(parse_focus_follows_mouse("1"), (true, false));
+        assert_eq!(parse_focus_follows_mouse("click"), (false, false));
+        assert_eq!(parse_focus_follows_mouse("off"), (false, false));
     }
 }

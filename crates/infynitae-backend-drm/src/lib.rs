@@ -3375,6 +3375,16 @@ pub fn calculate_abs_pointer_delta(
     calculate_abs_pointer_delta_scale(abs_px, current_p, scale)
 }
 
+/// Resolves whether touchpad tap-to-click should be enabled.
+/// Unset defaults to true (TOUCHPAD_TAP="true").
+pub fn resolve_touchpad_tap(configured: Option<bool>, env_val: Option<&str>) -> bool {
+    configured
+        .or_else(|| {
+            env_val.map(|t| matches!(t.to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        })
+        .unwrap_or(true)
+}
+
 fn configure_input_device(
     device: &mut smithay::reexports::input::Device,
     config: &infynitae_wayland::InputDeviceConfig,
@@ -3411,16 +3421,11 @@ fn configure_input_device(
         let _ = device.config_accel_set_speed(clamped);
     }
 
-    // 3. Touchpad Tap-to-click
-    let tap = config.touchpad_tap.or_else(|| {
-        std::env::var("TOUCHPAD_TAP")
-            .ok()
-            .map(|t| matches!(t.to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
-    });
-    if let Some(enable) = tap
-        && device.config_tap_finger_count() > 0
-    {
-        let _ = device.config_tap_set_enabled(enable);
+    // 3. Touchpad Tap-to-click (default: true, config/config:64)
+    let env_tap = std::env::var("TOUCHPAD_TAP").ok();
+    let tap = resolve_touchpad_tap(config.touchpad_tap, env_tap.as_deref());
+    if device.config_tap_finger_count() > 0 {
+        let _ = device.config_tap_set_enabled(tap);
     }
 
     // 4. Touchpad Natural Scrolling
@@ -3438,6 +3443,20 @@ fn configure_input_device(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn resolve_touchpad_tap_defaults_to_true() {
+        use super::resolve_touchpad_tap;
+        assert!(resolve_touchpad_tap(None, None));
+        assert!(resolve_touchpad_tap(Some(true), None));
+        assert!(resolve_touchpad_tap(None, Some("true")));
+        assert!(resolve_touchpad_tap(None, Some("1")));
+        assert!(!resolve_touchpad_tap(Some(false), None));
+        assert!(!resolve_touchpad_tap(None, Some("false")));
+        assert!(!resolve_touchpad_tap(None, Some("0")));
+        assert!(resolve_touchpad_tap(Some(true), Some("false")));
+        assert!(!resolve_touchpad_tap(Some(false), Some("true")));
+    }
+
     #[test]
     fn a_slow_turn_names_its_slowest_parts() {
         use std::time::Duration;

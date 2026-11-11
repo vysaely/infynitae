@@ -47,6 +47,7 @@ jobs:
       - run: sh tools/test-mako-config
       - run: sh tools/test-config-renames
       - run: sh tools/test-config-check
+      - run: sh tools/test-config-defaults
       - run: ./tools/test-readme-shortcuts
       - run: ./tools/test-readme-shortcuts --self-test
       - run: sh tools/test-reload-match

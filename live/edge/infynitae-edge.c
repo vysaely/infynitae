@@ -1907,7 +1907,7 @@ static void load_position_config(EdgeApp *app) {
     app->snap = true;
     app->overlap = false;
     app->hair_set = false;
-    app->square = false;
+    app->square = true;
     app->favorites[0] = '\0';
     app->surface_rgb[0] = 0x11 / 255.0; app->surface_rgb[1] = 0x13 / 255.0; app->surface_rgb[2] = 0x17 / 255.0;
     app->border_rgb[0]  = 0x33 / 255.0; app->border_rgb[1]  = 0x3b / 255.0; app->border_rgb[2]  = 0x54 / 255.0;
