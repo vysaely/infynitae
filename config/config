@@ -356,7 +356,7 @@ THEME_FROM_WALLPAPER="false"
     # options: false  · accent  · all
 
 WALLPAPER=""
-    # Wallpaper image (PNG, JPG, WebP; "$HOME/…" works) [save]
+    # Wallpaper image (PNG, JPG, WebP; "~/…" and "$HOME/…" work) [save]
     # default: ""
     #   ""    the first in ~/Pictures/Wallpapers or ~/.local/share/wallpapers
 
