@@ -126,8 +126,9 @@ fn a_game_that_asks_tears_while_fullscreen() {
     t.hint(&c, w, PresentationHint::Async);
     assert!(t.ls.state.tears(o));
     c.destroy();
+    t.ls.probe.surfaces[w].wl.commit();
     t.adv();
-    assert!(!t.ls.state.tears(o), "the object destroyed: vsync");
+    assert!(!t.ls.state.tears(o), "the object destroyed (and the next commit): vsync");
 }
 
 #[test]
@@ -229,4 +230,16 @@ fn presentation_hint_applies_on_commit_not_on_request() {
     t.ls.probe.surfaces[w].wl.commit();
     t.adv();
     assert!(!t.ls.state.tears(o), "vsync in effect after commit");
+
+    // destroying the control object goes back to vsync on the next commit, not before
+    c.set_presentation_hint(PresentationHint::Async);
+    t.ls.probe.surfaces[w].wl.commit();
+    t.adv();
+    assert!(t.ls.state.tears(o));
+    c.destroy();
+    t.adv();
+    assert!(t.ls.state.tears(o), "destroy applies on the next commit");
+    t.ls.probe.surfaces[w].wl.commit();
+    t.adv();
+    assert!(!t.ls.state.tears(o), "vsync after the commit");
 }

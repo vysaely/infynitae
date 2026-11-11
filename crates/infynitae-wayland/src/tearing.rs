@@ -41,6 +41,8 @@ struct TearingHint {
     current: bool,
     /// Pending presentation hint: applied on the surface's next `commit`.
     pending: bool,
+    /// the control object was destroyed: back to vsync on the next commit, then the entry goes
+    destroyed: bool,
 }
 
 impl Tearing {
@@ -59,6 +61,8 @@ impl Tearing {
         if let Some(entry) = self.hints.iter_mut().find(|h| &h.surface == surface) {
             entry.current = entry.pending;
         }
+        self.hints
+            .retain(|h| !(h.destroyed && &h.surface == surface));
     }
 }
 
@@ -165,6 +169,8 @@ impl Dispatch<WpTearingControlManagerV1, ()> for WaylandState {
         if let wp_tearing_control_manager_v1::Request::GetTearingControl { id, surface } = request {
             let hints = &mut state.tearing.hints;
             hints.retain(|h| h.surface.is_alive());
+            // a destroyed object waiting for its commit does not count
+            hints.retain(|h| !(h.destroyed && h.surface == surface));
             if hints.iter().any(|h| h.surface == surface) {
                 resource.post_error(
                     wp_tearing_control_manager_v1::Error::TearingControlExists,
@@ -176,6 +182,7 @@ impl Dispatch<WpTearingControlManagerV1, ()> for WaylandState {
                 surface: surface.clone(),
                 current: false,
                 pending: false,
+                destroyed: false,
             });
             data_init.init(id, surface);
         }
@@ -204,9 +211,17 @@ impl Dispatch<WpTearingControlV1, WlSurface> for WaylandState {
                     entry.pending = on;
                 }
             }
-            // destroying the object goes back to vsync
+            // destroying the object goes back to vsync on the next commit (the protocol)
             wp_tearing_control_v1::Request::Destroy => {
-                state.tearing.hints.retain(|h| &h.surface != surface);
+                if let Some(entry) = state
+                    .tearing
+                    .hints
+                    .iter_mut()
+                    .find(|h| &h.surface == surface)
+                {
+                    entry.pending = false;
+                    entry.destroyed = true;
+                }
             }
             _ => {}
         }
