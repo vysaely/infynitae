@@ -128,7 +128,10 @@ fn a_game_that_asks_tears_while_fullscreen() {
     c.destroy();
     t.ls.probe.surfaces[w].wl.commit();
     t.adv();
-    assert!(!t.ls.state.tears(o), "the object destroyed (and the next commit): vsync");
+    assert!(
+        !t.ls.state.tears(o),
+        "the object destroyed (and the next commit): vsync"
+    );
 }
 
 #[test]
