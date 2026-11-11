@@ -98,7 +98,20 @@ fn a_fullscreen_window_shown_directly_is_the_game_until_it_leaves_fullscreen() {
     assert_eq!(t.ls.state.game(), Some((id, pid)));
 
     t.fullscreen(w, false);
-    assert_eq!(t.ls.state.game(), None, "game mode ends with fullscreen");
+    // off screen briefly: stays on
+    assert_eq!(
+        t.ls.state.game(),
+        Some((id, pid)),
+        "game mode stays on during brief off-screen"
+    );
+    // off screen for 5 s continuously: ends
+    t.ls.state
+        .background_update(Instant::now() + Duration::from_secs(6));
+    assert_eq!(
+        t.ls.state.game(),
+        None,
+        "game mode ends after 5 s off screen"
+    );
 }
 
 #[test]
@@ -117,6 +130,41 @@ fn closing_the_game_ends_game_mode() {
     t.ls.probe.surfaces[w].wl.attach(None, 0, 0);
     t.ls.probe.surfaces[w].wl.commit();
     t.adv();
-    t.ls.state.background_update(Instant::now());
+    let t0 = Instant::now();
+    t.ls.state.background_update(t0);
+    // off screen briefly: stays on
+    assert_eq!(t.ls.state.game().map(|g| g.0), Some(id));
+    // off screen for 5 s continuously: ends
+    t.ls.state.background_update(t0 + Duration::from_secs(6));
     assert_eq!(t.ls.state.game(), None);
+}
+
+#[test]
+fn game_mode_hysteresis_stays_on_briefly_and_clears_after_hold() {
+    let mut t = T {
+        ls: Lockstep::new(Some(output((640, 480), 120))),
+    };
+    let o = t.ls.output();
+    let (w, id) = t.map("game");
+    let pid = std::process::id();
+
+    t.fullscreen(w, true);
+    t.ls.state.fullscreen_frame_shown(o);
+    assert_eq!(t.ls.state.game(), Some((id, pid)));
+
+    // Leave fullscreen (e.g. menu) for 3 s then back: stays on
+    t.fullscreen(w, false);
+    let t0 = Instant::now();
+    t.ls.state.background_update(t0 + Duration::from_secs(3));
+    assert_eq!(t.ls.state.game(), Some((id, pid)), "stays on after 3 s");
+
+    t.fullscreen(w, true);
+    t.ls.state.fullscreen_frame_shown(o);
+    assert_eq!(t.ls.state.game(), Some((id, pid)));
+
+    // Off screen for 6 s: ends once
+    t.fullscreen(w, false);
+    let t1 = Instant::now() + Duration::from_secs(10);
+    t.ls.state.background_update(t1 + Duration::from_secs(6));
+    assert_eq!(t.ls.state.game(), None, "ends after 6 s off screen");
 }

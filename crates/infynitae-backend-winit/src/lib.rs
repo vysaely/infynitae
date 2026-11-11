@@ -93,6 +93,8 @@ struct LoopData {
     host: HostFrameGate,
     /// Set of known mapped element IDs for detecting newly mapped windows.
     known_mapped: HashSet<infynitae_core::stage::ElementId>,
+    /// Last seen stage map generation for caching mapped window set.
+    last_mapped_generation: u64,
     config_path: Option<PathBuf>,
     last_config_check: std::time::Instant,
     last_config_mtime: Option<std::time::SystemTime>,
@@ -307,6 +309,7 @@ pub fn run_nested_with(
         options,
         host: HostFrameGate::new(),
         known_mapped: HashSet::new(),
+        last_mapped_generation: u64::MAX,
         config_path: cfg_path,
         last_config_check: std::time::Instant::now(),
         last_config_mtime: initial_mtime,
@@ -375,18 +378,25 @@ pub fn run_nested_with(
         data.session.dispatch(&mut data.state);
         apply_virtual_input(&mut data);
 
-        let current_mapped = data.state.core().stage().mapped_elements();
-        let new_mapped: Vec<_> = current_mapped
-            .iter()
-            .copied()
-            .filter(|id| !data.known_mapped.contains(id))
-            .collect();
+        let current_generation = data.state.core().stage().map_generation();
+        let new_mapped = if current_generation != data.last_mapped_generation {
+            data.last_mapped_generation = current_generation;
+            let current_mapped = data.state.core().stage().mapped_elements();
+            let new_mapped: Vec<_> = current_mapped
+                .iter()
+                .copied()
+                .filter(|id| !data.known_mapped.contains(id))
+                .collect();
 
-        data.known_mapped.clear();
-        data.known_mapped.extend(current_mapped);
+            data.known_mapped.clear();
+            data.known_mapped.extend(current_mapped);
+            new_mapped
+        } else {
+            Vec::new()
+        };
 
         if data.state.core().focus().is_initial_eligible() {
-            if let Some(&topmost) = data.state.core().stage().mapped_elements().last()
+            if let Some(topmost) = data.state.core().stage().top_mapped()
                 && let Ok(effects) = data
                     .state
                     .core_mut()

@@ -2539,6 +2539,10 @@ mod tests {
                 "Name for the drive".into()
             ]))
         );
+        assert_eq!(
+            parse_args(&["ask", "--title-stdin", "--secret"]),
+            Ok(Action::Ask(vec!["--title-stdin".into(), "--secret".into()]))
+        );
         assert!(parse_args(&["panel"]).is_err());
         assert!(parse_args(&["--unknown"]).is_err());
     }

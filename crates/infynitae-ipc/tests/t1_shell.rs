@@ -239,7 +239,7 @@ fn commands_run_in_order_and_failures_change_nothing() {
     let g0 = gen_of(&shell.reply(&mut server, &mut core, r#"{"id":"a","cmd":"snapshot"}"#));
     // three commands in one write: executed in this order
     shell.send(&format!(
-        r#"{{"id":1,"cmd":"navigate","output":{o},"to":{{"canvas":[100,100]}}}}
+        r#"{{"id":1,"cmd":"navigate","output":{o},"to":{{"canvas":[100,100]}},"zoom":2.0}}
 {{"id":2,"cmd":"navigate","output":{o},"to":{{"delta":[50,-50]}}}}
 {{"id":3,"cmd":"move_element","element":{},"to":[7.5,8.5]}}"#,
         eref(&core, w)
@@ -266,6 +266,7 @@ fn commands_run_in_order_and_failures_change_nothing() {
             y: 50 * q
         })
     );
+    assert_eq!(core.cameras().zoom(0), Some(2.0));
     assert_eq!(
         core.stage().anchor(w),
         Some(infynitae_core::geom::CanvasPoint { x: 8, y: 8 }),
@@ -278,6 +279,18 @@ fn commands_run_in_order_and_failures_change_nothing() {
         (
             format!(r#"{{"id":4,"cmd":"navigate","output":{o},"to":{{"canvas":[1e12,0]}}}}"#),
             "invalid_argument",
+        ),
+        (
+            format!(
+                r#"{{"id":4,"cmd":"navigate","output":{o},"to":{{"canvas":[0,0]}},"zoom":-1.0}}"#
+            ),
+            "invalid_request",
+        ),
+        (
+            format!(
+                r#"{{"id":4,"cmd":"navigate","output":{o},"to":{{"canvas":[0,0]}},"zoom":"invalid"}}"#
+            ),
+            "invalid_request",
         ),
         (
             format!(

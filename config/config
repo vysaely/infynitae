@@ -227,6 +227,8 @@ LATENCY="off"
     #    balanced   just in time for the refresh: about a frame less delay (experimental;
     #               misses more refreshes while the GPU is busy, e.g. a game or AI training)
     #    lowest     tighter still
+    #    direct     balanced while a fullscreen game is shown directly (the compositor only flips
+    #               then, so drawing late costs no refreshes), off otherwise
 
 LATENCY_STATS="false"
     # Input-to-screen times in ~/.local/state/infynitae/session.log every 10 s
@@ -256,7 +258,7 @@ FRAME_GUARD="33"
 
 GAME_MODE="true"
     # While a game is fullscreen (shown directly), gamemode runs the CPU at full speed
-    # (when installed)
+    # (when installed); ends once it has been off screen for 5 s continuously
     # default: true
     # options: true  · false
 
@@ -768,6 +770,15 @@ CLIPS_DIR="$HOME/Videos/Clips"
 RECORDINGS_DIR="$HOME/Videos/Recordings"
     # default: "$HOME/Videos/Recordings"
     # options: "$HOME/Videos/Recordings"  · any folder
+
+REPLAY_BACKEND="infynitae"
+    # What keeps the replay buffer
+    # default: infynitae
+    #   infynitae             the compositor captures each frame and ffmpeg encodes it (the copy out of
+    #                         the GPU costs the compositor time on every frame)
+    #   gpu-screen-recorder   reads the screen from the display hardware and encodes it on the GPU: no work
+    #                         in the compositor (install the gpu-screen-recorder package first; the capture
+    #                         mark does not show for it). Not yet tried on the owner's PC.
 
 RECORD_FPS="60"
     # default: 60

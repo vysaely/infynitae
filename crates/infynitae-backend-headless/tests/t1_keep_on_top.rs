@@ -72,6 +72,7 @@ fn picture_in_picture_keeps_its_place_on_the_screen_when_the_view_moves() {
                 ShellCommand::Navigate {
                     output: o,
                     to: NavigateTo::Delta(300.0, -100.0),
+                    zoom: None,
                     stream: ShellStream::Atomic,
                 },
             )

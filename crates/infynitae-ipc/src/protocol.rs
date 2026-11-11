@@ -157,9 +157,20 @@ fn request(v: &Value, core: &Core) -> Result<Request, RequestError> {
             } else {
                 return Err(Invalid);
             };
+            let zoom = match v.get("zoom") {
+                None | Some(Value::Null) => None,
+                Some(z) => {
+                    let z = z.as_f64().ok_or(Invalid)?;
+                    if !z.is_finite() || z <= 0.0 {
+                        return Err(Invalid);
+                    }
+                    Some(z)
+                }
+            };
             Request::Command(ShellCommand::Navigate {
                 output: output()?,
                 to,
+                zoom,
                 stream: stream()?,
             })
         }
@@ -198,6 +209,31 @@ fn request(v: &Value, core: &Core) -> Result<Request, RequestError> {
             to: point(v.get("to")).ok_or(Invalid)?,
             stream: stream()?,
         }),
+        "fullscreen_element" | "fullscreen" => {
+            let output = match v.get("output") {
+                None | Some(Value::Null) => None,
+                Some(o) => {
+                    let raw = o.as_u64().ok_or(Invalid)?;
+                    Some(
+                        core.outputs()
+                            .iter()
+                            .map(|out| out.id)
+                            .find(|out| out.get() == raw)
+                            .ok_or(RequestError::Shell(ShellError::UnknownOutput))?,
+                    )
+                }
+            };
+            let fullscreen = match v.get("fullscreen") {
+                None | Some(Value::Null) => true,
+                Some(Value::Bool(b)) => *b,
+                _ => return Err(Invalid),
+            };
+            Request::Command(ShellCommand::FullscreenElement {
+                element: element("element")?,
+                output,
+                fullscreen,
+            })
+        }
         _ => return Err(RequestError::UnknownCommand),
     })
 }

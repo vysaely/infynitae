@@ -1,6 +1,6 @@
 # Status
 
-Updated 2026-11-10 (the edge, widgets and the newest window rules: docs/EDGE_RUST.md, docs/DECISIONS.md).
+Updated 2026-11-11 (the edge, widgets and the newest window rules: docs/EDGE_RUST.md, docs/DECISIONS.md).
 
 Infynitae is my daily desktop. It is young and has only run on my own machine, so expect rough
 edges on other hardware.
@@ -10,18 +10,18 @@ edges on other hardware.
 - **The spatial model:** the endless canvas, a camera per screen (pan, zoom, fit, overview),
   clusters, window slots, fullscreen you can pan out of. The core is a pure state machine with
   no Wayland code in it, tested exactly.
-- **The test suite:** over 1,000 tests (1,055 `#[test]` in the crates, counted 2026-11-10), most of them real Wayland clients against a headless
-  compositor. `tools/verify-test-efficacy` seeds bugs on purpose to prove the tests catch them,
-  and `tools/verify-architecture` checks that the architecture holds.
+- **The test suite:** over 1,000 tests (1,058 `#[test]` in the crates, counted 2026-11-11), most of them real Wayland clients against a headless
+  compositor; the test harness isolates the launcher in a temporary directory so shortcuts and reload actions never reach the live desktop. `tools/verify-test-efficacy` seeds bugs on purpose to prove the tests catch them (sharing build paths so cargo rebuilds only what a seed touched),
+  `tools/verify-architecture` checks that the architecture holds, and CI tests config defaults and README shortcuts against the code.
 - **The desktop:** lock screen, wallpaper, screenshots, clipboard history, session restore,
-  recording and a replay buffer, polkit prompts, notifications (mako), a keyring
-  (gnome-keyring), USB automount (infynitae-automount on udisks2: encrypted drives ask for their passphrase, a notification opens or ejects a drive, `infynitae-automount eject` makes every drive safe to pull; right click a drive's folder in PCManFM-Qt, "Format drive...", to erase it as exFAT, FAT32 or ext4, `infynitae-format-drive` from a terminal), the control menu (Super+A: Wi-Fi, Bluetooth, volume
+  recording and a replay buffer (defaulting to hevc), polkit prompts, notifications (mako), a keyring
+  (gnome-keyring, or infynitae-keyring once switched via `tools/switch.sh`), USB automount (infynitae-automount on udisks2: encrypted drives ask for their passphrase, a notification opens or ejects a drive, `infynitae-automount eject` makes every drive safe to pull; right click a drive's folder in PCManFM-Qt, "Format drive...", to erase it as exFAT, FAT32 or ext4, `infynitae-format-drive` from a terminal), the control menu (Super+A: Wi-Fi, Bluetooth, volume
   for all sound or one app, sound output, power mode), global shortcuts for
-  apps, layer shell for bars, X11 apps through xwayland-satellite, VRR and direct scanout for
-  games, idle screen-off and auto-lock.
-- **Screen sharing:** a screen or a single window, through the portal or screencopy. The
-  portal asks before an app's first share (this time, always, or deny; `SCREENSHARE_ASK`). A
-  private window (`PRIVACY_APPS`, `PRIVACY_TITLES`, Super+Shift+P) is never shared, and nothing
+  apps, layer shell for bars, X11 apps through xwayland-satellite (can be disabled with `XWAYLAND=false`), VRR and direct scanout for
+  games, idle screen-off and auto-lock. Config defaults match documented settings: `FOCUS_FOLLOWS_MOUSE` is strict, `PAN_MODE` is free, `SQUARE_CORNERS` and `TOUCHPAD_TAP` are true.
+- **Screen sharing:** a screen or a single window, through the portal or screencopy (screencopy hides the cursor by default). The
+  portal asks before an app's first share (this time, always, or deny; `SCREENSHARE_ASK`, defaults to `app`). A
+  private window (`PRIVACY_APPS`, which accepts spaces or commas, `PRIVACY_TITLES` separated by commas, Super+Shift+P) is never shared, and nothing
   is while the screen is locked. A small red dot shows on every screen while anything captures
   it, and is never in the capture itself (`CAPTURE_INDICATOR`). Over a fullscreen window it
   steps aside, so a game still goes to the screen directly, and a notification says the screen
@@ -51,24 +51,34 @@ These pass the test suite but have not run on a real screen or device yet:
   - **Lock screen:** the wallpaper blurred and dimmed behind it, the user's picture
     (AccountsService, `~/.face`) or up to two initials, the full name, a larger clock; the
     wallpaper helper prepares the pictures (`~/.cache/infynitae`), the lock screen reads them only
-    once the lock holds.
+    once the lock holds. The lock screen wipes password buffers and memory-locks them against swap,
+    drops core dumps and ptrace, detaches PAM workers, and refuses `--greeter` as root;
+    `infynitae-sleep-lock` keeps the sleep inhibitor if an external locker exits within the first second.
   - **Panels of modules (2026-11-07):** each panel is one config line, its key, its place on
     any screen edge and its modules in order (`PANEL_<NAME>`); new panels of your own; a
     favorites module (FAVORITES, right click an app to pin it); arrows move to the nearest item
-    in every panel; opens at once (no animation).
+    in every panel; opens at once (no animation); panels opened by key stay open when the pointer
+    leaves; overlapping cards route clicks and drags to the topmost card; ask cards close when
+    their asking program ends, and later requests queue.
   - **Panels (Super+W, Super+L, Super+A, Super+V):** one look (sans-serif 12-15 px, 32 px rows,
     hairline outlines, the accent only for what is selected or on); the launcher, window list and
-    clipboard are one-column lists with every item reachable (Up/Down, Page Up/Down); the control
-    panel spells everything out.
+    clipboard are one-column lists with every item reachable (Up/Down, Page Up/Down); apps search
+    ranks names starting with the query before matches inside, ordered by recent use within each
+    rank; shrinking panels clear their previous bounds without leftover pixels; dragging sliders
+    coalesces commands, and media seek commits on release; calendar jumps to today on title click;
+    invoking a notification action keeps older unread notifications; the memory card protects the
+    compositor and session processes; touch-and-hold emits a right click; the control panel
+    spells everything out.
   - **Faster shortcuts** (24 ms of shell setup a press down to 8 ms), the wallpaper no longer
-    keeps its decoded image (about 70 MB with a large wallpaper).
+    keeps its decoded image (about 70 MB with a large wallpaper); edge system and memory modules
+    read GPU telemetry, temperatures, and memory directly from `/proc` and `/sys` without subshells.
 
 - **Other machines.** The console backend (real screens, GPUs, input) cannot run in the test
   suite and has only run on my machine. Multi-GPU has never been tried.
 - **Monitor hotplug:** a screen plugged in, unplugged or woken is found about 1.5 s after the
   last change, and the session can start with no screen and wait for one. A sleeping screen is
   never removed while asleep.
-- **Rotation, mode and VRR changes** from display tools or `OUTPUT_<NAME>_TRANSFORM`. Captures
+- **Rotation, mode and VRR changes** from display tools or `OUTPUT_<NAME>_*` (`OUTPUT_<NAME>_TRANSFORM`, `OUTPUT_<NAME>_MODE`, `OUTPUT_<NAME>_SCALE`, `OUTPUT_<NAME>_RATE`; checked by `config-check`). `OUTPUT_ORDER` accepts spaces or commas and overrides `OUTPUT_LAYOUT` with a warning. Captures
   and touch turn with the screen. VRR as tools see it is whether a screen may use it (on, or
   auto while fullscreen); turning it off from a tool lasts until the screen reconnects.
 - **Auto-rotate** on convertibles (`AUTO_ROTATE`, needs iio-sensor-proxy): the laptop's own
@@ -107,12 +117,12 @@ These pass the test suite but have not run on a real screen or device yet:
 - **Tearing for games** (`TEARING`, Super+Shift+O; Super+Shift+T too): a fullscreen window
   shown directly flips each frame at once (an async page flip) when its app asks
   (`tearing-control-v1`, a Vulkan or OpenGL game with vsync off; presentation hints apply on the
-  next surface commit) or after Super+Shift+O on it (X11 games, which cannot ask). A
+  next surface commit, and destroying the control object restores vsync on the next commit) or after Super+Shift+O on it (X11 games, which cannot ask). A
   driver that refuses gets the usual flip. In the test suite; this GPU (amdgpu) reports support,
   not yet seen in a game.
 - **Game mode** (`GAME_MODE`, `--no-gamemode`): a fullscreen window the GPU shows directly is
-  a game, registered with Feral's gamemode (full CPU speed) until it leaves fullscreen. A
-  fullscreen video shown directly counts too.
+  a game, registered with Feral's gamemode (full CPU speed) until it has been off screen for 5 s
+  continuously. A fullscreen video shown directly counts too.
 - **A full GPU slows the windows out of use** (`GPU_RELIEF`): while a game fills a screen, a
   screen missing one refresh in twenty for a second completes the frames of windows that are
   neither focused nor filling it at about 60 FPS for 30 s, longer if it had to start again at
@@ -132,7 +142,7 @@ These pass the test suite but have not run on a real screen or device yet:
   in Celluloid, pictures in Ristretto, text in Mousepad, set for the file types with no default of
   yours in `~/.config/mimeapps.list` (install and update). Tested against a stand-in home; not yet
   on a fresh install.
-- **Password store unlocked at login:** gnome-keyring starts before the start lock screen, and
+- **Password store unlocked at login:** gnome-keyring (or infynitae-keyring once enabled with `tools/switch.sh`) starts before the start lock screen, and
   the lock screen's password opens it (`pam_gnome_keyring`), so apps no longer ask for a second
   password. Not yet tested on hardware.
 - **Laptop lid:** closing it with another screen connected moves everything to that screen

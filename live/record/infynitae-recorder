@@ -48,6 +48,9 @@ RECORD_FPS="${RECORD_FPS:-60}"
 RECORD_CODEC="${RECORD_CODEC:-hevc}" # hevc, auto, av1, h264
 RECORD_AUDIO="${RECORD_AUDIO:-desktop}"
 RECORD_NOTIFY="${RECORD_NOTIFY:-true}"
+# infynitae: the compositor's capture -> ffmpeg; gpu-screen-recorder: the screen read from the display hardware
+# (KMS) and encoded on the GPU, with no work in the compositor (it must be installed)
+REPLAY_BACKEND="${REPLAY_BACKEND:-infynitae}"
 
 PID_FILE="$RUNTIME_DIR/infynitae-recording.pid"
 REPLAY_PID_FILE="$RUNTIME_DIR/infynitae-replay.pid"
@@ -205,7 +208,36 @@ detect_audio_args() {
     fi
 }
 
+# The replay buffer with gpu-screen-recorder: it keeps the last REPLAY_MINUTES in memory itself and writes a clip
+# into CLIPS_DIR on SIGUSR1 (save_replay_clip). The screen comes from the display hardware through its
+# gsr-kms-server (installed with cap_sys_admin), so the compositor draws and copies nothing for it.
+gsr_codec() {
+    case "$(echo "$RECORD_CODEC" | tr 'A-Z' 'a-z')" in
+        av1) echo av1 ;;
+        h264) echo h264 ;;
+        *) echo hevc ;;
+    esac
+}
+
+start_gsr_replay() {
+    mkdir -p "$CLIPS_DIR"
+    set -- -w screen -f "$RECORD_FPS" -r "$TOTAL_SECS" -c mp4 -k "$(gsr_codec)" -o "$CLIPS_DIR"
+    case "$(echo "${RECORD_AUDIO:-desktop}" | tr 'A-Z' 'a-z')" in
+        desktop|true|1|yes|on) set -- "$@" -a default_output ;;
+        mic|microphone) set -- "$@" -a default_input ;;
+        both|all) set -- "$@" -a "default_output|default_input" ;;
+    esac
+    echo "[infynitae-recorder] Replay buffer: gpu-screen-recorder ($*)"
+    exec nice -n 10 gpu-screen-recorder "$@"
+}
+
 start_replay_engine() {
+    if [ "$REPLAY_BACKEND" = "gpu-screen-recorder" ]; then
+        if command -v gpu-screen-recorder >/dev/null 2>&1; then
+            start_gsr_replay
+        fi
+        echo "[infynitae-recorder] REPLAY_BACKEND is gpu-screen-recorder, which is not installed: using the compositor's capture" >&2
+    fi
     resolve_wayland_display
     mkdir -p "$REPLAY_DIR"
     chmod 700 "$REPLAY_DIR" 2>/dev/null || true
@@ -264,6 +296,14 @@ supervisor_loop() {
 }
 
 save_replay_clip() {
+    # gpu-screen-recorder saves its own buffer on SIGUSR1 (into CLIPS_DIR)
+    engine=$(cat "$REPLAY_PID_FILE" 2>/dev/null)
+    if [ -n "$engine" ] && [ "$(cat "/proc/$engine/comm" 2>/dev/null)" = "gpu-screen-reco" ]; then
+        kill -USR1 "$engine"
+        notify_toast "Clip Saved" "Saved to ${CLIPS_DIR##*/}"
+        echo "[infynitae-recorder] Asked gpu-screen-recorder (PID $engine) to save its buffer into $CLIPS_DIR"
+        return 0
+    fi
     if [ ! -d "$REPLAY_DIR" ]; then
         notify_toast "Replay Buffer Inactive" "No replay buffer directory found."
         echo "Error: Replay directory $REPLAY_DIR does not exist" >&2

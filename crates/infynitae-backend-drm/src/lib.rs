@@ -173,6 +173,28 @@ pub fn idle_timeout_remaining(
     }
 }
 
+/// Time remaining until the next logind idle-inhibit background query is due.
+/// Starts 5 s before the idle timeout expires so the answer is ready without
+/// blocking the main loop. None when idle blanking is disabled, already active,
+/// or inhibited by Wayland. Pure.
+pub fn logind_query_remaining(
+    idle_sleep_timeout_min: u32,
+    dpms_active: bool,
+    idle_inhibited: bool,
+    last_user_activity: std::time::Instant,
+    now: std::time::Instant,
+) -> Option<Duration> {
+    if !dpms_active && idle_sleep_timeout_min > 0 && !idle_inhibited {
+        let total = Duration::from_secs(u64::from(idle_sleep_timeout_min) * 60);
+        let lead = Duration::from_secs(5).min(total / 2);
+        let query_at = total.saturating_sub(lead);
+        let elapsed = now.saturating_duration_since(last_user_activity);
+        Some(query_at.saturating_sub(elapsed))
+    } else {
+        None
+    }
+}
+
 /// A mode's refresh in mHz, from its pixel clock (kHz) and totals; the rounded `vrefresh` when the
 /// totals are unknown. Pure.
 pub fn refresh_mhz(clock_khz: u32, htotal: u16, vtotal: u16, vrefresh: u32) -> u32 {
@@ -487,6 +509,8 @@ struct LoopData {
     last_abs_pointer: Option<(f64, f64)>,
     /// Set of known mapped element IDs for detecting newly mapped windows.
     known_mapped: HashSet<infynitae_core::stage::ElementId>,
+    /// Last seen stage map generation for caching mapped window set.
+    last_mapped_generation: u64,
     /// Direct scanout for primary and overlay planes.
     direct_scanout: bool,
     /// The shader averaging windows drawn smaller than their buffer (`smooth`); `None` with
@@ -511,6 +535,7 @@ struct LoopData {
     idle_sleep_timeout_min: u32,
     idle_auto_lock: bool,
     lock_process: Option<std::process::Child>,
+    logind_inhibit: infynitae_wayland::idle_inhibit::LogindInhibitWatcher,
     /// The VRR setting (`ConsoleOptions::vrr`), each screen's until a tool changes it.
     vrr_mode: Option<bool>,
     /// For timers set from the render path (a refused page flip's retry).
@@ -521,6 +546,9 @@ struct LoopData {
     rescan_at: Option<std::time::Instant>,
     /// The laptop's lid is closed: its panel is left out while another screen is connected.
     lid_closed: bool,
+    /// Captures into memory whose GPU copy was started last turn: copied out and handed over at the next turn,
+    /// when the GPU has done it, instead of this loop waiting for the GPU (review 2026-11-11, 1).
+    capture_copies: Vec<PendingCopy>,
     /// `ConsoleOptions::virtual_screen`.
     virtual_screen_enabled: bool,
     /// The virtual screen standing in while no screen is connected.
@@ -683,15 +711,28 @@ fn read_connector_edid(drm: &impl Device, handle: connector::Handle) -> Option<e
 }
 
 /// At the idle timeout: whether logind holds an idle inhibitor (an app over D-Bus, through
-/// infynitae-portal's org.freedesktop.ScreenSaver, or `systemd-inhibit --what=idle`). If so,
+/// infynitae-portal's org.freedesktop.ScreenSaver, or `systemd-inhibit --what=idle`). Uses the
+/// last known answer delivered through the channel from the background query thread. If so,
 /// the timeout is asked again in a minute, not at every loop.
 fn logind_inhibits_idle_now(data: &mut LoopData) -> bool {
-    if !infynitae_wayland::idle_inhibit::logind_idle_inhibited() {
+    logind_inhibits_idle_decision(
+        &data.logind_inhibit,
+        data.idle_sleep_timeout_min,
+        &mut data.last_user_activity,
+    )
+}
+
+pub(crate) fn logind_inhibits_idle_decision(
+    inhibit: &infynitae_wayland::idle_inhibit::LogindInhibitWatcher,
+    idle_sleep_timeout_min: u32,
+    last_user_activity: &mut std::time::Instant,
+) -> bool {
+    if !inhibit.is_inhibited() {
         return false;
     }
-    let timeout = Duration::from_secs(u64::from(data.idle_sleep_timeout_min) * 60);
+    let timeout = Duration::from_secs(u64::from(idle_sleep_timeout_min) * 60);
     let recheck = timeout.saturating_sub(Duration::from_secs(60));
-    data.last_user_activity = std::time::Instant::now()
+    *last_user_activity = std::time::Instant::now()
         .checked_sub(recheck)
         .unwrap_or_else(std::time::Instant::now);
     true
@@ -1406,6 +1447,15 @@ pub fn run_console_with(
             }
         })
         .map_err(|e| format!("seat events: {e}"))?;
+    let (logind_inhibit, inhibit_channel) =
+        infynitae_wayland::idle_inhibit::LogindInhibitWatcher::new();
+    handle
+        .insert_source(inhibit_channel, |event, _, data| {
+            if let smithay::reexports::calloop::channel::Event::Msg(inhibited) = event {
+                data.logind_inhibit.update(inhibited);
+            }
+        })
+        .map_err(|e| format!("idle inhibit channel: {e}"))?;
     handle
         .insert_source(drm_notifier, |event, meta, data| match event {
             DrmEvent::VBlank(crtc) => {
@@ -1513,6 +1563,7 @@ pub fn run_console_with(
         input_devices: Vec::new(),
         last_abs_pointer: None,
         known_mapped: HashSet::new(),
+        last_mapped_generation: u64::MAX,
         loop_busy_max: Duration::ZERO,
         direct_scanout: options.direct_scanout.unwrap_or(true),
         smooth_program,
@@ -1528,11 +1579,13 @@ pub fn run_console_with(
         idle_sleep_timeout_min: idle_timeout_min,
         idle_auto_lock,
         lock_process: None,
+        logind_inhibit,
         vrr_mode: options.vrr,
         loop_handle: handle.clone(),
         factory,
         rescan_at: None,
         lid_closed: false,
+        capture_copies: Vec::new(),
         virtual_screen_enabled: options.virtual_screen,
         virtual_screen: None,
     };
@@ -1574,6 +1627,16 @@ pub fn run_console_with(
             data.last_user_activity,
             std::time::Instant::now(),
         );
+        let query_due = logind_query_remaining(
+            data.idle_sleep_timeout_min,
+            data.dpms_active,
+            data.state.is_idle_inhibited(),
+            data.last_user_activity,
+            std::time::Instant::now(),
+        );
+        if query_due == Some(Duration::ZERO) {
+            data.logind_inhibit.query_async(std::time::Instant::now());
+        }
         let capture_mark = data
             .state
             .capture_indicator()
@@ -1586,6 +1649,7 @@ pub fn run_console_with(
             data.session.timeout(),
             restart,
             idle_timeout,
+            query_due.filter(|d| !d.is_zero()),
             capture_mark,
             rescan,
             background,
@@ -1819,15 +1883,22 @@ pub fn run_console_with(
         }
 
         turn.mark("outputs, input, unlock");
-        let current_mapped = data.state.core().stage().mapped_elements();
-        let new_mapped: Vec<_> = current_mapped
-            .iter()
-            .copied()
-            .filter(|id| !data.known_mapped.contains(id))
-            .collect();
+        let current_generation = data.state.core().stage().map_generation();
+        let new_mapped = if current_generation != data.last_mapped_generation {
+            data.last_mapped_generation = current_generation;
+            let current_mapped = data.state.core().stage().mapped_elements();
+            let new_mapped: Vec<_> = current_mapped
+                .iter()
+                .copied()
+                .filter(|id| !data.known_mapped.contains(id))
+                .collect();
 
-        data.known_mapped.clear();
-        data.known_mapped.extend(current_mapped);
+            data.known_mapped.clear();
+            data.known_mapped.extend(current_mapped);
+            new_mapped
+        } else {
+            Vec::new()
+        };
         // which new windows the user opened, decided before any of them takes the focus
         let (focus_user_only, teleport_user_only) = data.state.open_policy_user_only();
         let priority = data.state.open_policy_priority();
@@ -1847,7 +1918,7 @@ pub fn run_console_with(
             .collect();
 
         if data.state.core().focus().is_initial_eligible() {
-            if let Some(&topmost) = data.state.core().stage().mapped_elements().last()
+            if let Some(topmost) = data.state.core().stage().top_mapped()
                 && let Ok(effects) = data
                     .state
                     .core_mut()
@@ -2001,6 +2072,12 @@ fn recover_renderer(data: &mut LoopData) {
         smooth::program(&mut renderer)
     };
     data.renderer = renderer;
+    // copies started on the lost renderer cannot be read: their captures fail (the client asks again)
+    for c in data.capture_copies.drain(..) {
+        for req in c.reqs {
+            req.fail();
+        }
+    }
     for s in &mut data.screens {
         s.screencopy_texture = None;
         let _ = s.compositor.reset_state();
@@ -2021,6 +2098,7 @@ const TEARING_RETRY: Duration = Duration::from_secs(5);
 /// One frame on every screen that is not waiting for its vblank. A screen whose frame changed
 /// nothing completes its frame callbacks now; a queued one at its vblank.
 fn render(data: &mut LoopData, turn: &mut TurnClock) {
+    deliver_copies(&mut data.renderer, &mut data.capture_copies);
     let locked = data.state.is_locked();
     let clear = if locked {
         convert::LOCKED_CLEAR
@@ -2039,6 +2117,7 @@ fn render(data: &mut LoopData, turn: &mut TurnClock) {
             &mut data.state,
             &mut data.renderer,
             &mut data.screens[i].screencopy_texture,
+            &mut data.capture_copies,
             data.smooth_program.as_ref(),
             id,
             size,
@@ -2072,7 +2151,8 @@ fn render(data: &mut LoopData, turn: &mut TurnClock) {
             s.schedule.set_period(std::time::Duration::from_nanos(
                 1_000_000_000_000 / u64::from(mhz),
             ));
-            s.schedule.set_mode(data.state.latency_mode);
+            s.schedule
+                .set_mode(data.state.latency_mode.for_screen(s.scanned_out));
             // a frame the GPU has to draw needs more of the refresh than one it only shows
             s.schedule.set_guard_percent(if s.scanned_out {
                 data.state.frame_guard_percent / 4
@@ -2283,6 +2363,15 @@ fn render(data: &mut LoopData, turn: &mut TurnClock) {
                     } else {
                         // this frame waited for the refresh; the next one tries again
                         s.tearing_refused += 1;
+                        // the kernel accepts an async flip that changes only the primary plane's buffer: say
+                        // what else this frame had, once per run of refusals (review 2026-11-11, 3: amdgpu's
+                        // EINVAL is unexplained; overlay planes in use are the first suspect)
+                        if s.tearing_refused == 1 {
+                            log_line!(
+                                "[infynitae] Tearing refused on screen {id:?}: {overlays} overlay plane(s) in use, cursor plane {}",
+                                if cursor { "in use" } else { "free" }
+                            );
+                        }
                         if s.tearing_refused == TEARING_REFUSALS {
                             s.tearing_retry_at = Some(std::time::Instant::now() + TEARING_RETRY);
                             log_line!(
@@ -2401,6 +2490,7 @@ fn render(data: &mut LoopData, turn: &mut TurnClock) {
             &mut data.state,
             &mut data.renderer,
             &mut v.screencopy_texture,
+            &mut data.capture_copies,
             data.smooth_program.as_ref(),
             v.id,
             VIRTUAL_SCREEN_SIZE,
@@ -2410,6 +2500,10 @@ fn render(data: &mut LoopData, turn: &mut TurnClock) {
         data.state.frame_tick(v.id, now);
     }
     confirm_lock(data);
+    // a capture copied out of the GPU this turn is handed over at the next one: make sure there is one
+    if !data.capture_copies.is_empty() {
+        data.session.request_frame();
+    }
     data.session.flush();
     if renderer_lost(&mut data.renderer) {
         recover_renderer(data);
@@ -2426,10 +2520,12 @@ fn confirm_lock(data: &mut LoopData) {
 
 /// Serves the captures waiting for `output_id`: the screen's (its frame, as shown), and the
 /// windows captured alone (each drawn by itself, `convert::window_capture_elements`).
+#[allow(clippy::too_many_arguments)]
 fn serve_captures(
     state: &mut WaylandState,
     renderer: &mut GlesRenderer,
     screencopy_texture: &mut Option<GlesTexture>,
+    copies: &mut Vec<PendingCopy>,
     smooth_program: Option<&GlesTexProgram>,
     output_id: OutputId,
     size: (i32, i32),
@@ -2454,6 +2550,7 @@ fn serve_captures(
                 handle_screencopy(
                     renderer,
                     &mut texture,
+                    copies,
                     vec![req],
                     &elements,
                     size,
@@ -2528,6 +2625,7 @@ fn serve_captures(
     handle_screencopy(
         renderer,
         screencopy_texture,
+        copies,
         pending,
         &elements,
         size,
@@ -2555,10 +2653,11 @@ fn note_capture_path(gpu: bool) {
 
 /// Renders `elements` (`size` px at `k`) into each waiting capture's buffer: a dmabuf on the GPU,
 /// a shm buffer through a copy (U-008).
-#[allow(unsafe_code)]
+#[allow(unsafe_code, clippy::too_many_arguments)]
 fn handle_screencopy<E>(
     renderer: &mut GlesRenderer,
     screencopy_texture: &mut Option<GlesTexture>,
+    copies: &mut Vec<PendingCopy>,
     pending: Vec<infynitae_wayland::screencopy::PendingFrame>,
     elements: &[E],
     size: (i32, i32),
@@ -2692,80 +2791,115 @@ fn handle_screencopy<E>(
         }
     };
 
-    let slice = match ExportMem::map_texture(renderer, &mapping) {
-        Ok(s) => s,
-        Err(e) => {
-            log_line!("[screencopy] Failed to map texture: {e:?}");
-            for p in remaining {
-                p.fail();
+    // the GPU copies in the background; the next turn hands it over (`deliver_copies`)
+    copies.push(PendingCopy {
+        mapping,
+        reqs: remaining,
+        size,
+        view,
+        transform,
+        now,
+    });
+}
+
+/// A capture into memory whose copy out of the GPU was started: handed over by `deliver_copies`.
+struct PendingCopy {
+    mapping: <GlesRenderer as ExportMem>::TextureMapping,
+    reqs: Vec<infynitae_wayland::screencopy::PendingFrame>,
+    size: (i32, i32),
+    view: (i32, i32),
+    transform: infynitae_core::output::Transform,
+    now: std::time::Duration,
+}
+
+/// Hands over the captures copied out of the GPU since the last turn (the GPU has finished them by now, so
+/// mapping does not wait on it the way mapping right after the copy did).
+#[allow(unsafe_code)]
+fn deliver_copies(renderer: &mut GlesRenderer, copies: &mut Vec<PendingCopy>) {
+    for PendingCopy {
+        mapping,
+        reqs: remaining,
+        size,
+        view,
+        transform,
+        now,
+    } in copies.drain(..)
+    {
+        let slice = match ExportMem::map_texture(renderer, &mapping) {
+            Ok(s) => s,
+            Err(e) => {
+                log_line!("[screencopy] Failed to map texture: {e:?}");
+                for p in remaining {
+                    p.fail();
+                }
+                continue;
             }
-            return;
-        }
-    };
+        };
 
-    let src_stride = (size.0 * 4) as usize;
+        let src_stride = (size.0 * 4) as usize;
 
-    for req in remaining {
-        // the region's place in the whole-screen buffer (the panel's orientation)
-        let (rx, ry) = req
-            .region
-            .map(|r| convert::capture_region_in_buffer(r, view, transform))
-            .map(|(x, y, _, _)| (x.max(0) as usize, y.max(0) as usize))
-            .unwrap_or((0, 0));
+        for req in remaining {
+            // the region's place in the whole-screen buffer (the panel's orientation)
+            let (rx, ry) = req
+                .region
+                .map(|r| convert::capture_region_in_buffer(r, view, transform))
+                .map(|(x, y, _, _)| (x.max(0) as usize, y.max(0) as usize))
+                .unwrap_or((0, 0));
 
-        let copy_result = with_buffer_contents_mut(&req.buffer, |ptr, len, buffer_data| {
-            if buffer_data.format
-                != smithay::reexports::wayland_server::protocol::wl_shm::Format::Argb8888
-                && buffer_data.format
-                    != smithay::reexports::wayland_server::protocol::wl_shm::Format::Xrgb8888
-            {
-                return false;
-            }
-            let h = (buffer_data.height.max(0) as usize).min(size.1 as usize);
-            let w_bytes = (buffer_data.width.max(0) as usize).min(size.0 as usize) * 4;
-            let dest_stride = buffer_data.stride.max(0) as usize;
-            let offset = buffer_data.offset.max(0) as usize;
+            let copy_result = with_buffer_contents_mut(&req.buffer, |ptr, len, buffer_data| {
+                if buffer_data.format
+                    != smithay::reexports::wayland_server::protocol::wl_shm::Format::Argb8888
+                    && buffer_data.format
+                        != smithay::reexports::wayland_server::protocol::wl_shm::Format::Xrgb8888
+                {
+                    return false;
+                }
+                let h = (buffer_data.height.max(0) as usize).min(size.1 as usize);
+                let w_bytes = (buffer_data.width.max(0) as usize).min(size.0 as usize) * 4;
+                let dest_stride = buffer_data.stride.max(0) as usize;
+                let offset = buffer_data.offset.max(0) as usize;
 
-            if dest_stride < w_bytes {
-                return false;
-            }
-            let total_required = match dest_stride
-                .checked_mul(h.saturating_sub(1))
-                .and_then(|v| v.checked_add(w_bytes))
-                .and_then(|v| v.checked_add(offset))
-            {
-                Some(bytes) => bytes,
-                None => return false,
-            };
-            if total_required > len {
-                return false;
-            }
+                if dest_stride < w_bytes {
+                    return false;
+                }
+                let total_required = match dest_stride
+                    .checked_mul(h.saturating_sub(1))
+                    .and_then(|v| v.checked_add(w_bytes))
+                    .and_then(|v| v.checked_add(offset))
+                {
+                    Some(bytes) => bytes,
+                    None => return false,
+                };
+                if total_required > len {
+                    return false;
+                }
 
-            // SAFETY: bounds verified: `dest_stride >= w_bytes`, `total_required <= len`,
-            // and `src_offset + w_bytes <= slice.len()`.
-            unsafe {
-                let dest_base = ptr.add(offset);
-                for row in 0..h {
-                    let src_row_idx = (ry + row).min(size.1.max(0) as usize);
-                    let src_offset = src_row_idx * src_stride + rx * 4;
-                    if src_offset + w_bytes <= slice.len() {
-                        let src_row = &slice[src_offset..(src_offset + w_bytes)];
-                        let dest_row = dest_base.add(row * dest_stride);
-                        std::ptr::copy_nonoverlapping(src_row.as_ptr(), dest_row, w_bytes);
+                // SAFETY: bounds verified: `dest_stride >= w_bytes`, `total_required <= len`,
+                // and `src_offset + w_bytes <= slice.len()`.
+                unsafe {
+                    let dest_base = ptr.add(offset);
+                    for row in 0..h {
+                        let src_row_idx = (ry + row).min(size.1.max(0) as usize);
+                        let src_offset = src_row_idx * src_stride + rx * 4;
+                        if src_offset + w_bytes <= slice.len() {
+                            let src_row = &slice[src_offset..(src_offset + w_bytes)];
+                            let dest_row = dest_base.add(row * dest_stride);
+                            std::ptr::copy_nonoverlapping(src_row.as_ptr(), dest_row, w_bytes);
+                        }
                     }
                 }
-            }
-            true
-        });
+                true
+            });
 
-        if matches!(copy_result, Ok(true)) {
-            let target_size = req
-                .region
-                .map(|(_, _, w, h)| convert::capture_buffer_size((w, h), transform))
-                .unwrap_or(size);
-            req.ready((target_size.0 as u32, target_size.1 as u32), now);
-        } else {
-            req.fail();
+            if matches!(copy_result, Ok(true)) {
+                let target_size = req
+                    .region
+                    .map(|(_, _, w, h)| convert::capture_buffer_size((w, h), transform))
+                    .unwrap_or(size);
+                req.ready((target_size.0 as u32, target_size.1 as u32), now);
+            } else {
+                req.fail();
+            }
         }
     }
 }
@@ -3798,6 +3932,46 @@ mod tests {
 
         // When timeout is 0 (disabled) -> None
         assert_eq!(idle_timeout_remaining(0, false, false, start, start), None);
+    }
+
+    #[test]
+    fn logind_query_remaining_schedules_lead_and_respects_inhibitions() {
+        let start = std::time::Instant::now();
+        // 10 minutes timeout (600 s): query is due 5 s before timeout (595 s)
+        let due = logind_query_remaining(10, false, false, start, start);
+        assert_eq!(due, Some(Duration::from_secs(595)));
+
+        // At 595 s elapsed: query is due immediately (0 remaining)
+        let due = logind_query_remaining(10, false, false, start, start + Duration::from_secs(595));
+        assert_eq!(due, Some(Duration::ZERO));
+
+        // When DPMS is already active -> None
+        assert_eq!(logind_query_remaining(10, true, false, start, start), None);
+
+        // When idle is inhibited -> None
+        assert_eq!(logind_query_remaining(10, false, true, start, start), None);
+
+        // When timeout is 0 (disabled) -> None
+        assert_eq!(logind_query_remaining(0, false, false, start, start), None);
+    }
+
+    #[test]
+    fn logind_inhibits_idle_decision_runs_no_process() {
+        let (mut watcher, _rx) = infynitae_wayland::idle_inhibit::LogindInhibitWatcher::new();
+        let mut activity = std::time::Instant::now();
+        let t0 = activity;
+
+        // Not inhibited: returns false, activity timestamp unchanged
+        assert!(!logind_inhibits_idle_decision(&watcher, 10, &mut activity));
+        assert_eq!(activity, t0);
+
+        // Inhibited: returns true, adjusts activity so timeout rechecks in 60 s
+        watcher.update(true);
+        assert!(logind_inhibits_idle_decision(&watcher, 10, &mut activity));
+        assert!(activity < t0, "activity pushed back for recheck");
+
+        // Evaluates in-memory without spawning any process on the main loop
+        assert!(t0.elapsed() < Duration::from_millis(5));
     }
 
     #[test]

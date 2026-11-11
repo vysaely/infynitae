@@ -374,6 +374,7 @@ fn a_shared_window_out_of_view_is_paced_by_the_captures() {
                 ShellCommand::Navigate {
                     output: o,
                     to: NavigateTo::Delta(5000.0, 0.0),
+                    zoom: None,
                     stream: ShellStream::Atomic,
                 },
             )
