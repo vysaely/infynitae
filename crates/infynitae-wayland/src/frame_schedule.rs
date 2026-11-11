@@ -21,6 +21,9 @@ pub enum LatencyMode {
     Balanced,
     /// The margin starts at 0.5 ms and may go down to 0.25 ms.
     Lowest,
+    /// `Balanced` while the screen shows a client's buffer directly (a fullscreen game: the compositor then only
+    /// flips, its frame takes a fraction of a millisecond, so drawing late costs no refreshes), `Off` otherwise.
+    Direct,
 }
 
 impl LatencyMode {
@@ -29,12 +32,24 @@ impl LatencyMode {
         match v.to_ascii_lowercase().as_str() {
             "off" | "false" | "0" | "no" => LatencyMode::Off,
             "lowest" | "low" | "min" => LatencyMode::Lowest,
+            "direct" => LatencyMode::Direct,
             _ => LatencyMode::Balanced,
+        }
+    }
+
+    /// The mode a screen's next frame is scheduled with: `Direct` becomes `Balanced` while the screen's last frame
+    /// was shown directly (scanned out), `Off` while the compositor draws it.
+    pub fn for_screen(self, scanned_out: bool) -> LatencyMode {
+        match self {
+            LatencyMode::Direct if scanned_out => LatencyMode::Balanced,
+            LatencyMode::Direct => LatencyMode::Off,
+            other => other,
         }
     }
 
     fn margins(self) -> (Duration, Duration) {
         match self {
+            LatencyMode::Direct => LatencyMode::Balanced.margins(),
             LatencyMode::Off => (Duration::ZERO, Duration::ZERO),
             LatencyMode::Balanced => (Duration::from_micros(1000), Duration::from_micros(500)),
             LatencyMode::Lowest => (Duration::from_micros(500), Duration::from_micros(250)),
@@ -416,6 +431,19 @@ impl LatencyStats {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn direct_is_late_only_while_scanned_out() {
+        use super::LatencyMode;
+        assert_eq!(LatencyMode::parse("direct"), LatencyMode::Direct);
+        assert_eq!(LatencyMode::Direct.for_screen(true), LatencyMode::Balanced);
+        assert_eq!(LatencyMode::Direct.for_screen(false), LatencyMode::Off);
+        assert_eq!(LatencyMode::Off.for_screen(true), LatencyMode::Off);
+        assert_eq!(
+            LatencyMode::Balanced.for_screen(false),
+            LatencyMode::Balanced
+        );
+    }
+
     use super::*;
 
     const P: Duration = Duration::from_nanos(6_060_606); // 165 Hz

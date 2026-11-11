@@ -519,6 +519,9 @@ struct LoopData {
     rescan_at: Option<std::time::Instant>,
     /// The laptop's lid is closed: its panel is left out while another screen is connected.
     lid_closed: bool,
+    /// Captures into memory whose GPU copy was started last turn: copied out and handed over at the next turn,
+    /// when the GPU has done it, instead of this loop waiting for the GPU (review 2026-11-11, 1).
+    capture_copies: Vec<PendingCopy>,
     /// `ConsoleOptions::virtual_screen`.
     virtual_screen_enabled: bool,
     /// The virtual screen standing in while no screen is connected.
@@ -1529,6 +1532,7 @@ pub fn run_console_with(
         factory,
         rescan_at: None,
         lid_closed: false,
+        capture_copies: Vec::new(),
         virtual_screen_enabled: options.virtual_screen,
         virtual_screen: None,
     };
@@ -1998,6 +2002,12 @@ fn recover_renderer(data: &mut LoopData) {
         smooth::program(&mut renderer)
     };
     data.renderer = renderer;
+    // copies started on the lost renderer cannot be read: their captures fail (the client asks again)
+    for c in data.capture_copies.drain(..) {
+        for req in c.reqs {
+            req.fail();
+        }
+    }
     for s in &mut data.screens {
         s.screencopy_texture = None;
         let _ = s.compositor.reset_state();
@@ -2018,6 +2028,7 @@ const TEARING_RETRY: Duration = Duration::from_secs(5);
 /// One frame on every screen that is not waiting for its vblank. A screen whose frame changed
 /// nothing completes its frame callbacks now; a queued one at its vblank.
 fn render(data: &mut LoopData) {
+    deliver_copies(&mut data.renderer, &mut data.capture_copies);
     let locked = data.state.is_locked();
     let clear = if locked {
         convert::LOCKED_CLEAR
@@ -2036,6 +2047,7 @@ fn render(data: &mut LoopData) {
             &mut data.state,
             &mut data.renderer,
             &mut data.screens[i].screencopy_texture,
+            &mut data.capture_copies,
             data.smooth_program.as_ref(),
             id,
             size,
@@ -2069,7 +2081,8 @@ fn render(data: &mut LoopData) {
             s.schedule.set_period(std::time::Duration::from_nanos(
                 1_000_000_000_000 / u64::from(mhz),
             ));
-            s.schedule.set_mode(data.state.latency_mode);
+            s.schedule
+                .set_mode(data.state.latency_mode.for_screen(s.scanned_out));
             // a frame the GPU has to draw needs more of the refresh than one it only shows
             s.schedule.set_guard_percent(if s.scanned_out {
                 data.state.frame_guard_percent / 4
@@ -2279,6 +2292,15 @@ fn render(data: &mut LoopData) {
                     } else {
                         // this frame waited for the refresh; the next one tries again
                         s.tearing_refused += 1;
+                        // the kernel accepts an async flip that changes only the primary plane's buffer: say
+                        // what else this frame had, once per run of refusals (review 2026-11-11, 3: amdgpu's
+                        // EINVAL is unexplained; overlay planes in use are the first suspect)
+                        if s.tearing_refused == 1 {
+                            eprintln!(
+                                "[infynitae] Tearing refused on screen {id:?}: {overlays} overlay plane(s) in use, cursor plane {}",
+                                if cursor { "in use" } else { "free" }
+                            );
+                        }
                         if s.tearing_refused == TEARING_REFUSALS {
                             s.tearing_retry_at = Some(std::time::Instant::now() + TEARING_RETRY);
                             eprintln!(
@@ -2395,6 +2417,7 @@ fn render(data: &mut LoopData) {
             &mut data.state,
             &mut data.renderer,
             &mut v.screencopy_texture,
+            &mut data.capture_copies,
             data.smooth_program.as_ref(),
             v.id,
             VIRTUAL_SCREEN_SIZE,
@@ -2404,6 +2427,10 @@ fn render(data: &mut LoopData) {
         data.state.frame_tick(v.id, now);
     }
     confirm_lock(data);
+    // a capture copied out of the GPU this turn is handed over at the next one: make sure there is one
+    if !data.capture_copies.is_empty() {
+        data.session.request_frame();
+    }
     data.session.flush();
     if renderer_lost(&mut data.renderer) {
         recover_renderer(data);
@@ -2420,10 +2447,12 @@ fn confirm_lock(data: &mut LoopData) {
 
 /// Serves the captures waiting for `output_id`: the screen's (its frame, as shown), and the
 /// windows captured alone (each drawn by itself, `convert::window_capture_elements`).
+#[allow(clippy::too_many_arguments)]
 fn serve_captures(
     state: &mut WaylandState,
     renderer: &mut GlesRenderer,
     screencopy_texture: &mut Option<GlesTexture>,
+    copies: &mut Vec<PendingCopy>,
     smooth_program: Option<&GlesTexProgram>,
     output_id: OutputId,
     size: (i32, i32),
@@ -2448,6 +2477,7 @@ fn serve_captures(
                 handle_screencopy(
                     renderer,
                     &mut texture,
+                    copies,
                     vec![req],
                     &elements,
                     size,
@@ -2522,6 +2552,7 @@ fn serve_captures(
     handle_screencopy(
         renderer,
         screencopy_texture,
+        copies,
         pending,
         &elements,
         size,
@@ -2549,10 +2580,11 @@ fn note_capture_path(gpu: bool) {
 
 /// Renders `elements` (`size` px at `k`) into each waiting capture's buffer: a dmabuf on the GPU,
 /// a shm buffer through a copy (U-008).
-#[allow(unsafe_code)]
+#[allow(unsafe_code, clippy::too_many_arguments)]
 fn handle_screencopy<E>(
     renderer: &mut GlesRenderer,
     screencopy_texture: &mut Option<GlesTexture>,
+    copies: &mut Vec<PendingCopy>,
     pending: Vec<infynitae_wayland::screencopy::PendingFrame>,
     elements: &[E],
     size: (i32, i32),
@@ -2686,80 +2718,115 @@ fn handle_screencopy<E>(
         }
     };
 
-    let slice = match ExportMem::map_texture(renderer, &mapping) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("[screencopy] Failed to map texture: {e:?}");
-            for p in remaining {
-                p.fail();
+    // the GPU copies in the background; the next turn hands it over (`deliver_copies`)
+    copies.push(PendingCopy {
+        mapping,
+        reqs: remaining,
+        size,
+        view,
+        transform,
+        now,
+    });
+}
+
+/// A capture into memory whose copy out of the GPU was started: handed over by `deliver_copies`.
+struct PendingCopy {
+    mapping: <GlesRenderer as ExportMem>::TextureMapping,
+    reqs: Vec<infynitae_wayland::screencopy::PendingFrame>,
+    size: (i32, i32),
+    view: (i32, i32),
+    transform: infynitae_core::output::Transform,
+    now: std::time::Duration,
+}
+
+/// Hands over the captures copied out of the GPU since the last turn (the GPU has finished them by now, so
+/// mapping does not wait on it the way mapping right after the copy did).
+#[allow(unsafe_code)]
+fn deliver_copies(renderer: &mut GlesRenderer, copies: &mut Vec<PendingCopy>) {
+    for PendingCopy {
+        mapping,
+        reqs: remaining,
+        size,
+        view,
+        transform,
+        now,
+    } in copies.drain(..)
+    {
+        let slice = match ExportMem::map_texture(renderer, &mapping) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("[screencopy] Failed to map texture: {e:?}");
+                for p in remaining {
+                    p.fail();
+                }
+                continue;
             }
-            return;
-        }
-    };
+        };
 
-    let src_stride = (size.0 * 4) as usize;
+        let src_stride = (size.0 * 4) as usize;
 
-    for req in remaining {
-        // the region's place in the whole-screen buffer (the panel's orientation)
-        let (rx, ry) = req
-            .region
-            .map(|r| convert::capture_region_in_buffer(r, view, transform))
-            .map(|(x, y, _, _)| (x.max(0) as usize, y.max(0) as usize))
-            .unwrap_or((0, 0));
+        for req in remaining {
+            // the region's place in the whole-screen buffer (the panel's orientation)
+            let (rx, ry) = req
+                .region
+                .map(|r| convert::capture_region_in_buffer(r, view, transform))
+                .map(|(x, y, _, _)| (x.max(0) as usize, y.max(0) as usize))
+                .unwrap_or((0, 0));
 
-        let copy_result = with_buffer_contents_mut(&req.buffer, |ptr, len, buffer_data| {
-            if buffer_data.format
-                != smithay::reexports::wayland_server::protocol::wl_shm::Format::Argb8888
-                && buffer_data.format
-                    != smithay::reexports::wayland_server::protocol::wl_shm::Format::Xrgb8888
-            {
-                return false;
-            }
-            let h = (buffer_data.height.max(0) as usize).min(size.1 as usize);
-            let w_bytes = (buffer_data.width.max(0) as usize).min(size.0 as usize) * 4;
-            let dest_stride = buffer_data.stride.max(0) as usize;
-            let offset = buffer_data.offset.max(0) as usize;
+            let copy_result = with_buffer_contents_mut(&req.buffer, |ptr, len, buffer_data| {
+                if buffer_data.format
+                    != smithay::reexports::wayland_server::protocol::wl_shm::Format::Argb8888
+                    && buffer_data.format
+                        != smithay::reexports::wayland_server::protocol::wl_shm::Format::Xrgb8888
+                {
+                    return false;
+                }
+                let h = (buffer_data.height.max(0) as usize).min(size.1 as usize);
+                let w_bytes = (buffer_data.width.max(0) as usize).min(size.0 as usize) * 4;
+                let dest_stride = buffer_data.stride.max(0) as usize;
+                let offset = buffer_data.offset.max(0) as usize;
 
-            if dest_stride < w_bytes {
-                return false;
-            }
-            let total_required = match dest_stride
-                .checked_mul(h.saturating_sub(1))
-                .and_then(|v| v.checked_add(w_bytes))
-                .and_then(|v| v.checked_add(offset))
-            {
-                Some(bytes) => bytes,
-                None => return false,
-            };
-            if total_required > len {
-                return false;
-            }
+                if dest_stride < w_bytes {
+                    return false;
+                }
+                let total_required = match dest_stride
+                    .checked_mul(h.saturating_sub(1))
+                    .and_then(|v| v.checked_add(w_bytes))
+                    .and_then(|v| v.checked_add(offset))
+                {
+                    Some(bytes) => bytes,
+                    None => return false,
+                };
+                if total_required > len {
+                    return false;
+                }
 
-            // SAFETY: bounds verified: `dest_stride >= w_bytes`, `total_required <= len`,
-            // and `src_offset + w_bytes <= slice.len()`.
-            unsafe {
-                let dest_base = ptr.add(offset);
-                for row in 0..h {
-                    let src_row_idx = (ry + row).min(size.1.max(0) as usize);
-                    let src_offset = src_row_idx * src_stride + rx * 4;
-                    if src_offset + w_bytes <= slice.len() {
-                        let src_row = &slice[src_offset..(src_offset + w_bytes)];
-                        let dest_row = dest_base.add(row * dest_stride);
-                        std::ptr::copy_nonoverlapping(src_row.as_ptr(), dest_row, w_bytes);
+                // SAFETY: bounds verified: `dest_stride >= w_bytes`, `total_required <= len`,
+                // and `src_offset + w_bytes <= slice.len()`.
+                unsafe {
+                    let dest_base = ptr.add(offset);
+                    for row in 0..h {
+                        let src_row_idx = (ry + row).min(size.1.max(0) as usize);
+                        let src_offset = src_row_idx * src_stride + rx * 4;
+                        if src_offset + w_bytes <= slice.len() {
+                            let src_row = &slice[src_offset..(src_offset + w_bytes)];
+                            let dest_row = dest_base.add(row * dest_stride);
+                            std::ptr::copy_nonoverlapping(src_row.as_ptr(), dest_row, w_bytes);
+                        }
                     }
                 }
-            }
-            true
-        });
+                true
+            });
 
-        if matches!(copy_result, Ok(true)) {
-            let target_size = req
-                .region
-                .map(|(_, _, w, h)| convert::capture_buffer_size((w, h), transform))
-                .unwrap_or(size);
-            req.ready((target_size.0 as u32, target_size.1 as u32), now);
-        } else {
-            req.fail();
+            if matches!(copy_result, Ok(true)) {
+                let target_size = req
+                    .region
+                    .map(|(_, _, w, h)| convert::capture_buffer_size((w, h), transform))
+                    .unwrap_or(size);
+                req.ready((target_size.0 as u32, target_size.1 as u32), now);
+            } else {
+                req.fail();
+            }
         }
     }
 }
