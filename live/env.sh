@@ -66,7 +66,7 @@ if [ -z "$XDG_RUNTIME_DIR" ]; then
     if [ -d "/run/user/$(id -u)" ] && [ -w "/run/user/$(id -u)" ]; then
         export XDG_RUNTIME_DIR="/run/user/$(id -u)"
     else
-        FALLBACK_DIR="/tmp/infynitae-runtime-$(id -u)"
+        FALLBACK_DIR="${INFYNITAE_ENV_TMP:-/tmp}/infynitae-runtime-$(id -u)"
         if [ -d "$FALLBACK_DIR" ] && [ -O "$FALLBACK_DIR" ]; then
             chmod 0700 "$FALLBACK_DIR"
         elif mkdir -m 0700 "$FALLBACK_DIR" 2>/dev/null; then
@@ -229,8 +229,10 @@ if [ -z "$WAYLAND_DISPLAY" ] && [ -n "$XDG_RUNTIME_DIR" ]; then
 fi
 
 # Resolve DISPLAY: prioritize active unix socket owned by the current user
-if [ -z "$DISPLAY" ] || [ ! -S "/tmp/.X11-unix/X${DISPLAY#*:}" ] || [ ! -O "/tmp/.X11-unix/X${DISPLAY#*:}" ]; then
-    for xsock in /tmp/.X11-unix/X*; do
+# (INFYNITAE_ENV_TMP: a folder used instead of /tmp, for tests)
+_infy_x11="${INFYNITAE_ENV_TMP:-/tmp}/.X11-unix"
+if [ -z "$DISPLAY" ] || [ ! -S "$_infy_x11/X${DISPLAY#*:}" ] || [ ! -O "$_infy_x11/X${DISPLAY#*:}" ]; then
+    for xsock in "$_infy_x11"/X*; do
         if [ -S "$xsock" ] && [ -O "$xsock" ]; then
             num="${xsock##*/X}"
             export DISPLAY=":$num"

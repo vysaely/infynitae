@@ -6,32 +6,34 @@ REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
 ENV_SCRIPT="$REPO_DIR/live/env.sh"
 
 TMP=$(mktemp -d "/tmp/infynitae-test-env.XXXXXX")
-trap 'rm -rf "$TMP"' EXIT INT TERM
+trap '[ -f "$TMP/portal_pid" ] && kill "$(cat "$TMP/portal_pid")" 2>/dev/null; rm -rf "$TMP"' EXIT INT TERM
+# env.sh's /tmp paths go to a folder of the test's own (never the machine's X sockets), and nothing reaches a
+# session bus or a display
+export INFYNITAE_ENV_TMP="$TMP/tmp"
+mkdir -p "$INFYNITAE_ENV_TMP"
+unset DBUS_SESSION_BUS_ADDRESS WAYLAND_DISPLAY DISPLAY
 
 # ----------------------------------------------------------------------
 # 1. Finding 6: DISPLAY auto-detection ignores foreign X11 sockets
 # ----------------------------------------------------------------------
-mkdir -p "$TMP/.X11-unix"
+X11="$INFYNITAE_ENV_TMP/.X11-unix"
+mkdir -p "$X11"
 # /etc/pacman.d/gnupg/S.gpg-agent is an existing socket not owned by the test user
 FOREIGN_SOCK="/etc/pacman.d/gnupg/S.gpg-agent"
 if [ -S "$FOREIGN_SOCK" ] && [ ! -O "$FOREIGN_SOCK" ]; then
-    ln -s "$FOREIGN_SOCK" "$TMP/.X11-unix/X0"
+    ln -s "$FOREIGN_SOCK" "$X11/X0"
 else
     echo "Warning: cannot find foreign socket; skipping socket ownership check"
 fi
 
 # Create user's own socket on display :1
-python3 -c "import socket; s = socket.socket(socket.AF_UNIX); s.bind('$TMP/.X11-unix/X1')"
+python3 -c "import socket; s = socket.socket(socket.AF_UNIX); s.bind('$X11/X1')"
 
-# Sourcing env.sh with /tmp/.X11-unix containing foreign X0 and own X1
+# Sourcing env.sh with the X socket folder holding a foreign X0 and our own X1
 export HOME="$TMP/home"
 export XDG_RUNTIME_DIR="$TMP/run"
 mkdir -p "$HOME" "$XDG_RUNTIME_DIR"
 unset DISPLAY
-rm -rf /tmp/.X11-unix
-mkdir -p /tmp/.X11-unix
-ln -s "$FOREIGN_SOCK" /tmp/.X11-unix/X0
-python3 -c "import socket; s = socket.socket(socket.AF_UNIX); s.bind('/tmp/.X11-unix/X1')"
 
 set +eu
 . "$ENV_SCRIPT" >/dev/null 2>&1
@@ -49,7 +51,7 @@ echo "ok Finding 6: DISPLAY auto-detect skips foreign X11 sockets"
 # ----------------------------------------------------------------------
 # A: When /tmp/infynitae-runtime-$(id -u) exists as a regular file (attacker blocked it),
 # env.sh must create a secure fallback directory instead of reusing the file.
-blocker="/tmp/infynitae-runtime-$(id -u)"
+blocker="$INFYNITAE_ENV_TMP/infynitae-runtime-$(id -u)"
 rm -rf "$blocker"
 touch "$blocker"
 res_dir=$(
@@ -106,6 +108,7 @@ mkdir -p "$TMP/home3/.local/bin"
 cat > "$TMP/home3/.local/bin/infynitae-portal" <<EOF
 #!/bin/sh
 touch "$PORTAL_FLAG"
+echo \$\$ > "$TMP/portal_pid"
 exec sleep 100
 EOF
 chmod +x "$TMP/home3/.local/bin/infynitae-portal"
