@@ -24,8 +24,10 @@ use crate::log_line;
 
 pub struct Tearing {
     _global: GlobalId,
-    /// `TEARING` (on by default; "off" never tears).
+    /// `TEARING`: on (a window that asks, or after Super+Shift+O), "always" (every window that has the
+    /// screen to itself, without asking: the default), "off" never.
     pub(crate) enabled: bool,
+    pub(crate) always: bool,
     /// The surfaces with a tearing control object, and their current and pending hints.
     hints: Vec<TearingHint>,
     /// The windows the user turned tearing on for (Super+Shift+O).
@@ -51,6 +53,7 @@ impl Tearing {
         Self {
             _global: dh.create_global::<WaylandState, WpTearingControlManagerV1, ()>(1, ()),
             enabled: true,
+            always: true,
             hints: Vec::new(),
             forced: Vec::new(),
             refused: Vec::new(),
@@ -91,7 +94,8 @@ impl WaylandState {
         if t.refused.contains(&window) {
             return false;
         }
-        t.forced.contains(&window)
+        t.always
+            || t.forced.contains(&window)
             || self
                 .window_surface(window)
                 .is_some_and(|s| t.hints.iter().any(|h| h.current && h.surface == s))
@@ -127,7 +131,8 @@ impl WaylandState {
         let t = &mut self.tearing;
         t.forced.retain(|e| mapped.contains(e));
         t.refused.retain(|e| mapped.contains(e));
-        let was_on = !t.refused.contains(&window) && (asks || t.forced.contains(&window));
+        let was_on =
+            !t.refused.contains(&window) && (t.always || asks || t.forced.contains(&window));
         t.forced.retain(|e| *e != window);
         t.refused.retain(|e| *e != window);
         if was_on {
@@ -141,6 +146,11 @@ impl WaylandState {
     /// `TEARING`: whether windows may tear at all.
     pub fn set_tearing_enabled(&mut self, enabled: bool) {
         self.tearing.enabled = enabled;
+    }
+
+    /// `TEARING="always"`: every window that has the screen to itself tears, asked or not.
+    pub fn set_tearing_always(&mut self, always: bool) {
+        self.tearing.always = always;
     }
 }
 

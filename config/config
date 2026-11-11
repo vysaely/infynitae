@@ -220,15 +220,15 @@ FORCE_TRANSPARENT_APPS=""
 
 # ═══ Performance & latency ═════════════════════════════════════════════════════════ [save] ═══
 
-LATENCY="off"
+LATENCY="direct"
     # When each frame is drawn
-    # default: off
-    #   off         at once (the most forgiving under heavy GPU load)
+    # default: direct
+    #   direct      balanced while a fullscreen game is shown directly (the compositor only flips
+    #               then, so drawing late costs no refreshes), off otherwise
+    #    off        at once (the most forgiving under heavy GPU load)
     #    balanced   just in time for the refresh: about a frame less delay (experimental;
     #               misses more refreshes while the GPU is busy, e.g. a game or AI training)
     #    lowest     tighter still
-    #    direct     balanced while a fullscreen game is shown directly (the compositor only flips
-    #               then, so drawing late costs no refreshes), off otherwise
 
 LATENCY_STATS="false"
     # Input-to-screen times in ~/.local/state/infynitae/session.log every 10 s
@@ -240,10 +240,12 @@ DIRECT_SCANOUT="true"
     # default: true
     # options: true  · false
 
-TEARING="true"
+TEARING="always"
     # A fullscreen game shows each frame at once (lowest latency, a visible tear line)
-    # default: true
-    #   true     when it asks (vsync off) or after Super+Shift+O on its window
+    # default: always
+    #   always   every window that has the screen to itself (fullscreen, or filling it), without
+    #            asking; Super+Shift+O turns it off for one window
+    #    true    when it asks (vsync off) or after Super+Shift+O on its window
     #    false   never
 
 FIT_IS_FULLSCREEN="true"
@@ -680,12 +682,15 @@ SCREENCOPY_CURSOR="false"
     # default: false
     #   false    no double cursor in RustDesk  · true (OBS)
 
-CAPTURE_INDICATOR="true"
-    # A small red dot in the top right corner while any app captures the screen (sharing,
-    # remote desktop, screenshots); the replay buffer does not show it, captures never show
-    # it. Over a fullscreen window a notification says it instead
-    # default: true
-    # options: true  · false
+CAPTURE_INDICATOR="edge"
+    # How you see that an app captures the screen (sharing, remote desktop, screenshots; the replay
+    # buffer is left out)
+    # default: edge
+    #   edge    "Screen capture" and the app in the edge's background apps module; nothing on the
+    #           screen, so a game keeps going to the screen directly
+    #    dot    a small red dot in the top right corner (captures never show it); over a fullscreen
+    #           window a notification says it instead
+    #    false  nowhere
 
 PRIVACY_APPS=""
     # Hidden from captures, by app

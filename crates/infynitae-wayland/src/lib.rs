@@ -783,7 +783,7 @@ impl WaylandState {
             border_ignore_csd: true,
             clip_to_geometry: true,
             square_corners: true,
-            latency_mode: crate::frame_schedule::LatencyMode::Off,
+            latency_mode: crate::frame_schedule::LatencyMode::Direct,
             latency_stats: false,
             gpu_relief: true,
             border_active: smithay::backend::renderer::Color32F::new(0.48, 0.64, 0.97, 1.0),
@@ -1120,7 +1120,7 @@ impl WaylandState {
                 let mut zoom_sharpen_after = true;
                 let (mut background_priority, mut game_mode) = (true, true);
                 let mut gpu_relief = true;
-                let mut tearing = true;
+                let (mut tearing, mut tearing_always) = (true, true);
                 for line in content.lines() {
                     if let Some((key, val)) = config_line(line) {
                         let (key, val) = (key.as_str(), val.as_str());
@@ -1192,10 +1192,9 @@ impl WaylandState {
                                 );
                             }
                             "TEARING" => {
-                                tearing = !matches!(
-                                    val.to_lowercase().as_str(),
-                                    "0" | "false" | "off" | "no"
-                                );
+                                let v = val.to_lowercase();
+                                tearing = !matches!(v.as_str(), "0" | "false" | "off" | "no");
+                                tearing_always = v == "always";
                             }
                             "FIT_IS_FULLSCREEN" => {
                                 self.fitted.enabled = !matches!(
@@ -1215,10 +1214,8 @@ impl WaylandState {
                                 );
                             }
                             "CAPTURE_INDICATOR" => {
-                                self.capture_indicator.enabled = !matches!(
-                                    val.to_lowercase().as_str(),
-                                    "0" | "false" | "off" | "no"
-                                );
+                                self.capture_indicator.mode =
+                                    crate::capture_indicator::CaptureMode::parse(val);
                             }
                             "FOCUS_FOLLOWS_MOUSE" => match val.to_lowercase().as_str() {
                                 "strict" => {
@@ -1470,6 +1467,7 @@ impl WaylandState {
                 self.set_zoom_sharpen(zoom_sharpen_after);
                 self.background.game_mode = game_mode;
                 self.set_tearing_enabled(tearing);
+                self.set_tearing_always(tearing_always);
                 self.background.enabled = background_priority;
                 self.gpu_relief = gpu_relief;
                 if !background_priority {

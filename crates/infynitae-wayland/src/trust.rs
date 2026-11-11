@@ -165,6 +165,20 @@ impl Identity {
         }
     }
 
+    /// The program's name as people know it: the sandbox app id, or the executable's file name.
+    pub fn app_name(&self) -> String {
+        match self {
+            Identity::Sandboxed { app_id, .. } => {
+                app_id.clone().unwrap_or_else(|| "A sandboxed app".into())
+            }
+            Identity::Native { path, .. } => path
+                .as_ref()
+                .and_then(|p| p.file_name())
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "An app".into()),
+        }
+    }
+
     /// A short name for logs and the consent store: the sandbox app id or the executable's path.
     pub fn describe(&self) -> String {
         match self {
