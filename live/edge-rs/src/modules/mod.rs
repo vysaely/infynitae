@@ -138,6 +138,9 @@ pub fn run_sh(key: &str, cmd: &str) -> String {
     if key == "memory" {
         return memory::fetch_string();
     }
+    if key == "system" {
+        return system::fetch_string();
+    }
     Command::new("sh")
         .arg("-c")
         .arg(cmd)
