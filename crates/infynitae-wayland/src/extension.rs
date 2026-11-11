@@ -5,6 +5,8 @@
 
 use std::io;
 
+use crate::log_line;
+
 use infynitae_core::Core;
 use infynitae_core::protocol::Effect;
 use smithay::reexports::calloop::LoopHandle;
@@ -77,12 +79,12 @@ pub fn start<D: 'static>(
     let ext = match factory?() {
         Ok(ext) => ext,
         Err(e) => {
-            eprintln!("[infynitae] loop extension not started: {e}");
+            log_line!("[infynitae] loop extension not started: {e}");
             return None;
         }
     };
     if let Err(e) = ext.wake.register(handle) {
-        eprintln!("[infynitae] loop extension not started: {e}");
+        log_line!("[infynitae] loop extension not started: {e}");
         return None;
     }
     Some(ext.inner)

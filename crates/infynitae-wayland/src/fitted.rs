@@ -15,6 +15,7 @@ use infynitae_core::render::FrameEntry;
 use infynitae_core::stage::ElementId;
 
 use crate::WaylandState;
+use crate::log_line;
 
 /// The frontmost window, when its main surface covers exactly the view, at no zoom but the screen's
 /// and with nothing popped up over it. A real fullscreen window is not asked about here.
@@ -114,10 +115,10 @@ impl WaylandState {
         };
         if was != window {
             match window {
-                Some(w) => println!(
+                Some(w) => log_line!(
                     "[infynitae] Window {w:?} fills screen {output:?}: treated as fullscreen"
                 ),
-                None => println!(
+                None => log_line!(
                     "[infynitae] Window {:?} no longer fills screen {output:?}",
                     was.unwrap()
                 ),

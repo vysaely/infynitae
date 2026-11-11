@@ -21,6 +21,8 @@
 
 use std::cell::Cell;
 use std::collections::VecDeque;
+
+use crate::log_line;
 use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
@@ -379,7 +381,7 @@ pub fn start_for_session<D: 'static>(
         RestartPolicy::default(),
     );
     s.arm_on_demand(handle)?;
-    println!(
+    log_line!(
         "[infynitae] X11 display {} ready; xwayland-satellite starts at the first X11 connection",
         s.display.name()
     );
@@ -598,7 +600,7 @@ impl XwaylandSupervisor {
             && self.wanted.take()
             && let Err(e) = self.spawn()
         {
-            eprintln!("[infynitae] failed to start xwayland-satellite: {e}");
+            log_line!("[infynitae] failed to start xwayland-satellite: {e}");
             self.state = SatelliteState::Degraded;
         }
         if self.state == SatelliteState::Running
@@ -618,7 +620,7 @@ impl XwaylandSupervisor {
                 self.exits.pop_front();
             }
             if self.exits.len() >= self.policy.max_exits {
-                eprintln!(
+                log_line!(
                     "[infynitae] xwayland-satellite exited {} times within {:?}; X11 is off for \
                      this session",
                     self.exits.len(),
@@ -627,7 +629,7 @@ impl XwaylandSupervisor {
                 self.state = SatelliteState::Degraded;
                 self.restart_at = None;
             } else {
-                eprintln!(
+                log_line!(
                     "[infynitae] xwayland-satellite exited ({status}); restarting on {} in {:?}",
                     self.display.name(),
                     self.policy.backoff
@@ -641,7 +643,7 @@ impl XwaylandSupervisor {
         {
             if now >= at {
                 if let Err(e) = self.spawn() {
-                    eprintln!("[infynitae] failed to restart xwayland-satellite: {e}");
+                    log_line!("[infynitae] failed to restart xwayland-satellite: {e}");
                     self.state = SatelliteState::Degraded;
                     self.restart_at = None;
                 }

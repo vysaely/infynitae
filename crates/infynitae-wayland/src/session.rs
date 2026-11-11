@@ -25,6 +25,7 @@ use smithay::reexports::rustix::process::{Pid, PidfdFlags, Signal, kill_process,
 use smithay::reexports::wayland_server::Display;
 use smithay::wayland::socket::ListeningSocketSource;
 
+use crate::log_line;
 use crate::{ClientState, WaylandState};
 
 /// How long a child gets between SIGTERM and SIGKILL at shutdown. A browser saves its session
@@ -254,7 +255,7 @@ fn open_recorder_socket<D: 'static>(
                                 data.identify(crate::trust::Identity::of_pid(c.pid));
                             }
                         }
-                        Err(e) => eprintln!("[infynitae] Failed to insert the recorder: {e}"),
+                        Err(e) => log_line!("[infynitae] Failed to insert the recorder: {e}"),
                     }
                 }
                 Ok(PostAction::Continue)
@@ -311,7 +312,7 @@ impl Session {
         // and ends with it (`ownership`): orphaned descendants are re-parented to the compositor,
         // which reaps them when SIGCHLD says one exited.
         if let Err(e) = crate::ownership::become_subreaper() {
-            eprintln!(
+            log_line!(
                 "[infynitae] Not a child subreaper ({e}): orphans of session processes escape the session"
             );
         }
@@ -362,7 +363,7 @@ impl Session {
                             data.identify(identity);
                         }
                     }
-                    Err(e) => eprintln!("[infynitae] Failed to insert client: {e}"),
+                    Err(e) => log_line!("[infynitae] Failed to insert client: {e}"),
                 }
             })
             .map_err(|e| format!("Failed to register listening socket: {e}"))?;
@@ -371,7 +372,7 @@ impl Session {
         let recorder_socket = match open_recorder_socket(&socket_name, &display, handle) {
             Ok(s) => s,
             Err(e) => {
-                eprintln!(
+                log_line!(
                     "[infynitae] No recorder socket ({e}): the replay buffer shows the capture mark"
                 );
                 None
@@ -385,14 +386,14 @@ impl Session {
         let serve_sandbox: ServeSandbox = Box::new(move |source, context| {
             let mut dh = sandboxed_clients.clone();
             let identity = crate::trust::sandboxed(&context);
-            println!("[infynitae] Sandbox listener for {}", identity.describe());
+            log_line!("[infynitae] Sandbox listener for {}", identity.describe());
             if let Err(e) = listeners.insert_source(source, move |stream, _, _| {
                 let state = ClientState::with_identity(identity.clone());
                 if let Err(e) = dh.insert_client(stream, Arc::new(state)) {
-                    eprintln!("[infynitae] Failed to insert sandboxed client: {e}");
+                    log_line!("[infynitae] Failed to insert sandboxed client: {e}");
                 }
             }) {
-                eprintln!("[infynitae] Failed to serve a sandbox listener: {e}");
+                log_line!("[infynitae] Failed to serve a sandbox listener: {e}");
             }
         });
         // a readable display wakes the loop; the requests are dispatched by `dispatch`
@@ -408,8 +409,8 @@ impl Session {
                 },
             )
             .map_err(|e| format!("Failed to register display event source: {e}"))?;
-        println!("[infynitae] Listening on Wayland socket: {socket_name}");
-        println!("[infynitae] To connect clients, set WAYLAND_DISPLAY={socket_name}");
+        log_line!("[infynitae] Listening on Wayland socket: {socket_name}");
+        log_line!("[infynitae] To connect clients, set WAYLAND_DISPLAY={socket_name}");
 
         let mut session = Session {
             display,
@@ -450,7 +451,7 @@ impl Session {
     /// Starts a client of this session. Its exit wakes the loop, so it is reaped when it happens
     /// and not at the next unrelated event.
     fn spawn<D: 'static>(&mut self, handle: &LoopHandle<'_, D>, cmd: &str) {
-        println!("[infynitae] Spawning initial client: {cmd}");
+        log_line!("[infynitae] Spawning initial client: {cmd}");
         let Some(mut command) = client_command(
             cmd,
             &self.socket_name,
@@ -461,7 +462,7 @@ impl Session {
         };
         match crate::ownership::spawn_owned(&mut command) {
             Ok(child) => {
-                println!("[infynitae] Client spawned with PID {}", child.id());
+                log_line!("[infynitae] Client spawned with PID {}", child.id());
                 let exited = Pid::from_raw(child.id() as i32)
                     .and_then(|pid| pidfd_open(pid, PidfdFlags::empty()).ok());
                 if let Some(fd) = exited {
@@ -472,7 +473,7 @@ impl Session {
                 }
                 self.children.push(child);
             }
-            Err(e) => eprintln!("[infynitae] Failed to spawn {cmd}: {e}"),
+            Err(e) => log_line!("[infynitae] Failed to spawn {cmd}: {e}"),
         }
     }
 
@@ -565,7 +566,7 @@ impl Session {
     pub fn dispatch(&mut self, state: &mut WaylandState) {
         self.children.retain_mut(|child| match child.try_wait() {
             Ok(Some(status)) => {
-                println!(
+                log_line!(
                     "[infynitae] Child process {} exited with status {status}",
                     child.id()
                 );
@@ -574,7 +575,7 @@ impl Session {
             }
             Ok(None) => true,
             Err(e) => {
-                eprintln!("[infynitae] Failed to wait on child {}: {e}", child.id());
+                log_line!("[infynitae] Failed to wait on child {}: {e}", child.id());
                 crate::ownership::forget_spawned(child.id());
                 false
             }
@@ -589,7 +590,7 @@ impl Session {
         {
             match signals::register(SIGCHLD, notify) {
                 Ok(r) => self.signal_ids.push(r),
-                Err(e) => eprintln!("[infynitae] Not reaping child processes: {e}"),
+                Err(e) => log_line!("[infynitae] Not reaping child processes: {e}"),
             }
             // anything that exited before
             crate::ownership::reap_adopted();
@@ -599,7 +600,7 @@ impl Session {
             Ok(0) if !ready => {}
             Ok(_) => self.request_frame(),
             Err(e) => {
-                eprintln!("[infynitae] Client dispatch error: {e}");
+                log_line!("[infynitae] Client dispatch error: {e}");
                 self.request_frame();
             }
         }
@@ -698,7 +699,7 @@ impl Session {
 
     fn report_teardown(&mut self, t: Instant, report: &crate::ownership::Teardown) {
         if report.terminated > 0 {
-            println!(
+            log_line!(
                 "[infynitae] Session processes ended in {:?}: {} terminated, {} killed, {} left",
                 t.elapsed(),
                 report.terminated,
@@ -784,7 +785,7 @@ pub fn terminate_children(children: &mut Vec<Child>, grace_period: Duration) {
             match kill_process(pid, Signal::TERM) {
                 // ESRCH: it exited in between
                 Ok(()) | Err(Errno::SRCH) => {}
-                Err(e) => eprintln!("[infynitae] Failed to send SIGTERM to child {pid_raw}: {e}"),
+                Err(e) => log_line!("[infynitae] Failed to send SIGTERM to child {pid_raw}: {e}"),
             }
         }
     }
@@ -794,7 +795,7 @@ pub fn terminate_children(children: &mut Vec<Child>, grace_period: Duration) {
         reap(children);
     }
     for child in children.iter_mut() {
-        println!(
+        log_line!(
             "[infynitae] Child {} did not exit within grace period, escalating to SIGKILL",
             child.id()
         );

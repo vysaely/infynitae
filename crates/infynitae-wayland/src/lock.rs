@@ -30,6 +30,8 @@
 
 use std::collections::HashSet;
 
+use crate::log_line;
+
 use smithay::backend::input::KeyState;
 use smithay::delegate_session_lock;
 use smithay::desktop::PopupUngrabStrategy;
@@ -141,7 +143,7 @@ impl WaylandState {
         if self.is_locked() {
             return;
         }
-        println!("[infynitae] Locked by request; starting the lock screen");
+        log_line!("[infynitae] Locked by request; starting the lock screen");
         self.start_locked();
         self.spawn_action("lock-screen");
     }
@@ -344,7 +346,7 @@ impl WaylandState {
             l.relaunched = Some(now);
             l.relaunches += 1;
         }
-        eprintln!("[infynitae] Session lock: the locker is gone while locked; starting it again");
+        log_line!("[infynitae] Session lock: the locker is gone while locked; starting it again");
         self.spawn_action("lock-screen");
         true
     }
@@ -373,7 +375,7 @@ impl WaylandState {
                 .with_all_clients(|c| connected |= c == id);
         }
         if !(holder_destroyed && confirmed && connected) {
-            eprintln!("[infynitae] Session lock: unlock refused (not the lock holder's)");
+            log_line!("[infynitae] Session lock: unlock refused (not the lock holder's)");
             return;
         }
         let Some(l) = self.session_lock.as_mut() else {

@@ -20,6 +20,7 @@ use smithay::backend::renderer::element::Id;
 use smithay::reexports::wayland_server::{Client, backend::ClientId};
 
 use crate::WaylandState;
+use crate::log_line;
 
 /// How long the mark stays after a client's last frame: a share at 1 frame per second keeps it.
 pub const HOLD: Duration = Duration::from_secs(3);
@@ -163,7 +164,7 @@ impl WaylandState {
     /// The notification that the screen is being captured, its mark hidden by a fullscreen
     /// window (`launch.sh notify-capture-hidden`).
     pub fn announce_hidden_capture(&mut self) {
-        println!("[infynitae] A capture runs under a fullscreen window: announced");
+        log_line!("[infynitae] A capture runs under a fullscreen window: announced");
         self.spawn_action("notify-capture-hidden");
     }
 }

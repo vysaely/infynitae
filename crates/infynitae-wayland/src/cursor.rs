@@ -18,6 +18,7 @@ use smithay::reexports::wayland_server::Resource;
 use smithay::utils::Transform;
 
 use crate::WaylandState;
+use crate::log_line;
 
 /// The built-in arrow's height in rows (`convert::arrow_rects`).
 pub(crate) const ARROW_ROWS: i32 = 13;
@@ -500,7 +501,7 @@ impl WaylandState {
         let (was, now) = (kind(&self.cursor), kind(&status));
         if was != now && (was.contains("hidden") || now.contains("hidden") || now.contains("empty"))
         {
-            println!("[infynitae] Cursor: {was} -> {now}");
+            log_line!("[infynitae] Cursor: {was} -> {now}");
         }
         if self.cursor != status {
             self.cursor = status;
@@ -567,13 +568,13 @@ impl WaylandState {
             search_paths,
         ));
         if exists {
-            eprintln!("[infynitae] Loaded cursor theme '{theme_name}' (size {cursor_size})");
+            log_line!("[infynitae] Loaded cursor theme '{theme_name}' (size {cursor_size})");
         } else if theme_name != "default" && default_exists {
-            eprintln!(
+            log_line!(
                 "[infynitae] Cursor theme '{theme_name}' not found, falling back to 'default'"
             );
         } else {
-            eprintln!(
+            log_line!(
                 "[infynitae] Cursor theme '{theme_name}' not found, falling back to built-in triangle"
             );
         }

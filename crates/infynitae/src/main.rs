@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use infynitae_core::Core;
 use infynitae_core::navigation::PersistedCameras;
+use infynitae_wayland::log_line;
 
 mod msg;
 mod restore;
@@ -84,6 +85,14 @@ OPTIONS:
 }
 
 fn main() -> ExitCode {
+    infynitae_wayland::logger::start();
+    let code = run();
+    // the log writer thread holds what was logged last (the shutdown): written out before the process ends
+    infynitae_wayland::logger::flush();
+    code
+}
+
+fn run() -> ExitCode {
     // Install panic hook to capture crash backtrace into ~/.local/state/infynitae/crash.log
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -513,7 +522,7 @@ fn main() -> ExitCode {
     let extension = shell_socket.map(|path| shell::factory(shell_port, path));
 
     if headless {
-        println!("[infynitae] Starting headless compositor...");
+        log_line!("[infynitae] Starting headless compositor...");
         let options = infynitae_backend_headless::HeadlessCompositorOptions {
             socket_name,
             exec: exec_cmd,
@@ -541,7 +550,7 @@ fn main() -> ExitCode {
     } else if tty.unwrap_or_else(|| {
         std::env::var_os("WAYLAND_DISPLAY").is_none() && std::env::var_os("DISPLAY").is_none()
     }) {
-        println!("[infynitae] Starting console compositor (DRM backend, EXPERIMENTAL)...");
+        log_line!("[infynitae] Starting console compositor (DRM backend, EXPERIMENTAL)...");
         let exec = exec_cmd.or_else(|| {
             let home = std::env::var("HOME").ok()?;
             let session_script = format!("{home}/infynitae/live/session.sh");
@@ -578,7 +587,7 @@ fn main() -> ExitCode {
             }
         }
     } else {
-        println!("[infynitae] Starting nested compositor (Winit backend)...");
+        log_line!("[infynitae] Starting nested compositor (Winit backend)...");
         let options = infynitae_backend_winit::WinitCompositorOptions {
             socket_name,
             exec: exec_cmd,

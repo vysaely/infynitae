@@ -13,6 +13,8 @@ use smithay::backend::renderer::gles::{GlesError, GlesFrame, GlesRenderer, GlesT
 use smithay::backend::renderer::utils::{CommitCounter, DamageSet, OpaqueRegions};
 use smithay::utils::{Buffer as BufferCoords, Physical, Point, Rectangle, Scale, Transform};
 
+use infynitae_wayland::log_line;
+
 /// The texture shader that averages the footprint (Smithay's texture shader contract: `tex`,
 /// `alpha`, `v_coords`, the `//_DEFINES_` line).
 const SHADER: &str = r#"#version 100
@@ -74,7 +76,7 @@ pub fn program(renderer: &mut GlesRenderer) -> Option<GlesTexProgram> {
     match renderer.compile_custom_texture_shader(SHADER, &[]) {
         Ok(p) => Some(p),
         Err(e) => {
-            eprintln!("[infynitae] Smooth zoomed-out windows unavailable: {e:?}");
+            log_line!("[infynitae] Smooth zoomed-out windows unavailable: {e:?}");
             None
         }
     }

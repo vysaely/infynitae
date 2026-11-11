@@ -20,6 +20,7 @@ use smithay::reexports::wayland_server::{
 };
 
 use crate::WaylandState;
+use crate::log_line;
 
 pub struct Tearing {
     _global: GlobalId,
@@ -103,7 +104,7 @@ impl WaylandState {
             return;
         };
         let on = self.toggle_tearing(focused);
-        println!(
+        log_line!(
             "[infynitae] Tearing {} for window {focused:?}",
             if on { "on" } else { "off" }
         );

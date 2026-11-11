@@ -32,6 +32,7 @@ mod launch;
 mod layers;
 pub mod limits;
 mod lock;
+pub mod logger;
 pub mod osk;
 pub mod output_management;
 pub mod output_power;
@@ -879,7 +880,7 @@ impl WaylandState {
             }
         }
         if self.dmabuf_scanout_formats.len() != before {
-            println!(
+            log_line!(
                 "[infynitae] Client buffers: {} formats/modifiers the screen shows directly",
                 self.dmabuf_scanout_formats.len()
             );
@@ -1071,7 +1072,7 @@ impl WaylandState {
         if config != *self.core.scale_config() {
             match self.core.set_scale_config(config) {
                 Ok(fx) => self.apply(&fx),
-                Err(e) => eprintln!("[infynitae] MAX_APP_SCALE {h_cfg} refused: {e:?}"),
+                Err(e) => log_line!("[infynitae] MAX_APP_SCALE {h_cfg} refused: {e:?}"),
             }
         }
     }
@@ -1089,7 +1090,7 @@ impl WaylandState {
         if config != *self.core.scale_config() {
             match self.core.set_scale_config(config) {
                 Ok(fx) => self.apply(&fx),
-                Err(e) => eprintln!("[infynitae] ZOOM_SHARPEN refused: {e:?}"),
+                Err(e) => log_line!("[infynitae] ZOOM_SHARPEN refused: {e:?}"),
             }
         }
     }
@@ -1459,7 +1460,7 @@ impl WaylandState {
                 }
                 let (bindings, commands, problems) = user_key_bindings(&bind_lines, &exec_lines);
                 for p in problems {
-                    eprintln!("[infynitae] Config key binding ignored: {p}");
+                    log_line!("[infynitae] Config key binding ignored: {p}");
                 }
                 self.core.set_key_bindings(bindings);
                 self.core.set_free_cursor_on_super(free_cursor_on_super);
@@ -1604,11 +1605,11 @@ impl WaylandState {
         if let Some(focused) = self.core.focus().target() {
             if self.private_elements.contains(&focused) {
                 self.private_elements.remove(&focused);
-                println!("[infynitae] Privacy capture exemption DISABLED for window {focused:?}");
+                log_line!("[infynitae] Privacy capture exemption DISABLED for window {focused:?}");
                 self.spawn_action("notify-privacy-off");
             } else {
                 self.private_elements.insert(focused);
-                println!(
+                log_line!(
                     "[infynitae] Privacy capture exemption ENABLED for window {focused:?} (hidden from screenshots and screenshare)"
                 );
                 self.spawn_action("notify-privacy-on");
@@ -1620,10 +1621,10 @@ impl WaylandState {
     pub fn toggle_idle_inhibit(&mut self) {
         self.manual_idle_inhibit = !self.manual_idle_inhibit;
         if self.manual_idle_inhibit {
-            println!("[infynitae] Idle sleep & auto-lock INHIBITED (Stay Awake mode)");
+            log_line!("[infynitae] Idle sleep & auto-lock INHIBITED (Stay Awake mode)");
             self.spawn_action("notify-idle-inhibit-on");
         } else {
-            println!("[infynitae] Idle sleep & auto-lock RESTORED to normal timeout");
+            log_line!("[infynitae] Idle sleep & auto-lock RESTORED to normal timeout");
             self.spawn_action("notify-idle-inhibit-off");
         }
     }
