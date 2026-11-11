@@ -189,3 +189,18 @@ pub fn title_hint(
     );
     hw
 }
+
+#[cfg(test)]
+mod hint_tests {
+    use super::*;
+
+    #[test]
+    fn a_title_hint_is_drawn_where_it_fits_and_dropped_where_it_would_touch_the_title() {
+        let th = Theme::from_config(&crate::config::Config::from_text(""));
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 400, 60).unwrap();
+        let cr = cairo::Context::new(&surf).unwrap();
+        assert!(title_hint(&cr, &th, 0.0, 0.0, 380.0, "Apps", "Recent first") > 0.0);
+        assert_eq!(title_hint(&cr, &th, 0.0, 0.0, 120.0, "Quick settings", "Right click: more"), 0.0);
+        assert_eq!(title_hint(&cr, &th, 0.0, 0.0, 380.0, "Apps", ""), 0.0);
+    }
+}

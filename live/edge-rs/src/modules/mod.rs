@@ -318,8 +318,8 @@ impl World {
             live: false,
             panel_has_clipboard: false,
             panel_key: None,
-            windows_key: Some('l'),
-            clipboard_key: Some('v'),
+            windows_key: None,
+            clipboard_key: None,
             actions: Vec::new(),
             edit_preview: false,
         };
