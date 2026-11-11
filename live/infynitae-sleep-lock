@@ -100,15 +100,21 @@ lock_now() {
     log "starting the lock screen ($l)"
     : > "$LOCK_LOG" 2>/dev/null
     $l > "$LOCK_LOG" 2>&1 9>&- &
+    lpid=$!
     limit=$(delay_tenths)
     i=0
     while [ "$i" -lt "$limit" ]; do
         case "$state" in
             unknown)
-                # a compositor without "locked": infynitae-lock's own confirmation, else a moment
+                # a compositor without "locked": infynitae-lock's own confirmation, else the lock
+                # screen still running after a second (one that exited or crashed confirms nothing)
                 case "$l" in
                     *infynitae-lock*) grep -q "Screen locked" "$LOCK_LOG" 2>/dev/null && break ;;
-                    *) [ "$i" -ge 10 ] && break ;;
+                    *) if [ "$i" -ge 10 ]; then
+                           kill -0 "$lpid" 2>/dev/null && break
+                           log "the lock screen exited ($(tail -1 "$LOCK_LOG" 2>/dev/null)): the sleep waits for logind's limit"
+                           return 1
+                       fi ;;
                 esac
                 ;;
             *) [ "$(lock_state)" = yes ] && { log "lock confirmed"; return 0; } ;;
