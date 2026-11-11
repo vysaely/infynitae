@@ -2235,6 +2235,8 @@ impl Drop for Lockstep {
             .backend()
             .dispatch_single_client(&mut self.state, self.client.id());
         let _ = self.display.flush_clients();
+        // the stub launcher's folder (a stub still running may write after this: it then fails quietly)
+        let _ = std::fs::remove_dir_all(&self.live_dir);
     }
 }
 
