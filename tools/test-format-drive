@@ -40,7 +40,18 @@ dev=""
 for a in "\$@"; do case "\$a" in /dev/*) dev="\$a" ;; esac; done
 case "\$*" in
     *PKNAME*) case "\$dev" in /dev/sdx[0-9]) echo sdx ;; /dev/sda[0-9]) echo sda ;; *) echo "" ;; esac ;;
-    *SIZE*) echo " 119.5G" ;;
+    *-b*SIZE*|*bndo*SIZE*)
+        if [ "\${BIG_DRIVE:-0}" = 1 ]; then
+            echo "4000787030016"
+        else
+            echo "128325785600"
+        fi ;;
+    *SIZE*)
+        if [ "\${BIG_DRIVE:-0}" = 1 ]; then
+            echo " 3.6T"
+        else
+            echo " 119.5G"
+        fi ;;
     *NAME,MOUNTPOINTS*)
         [ "\$dev" = /dev/sdx ] || exit 0
         echo "sdx "
@@ -141,6 +152,11 @@ check "FAT32: label in capitals, safe characters, 11 at most" "called \"0x0c  {}
 # ext4: owned by the user; an empty name becomes USB
 FS=ext4 NAME="" run /dev/sdx3
 check "ext4: from a device path, take-ownership, default name" "called \"0x83  {} ext4 {'label': <'USB'>, 'take-ownership': <true>}\""
+
+# drives larger than 2 TB use GPT partition table
+BIG_DRIVE=1 run /run/media/me/home
+check "drives over 2 TB use GPT partition table" 'called "Block.Format gpt" && called "CreatePartitionAndFormat 0 0   {} exfat"'
+BIG_DRIVE=0
 
 # missing filesystem type: unmount still finds its mountpoint
 MISSING_FSTYPE=1 run /run/media/me/home

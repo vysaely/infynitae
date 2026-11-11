@@ -8,8 +8,8 @@
 # (only those whose tools are installed), the name, then an explicit "Erase" (Cancel comes first).
 # Refused for anything not on a removable drive and for a drive that holds the running system
 # (/, /home, /boot, /usr, /var, active swap). The whole drive is erased, every partition on it: one
-# partition table (MBR, which every system reads), one partition. The automount watcher mounts it
-# after.
+# partition table (MBR up to 2 TB, which every system reads; GPT beyond), one partition. The
+# automount watcher mounts it after.
 #   INFYNITAE_FORMAT_UDISKSCTL, INFYNITAE_FORMAT_GDBUS, INFYNITAE_FORMAT_LSBLK,
 #   INFYNITAE_FORMAT_FINDMNT: commands used instead of those tools (tests)
 #   INFYNITAE_FORMAT_ASK: a command printing the answer to a prompt instead of asking; it gets the
@@ -174,10 +174,17 @@ still=$(blk -nro MOUNTPOINTS "$disk" 2>/dev/null | grep -v '^$' | head -n 1)
 [ -z "$still" ] || fail "$still is still in use: close what is open on it and try again."
 
 obj="/org/freedesktop/UDisks2/block_devices/$name_of_disk"
+# drives up to 2 TB use MBR (dos) which every system reads; drives over 2 TB need GPT
+ptable="dos"
+size_bytes=$(blk -bndo SIZE "$disk" 2>/dev/null || echo 0)
+if [ "$size_bytes" -gt 2199023255552 ] 2>/dev/null; then
+    ptable="gpt"
+    type=""
+fi
 # no 'tear-down': it also rewrites /etc/fstab and /etc/crypttab, which asks for the admin password; everything
 # on the drive is already unmounted and locked above, so a removable drive is formatted without a password
 if ! out=$(dbus call --system --timeout 600 --dest org.freedesktop.UDisks2 --object-path "$obj" \
-        --method org.freedesktop.UDisks2.Block.Format dos '{}' 2>&1); then
+        --method org.freedesktop.UDisks2.Block.Format "$ptable" '{}' 2>&1); then
     log "partition table failed: $out"
     fail "The drive refused a new partition table: $(printf '%s' "$out" | tail -n 1 | cut -c 1-160)"
 fi
