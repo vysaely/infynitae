@@ -703,7 +703,126 @@ struct App {
     last_fetch: Option<Instant>,
     prev_open: Option<usize>,
     toplevel_sync: ToplevelSyncState,
+    touch_tracker: Option<TouchTracker>,
     exit: bool,
+}
+
+pub const BTN_RIGHT: u32 = 0x111;
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum TouchAction {
+    Click { button: u32, pos: (f64, f64) },
+    Press { button: u32, pos: (f64, f64) },
+    Motion { pos: (f64, f64) },
+    Release,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TouchState {
+    Pending,
+    LongPressed,
+    Dragging,
+    Done,
+}
+
+#[derive(Clone, Debug)]
+pub struct TouchTracker {
+    pub surface: Option<wl_surface::WlSurface>,
+    pub start_pos: (f64, f64),
+    pub cur_pos: (f64, f64),
+    pub start_time: Instant,
+    pub state: TouchState,
+    pub is_desk: bool,
+}
+
+impl TouchTracker {
+    pub fn new(
+        surface: Option<wl_surface::WlSurface>,
+        pos: (f64, f64),
+        is_desk: bool,
+        now: Instant,
+    ) -> Self {
+        Self {
+            surface,
+            start_pos: pos,
+            cur_pos: pos,
+            start_time: now,
+            state: TouchState::Pending,
+            is_desk,
+        }
+    }
+
+    pub fn on_motion(&mut self, pos: (f64, f64)) -> Vec<TouchAction> {
+        self.cur_pos = pos;
+        let dist = ((self.cur_pos.0 - self.start_pos.0).powi(2)
+            + (self.cur_pos.1 - self.start_pos.1).powi(2))
+        .sqrt();
+        let mut actions = Vec::new();
+        match self.state {
+            TouchState::Pending => {
+                if dist >= 10.0 {
+                    self.state = TouchState::Dragging;
+                    actions.push(TouchAction::Press {
+                        button: BTN_LEFT,
+                        pos: self.start_pos,
+                    });
+                    actions.push(TouchAction::Motion { pos: self.cur_pos });
+                }
+            }
+            TouchState::Dragging => {
+                actions.push(TouchAction::Motion { pos: self.cur_pos });
+            }
+            TouchState::LongPressed | TouchState::Done => {}
+        }
+        actions
+    }
+
+    pub fn check_timer(&mut self, now: Instant) -> Option<TouchAction> {
+        if self.state == TouchState::Pending {
+            let dist = ((self.cur_pos.0 - self.start_pos.0).powi(2)
+                + (self.cur_pos.1 - self.start_pos.1).powi(2))
+            .sqrt();
+            if dist < 10.0 && now.duration_since(self.start_time) >= Duration::from_millis(350) {
+                self.state = TouchState::LongPressed;
+                return Some(TouchAction::Click {
+                    button: BTN_RIGHT,
+                    pos: self.start_pos,
+                });
+            }
+        }
+        None
+    }
+
+    pub fn on_up(&mut self, now: Instant) -> Vec<TouchAction> {
+        let mut actions = Vec::new();
+        match self.state {
+            TouchState::Pending => {
+                let dist = ((self.cur_pos.0 - self.start_pos.0).powi(2)
+                    + (self.cur_pos.1 - self.start_pos.1).powi(2))
+                .sqrt();
+                if dist < 10.0 {
+                    if now.duration_since(self.start_time) >= Duration::from_millis(350) {
+                        actions.push(TouchAction::Click {
+                            button: BTN_RIGHT,
+                            pos: self.start_pos,
+                        });
+                    } else {
+                        actions.push(TouchAction::Click {
+                            button: BTN_LEFT,
+                            pos: self.start_pos,
+                        });
+                    }
+                }
+                actions.push(TouchAction::Release);
+            }
+            TouchState::Dragging | TouchState::LongPressed => {
+                actions.push(TouchAction::Release);
+            }
+            TouchState::Done => {}
+        }
+        self.state = TouchState::Done;
+        actions
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -1002,6 +1121,48 @@ impl App {
         };
         if changed {
             self.sync_all();
+        }
+    }
+
+    fn apply_touch_actions(
+        &mut self,
+        actions: Vec<TouchAction>,
+        w: f64,
+        h: f64,
+        is_desk: bool,
+    ) {
+        let mut changed = false;
+        let mut desk_changed = false;
+        for action in actions {
+            match action {
+                TouchAction::Click { button, pos } | TouchAction::Press { button, pos } => {
+                    if is_desk {
+                        desk_changed |= self.widgets.click(w, h, pos.0, pos.1, button);
+                    } else {
+                        changed |= self.shell.click(w, h, pos.0, pos.1, button);
+                    }
+                }
+                TouchAction::Motion { pos } => {
+                    if is_desk {
+                        desk_changed |= self.widgets.pointer_motion(w, h, pos.0, pos.1);
+                    } else {
+                        changed |= self.shell.pointer_motion(w, h, pos.0, pos.1);
+                    }
+                }
+                TouchAction::Release => {
+                    if is_desk {
+                        desk_changed |= self.widgets.pointer_release();
+                    } else {
+                        changed |= self.shell.pointer_release();
+                    }
+                }
+            }
+        }
+        if changed {
+            self.sync_all();
+        }
+        if desk_changed {
+            self.sync_desk();
         }
     }
 }
@@ -1382,19 +1543,14 @@ impl TouchHandler for App {
         _id: i32,
         position: (f64, f64),
     ) {
-        if let Some((w, h)) = self.surface_dims(&surface) {
-            if self.is_desk(&surface) {
-                self.touch_desk = true;
-                if self.widgets.click(w, h, position.0, position.1, BTN_LEFT) {
-                    self.sync_desk();
-                }
-            } else {
-                self.touch_desk = false;
-                if self.shell.click(w, h, position.0, position.1, BTN_LEFT) {
-                    self.sync_all();
-                }
-            }
-        }
+        let is_desk = self.is_desk(&surface);
+        self.touch_desk = is_desk;
+        self.touch_tracker = Some(TouchTracker::new(
+            Some(surface),
+            position,
+            is_desk,
+            Instant::now(),
+        ));
     }
 
     fn up(
@@ -1406,12 +1562,18 @@ impl TouchHandler for App {
         _: u32,
         _: i32,
     ) {
-        if self.touch_desk {
-            if self.widgets.pointer_release() {
-                self.sync_desk();
-            }
-        } else if self.shell.pointer_release() {
-            self.sync_all();
+        let Some(mut tracker) = self.touch_tracker.take() else {
+            return;
+        };
+        let dims = tracker
+            .surface
+            .as_ref()
+            .and_then(|s| self.surface_dims(s))
+            .or_else(|| self.outputs.first().map(|o| (o.width as f64, o.height as f64)));
+        if let Some((w, h)) = dims {
+            let actions = tracker.on_up(Instant::now());
+            let is_desk = tracker.is_desk;
+            self.apply_touch_actions(actions, w, h, is_desk);
         }
     }
 
@@ -1424,16 +1586,20 @@ impl TouchHandler for App {
         _: i32,
         position: (f64, f64),
     ) {
-        if let Some(surf) = self.outputs.first() {
-            let (w, h) = (surf.width as f64, surf.height as f64);
-            if self.touch_desk {
-                if self.widgets.pointer_motion(w, h, position.0, position.1) {
-                    self.sync_desk();
-                }
-            } else if self.shell.pointer_motion(w, h, position.0, position.1) {
-                self.sync_all();
-            }
-        }
+        let Some(tracker) = &mut self.touch_tracker else {
+            return;
+        };
+        let surface = tracker.surface.clone();
+        let is_desk = tracker.is_desk;
+        let actions = tracker.on_motion(position);
+        let dims = surface
+            .as_ref()
+            .and_then(|s| self.surface_dims(s))
+            .or_else(|| self.outputs.first().map(|o| (o.width as f64, o.height as f64)));
+        let Some((w, h)) = dims else {
+            return;
+        };
+        self.apply_touch_actions(actions, w, h, is_desk);
     }
 
     fn shape(
@@ -1457,7 +1623,9 @@ impl TouchHandler for App {
     ) {
     }
 
-    fn cancel(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_touch::WlTouch) {}
+    fn cancel(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_touch::WlTouch) {
+        self.touch_tracker = None;
+    }
 }
 
 impl ShmHandler for App {
@@ -1679,6 +1847,7 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
         last_fetch: None,
         prev_open: None,
         toplevel_sync: ToplevelSyncState::default(),
+        touch_tracker: None,
         exit: false,
     };
 
@@ -1811,6 +1980,38 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
                 app.sync_desk();
             }
             timeout = Some(timeout.map_or(next, |t| t.min(next)));
+        }
+        let touch_action = if let Some(tracker) = &mut app.touch_tracker {
+            if tracker.state == TouchState::Pending {
+                let elapsed = tracker.start_time.elapsed();
+                let hold_dur = Duration::from_millis(350);
+                if elapsed >= hold_dur {
+                    tracker
+                        .check_timer(Instant::now())
+                        .map(|action| (action, tracker.surface.clone(), tracker.is_desk))
+                } else {
+                    let rem = hold_dur - elapsed;
+                    timeout = Some(timeout.map_or(rem, |t| t.min(rem)));
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        if let Some((action, surface, is_desk)) = touch_action {
+            let dims = surface
+                .as_ref()
+                .and_then(|s| app.surface_dims(s))
+                .or_else(|| {
+                    app.outputs
+                        .first()
+                        .map(|o| (o.width as f64, o.height as f64))
+                });
+            if let Some((w, h)) = dims {
+                app.apply_touch_actions(vec![action], w, h, is_desk);
+            }
         }
         event_loop
             .dispatch(timeout, &mut app)

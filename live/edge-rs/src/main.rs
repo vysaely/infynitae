@@ -3321,4 +3321,60 @@ mod tests {
         assert!(!sync.dirty);
         assert!(!sync.should_sync(true, false));
     }
+
+    #[test]
+    fn touch_tracker_tap_long_press_and_drag() {
+        use crate::wayland::{TouchAction, TouchState, TouchTracker, BTN_RIGHT};
+        use std::time::{Duration, Instant};
+
+        let now = Instant::now();
+
+        // 1. Quick tap emits left click followed by release
+        let mut tap = TouchTracker::new(None, (100.0, 100.0), false, now);
+        let tap_actions = tap.on_up(now + Duration::from_millis(150));
+        assert_eq!(
+            tap_actions,
+            vec![
+                TouchAction::Click {
+                    button: 0x110,
+                    pos: (100.0, 100.0)
+                },
+                TouchAction::Release
+            ]
+        );
+
+        // 2. Touch hold for 350ms emits right click via check_timer
+        let mut hold = TouchTracker::new(None, (100.0, 100.0), false, now);
+        assert_eq!(hold.check_timer(now + Duration::from_millis(200)), None);
+        assert_eq!(
+            hold.check_timer(now + Duration::from_millis(350)),
+            Some(TouchAction::Click {
+                button: BTN_RIGHT,
+                pos: (100.0, 100.0)
+            })
+        );
+        assert_eq!(hold.state, TouchState::LongPressed);
+        let hold_release = hold.on_up(now + Duration::from_millis(450));
+        assert_eq!(hold_release, vec![TouchAction::Release]);
+
+        // 3. Drag motion >= 10px emits press and motion, canceling long press
+        let mut drag = TouchTracker::new(None, (100.0, 100.0), false, now);
+        let drag_actions = drag.on_motion((100.0, 115.0));
+        assert_eq!(
+            drag_actions,
+            vec![
+                TouchAction::Press {
+                    button: 0x110,
+                    pos: (100.0, 100.0)
+                },
+                TouchAction::Motion {
+                    pos: (100.0, 115.0)
+                }
+            ]
+        );
+        assert_eq!(drag.state, TouchState::Dragging);
+        assert_eq!(drag.check_timer(now + Duration::from_millis(400)), None);
+        let drag_release = drag.on_up(now + Duration::from_millis(500));
+        assert_eq!(drag_release, vec![TouchAction::Release]);
+    }
 }
