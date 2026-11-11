@@ -420,7 +420,9 @@ impl Shell {
     }
 
     fn use_widgets(&mut self) {
-        self.cfg.panels = vec![self.cfg.widgets.clone().unwrap_or_else(Panel::no_widgets)];
+        let p = self.cfg.widgets.clone().unwrap_or_else(Panel::no_widgets);
+        self.world.panel_has_clipboard = p.has(config::Module::Clipboard);
+        self.cfg.panels = vec![p];
         self.open = Some(0);
     }
 
@@ -494,6 +496,7 @@ impl Shell {
     fn prepare_panel(&mut self, idx: usize) {
         self.world.on_open();
         if let Some(p) = self.cfg.panels.get(idx) {
+            self.world.panel_has_clipboard = p.has(config::Module::Clipboard);
             if p.has(config::Module::Apps) || p.has(config::Module::Favorites) {
                 self.world.apps.ensure_loaded(&self.world.search);
             }
@@ -1572,6 +1575,7 @@ impl Shell {
         self.world.child.open = false;
         self.world.tray.open_menu = None;
         self.world.media.pending_seek_us = None;
+        self.world.panel_has_clipboard = false;
         self.pointer_down = false;
         if self.open.is_some() {
             self.open = None;

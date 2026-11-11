@@ -272,6 +272,7 @@ pub struct World {
     /// a card's list to load on a helper thread (the live edge; taken by the event loop)
     pub child_pending: Option<child::ChildKind>,
     pub live: bool,
+    pub panel_has_clipboard: bool,
     pub actions: Vec<String>,
     /// the panel is being edited: empty modules keep a placeholder card (height_in)
     pub edit_preview: bool,
@@ -308,6 +309,7 @@ impl World {
             close_requested: false,
             child_pending: None,
             live: false,
+            panel_has_clipboard: false,
             actions: Vec::new(),
             edit_preview: false,
         };
@@ -336,6 +338,7 @@ impl World {
         self.active_target = None;
         self.panel_scroll = 0.0;
         self.close_requested = false;
+        self.panel_has_clipboard = false;
         self.child = child::ChildState::default();
         self.apps.scroll = 0;
         self.windows.scroll = 0;
