@@ -77,7 +77,11 @@ pub fn click(it: &Item, world: &mut World, size: (f64, f64), pos: (f64, f64)) ->
     let look = look_name(it, (0.0, 0.0, size.0, size.1));
     if look == "calendar" {
         let top = 2.0 * PAD_Y + 86.0 + draw::GAP;
-        calendar::click(world, size.0, (pos.0, pos.1 - top))
+        calendar::click(
+            world,
+            (size.0, (size.1 - top).max(0.0)),
+            (pos.0, pos.1 - top),
+        )
     } else {
         false
     }

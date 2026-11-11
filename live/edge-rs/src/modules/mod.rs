@@ -910,7 +910,7 @@ pub fn click(it: &Item, world: &mut World, size: (f64, f64), pos: (f64, f64), bu
         Module::Favorites => favorites::click(world, size, pos, button),
         Module::Apps => apps::click(world, size, pos, button),
         Module::Windows => windows::click(world, size, pos, button),
-        Module::Calendar => calendar::click(world, size.0, pos),
+        Module::Calendar => calendar::click(world, size, pos),
         Module::Clock => {
             if clock::size_look(size.0, size.1) != "calendar" && is_left_button(button) {
                 toggle_child(world, child::ChildKind::Calendar)

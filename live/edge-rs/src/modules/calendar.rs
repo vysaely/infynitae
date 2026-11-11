@@ -78,14 +78,21 @@ pub fn arrows(w: f64) -> (Rect, Rect) {
     (prev, next)
 }
 
-pub fn click(world: &mut World, w: f64, pos: (f64, f64)) -> bool {
+pub fn click(world: &mut World, size: (f64, f64), pos: (f64, f64)) -> bool {
+    let (w, h) = size;
     let (x, y) = pos;
+    if h < 140.0 {
+        return false;
+    }
     let (prev, next) = arrows(w);
     if x >= prev.0 && x < prev.0 + prev.2 && y >= prev.1 && y <= prev.1 + prev.3 {
         world.cal_month -= 1;
         true
     } else if x >= next.0 && x <= next.0 + next.2 && y >= next.1 && y <= next.1 + next.3 {
         world.cal_month += 1;
+        true
+    } else if world.cal_month != 0 && x >= PAD_X && x < prev.0 && y >= 0.0 && y <= PAD_Y + 28.0 {
+        world.cal_month = 0;
         true
     } else {
         false
@@ -362,5 +369,40 @@ mod tests {
         let th = Theme::from_config(&crate::config::Config::from_text(""));
         let world = World::now();
         draw_content(&cr, &th, &world, (0.0, 0.0, 380.0, 240.0));
+    }
+
+    #[test]
+    fn compact_calendar_view_ignores_month_arrows() {
+        let mut world = World::now();
+        world.cal_month = 0;
+        let (prev, next) = arrows(380.0);
+        // Compact height is under 140.0
+        let handled_prev = click(&mut world, (380.0, 100.0), (prev.0 + 2.0, prev.1 + 2.0));
+        assert!(!handled_prev);
+        assert_eq!(world.cal_month, 0);
+
+        let handled_next = click(&mut world, (380.0, 100.0), (next.0 + 2.0, next.1 + 2.0));
+        assert!(!handled_next);
+        assert_eq!(world.cal_month, 0);
+
+        // Standard height handles arrows
+        let handled_next_full = click(&mut world, (380.0, 240.0), (next.0 + 2.0, next.1 + 2.0));
+        assert!(handled_next_full);
+        assert_eq!(world.cal_month, 1);
+    }
+
+    #[test]
+    fn calendar_resets_to_today_on_month_title_click() {
+        let mut world = World::now();
+        world.cal_month = 3;
+        // Click on the month title area
+        let handled = click(&mut world, (380.0, 240.0), (PAD_X + 10.0, PAD_Y + 5.0));
+        assert!(handled);
+        assert_eq!(world.cal_month, 0);
+
+        // Clicking title when already on current month returns false
+        let handled_again = click(&mut world, (380.0, 240.0), (PAD_X + 10.0, PAD_Y + 5.0));
+        assert!(!handled_again);
+        assert_eq!(world.cal_month, 0);
     }
 }
