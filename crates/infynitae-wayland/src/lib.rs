@@ -1422,18 +1422,10 @@ impl WaylandState {
                                 }
                             }
                             "PRIVACY_APPS" => {
-                                self.privacy_apps = val
-                                    .split(',')
-                                    .map(|s| s.trim().to_lowercase())
-                                    .filter(|s| !s.is_empty())
-                                    .collect();
+                                self.privacy_apps = parse_list(val);
                             }
                             "PRIVACY_TITLES" => {
-                                self.privacy_titles = val
-                                    .split(',')
-                                    .map(|s| s.trim().to_lowercase())
-                                    .filter(|s| !s.is_empty())
-                                    .collect();
+                                self.privacy_titles = parse_list(val);
                             }
                             "WINE_TRANSPARENCY" => {
                                 self.wine_transparency = !matches!(
@@ -1442,11 +1434,7 @@ impl WaylandState {
                                 );
                             }
                             "FORCE_TRANSPARENT_APPS" => {
-                                self.force_transparent_apps = val
-                                    .split(',')
-                                    .map(|s| s.trim().to_lowercase())
-                                    .filter(|s| !s.is_empty())
-                                    .collect();
+                                self.force_transparent_apps = parse_list(val);
                             }
                             _ => {}
                         }
@@ -1904,6 +1892,14 @@ pub fn config_line(line: &str) -> Option<(String, String)> {
     Some((key.trim().to_string(), out.trim().to_string()))
 }
 
+/// Reads a comma- or whitespace-separated list from config, lowercased and trimmed.
+pub fn parse_list(val: &str) -> Vec<String> {
+    val.split([' ', ',', '\t'])
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
 /// The key of an edge panel's config line (`PANEL_<NAME>="KEY PLACE MODULES"`).
 #[derive(Debug, PartialEq, Eq)]
 pub enum PanelKey {
@@ -2239,6 +2235,25 @@ mod key_binding_config_tests {
         let c2 = parse_color_hex("#00ff0080").unwrap();
         assert_eq!((c2.r(), c2.g(), c2.b()), (0.0, 1.0, 0.0));
         assert!((c2.a() - 128.0 / 255.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn list_settings_accept_commas_and_spaces_both() {
+        use super::parse_list;
+        let want = vec!["bitwarden".to_string(), "keepassxc".to_string()];
+        assert_eq!(parse_list("bitwarden,keepassxc"), want);
+        assert_eq!(parse_list("bitwarden keepassxc"), want);
+        assert_eq!(parse_list("bitwarden, keepassxc"), want);
+        assert_eq!(
+            parse_list("  bitwarden \t keepassxc , 1password "),
+            vec![
+                "bitwarden".to_string(),
+                "keepassxc".to_string(),
+                "1password".to_string(),
+            ]
+        );
+        assert!(parse_list("").is_empty());
+        assert!(parse_list("  ,  ").is_empty());
     }
 }
 
