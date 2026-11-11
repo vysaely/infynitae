@@ -85,6 +85,7 @@ OPTIONS:
 }
 
 fn main() -> ExitCode {
+    infynitae_wayland::logger::start();
     let code = run();
     // the log writer thread holds what was logged last (the shutdown): written out before the process ends
     infynitae_wayland::logger::flush();

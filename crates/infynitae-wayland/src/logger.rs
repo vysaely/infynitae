@@ -1,6 +1,6 @@
 //! Non-blocking logger for the compositor session log.
 //!
-//! Log calls format the line and send it over a bounded channel to a dedicated writer thread
+//! Once the compositor starts it (`start`), log calls format the line and send it over a bounded channel to a writer thread
 //! that writes to stdout and flushes. If the writer thread is delayed (e.g. a slow write to disk)
 //! and the channel buffer fills up, log lines are dropped instead of blocking the main thread.
 //! Once the writer can write again, the number of dropped lines is reported.
@@ -115,17 +115,20 @@ fn writer_loop<W: Write>(mut out: W, rx: Receiver<LogCommand>, dropped: Arc<Atom
 
 static GLOBAL_LOGGER: OnceLock<Logger> = OnceLock::new();
 
-/// Returns a reference to the global compositor logger.
-pub fn global_logger() -> &'static Logger {
-    GLOBAL_LOGGER.get_or_init(|| {
-        let (logger, _) = Logger::new(std::io::stdout(), DEFAULT_CAPACITY);
-        logger
-    })
+/// Starts the log writer thread: from now on `log_line!` never waits on stdout. Only the compositor's own process
+/// calls it (`main`); until then, and in every test, a line is printed on the calling thread as `println!` does,
+/// so a test harness captures it (lines from another thread reach the terminal uncaptured and split the harness's
+/// own "test ... FAILED" lines).
+pub fn start() {
+    GLOBAL_LOGGER.get_or_init(|| Logger::new(std::io::stdout(), DEFAULT_CAPACITY).0);
 }
 
-/// Logs a line to the global compositor logger.
+/// Logs a line through the writer thread once it is started, else prints it here.
 pub fn log(line: String) {
-    global_logger().log(line);
+    match GLOBAL_LOGGER.get() {
+        Some(logger) => logger.log(line),
+        None => println!("{line}"),
+    }
 }
 
 /// Flushes the global compositor logger.
