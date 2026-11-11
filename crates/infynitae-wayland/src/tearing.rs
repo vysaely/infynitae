@@ -212,12 +212,3 @@ impl Dispatch<WpTearingControlV1, WlSurface> for WaylandState {
         }
     }
 }
-
-/// Pre-commit hook: applies the double-buffered presentation hint on surface commit.
-pub(crate) fn tearing_commit_hook(
-    state: &mut WaylandState,
-    _: &DisplayHandle,
-    surface: &WlSurface,
-) {
-    state.tearing.commit(surface);
-}

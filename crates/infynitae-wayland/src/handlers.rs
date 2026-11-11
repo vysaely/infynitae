@@ -424,10 +424,6 @@ impl CompositorHandler for WaylandState {
             self.note_x11_client(&client);
         }
         smithay::wayland::compositor::add_pre_commit_hook::<Self, _>(surface, wait_for_frame);
-        smithay::wayland::compositor::add_pre_commit_hook::<Self, _>(
-            surface,
-            crate::tearing::tearing_commit_hook,
-        );
         add_destruction_hook(surface, |state: &mut Self, s| {
             if let Some(key) = state.registry.key(s) {
                 let fx = state.core.destroy_pointer_constraint(key);
