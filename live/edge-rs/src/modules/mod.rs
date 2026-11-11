@@ -135,6 +135,9 @@ pub fn run_sh(key: &str, cmd: &str) -> String {
     if key == "media" {
         return media::fetch_dbus_string();
     }
+    if key == "memory" {
+        return memory::fetch_string();
+    }
     Command::new("sh")
         .arg("-c")
         .arg(cmd)

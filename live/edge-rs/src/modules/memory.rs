@@ -8,16 +8,69 @@ use crate::modules::{is_left_button, Rect, World};
 use crate::theme::Theme;
 use cairo::Context;
 use std::collections::HashMap;
+use std::path::Path;
 
 pub const HEADER_H: f64 = 42.0;
 pub const APP_ROW_H: f64 = 28.0;
 pub const BG_BTN_H: f64 = 26.0;
 
-pub const CMDS: &[(&str, &str)] = &[(
-    "memory",
-    "grep -E '^(MemTotal|MemAvailable|MemFree|Buffers|Cached):' /proc/meminfo 2>/dev/null; \
-     awk 'FNR==1 { name=\"\" } /^Name:/ { name=$2 } /^VmRSS:/ { if (name != \"\" && $2 > 0) print name \"\\t\" $2 }' /proc/[0-9]*/status 2>/dev/null",
-)];
+pub const CMDS: &[(&str, &str)] = &[("memory", "__proc_memory__")];
+
+/// Reads `/proc/meminfo` and `/proc/[pid]/status` directly from `proc_dir` without spawning shells.
+pub fn fetch_proc_memory_from(proc_dir: &Path) -> String {
+    let mut out = std::fs::read_to_string(proc_dir.join("meminfo")).unwrap_or_default();
+    if !out.is_empty() && !out.ends_with('\n') {
+        out.push('\n');
+    }
+
+    let Ok(entries) = std::fs::read_dir(proc_dir) else {
+        return out;
+    };
+    for entry in entries.flatten() {
+        let file_name = entry.file_name();
+        let Some(name_str) = file_name.to_str() else {
+            continue;
+        };
+        if !name_str.chars().all(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        let status_path = entry.path().join("status");
+        let Ok(status) = std::fs::read_to_string(status_path) else {
+            continue;
+        };
+        let mut proc_name: Option<String> = None;
+        let mut vm_rss: Option<u64> = None;
+        for line in status.lines() {
+            if let Some(rest) = line.strip_prefix("Name:") {
+                let name = rest.trim();
+                if is_skipped_process(name) {
+                    break;
+                }
+                proc_name = Some(name.to_string());
+            } else if let Some(rest) = line.strip_prefix("VmRSS:") {
+                vm_rss = rest
+                    .split_whitespace()
+                    .next()
+                    .and_then(|s| s.parse::<u64>().ok());
+                break;
+            }
+        }
+        if let (Some(name), Some(rss)) = (proc_name, vm_rss) {
+            if rss > 0 && !is_skipped_process(&name) {
+                out.push_str(&name);
+                out.push('\t');
+                out.push_str(&rss.to_string());
+                out.push('\n');
+            }
+        }
+    }
+    out
+}
+
+/// Returns the formatted memory string from `/proc` for consumption by [`parse_memory`].
+pub fn fetch_string() -> String {
+    fetch_proc_memory_from(Path::new("/proc"))
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AppMem {
@@ -624,5 +677,84 @@ firefox\t4404019
             },
         );
         assert_eq!(close_app_action(&mut d, 0), None);
+    }
+
+    #[test]
+    fn parses_full_kernel_meminfo_layout() {
+        let meminfo = "\
+MemTotal:       32453284 kB
+MemFree:         2125112 kB
+MemAvailable:   20688720 kB
+Buffers:             428 kB
+Cached:         20143660 kB
+SwapCached:          308 kB
+Active:          7240876 kB
+Inactive:       19639648 kB
+Active(anon):    5312432 kB
+Inactive(anon):  1744244 kB
+Active(file):    1928444 kB
+Inactive(file): 17895404 kB
+Unevictable:         392 kB
+Mlocked:             392 kB
+SwapTotal:      83335160 kB
+SwapFree:       79339996 kB
+Zswap:                 0 kB
+Zswapped:              0 kB
+Dirty:              6524 kB
+Writeback:             0 kB
+AnonPages:       6733464 kB
+Mapped:          3076412 kB
+Shmem:            320300 kB
+KReclaimable:     450436 kB
+Slab:             825720 kB
+";
+        let (used_kb, total_kb) = parse_meminfo(meminfo);
+        assert_eq!(total_kb, 32453284);
+        assert_eq!(used_kb, 32453284 - 20688720);
+    }
+
+    #[test]
+    fn reads_proc_meminfo_and_process_status_from_directory() {
+        let dir = std::env::temp_dir().join(format!("test_proc_mem_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("meminfo"),
+            "MemTotal:       32453284 kB\nMemAvailable:   20688720 kB\n",
+        )
+        .unwrap();
+
+        // PID 101: firefox
+        let p101 = dir.join("101");
+        std::fs::create_dir_all(&p101).unwrap();
+        std::fs::write(
+            p101.join("status"),
+            "Name:\tfirefox\nState:\tS\nVmRSS:\t 2800000 kB\n",
+        )
+        .unwrap();
+
+        // PID 102: firefox child
+        let p102 = dir.join("102");
+        std::fs::create_dir_all(&p102).unwrap();
+        std::fs::write(
+            p102.join("status"),
+            "Name:\tfirefox\nState:\tS\nVmRSS:\t 1604019 kB\n",
+        )
+        .unwrap();
+
+        // PID 103: kernel worker (should be skipped)
+        let p103 = dir.join("103");
+        std::fs::create_dir_all(&p103).unwrap();
+        std::fs::write(p103.join("status"), "Name:\tkworker/u64:1\nState:\tI\n").unwrap();
+
+        let out = fetch_proc_memory_from(&dir);
+        let d = parse_memory(&out);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(d.total_kb, 32453284);
+        assert_eq!(d.used_kb, 32453284 - 20688720);
+        assert_eq!(d.apps.len(), 1);
+        assert_eq!(d.apps[0].name, "firefox");
+        assert_eq!(d.apps[0].rss_kb, 2800000 + 1604019);
     }
 }
