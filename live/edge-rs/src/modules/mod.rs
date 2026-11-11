@@ -170,6 +170,67 @@ pub fn spawn_fetch(
     });
 }
 
+#[derive(Default)]
+struct CoalesceSlot {
+    running: bool,
+    pending: Option<String>,
+}
+
+static COALESCE_MAP: std::sync::Mutex<
+    Option<std::collections::HashMap<&'static str, CoalesceSlot>>,
+> = std::sync::Mutex::new(None);
+
+pub fn spawn_coalesced(key: &'static str, cmd: String) {
+    spawn_coalesced_with(key, cmd, |c| {
+        if let Ok(mut child) = Command::new("sh")
+            .arg("-c")
+            .arg(c)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            let _ = child.wait();
+        }
+    });
+}
+
+pub fn spawn_coalesced_with<F>(key: &'static str, cmd: String, run_fn: F)
+where
+    F: Fn(&str) + Send + Sync + 'static,
+{
+    let run_fn = std::sync::Arc::new(run_fn);
+    let mut guard = COALESCE_MAP
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let slot = guard
+        .get_or_insert_with(Default::default)
+        .entry(key)
+        .or_default();
+    if slot.running {
+        slot.pending = Some(cmd);
+        return;
+    }
+    slot.running = true;
+    let mut cur_cmd = cmd;
+    let runner = run_fn.clone();
+    std::thread::spawn(move || loop {
+        runner(&cur_cmd);
+        let mut guard = COALESCE_MAP
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(slot) = guard.as_mut().and_then(|m| m.get_mut(key)) else {
+            break;
+        };
+        if let Some(next) = slot.pending.take() {
+            cur_cmd = next;
+        } else {
+            slot.running = false;
+            break;
+        }
+    });
+}
+
 fn current_time() -> NaiveDateTime {
     std::env::var("INFYNITAE_EDGE_RENDER_TIME")
         .ok()
@@ -211,6 +272,7 @@ pub struct World {
     /// a card's list to load on a helper thread (the live edge; taken by the event loop)
     pub child_pending: Option<child::ChildKind>,
     pub live: bool,
+    pub panel_has_clipboard: bool,
     pub actions: Vec<String>,
     /// the panel is being edited: empty modules keep a placeholder card (height_in)
     pub edit_preview: bool,
@@ -247,6 +309,7 @@ impl World {
             close_requested: false,
             child_pending: None,
             live: false,
+            panel_has_clipboard: false,
             actions: Vec::new(),
             edit_preview: false,
         };
@@ -275,6 +338,7 @@ impl World {
         self.active_target = None;
         self.panel_scroll = 0.0;
         self.close_requested = false;
+        self.panel_has_clipboard = false;
         self.child = child::ChildState::default();
         self.apps.scroll = 0;
         self.windows.scroll = 0;
@@ -568,6 +632,16 @@ impl World {
         self.actions.push(cmd);
     }
 
+    /// Runs `cmd` coalesced by `key`: at most one command in flight at a time, the latest value
+    /// winning when commands arrive while one is running (e.g. slider dragging).
+    pub fn run_coalesced(&mut self, key: &'static str, cmd: String) {
+        if self.live && std::env::var_os("INFYNITAE_EDGE_RENDER_DATA").is_none() {
+            spawn_coalesced(key, cmd);
+            return;
+        }
+        self.actions.push(cmd);
+    }
+
     /// Sets a config line (`config::write_value`) in the live edge; the tests see `set KEY="v"`.
     pub fn set_config(&mut self, key: &str, value: &str) {
         if self.live && std::env::var_os("INFYNITAE_EDGE_RENDER_DATA").is_none() {
@@ -839,7 +913,7 @@ pub fn click(it: &Item, world: &mut World, size: (f64, f64), pos: (f64, f64), bu
         Module::Favorites => favorites::click(world, size, pos, button),
         Module::Apps => apps::click(world, size, pos, button),
         Module::Windows => windows::click(world, size, pos, button),
-        Module::Calendar => calendar::click(world, size.0, pos),
+        Module::Calendar => calendar::click(world, size, pos),
         Module::Clock => {
             if clock::size_look(size.0, size.1) != "calendar" && is_left_button(button) {
                 toggle_child(world, child::ChildKind::Calendar)
@@ -1281,5 +1355,62 @@ notifications=42\\tFirefox\\t2m\\tBuild finished\\tAll 20 checks passed on main
         assert_eq!(world.notifications.items[0].id, 42);
         assert_eq!(world.notifications.items[0].app, "Firefox");
         assert_eq!(world.notifications.items[0].title, "Build finished");
+    }
+
+    #[test]
+    fn spawn_coalesced_runs_at_most_one_in_flight_and_latest_wins() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        let in_flight = Arc::new(AtomicUsize::new(0));
+        let max_in_flight = Arc::new(AtomicUsize::new(0));
+        let completed = Arc::new(std::sync::Mutex::new(Vec::new()));
+
+        let in_flight_clone = in_flight.clone();
+        let max_in_flight_clone = max_in_flight.clone();
+        let completed_clone = completed.clone();
+
+        let runner = move |cmd: &str| {
+            let cur = in_flight_clone.fetch_add(1, Ordering::SeqCst) + 1;
+            let mut m = max_in_flight_clone.load(Ordering::SeqCst);
+            while cur > m {
+                match max_in_flight_clone.compare_exchange_weak(
+                    m,
+                    cur,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                ) {
+                    Ok(_) => break,
+                    Err(actual) => m = actual,
+                }
+            }
+            std::thread::sleep(Duration::from_millis(30));
+            completed_clone.lock().unwrap().push(cmd.to_string());
+            in_flight_clone.fetch_sub(1, Ordering::SeqCst);
+        };
+
+        // Fire initial command 1
+        spawn_coalesced_with("test_volume_coalesce", "val_1".into(), runner.clone());
+
+        // Immediately fire values 2..=10 while 1 is in flight
+        for i in 2..=10 {
+            spawn_coalesced_with("test_volume_coalesce", format!("val_{i}"), runner.clone());
+        }
+
+        // Wait for all in-flight work to settle
+        std::thread::sleep(Duration::from_millis(150));
+
+        assert_eq!(
+            max_in_flight.load(Ordering::SeqCst),
+            1,
+            "at most 1 in flight"
+        );
+        let done = completed.lock().unwrap().clone();
+        assert_eq!(
+            done,
+            vec!["val_1".to_string(), "val_10".to_string()],
+            "first value runs, values 2-9 are coalesced, latest value (10) wins"
+        );
     }
 }

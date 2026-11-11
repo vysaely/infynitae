@@ -420,7 +420,9 @@ impl Shell {
     }
 
     fn use_widgets(&mut self) {
-        self.cfg.panels = vec![self.cfg.widgets.clone().unwrap_or_else(Panel::no_widgets)];
+        let p = self.cfg.widgets.clone().unwrap_or_else(Panel::no_widgets);
+        self.world.panel_has_clipboard = p.has(config::Module::Clipboard);
+        self.cfg.panels = vec![p];
         self.open = Some(0);
     }
 
@@ -494,6 +496,7 @@ impl Shell {
     fn prepare_panel(&mut self, idx: usize) {
         self.world.on_open();
         if let Some(p) = self.cfg.panels.get(idx) {
+            self.world.panel_has_clipboard = p.has(config::Module::Clipboard);
             if p.has(config::Module::Apps) || p.has(config::Module::Favorites) {
                 self.world.apps.ensure_loaded(&self.world.search);
             }
@@ -1562,6 +1565,7 @@ impl Shell {
             self.edit_exit();
             self.world.child.open = false;
             self.world.tray.open_menu = None;
+            self.world.media.pending_seek_us = None;
             self.pointer_down = false;
             return was;
         }
@@ -1570,6 +1574,8 @@ impl Shell {
         }
         self.world.child.open = false;
         self.world.tray.open_menu = None;
+        self.world.media.pending_seek_us = None;
+        self.world.panel_has_clipboard = false;
         self.pointer_down = false;
         if self.open.is_some() {
             self.open = None;
@@ -1851,11 +1857,14 @@ impl Shell {
         let oy_scrolled = oy - self.world.panel_scroll;
         let mut clicked_module = false;
         let mut changed = false;
-        for (it, r) in panel.items.iter().zip(rects) {
+        for (it, r) in panel.items.iter().zip(rects).rev() {
             let (mx, my, mw, mh) = (ox + r.0, oy_scrolled + r.1, r.2, r.3);
             if mw > 0.0 && mh > 0.0 && x >= mx && x <= mx + mw && y >= my && y <= my + mh {
                 clicked_module = true;
-                changed |= modules::click(it, &mut self.world, (mw, mh), (x - mx, y - my), button);
+                if modules::click(it, &mut self.world, (mw, mh), (x - mx, y - my), button) {
+                    changed = true;
+                    break;
+                }
             }
         }
 
@@ -1885,10 +1894,19 @@ impl Shell {
 
     pub fn pointer_release(&mut self) -> bool {
         self.pointer_down = false;
-        if self.edit.active {
-            return self.edit_release();
+        let mut changed = false;
+        if let Some(seek_us) = self.world.media.pending_seek_us.take() {
+            let bus = self.world.media.bus_name.clone();
+            self.world.note(format!("media:seek:{seek_us}"));
+            if self.world.live && !bus.is_empty() {
+                modules::media::execute_media_seek(&bus, seek_us);
+            }
+            changed = true;
         }
-        false
+        if self.edit.active {
+            return self.edit_release() || changed;
+        }
+        changed
     }
 
     pub fn scroll(&mut self, w: f64, h: f64, x: f64, y: f64, dy: f64) -> bool {
@@ -2010,7 +2028,7 @@ impl Shell {
                     let (ox, oy) = panel_origin(p, w, h, pw, ph);
                     let oy_scrolled = oy - self.world.panel_scroll;
                     let mut changed = false;
-                    for (it, r) in p.items.iter().zip(rects) {
+                    for (it, r) in p.items.iter().zip(rects).rev() {
                         let (mx, my, mw, mh) = (ox + r.0, oy_scrolled + r.1, r.2, r.3);
                         if mw > 0.0
                             && mh > 0.0
@@ -2018,9 +2036,10 @@ impl Shell {
                             && x <= mx + mw
                             && y >= my
                             && y <= my + mh
+                            && modules::drag(it, &mut self.world, (mw, mh), (x - mx, y - my))
                         {
-                            changed |=
-                                modules::drag(it, &mut self.world, (mw, mh), (x - mx, y - my));
+                            changed = true;
+                            break;
                         }
                     }
                     return changed;
@@ -2056,10 +2075,10 @@ impl Shell {
         {
             return false;
         }
-        let Some(open_idx) = self.open else {
+        if self.open.is_none() {
             return false;
-        };
-        if self.opened_by_hover || self.cfg.panels.get(open_idx).is_some_and(|p| p.hover) {
+        }
+        if self.opened_by_hover {
             self.close()
         } else {
             false
@@ -2530,6 +2549,36 @@ mod tests {
     }
 
     #[test]
+    fn clicking_overlapping_modules_hits_topmost_card_only() {
+        let mut cfg = Config::from_text("");
+        cfg.widgets = Some(
+            Panel::widgets("session@10,10,300x100 volume@10,10,300x100").expect("widgets panel"),
+        );
+        let mut sh = Shell::from_config(cfg);
+        sh.desktop = true;
+        sh.use_widgets();
+        sh.world
+            .apply("volume", "Volume: 50%\nMute: no\nDescription: Speakers\n");
+
+        let (w, h) = (1920.0, 1080.0);
+        // Click at coordinates that hit both session (lock) and volume (slider)
+        assert!(sh.click(w, h, 50.0, 35.0, 1));
+
+        // Volume (topmost, second item) should receive the click, not session underneath
+        assert!(
+            !sh.world.actions.iter().any(|a| a.contains("lock")),
+            "session underneath should not be clicked when occluded by volume"
+        );
+        assert!(
+            sh.world
+                .actions
+                .iter()
+                .any(|a| a.contains("pactl set-sink-volume")),
+            "topmost module (volume) should receive the click"
+        );
+    }
+
+    #[test]
     fn hover_strip_rectangles_per_side_and_alignment() {
         let cfg_h = Config::from_text(
             "PANEL_TL=\"top left 300 hover clock\"\n\
@@ -2624,6 +2673,41 @@ mod tests {
         assert!(sh.opened_by_hover);
         assert!(sh.pointer_leave());
         assert_eq!(sh.open, None);
+    }
+
+    #[test]
+    fn hover_panel_opened_by_key_stays_open_on_pointer_leave() {
+        let cfg =
+            Config::from_text("PANEL_CONTROL=\"SUPER+A top right 380 hover clock session\"\n");
+        let mut sh = Shell::from_config(cfg);
+        let (w, h) = (1920.0, 1080.0);
+        sh.last_screen = (w, h);
+
+        // Open by shortcut / command line
+        assert!(sh.toggle_named("control"));
+        assert!(sh.open.is_some());
+        assert!(!sh.opened_by_hover);
+
+        // Mouse leaves the panel / screen
+        assert!(
+            !sh.pointer_leave(),
+            "pointer_leave should not close panel opened by key"
+        );
+        assert!(sh.open.is_some(), "panel must remain open");
+
+        // Now close and open by hover strip
+        sh.close();
+        let (sx, sy, _, _) = hover_strip_in(&sh.cfg.panels[0], w, h, &sh.world, &sh.theme);
+        assert!(sh.pointer_motion(w, h, sx + 1.0, sy + 1.0));
+        assert!(sh.open.is_some());
+        assert!(sh.opened_by_hover);
+
+        // Mouse leaves -> now it should close
+        assert!(
+            sh.pointer_leave(),
+            "pointer_leave must close panel opened by hover"
+        );
+        assert!(sh.open.is_none());
     }
 
     #[test]
@@ -2829,6 +2913,44 @@ mod tests {
             Some("tray:menu-action:discord:20")
         );
         assert_eq!(sh.world.tray.open_menu, None);
+    }
+
+    #[test]
+    fn dragging_media_progress_bar_commits_seek_on_pointer_release() {
+        let cfg = Config::from_text("PANEL_MEDIA=\"SUPER+M top right media\"\n");
+        let mut sh = Shell::from_config(cfg);
+        sh.world.apply(
+            "media",
+            "status=Playing\ntitle=Starless\nartist=King Crimson\nplayer=Melodyae\nbus_name=org.mpris.MediaPlayer2.melodyae\nposition=100000000\nduration=500000000\nlyrics_current=Line\n",
+        );
+        let (w, h) = (1920.0, 1080.0);
+        assert!(sh.toggle_named("media"));
+        let panel = sh.cfg.panels[sh.open.unwrap()].clone();
+        let pw = panel_width(&panel, w);
+        let (rects, ph) = layout_in(&panel, pw, &sh.world, &sh.theme);
+        let (ox, oy) = panel_origin(&panel, w, h, pw, ph);
+        let r_media = rects[0];
+
+        // Press down inside panel so pointer_down is true
+        sh.click(w, h, ox + 10.0, oy + 10.0, 1);
+        assert!(sh.pointer_down);
+
+        // Progress bar cy in Medium size: PAD_Y(8) + 64 + 10 + 18 (current lyric) + 6 = 106
+        let bar_y = oy + r_media.1 + 106.0;
+        let bar_center_x = ox + r_media.0 + r_media.2 / 2.0;
+        assert!(sh.pointer_motion(w, h, bar_center_x, bar_y));
+        assert!(sh.world.media.pending_seek_us.is_some());
+
+        // Pointer release commits the seek
+        assert!(sh.pointer_release());
+        assert_eq!(sh.world.media.pending_seek_us, None);
+        assert!(
+            sh.world
+                .actions
+                .iter()
+                .any(|a| a.starts_with("media:seek:")),
+            "media seek action should have been emitted"
+        );
     }
 
     #[test]
@@ -3137,5 +3259,85 @@ mod tests {
             .actions
             .iter()
             .all(|a| !a.starts_with("set PANEL_")));
+    }
+
+    #[test]
+    fn toplevel_sync_state_defers_work_when_closed() {
+        use crate::wayland::ToplevelSyncState;
+
+        let mut sync = ToplevelSyncState::default();
+        assert!(!sync.should_sync(false, false));
+        assert!(!sync.should_sync(true, false));
+
+        // Window change occurs while edge is closed
+        sync.mark_dirty();
+        assert!(sync.dirty);
+        // While panel is closed and no widgets are shown, syncing is deferred
+        assert!(!sync.should_sync(false, false));
+
+        // When a panel opens or widgets are shown, syncing triggers
+        assert!(sync.should_sync(true, false));
+        assert!(sync.should_sync(false, true));
+
+        // Once synced, dirty flag is cleared
+        sync.did_sync();
+        assert!(!sync.dirty);
+        assert!(!sync.should_sync(true, false));
+    }
+
+    #[test]
+    fn touch_tracker_tap_long_press_and_drag() {
+        use crate::wayland::{TouchAction, TouchState, TouchTracker, BTN_RIGHT};
+        use std::time::{Duration, Instant};
+
+        let now = Instant::now();
+
+        // 1. Quick tap emits left click followed by release
+        let mut tap = TouchTracker::new(None, (100.0, 100.0), false, now);
+        let tap_actions = tap.on_up(now + Duration::from_millis(150));
+        assert_eq!(
+            tap_actions,
+            vec![
+                TouchAction::Click {
+                    button: 0x110,
+                    pos: (100.0, 100.0)
+                },
+                TouchAction::Release
+            ]
+        );
+
+        // 2. Touch hold for 350ms emits right click via check_timer
+        let mut hold = TouchTracker::new(None, (100.0, 100.0), false, now);
+        assert_eq!(hold.check_timer(now + Duration::from_millis(200)), None);
+        assert_eq!(
+            hold.check_timer(now + Duration::from_millis(350)),
+            Some(TouchAction::Click {
+                button: BTN_RIGHT,
+                pos: (100.0, 100.0)
+            })
+        );
+        assert_eq!(hold.state, TouchState::LongPressed);
+        let hold_release = hold.on_up(now + Duration::from_millis(450));
+        assert_eq!(hold_release, vec![TouchAction::Release]);
+
+        // 3. Drag motion >= 10px emits press and motion, canceling long press
+        let mut drag = TouchTracker::new(None, (100.0, 100.0), false, now);
+        let drag_actions = drag.on_motion((100.0, 115.0));
+        assert_eq!(
+            drag_actions,
+            vec![
+                TouchAction::Press {
+                    button: 0x110,
+                    pos: (100.0, 100.0)
+                },
+                TouchAction::Motion {
+                    pos: (100.0, 115.0)
+                }
+            ]
+        );
+        assert_eq!(drag.state, TouchState::Dragging);
+        assert_eq!(drag.check_timer(now + Duration::from_millis(400)), None);
+        let drag_release = drag.on_up(now + Duration::from_millis(500));
+        assert_eq!(drag_release, vec![TouchAction::Release]);
     }
 }

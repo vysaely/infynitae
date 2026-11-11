@@ -459,9 +459,6 @@ pub fn invoke_item_action(d: &mut NotificationsData, idx: usize) -> Option<Strin
         return None;
     }
     let item = d.items.remove(idx);
-    if item.id > d.cleared_id {
-        d.cleared_id = item.id;
-    }
     if item.id > d.max_id {
         d.max_id = item.id;
     }
@@ -741,5 +738,47 @@ Notification 19: Low battery
             world.actions.last().map(String::as_str),
             Some("makoctl dismiss -a 2>/dev/null")
         );
+    }
+
+    #[test]
+    fn invoke_single_notification_action_preserves_older_unread_notifications() {
+        let mut d = NotificationsData::default();
+        let raw = "\
+Notification 12: Newer
+  App name: App
+Notification 11: Middle
+  App name: App
+Notification 10: Older
+  App name: App
+";
+        let (items, max_id) = parse_mako(raw, d.cleared_id);
+        d.items = items;
+        d.max_id = max_id;
+        assert_eq!(d.items.len(), 3);
+        assert_eq!(d.cleared_id, 0);
+
+        // Invoke action on newest notification (id 12, index 0)
+        let act = invoke_item_action(&mut d, 0);
+        assert!(act.is_some());
+        assert_eq!(
+            d.cleared_id, 0,
+            "cleared_id should only update on Clear all"
+        );
+
+        // Next poll returns remaining active notifications 11 and 10
+        let remaining_raw = "\
+Notification 11: Middle
+  App name: App
+Notification 10: Older
+  App name: App
+";
+        let (new_items, _) = parse_mako(remaining_raw, d.cleared_id);
+        assert_eq!(
+            new_items.len(),
+            2,
+            "older notifications must not be dropped"
+        );
+        assert_eq!(new_items[0].id, 11);
+        assert_eq!(new_items[1].id, 10);
     }
 }

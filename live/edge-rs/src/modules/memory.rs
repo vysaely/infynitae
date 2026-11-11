@@ -64,6 +64,8 @@ fn is_skipped_process(name: &str) -> bool {
         || n.starts_with("kworker/")
         || n.starts_with("ksoftirqd/")
         || n.starts_with("migration/")
+        || n == "infynitae"
+        || n.starts_with("infynitae-session")
         || n == "infynitae-edge"
         || n.starts_with("infynitae-edge-")
 }
@@ -248,6 +250,9 @@ fn shell_arg(name: &str) -> String {
 /// Closes the app at `idx` (`0..3`) and returns the `pkill -TERM -x` command string.
 pub fn close_app_action(d: &mut MemoryData, idx: usize) -> Option<String> {
     if idx >= d.apps.len().min(3) {
+        return None;
+    }
+    if protected(&d.apps[idx].name) {
         return None;
     }
     let removed = d.apps.remove(idx);
@@ -589,5 +594,35 @@ VmRSS:\t   26188 kB
         }
         let cmd = close_bg_action(&mut d).unwrap();
         assert_eq!(cmd, "pkill -TERM -x steam");
+    }
+
+    #[test]
+    fn compositor_and_session_processes_are_never_in_top_apps_or_killed() {
+        let sample = "\
+MemTotal: 33554432 kB
+MemAvailable: 13002342 kB
+infynitae\t8000000
+infynitae-session\t500000
+firefox\t4404019
+";
+        let mut d = parse_memory(sample);
+        assert!(
+            !d.apps
+                .iter()
+                .any(|a| a.name == "infynitae" || a.name.starts_with("infynitae-session")),
+            "compositor and session must be excluded from apps"
+        );
+        assert_eq!(d.apps.len(), 1);
+        assert_eq!(d.apps[0].name, "firefox");
+
+        // Even if a protected process were somehow in apps, close_app_action must refuse to kill it
+        d.apps.insert(
+            0,
+            AppMem {
+                name: "infynitae".into(),
+                rss_kb: 8000000,
+            },
+        );
+        assert_eq!(close_app_action(&mut d, 0), None);
     }
 }

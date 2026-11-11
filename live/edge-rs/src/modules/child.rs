@@ -848,7 +848,7 @@ pub fn click_child(
     let (px, py) = pos;
 
     if kind == ChildKind::Calendar {
-        let changed = calendar::click(world, cw, (px - cx, py - cy));
+        let changed = calendar::click(world, (cw, rect.3), (px - cx, py - cy));
         return (changed, None);
     }
 

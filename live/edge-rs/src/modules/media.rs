@@ -97,6 +97,7 @@ pub struct MediaData {
     pub lyrics: Lyrics,
     pub queue: Vec<QueueSong>,
     pub queue_scroll: usize,
+    pub pending_seek_us: Option<i64>,
 }
 
 impl MediaData {
@@ -121,11 +122,18 @@ pub fn apply(d: &mut MediaData, key: &str, out: &str) -> bool {
         return false;
     }
     // the queue's scroll is the user's, not the player's: kept across the refresh (it snapped
-    // back every 2 s), within the new queue
+    // back every 2 s), within the new queue; keep any seek being dragged so a background refresh
+    // does not snap the slider back under the pointer
     let scroll = d.queue_scroll;
+    let pending_seek = d.pending_seek_us;
+    let drag_pos = d.position_us;
     let mut next = parse_media_data(out).unwrap_or_default();
     next.ready = true;
     next.queue_scroll = scroll.min(next.queue.len().saturating_sub(1));
+    if let Some(pending) = pending_seek {
+        next.pending_seek_us = Some(pending);
+        next.position_us = drag_pos;
+    }
     let changed = next != *d;
     *d = next;
     changed
@@ -334,6 +342,7 @@ fn parse_json_media(text: &str) -> Option<MediaData> {
         },
         queue: Vec::new(),
         queue_scroll: 0,
+        pending_seek_us: None,
     })
 }
 
@@ -1328,6 +1337,7 @@ pub fn click(world: &mut World, size: (f64, f64), pos: (f64, f64), button: u32) 
                 let frac = ((px - bar_x) / bar_w).clamp(0.0, 1.0);
                 let seek_us = (frac * world.media.duration_us as f64) as i64;
                 world.media.position_us = seek_us;
+                world.media.pending_seek_us = None;
                 let bus = world.media.bus_name.clone();
                 world.note(format!("media:seek:{seek_us}"));
                 if world.live && !bus.is_empty() {
@@ -1420,6 +1430,7 @@ pub fn click(world: &mut World, size: (f64, f64), pos: (f64, f64), button: u32) 
                 let frac = ((px - bar_x) / bar_w).clamp(0.0, 1.0);
                 let seek_us = (frac * world.media.duration_us as f64) as i64;
                 world.media.position_us = seek_us;
+                world.media.pending_seek_us = None;
                 let bus = world.media.bus_name.clone();
                 world.note(format!("media:seek:{seek_us}"));
                 if world.live && !bus.is_empty() {
@@ -1547,6 +1558,7 @@ pub fn drag(world: &mut World, size: (f64, f64), pos: (f64, f64)) -> bool {
         let frac = ((px - bar_x) / bar_w).clamp(0.0, 1.0);
         let seek_us = (frac * world.media.duration_us as f64) as i64;
         world.media.position_us = seek_us;
+        world.media.pending_seek_us = Some(seek_us);
         return true;
     }
     false
