@@ -44,6 +44,11 @@ pub struct WlrToplevelsState {
     global: GlobalId,
     managers: Vec<ZwlrForeignToplevelManagerV1>,
     handles: HashMap<ElementId, (Vec<ZwlrForeignToplevelHandleV1>, Told)>,
+    pub(crate) dirty: bool,
+    last_focus: Option<ElementId>,
+    last_stage_generation: u64,
+    last_output_count: usize,
+    sync_count: u64,
 }
 
 impl WlrToplevelsState {
@@ -55,6 +60,11 @@ impl WlrToplevelsState {
                 ),
             managers: Vec::new(),
             handles: HashMap::new(),
+            dirty: true,
+            last_focus: None,
+            last_stage_generation: u64::MAX,
+            last_output_count: usize::MAX,
+            sync_count: 0,
         }
     }
 }
@@ -129,6 +139,22 @@ impl WaylandState {
         if self.wlr_toplevels.managers.is_empty() && self.wlr_toplevels.handles.is_empty() {
             return;
         }
+        let current_focus = self.core.focus().target();
+        let stage_gen = self.core.stage().map_generation();
+        let output_count = self.outputs.len();
+        if !self.wlr_toplevels.dirty
+            && self.wlr_toplevels.last_focus == current_focus
+            && self.wlr_toplevels.last_stage_generation == stage_gen
+            && self.wlr_toplevels.last_output_count == output_count
+        {
+            return;
+        }
+        self.wlr_toplevels.dirty = false;
+        self.wlr_toplevels.last_focus = current_focus;
+        self.wlr_toplevels.last_stage_generation = stage_gen;
+        self.wlr_toplevels.last_output_count = output_count;
+        self.wlr_toplevels.sync_count = self.wlr_toplevels.sync_count.wrapping_add(1);
+
         // in the order the windows were opened (ids only grow): the bar lists them so
         let mut listed: Vec<ElementId> = self.foreign_toplevels.keys().copied().collect();
         listed.sort();
@@ -200,6 +226,11 @@ impl WaylandState {
             self.toplevel_request(&t, request);
         }
     }
+
+    /// Number of times the wlr-toplevels window list was synced.
+    pub fn wlr_toplevel_sync_count(&self) -> u64 {
+        self.wlr_toplevels.sync_count
+    }
 }
 
 /// The `state` array: each state a native-endian u32.
@@ -231,6 +262,7 @@ impl GlobalDispatch<ZwlrForeignToplevelManagerV1, crate::trust::Gate> for Waylan
             }
         }
         state.wlr_toplevels.managers.push(manager);
+        state.wlr_toplevels.dirty = true;
         state.sync_wlr_toplevels();
     }
 }
@@ -308,6 +340,7 @@ impl Dispatch<ZwlrForeignToplevelHandleV1, ElementId> for WaylandState {
             // set_rectangle is a hint for minimize animations
             _ => {}
         }
+        state.wlr_toplevels.dirty = true;
         state.sync_wlr_toplevels();
     }
 

@@ -153,6 +153,7 @@ impl WaylandState {
                 }
             }
             Effect::LayerKeyboardFocus(layer) => {
+                self.wlr_toplevels.dirty = true;
                 if let Some(surface) = self.layer_surface(layer)
                     && !self.is_locked()
                 {

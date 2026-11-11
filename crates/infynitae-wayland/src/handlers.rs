@@ -246,6 +246,9 @@ impl WaylandState {
                 .map(|s| infynitae_core::geom::LocalSize { w: s.w, h: s.h });
             self.core.toplevel_size_drawn(id, acked, drawn);
         }
+        if window.toplevel().is_some() {
+            self.wlr_toplevels.dirty = true;
+        }
         self.list_toplevel(id, mapped);
         if opens && !acked_fullscreen {
             self.fit_opening_window(id, &window);
@@ -312,6 +315,7 @@ impl WaylandState {
         } else if let Some(handle) = self.foreign_toplevels.remove(&id) {
             self.foreign_toplevel_list.remove_toplevel(&handle);
         }
+        self.wlr_toplevels.dirty = true;
         self.sync_wlr_toplevels();
     }
 
@@ -672,6 +676,7 @@ impl WaylandState {
             handle.send_app_id(app_id.as_deref().unwrap_or_default());
             handle.send_done();
         }
+        self.wlr_toplevels.dirty = true;
         self.sync_wlr_toplevels();
     }
 }

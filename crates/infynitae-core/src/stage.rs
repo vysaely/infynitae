@@ -130,6 +130,8 @@ pub struct Stage {
     records: Vec<Record>,
     /// Bottom to top. Contains every element that has been mapped and not destroyed.
     z: Vec<ElementId>,
+    /// Generation counter incremented whenever an element maps, unmaps or is destroyed while mapped.
+    map_generation: u64,
 }
 
 impl Stage {
@@ -139,6 +141,7 @@ impl Stage {
             last_id: 0,
             records: Vec::new(),
             z: Vec::new(),
+            map_generation: 0,
         }
     }
 
@@ -204,6 +207,11 @@ impl Stage {
             .copied()
             .filter(|&id| self.state(id) == Some(Lifecycle::Mapped))
             .collect()
+    }
+
+    /// A monotonic generation counter incremented whenever the set of mapped elements changes.
+    pub fn map_generation(&self) -> u64 {
+        self.map_generation
     }
 
     /// Returns mapped elements in creation order (stable slot ordering for Super+1..9).
@@ -370,8 +378,12 @@ impl Stage {
         state: Lifecycle,
     ) -> Result<(), StaleElement> {
         let r = self.record_mut(id).ok_or(StaleElement)?;
+        let changed = (r.state == Lifecycle::Mapped) != (state == Lifecycle::Mapped);
         r.state = state;
         r.mapped_once |= state == Lifecycle::Mapped;
+        if changed {
+            self.map_generation = self.map_generation.wrapping_add(1);
+        }
         Ok(())
     }
 
@@ -403,7 +415,12 @@ impl Stage {
     }
 
     pub(crate) fn set_minimized(&mut self, id: ElementId, on: bool) -> Result<(), StaleElement> {
-        self.record_mut(id).ok_or(StaleElement)?.minimized = on;
+        let r = self.record_mut(id).ok_or(StaleElement)?;
+        let changed = r.minimized != on;
+        r.minimized = on;
+        if changed {
+            self.map_generation = self.map_generation.wrapping_add(1);
+        }
         Ok(())
     }
 
@@ -450,9 +467,14 @@ impl Stage {
     /// Destroy purges every reference; idempotent (INV-STAGE-4). Returns whether it existed.
     pub(crate) fn destroy(&mut self, id: ElementId) -> bool {
         self.z.retain(|&e| e != id);
+        let was_mapped = self.state(id) == Some(Lifecycle::Mapped);
         let before = self.records.len();
         self.records.retain(|r| r.id != id);
-        before != self.records.len()
+        let removed = before != self.records.len();
+        if removed && was_mapped {
+            self.map_generation = self.map_generation.wrapping_add(1);
+        }
+        removed
     }
 }
 
@@ -558,5 +580,42 @@ mod tests {
         s.raise(b);
         s.raise(a);
         assert_eq!(s.z_order(), &[b, a]);
+    }
+
+    #[test]
+    fn map_generation_increments_on_mapping_changes() {
+        let mut s = Stage::new(InstanceId(1));
+        assert_eq!(s.map_generation(), 0);
+
+        let a = s.create();
+        assert_eq!(s.map_generation(), 0);
+
+        s.set_state(a, Lifecycle::AwaitingFirstBuffer).unwrap();
+        assert_eq!(s.map_generation(), 0);
+
+        s.set_state(a, Lifecycle::Mapped).unwrap();
+        assert_eq!(s.map_generation(), 1);
+
+        s.set_state(a, Lifecycle::Mapped).unwrap();
+        assert_eq!(s.map_generation(), 1);
+
+        s.set_minimized(a, true).unwrap();
+        assert_eq!(s.map_generation(), 2);
+
+        s.set_minimized(a, false).unwrap();
+        assert_eq!(s.map_generation(), 3);
+
+        s.set_state(a, Lifecycle::Unmapped).unwrap();
+        assert_eq!(s.map_generation(), 4);
+
+        s.destroy(a);
+        assert_eq!(s.map_generation(), 4);
+
+        let b = s.create();
+        s.set_state(b, Lifecycle::Mapped).unwrap();
+        assert_eq!(s.map_generation(), 5);
+
+        s.destroy(b);
+        assert_eq!(s.map_generation(), 6);
     }
 }
