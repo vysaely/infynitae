@@ -143,20 +143,24 @@ pub struct ScreencopyState {
     pub serves_capture: std::sync::atomic::AtomicBool,
 }
 
+/// Resolves whether the cursor should be hidden in screencopy captures.
+/// Unset defaults to true (SCREENCOPY_CURSOR="false", cursor hidden).
+pub fn parse_screencopy_hide_cursor(val: Option<&str>) -> bool {
+    val.is_none_or(|v| matches!(v.to_lowercase().as_str(), "0" | "false" | "off" | "no"))
+}
+
 impl ScreencopyState {
     pub fn new(dh: &DisplayHandle, gate: crate::trust::Gate) -> Self {
         let global =
             dh.create_global::<WaylandState, ZwlrScreencopyManagerV1, crate::trust::Gate>(3, gate);
-        let mut hide = std::env::var("SCREENCOPY_CURSOR")
-            .map(|v| matches!(v.to_lowercase().as_str(), "0" | "false" | "off" | "no"))
-            .unwrap_or(false);
+        let mut hide =
+            parse_screencopy_hide_cursor(std::env::var("SCREENCOPY_CURSOR").ok().as_deref());
         if let Ok(home) = std::env::var("HOME") {
             let config_path = format!("{home}/.config/infynitae/config");
             if let Ok(content) = std::fs::read_to_string(config_path) {
                 for (k, v) in content.lines().filter_map(crate::config_line) {
                     if k.trim() == "SCREENCOPY_CURSOR" {
-                        let mode = v.trim();
-                        hide = matches!(mode.to_lowercase().as_str(), "0" | "false" | "off" | "no");
+                        hide = parse_screencopy_hide_cursor(Some(v.trim()));
                     }
                 }
             }
@@ -538,6 +542,15 @@ mod tests {
         assert!(!state.serves_capture());
         state.enable_capture();
         assert!(state.serves_capture());
+    }
+
+    #[test]
+    fn screencopy_hide_cursor_defaults_to_true() {
+        assert!(parse_screencopy_hide_cursor(None));
+        assert!(parse_screencopy_hide_cursor(Some("false")));
+        assert!(parse_screencopy_hide_cursor(Some("0")));
+        assert!(!parse_screencopy_hide_cursor(Some("true")));
+        assert!(!parse_screencopy_hide_cursor(Some("1")));
     }
 
     #[test]
