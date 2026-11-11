@@ -54,4 +54,24 @@ keeper_alive=$(kill -0 "$keeper_pid" 2>/dev/null && echo yes || echo no)
 kill "$keeper_pid" 2>/dev/null || true
 check "sudo_once keeper process is terminated on script exit" "$keeper_alive" "no"
 
+# Finding 25: set_option handles values with slashes, ampersands, and backslashes
+cfg_file="$TMP/test_config"
+cat << 'EOF' > "$cfg_file"
+NOTIFICATIONS="mako"
+EOF
+
+# Source install-lib.sh and test set_option function
+bash -c '
+    src="'"$REPO_DIR"'"
+    cfg="'"$cfg_file"'"
+    . "'"$REPO_DIR"'/live/install-lib.sh"
+    # Call install_config helper function set_option
+    # We simulate set_option defined by install-lib.sh
+    eval "$(sed -n "/^    set_option() {/,/}/p" "'"$REPO_DIR"'/live/install-lib.sh")"
+    set_option NOTIFICATIONS "custom/path & flag\\extra"
+' 2>"$TMP/sed_err" || true
+val_got=$(grep '^NOTIFICATIONS=' "$cfg_file" | cut -d= -f2- || true)
+check "set_option replaces setting with value containing slashes, ampersands, and backslashes" \
+    "$val_got" '"custom/path & flag\extra"'
+
 exit $fail

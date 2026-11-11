@@ -660,7 +660,8 @@ EOF
         cp /etc/xdg/Thunar/uca.xml "$uca"
     fi
     if [ -f "$uca" ] && grep -q 'exo-open --working-directory %f --launch TerminalEmulator' "$uca"; then
-        sed -i "s|<command>exo-open --working-directory %f --launch TerminalEmulator</command>|<command>$term_exec --dir=%f</command>|" "$uca"
+        escaped_exec=$(printf '%s\n' "$term_exec" | sed 's/[&|\\]/\\&/g')
+        sed -i "s|<command>exo-open --working-directory %f --launch TerminalEmulator</command>|<command>$escaped_exec --dir=%f</command>|" "$uca"
     fi
     # Dolphin (KDE): its terminal, unless kdeglobals names one
     if [ -f "$HOME/.config/kdeglobals" ] && ! grep -q '^TerminalApplication=' "$HOME/.config/kdeglobals"; then

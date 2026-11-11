@@ -304,7 +304,8 @@ PORTAL
     # the battery's charge limit (BATTERY_LIMIT), settable by this user where supported
     if ls /sys/class/power_supply/BAT*/charge_control_end_threshold >/dev/null 2>&1; then
         tmp="$(mktemp)"
-        sed "s/@GROUP@/$(id -gn)/" "$src/live/99-infynitae-battery.rules" > "$tmp"
+        escaped_grp=$(id -gn | sed 's/[&/\]/\\&/g')
+        sed "s/@GROUP@/$escaped_grp/" "$src/live/99-infynitae-battery.rules" > "$tmp"
         if ! cmp -s "$tmp" /etc/udev/rules.d/99-infynitae-battery.rules; then
             install_root_file "$tmp" /etc/udev/rules.d/99-infynitae-battery.rules 644
             sudo udevadm trigger --subsystem-match=power_supply 2>/dev/null || true
@@ -426,7 +427,10 @@ install_config() {
         return 0
     fi
     cp -f "$src/config/config" "$cfg"
-    set_option() { sed -i "s/^$1=\"[^\"]*\"/$1=\"$2\"/" "$cfg"; }
+    set_option() {
+        escaped_val=$(printf '%s\n' "$2" | sed 's/[&/\]/\\&/g')
+        sed -i "s/^$1=\"[^\"]*\"/$1=\"$escaped_val\"/" "$cfg"
+    }
     is_skipped notifications && set_option NOTIFICATIONS none
     is_skipped automount && set_option AUTOMOUNT false
     is_skipped clipboard && { set_option CLIPBOARD_HISTORY false; set_option CLIPBOARD_PERSIST false; }

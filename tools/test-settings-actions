@@ -41,4 +41,14 @@ injected_flag="$TMP/injected_command_ran"
 HOME="$H" CONFIG_FILE="$CFG" WALLPAPER="\$(touch '$injected_flag')" sh "$REPO_DIR/live/settings.sh" apply >/dev/null 2>&1 || true
 check "eval on WALLPAPER is not performed (no command execution)" "$([ -f "$injected_flag" ] && echo yes || echo no)" "no"
 
+# Finding 25: Thunar custom action sed delimiter injection safety
+pipe_h="$TMP/pipe|user&name"
+pipe_cfg="$pipe_h/.config/infynitae/config"
+pipe_uca="$pipe_h/.config/Thunar/uca.xml"
+mkdir -p "$pipe_h/.config/Thunar" "$pipe_h/.config/infynitae"
+echo '<command>exo-open --working-directory %f --launch TerminalEmulator</command>' > "$pipe_uca"
+HOME="$pipe_h" CONFIG_FILE="$pipe_cfg" sh "$REPO_DIR/live/settings.sh" apply >/dev/null 2>&1 || true
+check "Thunar uca sed replacement handles pipe and ampersand characters in paths" \
+    "$([ -f "$pipe_uca" ] && grep -c "$pipe_h/.local/bin/xdg-terminal-exec --dir=%f" "$pipe_uca" || true)" 1
+
 exit $fail
