@@ -250,3 +250,33 @@ fn pointer_motion_sends_no_toplevel_events_when_nothing_changed() {
         "title change triggers a sync"
     );
 }
+
+/// A window that fills a screen and counts as fullscreen there (`FIT_IS_FULLSCREEN`) is told to task bars as
+/// fullscreen, and no longer once it does not fill it: the edge takes its closed panels off that screen then,
+/// so nothing is drawn over the window (review 2026-11-11: a closed panel kept a maximized game from going to
+/// the screen directly).
+#[test]
+fn a_window_that_fills_the_screen_is_told_as_fullscreen() {
+    const FULLSCREEN: u32 = 3;
+    let (mut s, _, _) = S::new();
+    s.bind();
+    s.take_log();
+    let out = s.ls.output();
+    let w = s.e[0];
+    s.ls.state.set_fitted_window(out, Some(w));
+    s.focus(Some(w));
+    let log = s.take_log();
+    assert!(
+        log.iter()
+            .any(|l| l.starts_with("state") && l.contains(&FULLSCREEN.to_string())),
+        "{log:?}"
+    );
+    s.ls.state.set_fitted_window(out, None);
+    s.focus(Some(s.e[1]));
+    let log = s.take_log();
+    let states: Vec<&String> = log.iter().filter(|l| l.starts_with("state")).collect();
+    assert!(
+        !states.is_empty() && states.iter().all(|l| !l.contains(&FULLSCREEN.to_string())),
+        "{log:?}"
+    );
+}
