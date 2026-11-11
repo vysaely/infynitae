@@ -455,6 +455,12 @@ pub struct WaylandState {
     pub(crate) exec_commands: Vec<String>,
     /// Processes started from shortcuts, to tell the windows the user opened (`launch`).
     pub(crate) launches: launch::Launches,
+    /// Directory holding live desktop scripts (launch.sh, infynitae-reload). Defaults to
+    /// `$HOME/infynitae/live` in the real binary; test harnesses point it at a temporary folder.
+    pub live_dir: std::path::PathBuf,
+    /// Directory holding portal communication sockets (`bound_keys`, `shortcuts.sock`).
+    /// `None` disables portal shortcut notification (e.g. in test harnesses).
+    pub portal_runtime_dir: Option<std::path::PathBuf>,
     /// The session's own Wayland socket, X display and cookie, given to the shortcut actions
     /// (`launch.sh`) as to every other client the session starts (INV-XWAYLAND-1); `None` until
     /// the session listens (`set_client_env`). Before 2026-11-06 the actions got none of it and
@@ -634,6 +640,10 @@ impl WaylandState {
         {
             trust.set(trust_policy(std::path::Path::new(&home), &content));
         }
+        let live_dir = std::env::var_os("HOME")
+            .map(|h| std::path::PathBuf::from(h).join("infynitae/live"))
+            .unwrap_or_else(|| std::path::PathBuf::from("/infynitae/live"));
+        let portal_runtime_dir = std::env::var_os("XDG_RUNTIME_DIR").map(std::path::PathBuf::from);
         use trust::Capability as Cap;
         // the primary selection exists before the data-control globals that also serve it
         let primary_selection = PrimarySelectionState::new::<Self>(display);
@@ -799,6 +809,8 @@ impl WaylandState {
             current_time: None,
             exec_commands: Vec::new(),
             launches: launch::Launches::default(),
+            live_dir,
+            portal_runtime_dir,
             client_env: None,
             focus_open_user_only: false,
             focus_open_priority: true,
@@ -821,6 +833,11 @@ impl WaylandState {
         state.desk_start();
         state.note_keyboard_layout();
         state
+    }
+
+    /// Sets the directory holding live desktop scripts (launch.sh, infynitae-reload).
+    pub fn set_live_dir(&mut self, dir: impl Into<std::path::PathBuf>) {
+        self.live_dir = dir.into();
     }
 
     /// The GPU clients should allocate their buffers on (linux-dmabuf feedback main device): the
@@ -1478,11 +1495,22 @@ impl WaylandState {
                     // session script starts the wallpaper
                     if !first_load {
                         let home = std::env::var("HOME").unwrap_or_default();
-                        let bin = format!("{home}/.local/bin/infynitae-reload");
-                        let reload = if std::path::Path::new(&bin).exists() {
-                            bin
+                        let default_live = if home.is_empty() {
+                            std::path::PathBuf::from("/infynitae/live")
                         } else {
-                            format!("{home}/infynitae/live/infynitae-reload")
+                            std::path::PathBuf::from(&home).join("infynitae/live")
+                        };
+                        let reload = if self.live_dir != default_live {
+                            self.live_dir.join("infynitae-reload")
+                        } else {
+                            let bin = std::path::PathBuf::from(format!(
+                                "{home}/.local/bin/infynitae-reload"
+                            ));
+                            if bin.exists() {
+                                bin
+                            } else {
+                                self.live_dir.join("infynitae-reload")
+                            }
                         };
                         let _ = std::process::Command::new(reload)
                             .arg("wallpaper")
