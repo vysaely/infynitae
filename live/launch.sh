@@ -315,10 +315,12 @@ case "$ACTION" in
         ;;
     browser)
         # Web browser
-        if [ "$BROWSER" = "xdg-open" ] || [ "$BROWSER" = "gio open" ]; then
+        b="${BROWSER:-auto}"
+        [ "$b" = "auto" ] && b="xdg-open"
+        if [ "$b" = "xdg-open" ] || [ "$b" = "gio open" ]; then
             exec gtk-launch "$(xdg-settings get default-web-browser 2>/dev/null || echo firefox.desktop)"
         fi
-        exec sh -c "$BROWSER"
+        exec sh -c "$b"
         ;;
     volume-up)
         # Volume Up: PipeWire wpctl / PulseAudio pactl / amixer + synchronous OSD

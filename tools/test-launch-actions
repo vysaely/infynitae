@@ -133,7 +133,19 @@ run_action toggle-privacy ""
 check "toggle-privacy falls back to ~/.local/bin/infynitae when PATH lacks it" \
     "$(grep -c 'infynitae-bin: msg shortcut privacy' "$LOG" 2>/dev/null || true)" 1
 
-# 8. Finding 5: Brightness divide by zero check (verify max_brightness 0 does not divide by zero)
+# 8. Finding 23: Empty BROWSER falls back to default browser
+cat << 'EOF' > "$BIN/gtk-launch"
+#!/bin/sh
+echo "gtk-launch: $*" >> "$CALL_LOG"
+EOF
+chmod +x "$BIN/gtk-launch"
+
+: > "$LOG"
+run_action browser "" BROWSER=""
+check "browser with empty BROWSER falls back to system default" \
+    "$(grep -c '^gtk-launch:' "$LOG" 2>/dev/null || true)" 1
+
+# 9. Finding 5: Brightness divide by zero check (verify max_brightness 0 does not divide by zero)
 sys_dir="$TMP/sys/class/backlight/panel"
 mkdir -p "$sys_dir"
 echo 0 > "$sys_dir/brightness"
