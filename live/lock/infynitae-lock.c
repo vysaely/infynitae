@@ -19,6 +19,7 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <pthread.h>
+#include <sys/prctl.h>
 #include <pwd.h>
 #include <math.h>
 #include <poll.h>
@@ -235,6 +236,12 @@ static int pam_conv_func(int num_msg, const struct pam_message **msg,
                 reply[i].resp_retcode = 0;
                 break;
             default:
+                for (int j = 0; j < i; ++j) {
+                    if (reply[j].resp) {
+                        explicit_bzero(reply[j].resp, strlen(reply[j].resp));
+                        free(reply[j].resp);
+                    }
+                }
                 free(reply);
                 return PAM_CONV_ERR;
         }
@@ -277,6 +284,8 @@ static void *pam_worker_thread(void *arg) {
         app->shake_frame = SHAKE_DURATION_FRAMES;
     }
 
+    explicit_bzero(data, sizeof(*data));
+    munlock(data, sizeof(*data));
     free(data);
     app->pam_thread_active = false;
     return NULL;
@@ -290,6 +299,8 @@ static void trigger_auth(LockApp *app) {
 
     PamWorkerData *data = malloc(sizeof(PamWorkerData));
     if (!data) return;
+    // kept out of swap while it holds the password (best effort: RLIMIT_MEMLOCK may refuse)
+    (void)mlock(data, sizeof(*data));
 
     strncpy(data->username, app->username, sizeof(data->username) - 1);
     data->username[sizeof(data->username) - 1] = '\0';
@@ -305,8 +316,12 @@ static void trigger_auth(LockApp *app) {
     if (pthread_create(&app->pam_thread, NULL, pam_worker_thread, data) != 0) {
         app->auth_state = AUTH_STATE_FAILED;
         app->pam_thread_active = false;
+        explicit_bzero(data, sizeof(*data));
         free(data);
+        return;
     }
+    // nothing waits for the worker: its resources go when it ends
+    pthread_detach(app->pam_thread);
 }
 
 static void parse_hex_rgb(const char *s, double out[3]) {
@@ -1120,6 +1135,7 @@ static void keyboard_key(void *data, struct wl_keyboard *keyboard,
             damage_all_outputs(app);
         }
     }
+    explicit_bzero(buf, sizeof(buf));
 }
 
 static void keyboard_modifiers(void *data, struct wl_keyboard *keyboard,
@@ -1346,6 +1362,9 @@ int main(int argc, char **argv) {
     strncpy(app.session_cmd, "infynitae-session", sizeof(app.session_cmd) - 1);
     load_theme_config(&app);
     const char *render_size = NULL, *render_out = NULL;
+    // no core dump and no ptrace by the same user of a process that holds the password
+    prctl(PR_SET_DUMPABLE, 0);
+    (void)mlock(app.password, sizeof(app.password));
 
     // Parse options
     for (int i = 1; i < argc; ++i) {
@@ -1366,6 +1385,12 @@ int main(int argc, char **argv) {
     // Resolve username. Locking, it is always the real account (getuid), never the environment
     // or an argument: only that account's password unlocks the session. `--user` picks the
     // account only for the greeter, which logs someone in.
+    // the greeter is not finished: it starts the session without dropping to the account (no
+    // setuid, no PAM session), so as root that session would be root's. Refused there.
+    if (app.greeter_mode && geteuid() == 0) {
+        fprintf(stderr, "[infynitae-lock] --greeter does not run as root (it would start the session as root)\n");
+        return 1;
+    }
     if (!app.greeter_mode) {
         if (app.username[0] != '\0')
             fprintf(stderr, "[infynitae-lock] --user is only for --greeter; locking for the real account\n");

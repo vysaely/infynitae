@@ -23,6 +23,8 @@ if [ "\$1 \$2" = "msg lock" ]; then
     touch "$TMP/locked"; echo '{"id":1,"ok":true}'; exit 0
 fi
 [ "\$1 \$2" = "msg snapshot" ] || exit 2
+# an older compositor that cannot say whether it is locked
+[ -f "$TMP/no-snapshot" ] && exit 2
 if [ -f "$TMP/locked" ]; then echo '{"id":1,"ok":true,"snapshot":{"locked":true}}'
 else echo '{"id":1,"ok":true,"snapshot":{"locked":false}}'; fi
 EOF
@@ -35,7 +37,7 @@ EOF
 # logind's delay limit: 1 s, so the test is quick
 cat > "$BIN/busctl" <<EOF
 #!/bin/sh
-echo "t 1000000"
+if [ -f "$TMP/long-delay" ]; then echo "t 3000000"; else echo "t 1000000"; fi
 EOF
 # a lock screen that locks, and one that never does
 cat > "$BIN/good-lock" <<EOF
@@ -45,6 +47,11 @@ EOF
 cat > "$BIN/stuck-lock" <<EOF
 #!/bin/sh
 exec sleep 1000
+EOF
+# a lock screen that fails at once
+cat > "$BIN/dead-lock" <<EOF
+#!/bin/sh
+echo "cannot open display" >&2; exit 1
 EOF
 chmod +x "$BIN"/*
 
@@ -108,5 +115,15 @@ run stuck-lock
 rm -f "$TMP/has-msg-lock"
 check "a compositor that locks itself is asked first" "locked by the compositor"
 held_is "  and the sleep goes on at once" no
+
+# a compositor that cannot say it is locked, and another lock screen than infynitae-lock: it must still run
+# after a second; one that exited keeps the inhibitor (lock-screen audit r-14, finding 2)
+touch "$TMP/no-snapshot" "$TMP/long-delay"
+run dead-lock
+check "a lock screen that exited confirms nothing" "the lock screen exited"
+held_is "  and keeps the inhibitor" yes
+run stuck-lock
+check "one still running after a second is taken as the lock" "lock confirmed by the lock screen"
+rm -f "$TMP/no-snapshot" "$TMP/long-delay"
 
 exit "$fail"
