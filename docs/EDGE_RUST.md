@@ -18,6 +18,9 @@ colour scheme (yours from the system, monochrome, neutral, tonal, vibrant, expre
   `stop`, `ask`, `--render`, `--print-panels`; SIGRTMIN..SIGRTMIN+3), the same `$XDG_RUNTIME_DIR` files,
   the same `PANEL_` lines and `FAVORITES`: the compositor, `live/launch.sh` and every script keep working
   the day it replaces the C one. Until then both are built and `EDGE_IMPL=rust` picks the new one.
+- `infynitae-edge ask --title-stdin [--secret]`: reads the title from the first line of standard input
+  (choices follow on remaining lines for a choice card). Callers with private titles (such as the keyring)
+  should use `--title-stdin` so the title is not visible in `/proc/<pid>/cmdline`.
 - Its own crate in `live/edge-rs` (own lockfile; outside the compositor workspace and its dependency
   policy, like the C helpers). Drawing with cairo and pango (the same libraries and font rendering as now);
   Wayland through smithay-client-toolkit; D-Bus (tray, media) through zbus.

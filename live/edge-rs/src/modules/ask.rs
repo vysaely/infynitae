@@ -1,4 +1,4 @@
-//! The `ask` prompt (`infynitae-edge-rs ask [--text] [--secret] [--default TEXT] TITLE`):
+//! The `ask` prompt (`infynitae-edge-rs ask [--title-stdin] [--text] [--secret] [--default TEXT] [TITLE]`):
 //! a centred card that scripts use to ask the user a choice or a line of text.
 //!
 //! Ported from `ask_client`, `ask_load`, `draw_ask`, `ask_key` and `ask_answer` in
@@ -61,6 +61,7 @@ pub fn ask_copy(src: &str, max_bytes: usize) -> String {
 pub struct AskCliArgs {
     pub text: bool,
     pub secret: bool,
+    pub title_stdin: bool,
     pub default: String,
     pub title: String,
 }
@@ -69,11 +70,13 @@ pub struct AskCliArgs {
 pub fn parse_cli_args<S: AsRef<str>>(args: &[S]) -> Result<AskCliArgs, String> {
     let mut text = false;
     let mut secret = false;
+    let mut title_stdin = false;
     let mut default = String::new();
     let mut title: Option<String> = None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_ref() {
+            "--title-stdin" => title_stdin = true,
             "--text" => text = true,
             "--secret" => {
                 text = true;
@@ -87,18 +90,47 @@ pub fn parse_cli_args<S: AsRef<str>>(args: &[S]) -> Result<AskCliArgs, String> {
         }
         i += 1;
     }
-    let Some(title) = title else {
+    if !title_stdin && title.is_none() {
         return Err(
-            "usage: infynitae-edge-rs ask [--text] [--secret] [--default TEXT] TITLE < choices"
+            "usage: infynitae-edge-rs ask [--title-stdin] [--text] [--secret] [--default TEXT] TITLE < choices"
                 .to_string(),
         );
-    };
+    }
     Ok(AskCliArgs {
         text,
         secret,
+        title_stdin,
         default,
-        title,
+        title: title.unwrap_or_default(),
     })
+}
+
+/// Parses standard input when `--title-stdin` is used.
+///
+/// The first line is the title (bounded to [`MAX_TITLE_BYTES`] and control characters
+/// converted to spaces). Returns `None` if the input has no first line or the title is empty.
+/// For choice cards (`!text`), remaining non-empty lines are parsed as choices up to [`ASK_MAX`].
+/// For text cards (`text`), no choices are parsed.
+pub fn parse_title_stdin(input: &str, text: bool) -> Option<(String, Vec<String>)> {
+    let mut lines = input.lines();
+    let first = lines.next()?;
+    let title = ask_copy(first, MAX_TITLE_BYTES);
+    if title.is_empty() {
+        return None;
+    }
+    let mut items = Vec::new();
+    if !text {
+        for raw in lines {
+            let cleaned = ask_copy(raw, MAX_ITEM_BYTES);
+            if !cleaned.is_empty() {
+                items.push(cleaned);
+                if items.len() >= ASK_MAX {
+                    break;
+                }
+            }
+        }
+    }
+    Some((title, items))
 }
 
 /// Parses choice lines from `stdin` text, leaving out empty lines and keeping at most [`ASK_MAX`].
@@ -162,7 +194,7 @@ pub fn tell_edge_cancel(edge_pid: i32, my_pid: u32, fifo_str: &str) {
 /// `$XDG_RUNTIME_DIR` and `SIGRTMIN+3`, prints the answer, and returns the exit code
 /// (`0` answered, `1` cancelled, `2` bad question, `3` no edge running).
 pub fn run_client<S: AsRef<str>>(args: &[S]) -> u8 {
-    let cli = match parse_cli_args(args) {
+    let mut cli = match parse_cli_args(args) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("{e}");
@@ -173,7 +205,18 @@ pub fn run_client<S: AsRef<str>>(args: &[S]) -> u8 {
         return 3;
     };
     let mut items = Vec::new();
-    if !cli.text {
+    if cli.title_stdin {
+        let mut raw = String::new();
+        let _ = std::io::stdin().read_to_string(&mut raw);
+        let Some((title, parsed_items)) = parse_title_stdin(&raw, cli.text) else {
+            return 1;
+        };
+        cli.title = title;
+        items = parsed_items;
+        if !cli.text && items.is_empty() {
+            return 2;
+        }
+    } else if !cli.text {
         let mut raw = String::new();
         let _ = std::io::stdin().read_to_string(&mut raw);
         items = parse_choices(&raw);
@@ -1087,6 +1130,72 @@ mod tests {
     use super::*;
     use std::io::Read;
     use std::os::fd::FromRawFd;
+
+    #[test]
+    fn title_stdin_parsing_handles_choices_secret_and_empty_input() {
+        // 1. title line + choices
+        let input =
+            "Format the drive as\nexFAT: every computer\nFAT32: every device\n\next4: Linux only\n";
+        let (title, choices) = parse_title_stdin(input, false).unwrap();
+        assert_eq!(title, "Format the drive as");
+        assert_eq!(
+            choices,
+            vec![
+                "exFAT: every computer",
+                "FAT32: every device",
+                "ext4: Linux only"
+            ]
+        );
+
+        // Bounded title length (MAX_TITLE_BYTES = 159)
+        let long_title = "T".repeat(200);
+        let input_long = format!("{long_title}\nChoice A\nChoice B\n");
+        let (title_bounded, choices_bounded) = parse_title_stdin(&input_long, false).unwrap();
+        assert_eq!(title_bounded.len(), MAX_TITLE_BYTES);
+        assert_eq!(title_bounded, "T".repeat(MAX_TITLE_BYTES));
+        assert_eq!(choices_bounded, vec!["Choice A", "Choice B"]);
+
+        // 2. title only for --secret
+        let secret_input = "Passphrase for USB\nextra line ignored for text\n";
+        let (sec_title, sec_choices) = parse_title_stdin(secret_input, true).unwrap();
+        assert_eq!(sec_title, "Passphrase for USB");
+        assert!(sec_choices.is_empty());
+
+        let secret_single_line = "Passphrase for USB";
+        let (sec_title2, sec_choices2) = parse_title_stdin(secret_single_line, true).unwrap();
+        assert_eq!(sec_title2, "Passphrase for USB");
+        assert!(sec_choices2.is_empty());
+
+        // 3. empty input
+        assert_eq!(parse_title_stdin("", false), None);
+        assert_eq!(parse_title_stdin("", true), None);
+        assert_eq!(parse_title_stdin("\n", false), None);
+        assert_eq!(parse_title_stdin("\r\n", false), None);
+        assert_eq!(parse_title_stdin("\n", true), None);
+    }
+
+    #[test]
+    fn cli_args_parsing_with_title_stdin() {
+        let cli = parse_cli_args(&["--title-stdin", "--secret"]).unwrap();
+        assert!(cli.title_stdin);
+        assert!(cli.text);
+        assert!(cli.secret);
+        assert_eq!(cli.title, "");
+
+        let cli_choice = parse_cli_args(&["--title-stdin"]).unwrap();
+        assert!(cli_choice.title_stdin);
+        assert!(!cli_choice.text);
+        assert!(!cli_choice.secret);
+        assert_eq!(cli_choice.title, "");
+
+        let cli_default = parse_cli_args(&["--title-stdin", "--default", "hint"]).unwrap();
+        assert!(cli_default.title_stdin);
+        assert_eq!(cli_default.default, "hint");
+
+        // Missing title and no --title-stdin fails
+        assert!(parse_cli_args(&["--secret"]).is_err());
+        assert!(parse_cli_args::<&str>(&[]).is_err());
+    }
 
     #[test]
     fn cli_args_and_request_formatting_match_c_edge() {
