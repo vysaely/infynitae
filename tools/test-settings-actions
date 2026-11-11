@@ -1,0 +1,58 @@
+#!/bin/sh
+# tools/test-settings-actions: checks the settings CLI (live/settings.sh).
+# Tests:
+# - list cursors does not split themes with spaces across multiple lines (finding 18)
+# - set on fresh install when config file does not exist creates config and succeeds (finding 1)
+# - wallpaper path with $(...) does not execute shell command substitution (finding 4)
+set -eu
+
+REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
+TMP=$(mktemp -d "/tmp/infynitae-test-settings-actions.XXXXXX")
+trap 'rm -rf "$TMP"' EXIT INT TERM
+
+H="$TMP/home"
+CFG="$H/.config/infynitae/config"
+mkdir -p "$H/.config/infynitae"
+
+fail=0
+check() {
+    if [ "$2" = "$3" ]; then
+        echo "ok   $1"
+    else
+        echo "FAIL $1: expected '$3', got '$2'"
+        fail=1
+    fi
+}
+
+# Finding 18: list cursors with spaces in theme name
+mkdir -p "$H/.icons/Breeze Light/cursors"
+out=$(HOME="$H" CONFIG_FILE="$CFG" sh "$REPO_DIR/live/settings.sh" list cursors 2>/dev/null)
+check "list cursors outputs 'Breeze Light' intact" "$(echo "$out" | grep -c 'Breeze Light')" 1
+check "list cursors does not split into 'Breeze' alone" "$(echo "$out" | grep -E -c '^[[:space:]]+Breeze$')" 0
+
+# Finding 1: fresh install without existing config file
+rm -f "$CFG"
+HOME="$H" CONFIG_FILE="$CFG" sh "$REPO_DIR/live/settings.sh" set CURSOR_THEME "Bibata-Modern-Classic" >/dev/null 2>&1
+check "set creates config file on fresh install" "$([ -f "$CFG" ] && echo yes || echo no)" "yes"
+check "set writes key on fresh install" "$(grep '^CURSOR_THEME=' "$CFG" 2>/dev/null || true)" "CURSOR_THEME='Bibata-Modern-Classic'"
+
+# Finding 4: wallpaper path command injection safety
+injected_flag="$TMP/injected_command_ran"
+HOME="$H" CONFIG_FILE="$CFG" WALLPAPER="\$(touch '$injected_flag')" sh "$REPO_DIR/live/settings.sh" apply >/dev/null 2>&1 || true
+check "eval on WALLPAPER is not performed (no command execution)" "$([ -f "$injected_flag" ] && echo yes || echo no)" "no"
+
+# Finding 25: Thunar custom action sed delimiter injection safety
+pipe_h="$TMP/pipe|user&name"
+pipe_cfg="$pipe_h/.config/infynitae/config"
+pipe_uca="$pipe_h/.config/Thunar/uca.xml"
+mkdir -p "$pipe_h/.config/Thunar" "$pipe_h/.config/infynitae"
+echo '<command>exo-open --working-directory %f --launch TerminalEmulator</command>' > "$pipe_uca"
+HOME="$pipe_h" CONFIG_FILE="$pipe_cfg" sh "$REPO_DIR/live/settings.sh" apply >/dev/null 2>&1 || true
+check "Thunar uca sed replacement handles pipe and ampersand characters in paths" \
+    "$([ -f "$pipe_uca" ] && grep -c "$pipe_h/.local/bin/xdg-terminal-exec --dir=%f" "$pipe_uca" || true)" 1
+
+# Finding 26: config_write and cmd_set do not use predictable .tmp.$$ suffix
+has_predictable_tmp=$(grep -F '$CONFIG_FILE.tmp.$$' "$REPO_DIR/live/settings.sh" || true)
+check "settings.sh does not use predictable \$CONFIG_FILE.tmp.\$\$ temp files" "$has_predictable_tmp" ""
+
+exit $fail

@@ -36,6 +36,15 @@ resolve_terminal() {
 
 TERM_CMD=$(resolve_terminal)
 
+INFYNITAE_BIN="${INFYNITAE_BIN:-}"
+if [ -z "$INFYNITAE_BIN" ]; then
+    if command -v infynitae >/dev/null 2>&1; then
+        INFYNITAE_BIN="infynitae"
+    else
+        INFYNITAE_BIN="$HOME/.local/bin/infynitae"
+    fi
+fi
+
 # The edge (ENABLE_EDGE) serves Super+W, Super+L, Super+A and Super+V when it is on and installed
 # (EDGE_BIN; its name before 2026-10-31, infynitae-island, until an update builds the new one)
 edge_on() {
@@ -100,11 +109,12 @@ case "$ACTION" in
         # a fullscreen game shown directly started ("on <pid>") or ended ("off <pid>"): Feral's
         # gamemode, when installed, runs the CPU at full speed while it lasts. An X11 game's
         # process is xwayland-satellite's, which is enough for the CPU mode
-        set -- $2
-        [ "$1" = on ] && call=RegisterGame || call=UnregisterGame
+        gm_mode=${2%% *}
+        gm_pid=${2#* }
+        [ "$gm_mode" = on ] && call=RegisterGame || call=UnregisterGame
         gdbus call --session --dest com.feralinteractive.GameMode \
             --object-path /com/feralinteractive/GameMode \
-            --method "com.feralinteractive.GameMode.$call" "$2" >/dev/null 2>&1
+            --method "com.feralinteractive.GameMode.$call" "$gm_pid" >/dev/null 2>&1
         ;;
     system-monitor)
         # Super+Shift+Escape: a window of its own if one is installed, else in the terminal
@@ -155,7 +165,7 @@ case "$ACTION" in
                 exec dolphin --new-window
                 ;;
             *)
-                exec $FM
+                exec sh -c "$FM"
                 ;;
         esac
         ;;
@@ -197,14 +207,14 @@ case "$ACTION" in
                 exec wofi --show drun
                 ;;
             *)
-                exec $L
+                exec sh -c "$L"
                 ;;
         esac
         ;;
     overview|radar)
         # Super+Shift+Tab: the overview, a menu of the windows to go to
-        if command -v infynitae >/dev/null 2>&1; then
-            exec infynitae msg overview
+        if command -v "$INFYNITAE_BIN" >/dev/null 2>&1; then
+            exec "$INFYNITAE_BIN" msg overview
         elif command -v fuzzel >/dev/null 2>&1; then
             exec fuzzel
         fi
@@ -233,7 +243,7 @@ case "$ACTION" in
         mkdir -p "$SHOT_DIR"
         SHOT_FILE="$SHOT_DIR/shot-$(date +%Y%m%d-%H%M%S).png"
         if [ -n "$SCREENSHOT_CMD" ]; then
-            exec $SCREENSHOT_CMD "$SHOT_FILE"
+            exec sh -c "$SCREENSHOT_CMD \"\$1\"" -- "$SHOT_FILE"
         elif command -v grim >/dev/null 2>&1; then
             grim "$SHOT_FILE"
             if [ -f "$SHOT_FILE" ] && command -v wl-copy >/dev/null 2>&1; then
@@ -269,7 +279,7 @@ case "$ACTION" in
             if [ "${FREEZE_SCREENSHOT:-true}" = true ] && [ -x "$FREEZER" ]; then
                 FREEZE_DIR=$(mktemp -d "${XDG_RUNTIME_DIR:-/tmp}/infynitae-freeze.XXXXXX")
                 # the output names are the only "name" keys of the snapshot
-                for out in $("${INFYNITAE_BIN:-$HOME/.local/bin/infynitae}" msg snapshot 2>/dev/null \
+                for out in $("$INFYNITAE_BIN" msg snapshot 2>/dev/null \
                     | grep -o '"name":"[^"]*"' | cut -d'"' -f4); do
                     grim -o "$out" "$FREEZE_DIR/$out.png" 2>/dev/null || continue
                     "$FREEZER" --overlay --output "$out" "$FREEZE_DIR/$out.png" stretch &
@@ -305,10 +315,12 @@ case "$ACTION" in
         ;;
     browser)
         # Web browser
-        if [ "$BROWSER" = "xdg-open" ] || [ "$BROWSER" = "gio open" ]; then
+        b="${BROWSER:-auto}"
+        [ "$b" = "auto" ] && b="xdg-open"
+        if [ "$b" = "xdg-open" ] || [ "$b" = "gio open" ]; then
             exec gtk-launch "$(xdg-settings get default-web-browser 2>/dev/null || echo firefox.desktop)"
         fi
-        exec sh -c "$BROWSER"
+        exec sh -c "$b"
         ;;
     volume-up)
         # Volume Up: PipeWire wpctl / PulseAudio pactl / amixer + synchronous OSD
@@ -489,7 +501,7 @@ case "$ACTION" in
                 fi
                 ;;
             *)
-                exec $LOCKER
+                exec sh -c "$LOCKER"
                 ;;
         esac
         ;;
@@ -525,13 +537,13 @@ case "$ACTION" in
     mute|toggle-mute)
         # Trigger Discord / App Global Shortcuts portal (in-app mute only, zero OS hardware muting)
         if [ -S "$XDG_RUNTIME_DIR/infynitae/shortcuts.sock" ]; then
-            infynitae msg shortcut mute 2>/dev/null || true
+            "$INFYNITAE_BIN" msg shortcut mute 2>/dev/null || true
         fi
         ;;
     deafen|toggle-deafen)
         # Trigger Discord / App Global Shortcuts portal (in-app deafen only, zero OS hardware muting)
         if [ -S "$XDG_RUNTIME_DIR/infynitae/shortcuts.sock" ]; then
-            infynitae msg shortcut deafen 2>/dev/null || true
+            "$INFYNITAE_BIN" msg shortcut deafen 2>/dev/null || true
         fi
         ;;
     config-check)
@@ -583,13 +595,13 @@ case "$ACTION" in
     toggle-idle-inhibit|inhibit-idle)
         # Send keypress or signal to compositor to toggle idle inhibit
         if [ -S "$XDG_RUNTIME_DIR/infynitae/shortcuts.sock" ]; then
-            infynitae msg shortcut idle_inhibit 2>/dev/null || true
+            "$INFYNITAE_BIN" msg shortcut idle_inhibit 2>/dev/null || true
         fi
         ;;
     toggle-privacy|privacy)
         # Send keypress or signal to compositor to toggle privacy
         if [ -S "$XDG_RUNTIME_DIR/infynitae/shortcuts.sock" ]; then
-            infynitae msg shortcut privacy 2>/dev/null || true
+            "$INFYNITAE_BIN" msg shortcut privacy 2>/dev/null || true
         fi
         ;;
     save-replay|clip-save|clip)
