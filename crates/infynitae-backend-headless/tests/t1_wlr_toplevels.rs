@@ -226,14 +226,7 @@ fn pointer_motion_sends_no_toplevel_events_when_nothing_changed() {
     for i in 0..20 {
         s.t += 1000;
         let p = 500.0 + (i as f64);
-        pointer_motion(
-            &mut s.ls.state,
-            &mut s.ls.input,
-            (p, p),
-            (p, p),
-            s.t,
-        )
-        .expect("motion");
+        pointer_motion(&mut s.ls.state, &mut s.ls.input, (p, p), (p, p), s.t).expect("motion");
         s.pump();
     }
     assert_eq!(
