@@ -7,7 +7,9 @@ mod common;
 
 use std::cell::RefCell;
 
-use common::{Lockstep, Probe, output};
+use common::{Lockstep, Probe, output, output_k};
+use infynitae_backend_headless::VirtualOutput;
+use infynitae_core::navigation::PersistedCameras;
 use wayland_client::{Connection, Dispatch, QueueHandle};
 use wayland_protocols_wlr::output_management::v1::client::{
     zwlr_output_configuration_head_v1::ZwlrOutputConfigurationHeadV1,
@@ -126,9 +128,18 @@ struct S {
 
 impl S {
     fn new() -> S {
+        Self::with_outputs(&[output((1920, 1080), 120)])
+    }
+
+    fn with_outputs(outputs: &[VirtualOutput]) -> S {
+        Self::with_outputs_and_info(outputs, |_| {})
+    }
+
+    fn with_outputs_and_info(outputs: &[VirtualOutput], setup: impl FnOnce(&mut Lockstep)) -> S {
         HEADS.with_borrow_mut(Vec::clear);
         MODES.with_borrow_mut(Vec::clear);
-        let mut ls = Lockstep::new(Some(output((1920, 1080), 120)));
+        let mut ls = Lockstep::with(PersistedCameras::default(), outputs);
+        setup(&mut ls);
         let (name, _, _) = ls
             .probe
             .globals
@@ -153,6 +164,10 @@ impl S {
 
     fn head(&self) -> ZwlrOutputHeadV1 {
         HEADS.with_borrow(|h| h[0].clone())
+    }
+
+    fn heads(&self) -> Vec<ZwlrOutputHeadV1> {
+        HEADS.with_borrow(|h| h.clone())
     }
 
     /// A configuration of the one head against `serial`, set up by `f`, then `apply` or `test`.
@@ -274,8 +289,8 @@ fn what_cannot_be_done_fails_and_changes_nothing() {
     config.apply();
     s.ls.pump();
     assert!(
-        s.ls.probe.log.contains(&"failed".to_string()),
-        "turning a screen off: {:?}",
+        s.ls.probe.log.contains(&"cancelled".to_string()),
+        "turning off the only screen: {:?}",
         s.ls.probe.log
     );
 }
@@ -427,4 +442,175 @@ fn vrr_test_changes_nothing_and_no_vrr_fails() {
         "a test changes and reports nothing: {:?}",
         s.ls.probe.log
     );
+}
+
+/// With two screens, turn one off (windows move as on unplug, the head reports enabled 0) and
+/// turn it on again (it comes back where it was in the layout).
+#[test]
+fn two_screens_turn_one_off_and_on_again() {
+    let mut s = S::with_outputs(&[
+        output_k("A", (1920, 1080), 120, 60_000),
+        output_k("B", (1280, 720), 120, 60_000),
+    ]);
+    assert_eq!(s.ls.state.core().outputs().len(), 2);
+    let heads = s.heads();
+    assert_eq!(heads.len(), 2);
+
+    let qh = s.ls.qh.clone();
+    let w = s.ls.probe.toplevel(&qh, "W", (800, 600), 20);
+    s.ls.pump();
+    s.ls.probe.draw(&qh, w);
+    s.ls.pump();
+    let elem_id = s.ls.state.elements().next().unwrap();
+    infynitae_backend_headless::set_focus(&mut s.ls.state, &mut s.ls.input, Some(elem_id))
+        .expect("focus");
+    s.ls.pump();
+
+    // Maximize window on screen A
+    s.ls.probe.surfaces[w]
+        .toplevel
+        .as_ref()
+        .unwrap()
+        .set_maximized();
+    s.ls.pump();
+    assert_eq!(
+        s.ls.probe.toplevel_configures.last().map(|(_, sz, _)| *sz),
+        Some((1920, 1080))
+    );
+
+    // Turn screen A off
+    let serial = s.serial();
+    let config = s.manager.create_configuration(serial, &s.ls.qh, ());
+    config.disable_head(&heads[0]);
+    s.ls.probe.log.clear();
+    config.apply();
+    s.ls.pump();
+
+    assert!(
+        s.ls.probe.log.contains(&"succeeded".to_string()),
+        "log: {:?}",
+        s.ls.probe.log
+    );
+    assert!(s.ls.probe.log.contains(&"enabled 0".to_string()));
+    assert_eq!(s.ls.state.core().outputs().len(), 1);
+    assert_eq!(s.ls.state.core().outputs()[0].key.connector, "B");
+    // Window moves as on unplug: maximized window fills the surviving screen B (1280x720)
+    assert_eq!(
+        s.ls.probe.toplevel_configures.last().map(|(_, sz, _)| *sz),
+        Some((1280, 720))
+    );
+
+    // Turn screen A back on
+    let serial = s.serial();
+    let config = s.manager.create_configuration(serial, &s.ls.qh, ());
+    config.enable_head(&heads[0], &s.ls.qh, ());
+    s.ls.probe.log.clear();
+    config.apply();
+    s.ls.pump();
+
+    assert!(
+        s.ls.probe.log.contains(&"succeeded".to_string()),
+        "log: {:?}",
+        s.ls.probe.log
+    );
+    assert!(s.ls.probe.log.contains(&"enabled 1".to_string()));
+    assert_eq!(s.ls.state.core().outputs().len(), 2);
+    let out_a =
+        s.ls.state
+            .core()
+            .outputs()
+            .iter()
+            .find(|o| o.key.connector == "A")
+            .expect("screen A restored");
+    assert_eq!(
+        out_a.arrangement,
+        (0.0, 0.0),
+        "screen A came back where it was"
+    );
+    let out_b =
+        s.ls.state
+            .core()
+            .outputs()
+            .iter()
+            .find(|o| o.key.connector == "B")
+            .expect("screen B remained");
+    assert_eq!(
+        out_b.arrangement,
+        (1920.0, 0.0),
+        "screen B stayed where it was"
+    );
+}
+
+/// Disabling every screen cancels the configuration, leaving the screens unchanged.
+#[test]
+fn turning_off_the_last_screen_is_cancelled() {
+    let mut s = S::new();
+    let serial = s.serial();
+    let config = s.manager.create_configuration(serial, &s.ls.qh, ());
+    config.disable_head(&s.head());
+    s.ls.probe.log.clear();
+    config.apply();
+    s.ls.pump();
+
+    assert!(
+        s.ls.probe.log.contains(&"cancelled".to_string()),
+        "turning off the last screen is cancelled: {:?}",
+        s.ls.probe.log
+    );
+    assert_eq!(s.ls.state.core().outputs().len(), 1);
+    assert!(!s.ls.probe.log.contains(&"enabled 0".to_string()));
+}
+
+/// A configuration mixing turning a head off and changing the mode of another head.
+#[test]
+fn configuration_mixing_mode_change_and_off() {
+    let mut s = S::with_outputs_and_info(
+        &[
+            output_k("A", (1920, 1080), 120, 60_000),
+            output_k("B", (1920, 1080), 120, 60_000),
+        ],
+        |ls| {
+            let b_id = ls.state.core().outputs()[1].id;
+            ls.state.set_output_head_info(
+                b_id,
+                infynitae_wayland::output_management::HeadInfo {
+                    modes: vec![
+                        infynitae_wayland::output_management::HeadMode {
+                            size: (1920, 1080),
+                            refresh_mhz: 60_000,
+                            preferred: true,
+                        },
+                        infynitae_wayland::output_management::HeadMode {
+                            size: (1280, 720),
+                            refresh_mhz: 60_000,
+                            preferred: false,
+                        },
+                    ],
+                    physical_size: None,
+                    adaptive_sync: None,
+                },
+            );
+        },
+    );
+
+    let heads = s.heads();
+    let serial = s.serial();
+    let config = s.manager.create_configuration(serial, &s.ls.qh, ());
+    config.disable_head(&heads[0]);
+    let head_b = config.enable_head(&heads[1], &s.ls.qh, ());
+    head_b.set_custom_mode(1280, 720, 60_000);
+    s.ls.probe.log.clear();
+    config.apply();
+    s.ls.pump();
+
+    assert!(
+        s.ls.probe.log.contains(&"succeeded".to_string()),
+        "log: {:?}",
+        s.ls.probe.log
+    );
+    assert!(s.ls.probe.log.contains(&"enabled 0".to_string()));
+    assert_eq!(s.ls.state.core().outputs().len(), 1);
+    let out_b = &s.ls.state.core().outputs()[0];
+    assert_eq!(out_b.key.connector, "B");
+    assert_eq!(out_b.phys, (1280, 720));
 }

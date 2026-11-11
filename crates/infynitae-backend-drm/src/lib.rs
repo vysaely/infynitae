@@ -29,7 +29,7 @@ use std::time::Duration;
 
 use infynitae_core::output::{OutputDescriptor, OutputId, OutputKey, Transform};
 use infynitae_core::{Core, InputPort, OutputLifecycleToken, PhysicalEvent};
-use infynitae_wayland::output_management::{HeadChange, HeadInfo, HeadMode};
+use infynitae_wayland::output_management::{HeadChange, HeadInfo, HeadMode, HeadOn};
 use infynitae_wayland::session::{Session, SessionOptions};
 use infynitae_wayland::{WaylandState, convert};
 
@@ -358,6 +358,65 @@ impl infynitae_wayland::output_power::OutputPowerHandler for DrmOutputPowerHandl
 /// Carries out a display configuration (`wlr-output-management`): the new modes on the
 /// hardware first, then Core's descriptors and positions. Everything or nothing: a mode the
 /// hardware refuses, or a configuration Core refuses, sets every changed screen back.
+/// A display tool turned screens off or on (`wlr-randr --output X --off` / `--on`). Off: the screen is blanked and
+/// leaves the layout as an unplugged one does (its camera kept for its return), by the same rescan, its connector
+/// left out until it is turned on. On: the connector is taken back and the rescan connects it like a replug; the
+/// tool's head is linked to the new output, placed where the tool asks.
+fn turn_screens_off_and_on(data: &mut LoopData, off: &[OutputId], on: &[HeadOn]) -> bool {
+    if off.is_empty() && on.is_empty() {
+        return true;
+    }
+    for id in off {
+        let Some(s) = data.screens.iter_mut().find(|s| s.id == *id) else {
+            return false;
+        };
+        let _ = s.compositor.clear();
+        // a screen powered down by wlopm counts as present in a rescan: not this one
+        s.power_off = false;
+        data.turned_off.insert(*id, s.connector);
+        println!("[infynitae] Screen {id:?} turned off by a display tool");
+    }
+    let mut back = Vec::new();
+    for h in on {
+        let Some(conn) = data.turned_off.remove(&h.output) else {
+            return false;
+        };
+        back.push((h, conn));
+    }
+    rescan_screens(data);
+    for (h, conn) in back {
+        let Some(new_id) = data
+            .screens
+            .iter()
+            .find(|s| s.connector == conn)
+            .map(|s| s.id)
+        else {
+            // the monitor is gone meanwhile: nothing to turn on
+            continue;
+        };
+        data.state
+            .output_management_reconnect_head(h.output, new_id, h.adaptive_sync);
+        let placed = data.state.core().output(new_id).map(|m| {
+            (
+                m.arrangement.0.round() as i32,
+                m.arrangement.1.round() as i32,
+            )
+        });
+        if placed != Some(h.position) {
+            match data
+                .state
+                .core_mut()
+                .output_arranged(&mut data.output_token, new_id, h.position)
+            {
+                Ok(fx) => data.state.apply(&fx),
+                Err(e) => eprintln!("[infynitae] Screen {new_id:?} could not be placed: {e:?}"),
+            }
+        }
+        println!("[infynitae] Screen {new_id:?} turned on by a display tool");
+    }
+    true
+}
+
 fn apply_output_configuration(data: &mut LoopData, changes: &[HeadChange]) -> bool {
     type Before = (
         usize,
@@ -519,6 +578,9 @@ struct LoopData {
     rescan_at: Option<std::time::Instant>,
     /// The laptop's lid is closed: its panel is left out while another screen is connected.
     lid_closed: bool,
+    /// Screens a display tool turned off (wlr-output-management `disable_head`), by the output id they had and
+    /// their connector: left out like a closed lid's panel until a tool turns them on again.
+    turned_off: HashMap<OutputId, connector::Handle>,
     /// `ConsoleOptions::virtual_screen`.
     virtual_screen_enabled: bool,
     /// The virtual screen standing in while no screen is connected.
@@ -760,6 +822,7 @@ fn rescan_screens(data: &mut LoopData) {
         i += 1;
         shown[i - 1]
     });
+    connected.retain(|(h, _)| !data.turned_off.values().any(|off| off == h));
     let handles: Vec<connector::Handle> = connected.iter().map(|(h, _)| *h).collect();
     let gone = screens_gone(
         data.screens
@@ -1529,6 +1592,7 @@ pub fn run_console_with(
         factory,
         rescan_at: None,
         lid_closed: false,
+        turned_off: HashMap::new(),
         virtual_screen_enabled: options.virtual_screen,
         virtual_screen: None,
     };
@@ -1752,7 +1816,8 @@ pub fn run_console_with(
         }
         watch_frame_waits(&mut data);
         for c in data.state.take_output_configurations() {
-            let ok = apply_output_configuration(&mut data, &c.changes);
+            let ok = turn_screens_off_and_on(&mut data, &c.off, &c.on)
+                && apply_output_configuration(&mut data, &c.changes);
             data.state.finish_output_configuration(c, ok);
         }
         apply_virtual_input(&mut data);
