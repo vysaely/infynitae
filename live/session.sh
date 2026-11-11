@@ -69,6 +69,12 @@ if [ "$START_LOCKED" = "1" ] || [ "$START_LOCKED" = "true" ] || [ "$1" = "--lock
             sleep 0.1
             i=$((i + 1))
         done
+        if [ "$LOCKED" != "true" ]; then
+            sleep 0.2
+            if grep -q "Screen locked" "$LOCK_LOG" 2>/dev/null; then
+                LOCKED=true
+            fi
+        fi
     fi
     if [ "$LOCKED" != "true" ]; then
         echo "[infynitae] START_LOCKED: the lock screen could not be engaged (${LOCK_BIN:-infynitae-lock not installed}); ending the session" >&2
