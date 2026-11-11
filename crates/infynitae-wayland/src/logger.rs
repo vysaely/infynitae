@@ -167,7 +167,11 @@ mod tests {
                 if let Some(gate) = self.gate.as_ref() {
                     gate.wait();
                 }
-            } else if let Some(drained) = self.drained_one.take() {
+            } else if buf.starts_with(b"queued 1")
+                && let Some(drained) = self.drained_one.take()
+            {
+                // the writer took "queued 1" off the queue to write it: a slot is free (a bare write after the
+                // first is not enough: writeln! writes the line and its newline in two calls)
                 let _ = drained.send(());
             }
             self.data.lock().unwrap().extend_from_slice(buf);
