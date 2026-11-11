@@ -1,6 +1,10 @@
 #!/bin/sh
 # tools/test-config-defaults: verify default settings values match config/config documentation.
 set -u
+cd "$(dirname "$0")/.."
+# a throwaway home: the scripts read ~/.config/infynitae/config, and the tester's own settings must not decide
+HOME=$(mktemp -d); export HOME
+trap 'rm -rf "$HOME"' EXIT
 fails=0
 check() {
     if [ "$2" = "$3" ]; then
