@@ -473,6 +473,7 @@ pub fn run_headless_with(
 
     println!("[infynitae] Headless compositor running.");
     let mut known_mapped = std::collections::HashSet::new();
+    let mut last_mapped_generation = u64::MAX;
     while !session.finished() {
         // An open scale-settlement deadline (INV-SCALE-3) is a wake-up of its own: the loop
         // sleeps until it even if no client and no frame is pending, and has nothing to wake
@@ -505,18 +506,25 @@ pub fn run_headless_with(
         apply_output_configurations(&mut state, &mut output_token);
         apply_virtual_input(&mut state, &mut input_port);
 
-        let current_mapped = state.core().stage().mapped_elements();
-        let new_mapped: Vec<_> = current_mapped
-            .iter()
-            .copied()
-            .filter(|id| !known_mapped.contains(id))
-            .collect();
+        let current_generation = state.core().stage().map_generation();
+        let new_mapped = if current_generation != last_mapped_generation {
+            last_mapped_generation = current_generation;
+            let current_mapped = state.core().stage().mapped_elements();
+            let new_mapped: Vec<_> = current_mapped
+                .iter()
+                .copied()
+                .filter(|id| !known_mapped.contains(id))
+                .collect();
 
-        known_mapped.clear();
-        known_mapped.extend(current_mapped);
+            known_mapped.clear();
+            known_mapped.extend(current_mapped);
+            new_mapped
+        } else {
+            Vec::new()
+        };
 
         if state.core().focus().is_initial_eligible() {
-            if let Some(&topmost) = state.core().stage().mapped_elements().last()
+            if let Some(topmost) = state.core().stage().top_mapped()
                 && let Ok(effects) = state
                     .core_mut()
                     .grant_initial_focus(&mut input_port, topmost)

@@ -487,6 +487,8 @@ struct LoopData {
     last_abs_pointer: Option<(f64, f64)>,
     /// Set of known mapped element IDs for detecting newly mapped windows.
     known_mapped: HashSet<infynitae_core::stage::ElementId>,
+    /// Last seen stage map generation for caching mapped window set.
+    last_mapped_generation: u64,
     /// Direct scanout for primary and overlay planes.
     direct_scanout: bool,
     /// The shader averaging windows drawn smaller than their buffer (`smooth`); `None` with
@@ -1510,6 +1512,7 @@ pub fn run_console_with(
         input_devices: Vec::new(),
         last_abs_pointer: None,
         known_mapped: HashSet::new(),
+        last_mapped_generation: u64::MAX,
         loop_busy_max: Duration::ZERO,
         direct_scanout: options.direct_scanout.unwrap_or(true),
         smooth_program,
@@ -1815,15 +1818,22 @@ pub fn run_console_with(
         }
 
         turn.mark("outputs, input, unlock");
-        let current_mapped = data.state.core().stage().mapped_elements();
-        let new_mapped: Vec<_> = current_mapped
-            .iter()
-            .copied()
-            .filter(|id| !data.known_mapped.contains(id))
-            .collect();
+        let current_generation = data.state.core().stage().map_generation();
+        let new_mapped = if current_generation != data.last_mapped_generation {
+            data.last_mapped_generation = current_generation;
+            let current_mapped = data.state.core().stage().mapped_elements();
+            let new_mapped: Vec<_> = current_mapped
+                .iter()
+                .copied()
+                .filter(|id| !data.known_mapped.contains(id))
+                .collect();
 
-        data.known_mapped.clear();
-        data.known_mapped.extend(current_mapped);
+            data.known_mapped.clear();
+            data.known_mapped.extend(current_mapped);
+            new_mapped
+        } else {
+            Vec::new()
+        };
         // which new windows the user opened, decided before any of them takes the focus
         let (focus_user_only, teleport_user_only) = data.state.open_policy_user_only();
         let priority = data.state.open_policy_priority();
@@ -1843,7 +1853,7 @@ pub fn run_console_with(
             .collect();
 
         if data.state.core().focus().is_initial_eligible() {
-            if let Some(&topmost) = data.state.core().stage().mapped_elements().last()
+            if let Some(topmost) = data.state.core().stage().top_mapped()
                 && let Ok(effects) = data
                     .state
                     .core_mut()
