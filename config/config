@@ -126,7 +126,8 @@ PLACEMENT_POLICY="cluster"
 KEEP_ON_TOP="Picture-in-Picture, Picture in picture"
     # Windows kept on top of the others from the moment they open, by title or app id, comma
     # separated: they open in the view's bottom right corner and keep their place on the screen
-    # when the view moves. Super+Shift+K does it for any window (and undoes it).
+    # when the view moves. Super+Shift+K does it for any window (and undoes it) and keeps that for the
+    # window's app here, so its windows open on top after a restart too.
     # default: Picture-in-Picture, Picture in picture   (Firefox's and Chromium's)
 
 SUPER_ENTER_ACTION="maximize"
@@ -688,7 +689,7 @@ CAPTURE_INDICATOR="true"
     # options: true  · false
 
 PRIVACY_APPS=""
-    # Hidden from captures, by app
+    # Hidden from captures, by app. Super+Shift+P on a window adds its app here (and takes it out again)
     # default: ""
     # options: ""  · e.g. "bitwarden,keepassxc" (comma or space separated)
 

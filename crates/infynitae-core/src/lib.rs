@@ -1423,6 +1423,7 @@ impl Core {
             | E::SpawnControlMenu
             | E::TogglePrivacy
             | E::ToggleIdleInhibit
+            | E::KeptOnTop { .. }
             | E::ToggleTearing
             | E::SaveReplay
             | E::ToggleRecording

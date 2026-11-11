@@ -794,6 +794,9 @@ impl Core {
                 if let Some(id) = self.focus.target() {
                     let on = !self.stage.is_above(id);
                     self.set_on_top(id, on);
+                    if self.stage.is_above(id) == on {
+                        out.push(Effect::KeptOnTop { element: id, on });
+                    }
                 }
                 return;
             }

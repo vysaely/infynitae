@@ -277,6 +277,9 @@ impl WaylandState {
                 Effect::ToggleIdleInhibit => {
                     self.toggle_idle_inhibit();
                 }
+                Effect::KeptOnTop { element, on } => {
+                    self.remember_for_app(element, "KEEP_ON_TOP", on);
+                }
                 Effect::ToggleTearing => {
                     self.toggle_tearing_focused();
                 }
