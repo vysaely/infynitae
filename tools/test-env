@@ -72,3 +72,59 @@ if [ "$res_dir" = "$blocker" ]; then
     exit 1
 fi
 echo "ok Finding 7: safe fallback directory created when predictable runtime path is blocked"
+
+# ----------------------------------------------------------------------
+# 3. Finding 11: Cross-user process matching prevents portal startup
+# ----------------------------------------------------------------------
+# Mock pgrep in a dedicated bin dir:
+# If -u <my_uid> is passed, return nothing (no portal running for my user).
+# If -u is omitted, simulate finding another user's portal process (PID 99999).
+MOCK_BIN="$TMP/mock_bin"
+mkdir -p "$MOCK_BIN"
+my_uid=$(id -u)
+cat > "$MOCK_BIN/pgrep" <<EOF
+#!/bin/sh
+has_u=false
+for arg in "\$@"; do
+    if [ "\$arg" = "-u" ] || [ "\${arg#-u}" != "\$arg" ]; then
+        has_u=true
+    fi
+done
+if [ "\$has_u" = "true" ]; then
+    exit 1
+else
+    echo "99999"
+    exit 0
+fi
+EOF
+chmod +x "$MOCK_BIN/pgrep"
+
+# Create a mock infynitae-portal in HOME/.local/bin that marks when it was started
+PORTAL_FLAG="$TMP/portal_started"
+rm -f "$PORTAL_FLAG"
+mkdir -p "$TMP/home3/.local/bin"
+cat > "$TMP/home3/.local/bin/infynitae-portal" <<EOF
+#!/bin/sh
+touch "$PORTAL_FLAG"
+exec sleep 100
+EOF
+chmod +x "$TMP/home3/.local/bin/infynitae-portal"
+
+(
+    export PATH="$MOCK_BIN:$PATH"
+    export HOME="$TMP/home3"
+    export XDG_RUNTIME_DIR="$TMP/run3"
+    mkdir -p "$HOME" "$XDG_RUNTIME_DIR"
+    set +eu
+    . "$ENV_SCRIPT" >/dev/null 2>&1
+    set -eu
+)
+
+# If pgrep filtered by -u, portal would be launched and PORTAL_FLAG created.
+# Without -u, pgrep matched the foreign process and skipped starting portal.
+sleep 0.2
+if [ ! -f "$PORTAL_FLAG" ]; then
+    echo "FAIL Finding 11: infynitae-portal was not started because pgrep matched foreign process"
+    exit 1
+fi
+echo "ok Finding 11: pgrep filters by user ID to prevent foreign process hijacking"

@@ -197,14 +197,14 @@ done
 _infy_portal_pid="${XDG_RUNTIME_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/infynitae}/infynitae-portal.pid"
 _infy_portal_up=false
 if [ -r "$_infy_portal_pid" ] && read -r _infy_p < "$_infy_portal_pid" 2>/dev/null \
-    && [ -n "$_infy_p" ] && [ -r "/proc/$_infy_p/comm" ] && read -r _infy_c < "/proc/$_infy_p/comm" \
+    && [ -n "$_infy_p" ] && [ -d "/proc/$_infy_p" ] && [ -O "/proc/$_infy_p" ] \
+    && [ -r "/proc/$_infy_p/comm" ] && read -r _infy_c < "/proc/$_infy_p/comm" \
     && [ "$_infy_c" = "infynitae-porta" ]; then
     _infy_portal_up=true
-elif pgrep -f '(^|/)infynitae-portal( |$)' > "$_infy_portal_pid.new" 2>/dev/null; then
-    head -1 "$_infy_portal_pid.new" > "$_infy_portal_pid" 2>/dev/null
+elif _infy_p=$(pgrep -u "$(id -u)" -f '(^|/)infynitae-portal( |$)' 2>/dev/null | head -1) && [ -n "$_infy_p" ]; then
+    echo "$_infy_p" > "$_infy_portal_pid" 2>/dev/null
     _infy_portal_up=true
 fi
-rm -f "$_infy_portal_pid.new"
 if [ -x "$PORTAL_BIN" ] && [ "$_infy_portal_up" = false ]; then
     "$PORTAL_BIN" >> "$PORTAL_LOG" 2>&1 &
     echo $! > "$_infy_portal_pid" 2>/dev/null
