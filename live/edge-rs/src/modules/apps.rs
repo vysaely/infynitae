@@ -1136,10 +1136,26 @@ pub fn scroll(world: &mut World, size: (f64, f64), _pos: (f64, f64), dy: f64) ->
     }
 }
 
+/// The hint for the apps card title: `"Recent first"` when the list is sorted by recent use,
+/// or `None` when searching, empty, or sorted purely alphabetically (no launched apps).
+pub fn hint(world: &World) -> Option<&'static str> {
+    if !world.search.trim().is_empty() || world.apps.filtered.is_empty() {
+        return None;
+    }
+    if world.apps.apps.iter().any(|a| a.last_launched > 0) {
+        Some("Recent first")
+    } else {
+        None
+    }
+}
+
 pub fn draw(cr: &Context, th: &Theme, world: &World, rect: Rect) {
     let (x, y, w, h) = rect;
     draw::card(cr, th, x, y, w, h);
     draw::title(cr, th, x + PAD_X, y + PAD_Y, "Apps");
+    if let Some(h_text) = hint(world) {
+        draw::title_hint(cr, th, x, y, w, "Apps", h_text);
+    }
 
     let count = world.apps.filtered.len();
     if count == 0 {
@@ -1551,5 +1567,52 @@ mod tests {
             assert_eq!(svg_loaded.height(), 44);
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn apps_hint_shows_recent_first_only_when_sorted_by_recent_use() {
+        let mut world = World::now();
+        world.apps.apps = sample_apps();
+        world.apps.update_filter("");
+
+        // When all last_launched are 0, sort is purely alphabetical -> hint is None
+        assert_eq!(hint(&world), None);
+
+        // When at least one app was launched -> hint is "Recent first"
+        world.apps.apps[0].last_launched = 100;
+        assert_eq!(hint(&world), Some("Recent first"));
+
+        // When user is searching -> ranking is by match relevance, not recent use -> hint is None
+        world.search = "foot".to_string();
+        world.apps.update_filter(&world.search);
+        assert_eq!(hint(&world), None);
+
+        // When search is empty again -> hint returns
+        world.search.clear();
+        world.apps.update_filter("");
+        assert_eq!(hint(&world), Some("Recent first"));
+
+        // When filtered is empty -> hint is None
+        world.apps.filtered.clear();
+        assert_eq!(hint(&world), None);
+    }
+
+    #[test]
+    fn apps_draw_drops_hint_when_card_too_narrow() {
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 380, 200).unwrap();
+        let cr = cairo::Context::new(&surf).unwrap();
+        let th = Theme::from_config(&crate::config::Config::from_text(""));
+        let mut world = World::now();
+        world.apps.apps = sample_apps();
+        world.apps.apps[0].last_launched = 100;
+        world.apps.update_filter("");
+
+        // Wide card (380.0) renders title and hint
+        draw(&cr, &th, &world, (0.0, 0.0, 380.0, 200.0));
+
+        // Narrow card (60.0) drops hint to prevent overlap with title
+        let surf_narrow = cairo::ImageSurface::create(cairo::Format::ARgb32, 60, 200).unwrap();
+        let cr_narrow = cairo::Context::new(&surf_narrow).unwrap();
+        draw(&cr_narrow, &th, &world, (0.0, 0.0, 60.0, 200.0));
     }
 }
