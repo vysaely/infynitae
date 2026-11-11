@@ -1396,9 +1396,11 @@ pub fn run_console_with(
     )?;
     // the edge says what captures the screen from this file (CAPTURE_INDICATOR="edge")
     if let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR") {
-        state
-            .capture_indicator()
-            .set_file(std::path::PathBuf::from(dir).join("infynitae").join("capturing"));
+        state.capture_indicator().set_file(
+            std::path::PathBuf::from(dir)
+                .join("infynitae")
+                .join("capturing"),
+        );
     }
     // the shortcut actions get this session's socket and X display too (INV-XWAYLAND-1)
     state.set_client_env(

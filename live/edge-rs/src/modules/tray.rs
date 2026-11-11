@@ -136,7 +136,11 @@ pub struct TrayData {
 /// writes it while any captures, `CAPTURE_INDICATOR="edge"`).
 fn read_capturing() -> String {
     std::env::var_os("XDG_RUNTIME_DIR")
-        .map(|d| std::path::PathBuf::from(d).join("infynitae").join("capturing"))
+        .map(|d| {
+            std::path::PathBuf::from(d)
+                .join("infynitae")
+                .join("capturing")
+        })
         .and_then(|p| std::fs::read_to_string(p).ok())
         .unwrap_or_default()
 }

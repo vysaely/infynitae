@@ -318,7 +318,11 @@ mod tests {
     fn the_settings_words_pick_the_place() {
         assert_eq!(CaptureMode::parse("edge"), CaptureMode::Edge);
         assert_eq!(CaptureMode::parse("dot"), CaptureMode::Dot);
-        assert_eq!(CaptureMode::parse("true"), CaptureMode::Dot, "true from before");
+        assert_eq!(
+            CaptureMode::parse("true"),
+            CaptureMode::Dot,
+            "true from before"
+        );
         assert_eq!(CaptureMode::parse("false"), CaptureMode::Off);
         assert_eq!(CaptureMode::parse(""), CaptureMode::Edge, "the default");
     }

@@ -373,8 +373,15 @@ fn shown_by_the_edge_a_capture_draws_nothing_and_names_its_program() {
     capture(&mut r, &s, (1920, 1080));
     let now = std::time::Instant::now();
     r.ls.state.capture_indicator().update(now);
-    assert!(solid_rects(&mut r, false).is_empty(), "no dot on the screen");
-    assert_eq!(r.ls.state.capture_indicator().written().len(), 1, "one program");
+    assert!(
+        solid_rects(&mut r, false).is_empty(),
+        "no dot on the screen"
+    );
+    assert_eq!(
+        r.ls.state.capture_indicator().written().len(),
+        1,
+        "one program"
+    );
     let text = std::fs::read_to_string(&file).expect("written for the edge");
     assert_eq!(text.lines().count(), 1);
     r.ls.state.capture_indicator().update(now + HOLD);
