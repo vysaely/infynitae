@@ -46,6 +46,9 @@ jobs:
       - run: sh tools/test-edge-panel-lines
       - run: sh tools/test-mako-config
       - run: sh tools/test-config-renames
+      - run: sh tools/test-config-check
+      - run: ./tools/test-readme-shortcuts
+      - run: ./tools/test-readme-shortcuts --self-test
       - run: sh tools/test-reload-match
       - run: sh tools/test-launch-fast
       - run: sh tools/test-lock-render

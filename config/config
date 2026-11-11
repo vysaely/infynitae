@@ -132,7 +132,7 @@ KEEP_ON_TOP="Picture-in-Picture, Picture in picture"
 SUPER_ENTER_ACTION="maximize"
     # Super+Enter
     # default: maximize (a config without this line: fit)
-    #   maximize    the window fills the view at 100%
+    #   maximize    the window grows into the nearest free space (the whole screen when alone in view)
     #    fit        zoom the camera to the window
 
 FULLSCREEN_PAN="true"
@@ -320,8 +320,8 @@ ICON_THEME="Adwaita"
 
 FOLDER_COLOR="accent"
     # Folders in the file manager: in the theme's colour (BORDER_ACTIVE), following it when it
-    # changes, or the icon theme's own (Papirus only; a theme of your own named
-    # Infynitae-<icon theme> is made in ~/.local/share/icons, every other icon is Papirus's)
+    # changes (requires ICON_THEME set to Papirus, Papirus-Dark or Papirus-Light; with Adwaita
+    # or other themes this setting has no effect), or the icon theme's own ("theme")
     # default: accent
     # options: accent · theme
 
@@ -434,7 +434,7 @@ AUTO_ROTATE="auto"
 OUTPUT_ORDER=""
     # Screens left to right
     # default: ""
-    #   ""    as found  · e.g. "DP-1,HDMI-A-1" (names: the "Screen …" lines in
+    #   ""    as found  · e.g. "DP-1,HDMI-A-1" (comma or space separated; names: the "Screen …" lines in
     #         ~/.local/state/infynitae/session.log)
 
 OUTPUT_LAYOUT="left-to-right"
@@ -688,12 +688,12 @@ CAPTURE_INDICATOR="true"
 PRIVACY_APPS=""
     # Hidden from captures, by app
     # default: ""
-    # options: ""  · e.g. "bitwarden,keepassxc"
+    # options: ""  · e.g. "bitwarden,keepassxc" (comma or space separated)
 
 PRIVACY_TITLES=""
     # Hidden from captures, by title (Super+Shift+P toggles a window)
     # default: ""
-    # options: ""  · e.g. "Password"
+    # options: ""  · e.g. "Password" (comma separated: a title can hold spaces)
 
 # Which apps may use the powers above the normal app's (docs/SECURITY.md). Each list holds
 # app ids (a sandboxed app, e.g. Flatpak: "com.obsproject.Studio") and program names or paths

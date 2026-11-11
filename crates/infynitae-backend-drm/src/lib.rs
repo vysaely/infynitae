@@ -1180,11 +1180,7 @@ pub fn run_console_with(
                 let key = k.trim();
                 let val = v.trim();
                 if key == "OUTPUT_ORDER" {
-                    output_order = val
-                        .split(',')
-                        .map(|s| s.trim().to_lowercase())
-                        .filter(|s| !s.is_empty())
-                        .collect();
+                    output_order = infynitae_wayland::parse_list(val);
                 } else if key == "OUTPUT_LAYOUT" && val.eq_ignore_ascii_case("right-to-left") {
                     output_layout_reverse = true;
                 } else if key == "IDLE_SLEEP_TIMEOUT_MIN" {
@@ -1267,6 +1263,9 @@ pub fn run_console_with(
     }
 
     if !output_order.is_empty() {
+        if output_layout_reverse {
+            eprintln!("[infynitae] OUTPUT_ORDER overrides OUTPUT_LAYOUT");
+        }
         connected_connectors.sort_by_key(|(_, _, name, debug_name)| {
             output_order
                 .iter()
