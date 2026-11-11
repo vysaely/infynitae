@@ -12,7 +12,8 @@
 //!
 //! Game mode (`GAME_MODE`, on by default): a fullscreen window the GPU shows directly (direct
 //! [`WaylandState::fullscreen_frame_shown`]) is a game. Its app is registered with Feral's
-//! gamemode, when installed (`launch.sh game-mode`), until the window is no longer fullscreen.
+//! gamemode, when installed (`launch.sh game-mode`), until the window has been off screen for
+//! [`GAME_MODE_HOLD`] continuously.
 
 use std::collections::{BTreeMap, HashMap};
 use std::time::{Duration, Instant};
@@ -31,6 +32,9 @@ pub const BACKGROUND_NICE: i32 = 10;
 
 /// A shared window counts as in sight until this long after its last captured frame.
 pub const CAPTURE_HOLD: Duration = Duration::from_secs(5);
+
+/// How long a game must be off screen before game mode ends.
+pub const GAME_MODE_HOLD: Duration = Duration::from_secs(5);
 
 /// The executable whose clients are X11 apps, all through one process.
 const SATELLITE: &str = "xwayland-satellite";
@@ -53,7 +57,9 @@ pub struct Background {
     /// The last captured frame of each window shared alone.
     captured: HashMap<ElementId, Instant>,
     /// The game: its window and app.
-    game: Option<(ElementId, u32)>,
+    pub(crate) game: Option<(ElementId, u32)>,
+    /// When the game was last seen off screen, while game mode is on.
+    pub(crate) game_off_since: Option<Instant>,
     /// The last scan of the apps out of sight (`background_update`).
     pub(crate) scanned_at: Option<Instant>,
 }
@@ -69,6 +75,7 @@ impl Default for Background {
             lowered: HashMap::new(),
             captured: HashMap::new(),
             game: None,
+            game_off_since: None,
         }
     }
 }
@@ -119,11 +126,16 @@ impl Background {
         plan
     }
 
-    /// How long until an app out of sight is due to be lowered, or a share's hold ends (the
-    /// backend wakes then); `None` when nothing waits.
+    /// How long until an app out of sight is due to be lowered, a share's hold ends, or game
+    /// mode ends (the backend wakes then); `None` when nothing waits.
     pub fn due(&self, now: Instant) -> Option<Duration> {
+        let game_hold = if self.game_mode {
+            self.game_off_since.map(|since| since + GAME_MODE_HOLD)
+        } else {
+            None
+        };
         if !self.enabled {
-            return None;
+            return game_hold.map(|t| t.saturating_duration_since(now));
         }
         let lowering = self
             .hidden_since
@@ -133,8 +145,27 @@ impl Background {
         let holds = self.captured.values().map(|t| *t + CAPTURE_HOLD);
         lowering
             .chain(holds)
+            .chain(game_hold)
             .min()
             .map(|t| t.saturating_duration_since(now))
+    }
+
+    /// Tracks whether the game is still exclusive on a screen; returns the process id if game
+    /// mode just ended (off screen for [`GAME_MODE_HOLD`] continuously). Pure but for its timer.
+    pub fn update_game(&mut self, now: Instant, exclusive: bool) -> Option<u32> {
+        let (_window, pid) = self.game?;
+        if exclusive && self.game_mode {
+            self.game_off_since = None;
+            return None;
+        }
+        let since = *self.game_off_since.get_or_insert(now);
+        if now.duration_since(since) >= GAME_MODE_HOLD || !self.game_mode {
+            self.game = None;
+            self.game_off_since = None;
+            Some(pid)
+        } else {
+            None
+        }
     }
 }
 
@@ -148,7 +179,7 @@ impl WaylandState {
     /// a game that was not scanned out and asked for nothing never got game mode, and needs the
     /// CPU most; a fullscreen video gets it too, which costs little).
     pub fn fullscreen_frame_shown(&mut self, output: OutputId) {
-        if !self.background.game_mode || self.background.game.is_some() {
+        if !self.background.game_mode {
             return;
         }
         // fitting alone isn't a game: a maximized editor is not; a fitted window that tears is
@@ -163,8 +194,17 @@ impl WaylandState {
         let Some(pid) = self.client_pid(window) else {
             return;
         };
+        if let Some((cur_win, cur_pid)) = self.background.game {
+            if cur_win == window {
+                self.background.game_off_since = None;
+                return;
+            }
+            println!("[infynitae] Game mode off for process {cur_pid}");
+            self.gamemode(false, cur_pid);
+        }
         println!("[infynitae] Game mode on for process {pid}");
         self.background.game = Some((window, pid));
+        self.background.game_off_since = None;
         self.gamemode(true, pid);
     }
 
@@ -188,19 +228,19 @@ impl WaylandState {
     }
 
     /// Lowers and restores apps by what the screens show now, and ends game mode when the game
-    /// is no longer fullscreen. Cheap: the backends call it on every turn of their loop.
+    /// has been off screen for [`GAME_MODE_HOLD`] continuously. Cheap: the backends call it on
+    /// every turn of their loop.
     pub fn background_update(&mut self, now: Instant) {
-        if let Some((window, pid)) = self.background.game {
+        if let Some((window, _pid)) = self.background.game {
             let still = self.background.game_mode
                 && self
                     .core
                     .outputs()
                     .iter()
                     .any(|o| self.exclusive_window(o.id) == Some(window));
-            if !still {
-                println!("[infynitae] Game mode off for process {pid}");
-                self.background.game = None;
-                self.gamemode(false, pid);
+            if let Some(ended_pid) = self.background.update_game(now, still) {
+                println!("[infynitae] Game mode off for process {ended_pid}");
+                self.gamemode(false, ended_pid);
             }
         }
         let bg = &self.background;
@@ -422,6 +462,72 @@ mod tests {
             }
         );
         assert_eq!(bg.due(t0), None);
+    }
+
+    fn test_element() -> ElementId {
+        let (mut core, ..) =
+            infynitae_core::Core::new(infynitae_core::navigation::PersistedCameras::default());
+        core.toplevel_created()
+    }
+
+    #[test]
+    fn game_mode_hysteresis_stays_on_briefly_and_ends_after_hold() {
+        let mut bg = Background::default();
+        let elem = test_element();
+        let pid = 42;
+        bg.game = Some((elem, pid));
+        let t0 = Instant::now();
+
+        // on, off for 3 s then back: stays on
+        assert_eq!(bg.update_game(t0, false), None);
+        assert_eq!(bg.game, Some((elem, pid)));
+        assert_eq!(bg.update_game(t0 + Duration::from_secs(3), true), None);
+        assert_eq!(bg.game, Some((elem, pid)));
+        assert_eq!(bg.game_off_since, None);
+
+        // off for 6 s: off once
+        let t1 = t0 + Duration::from_secs(4);
+        assert_eq!(bg.update_game(t1, false), None);
+        assert_eq!(bg.game, Some((elem, pid)));
+        assert_eq!(
+            bg.update_game(t1 + Duration::from_secs(6), false),
+            Some(pid)
+        );
+        assert_eq!(bg.game, None);
+        assert_eq!(bg.game_off_since, None);
+        // off once: subsequent updates return None
+        assert_eq!(bg.update_game(t1 + Duration::from_secs(7), false), None);
+    }
+
+    #[test]
+    fn game_mode_hold_wakes_the_loop_then_clears() {
+        let mut bg = Background::default();
+        let elem = test_element();
+        let pid = 42;
+        bg.game = Some((elem, pid));
+        let t0 = Instant::now();
+        assert_eq!(bg.due(t0), None);
+
+        // Off screen: due in 5 s
+        bg.update_game(t0, false);
+        assert_eq!(bg.due(t0), Some(GAME_MODE_HOLD));
+        assert_eq!(
+            bg.due(t0 + Duration::from_secs(2)),
+            Some(Duration::from_secs(3))
+        );
+
+        // Back on screen: due cleared
+        bg.update_game(t0 + Duration::from_secs(2), true);
+        assert_eq!(bg.due(t0 + Duration::from_secs(2)), None);
+
+        // Off for 6 s: off once, due cleared
+        let t1 = t0 + Duration::from_secs(3);
+        bg.update_game(t1, false);
+        assert_eq!(
+            bg.update_game(t1 + Duration::from_secs(6), false),
+            Some(pid)
+        );
+        assert_eq!(bg.due(t1 + Duration::from_secs(6)), None);
     }
 
     /// An app the user started with `nice` (already at or below the background level) is left

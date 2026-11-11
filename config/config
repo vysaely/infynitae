@@ -256,7 +256,7 @@ FRAME_GUARD="33"
 
 GAME_MODE="true"
     # While a game is fullscreen (shown directly), gamemode runs the CPU at full speed
-    # (when installed)
+    # (when installed); ends once it has been off screen for 5 s continuously
     # default: true
     # options: true  · false
 

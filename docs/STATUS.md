@@ -111,8 +111,8 @@ These pass the test suite but have not run on a real screen or device yet:
   driver that refuses gets the usual flip. In the test suite; this GPU (amdgpu) reports support,
   not yet seen in a game.
 - **Game mode** (`GAME_MODE`, `--no-gamemode`): a fullscreen window the GPU shows directly is
-  a game, registered with Feral's gamemode (full CPU speed) until it leaves fullscreen. A
-  fullscreen video shown directly counts too.
+  a game, registered with Feral's gamemode (full CPU speed) until it has been off screen for 5 s
+  continuously. A fullscreen video shown directly counts too.
 - **A full GPU slows the windows out of use** (`GPU_RELIEF`): while a game fills a screen, a
   screen missing one refresh in twenty for a second completes the frames of windows that are
   neither focused nor filling it at about 60 FPS for 30 s, longer if it had to start again at
