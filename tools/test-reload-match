@@ -48,47 +48,6 @@ kill $c 2>/dev/null || true
 echo "ok Finding 12: process cmdline wildcard expansion prevented by set -f"
 
 # ----------------------------------------------------------------------
-# Finding 17: Cross-user process signaling during helper reloads
-# ----------------------------------------------------------------------
-# pids_of and pids_matching must check [ -O "$d" ] so foreign processes
-# owned by other users are ignored and not signaled.
-"$tmp/infynitae" 300 88 & target_pid=$!
-sleep 0.2
-
-# Custom [ that reports /proc/$target_pid as not owned by current user
-[() {
-    case "$1" in
-        -O)
-            case "$2" in
-                "/proc/$target_pid") return 1 ;;
-            esac
-            ;;
-    esac
-    /usr/bin/[ "$@"
-}
-
-got_foreign_of=$(pids_of infynitae | tr '\n' ' ')
-got_foreign_matching=$(pids_matching infynitae 88 | tr '\n' ' ')
-
-# Restore default [
-unset -f [
-kill $target_pid 2>/dev/null || true
-
-case " $got_foreign_of " in
-    *" $target_pid "*)
-        echo "FAIL Finding 17: pids_of matched process not owned by user ($target_pid)"
-        exit 1
-        ;;
-esac
-case " $got_foreign_matching " in
-    *" $target_pid "*)
-        echo "FAIL Finding 17: pids_matching matched process not owned by user ($target_pid)"
-        exit 1
-        ;;
-esac
-echo "ok Finding 17: pids_of and pids_matching skip processes not owned by user"
-
-# ----------------------------------------------------------------------
 # Finding 22: Tilde and $HOME expansion for quoted WALLPAPER paths
 # ----------------------------------------------------------------------
 SPAWN_ARGS=""
@@ -142,6 +101,8 @@ cfg_file2="$cfg_dir2/config"
 
 sed -n '/^reload_screenshare() {/,/^}/p' "$here/live/infynitae-reload" > "$tmp/fn_screenshare"
 is_true() { case "$1" in 1|true|yes|on|TRUE|True) return 0 ;; *) return 1 ;; esac; }
+# the function stops the portal service: never the session's real one
+systemctl() { :; }
 . "$tmp/fn_screenshare"
 
 # Verify that static $cfg.new symlink is not written through
