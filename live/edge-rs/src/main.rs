@@ -640,12 +640,19 @@ impl Shell {
 
     pub fn ask_load(&mut self) -> bool {
         self.reload_if_changed();
+        let cancel_path = wayland::runtime_path(modules::ask::ASK_CANCEL_FILE);
+        let mut changed = modules::ask::handle_cancel_from_path(&mut self.world, &cancel_path);
         let req_path = wayland::runtime_path(modules::ask::ASK_FILE);
-        let changed = modules::ask::load_from_path(&mut self.world, &req_path);
+        changed |= modules::ask::load_from_path(&mut self.world, &req_path);
+        changed |= modules::ask::check_asker_gone(&mut self.world);
         if self.world.ask.on {
             self.close();
         }
         changed
+    }
+
+    pub fn check_asker_gone(&mut self) -> bool {
+        modules::ask::check_asker_gone(&mut self.world)
     }
 
     /// Does the open panel (or its card) show windows: the windows list, or apps and favorites

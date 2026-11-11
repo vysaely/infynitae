@@ -18,6 +18,7 @@ use std::time::Duration;
 pub const ASK_FILE: &str = "infynitae-edge-rs.ask";
 pub const FEATURES_FILE: &str = "infynitae-edge-rs.features";
 pub const ASK_PIPE_PREFIX: &str = "infynitae-edge-rs.ask.";
+pub const ASK_CANCEL_FILE: &str = "infynitae-edge-rs.ask-cancel";
 
 pub const ASK_MAX: usize = 12;
 pub const MAX_TITLE_BYTES: usize = 159;
@@ -145,6 +146,18 @@ pub fn parse_reply_payload(got: &str) -> Option<Option<String>> {
     }
 }
 
+/// Notifies the edge that this asker is cancelling, writes `ASK_CANCEL_FILE`, and signals the edge.
+pub fn tell_edge_cancel(edge_pid: i32, my_pid: u32, fifo_str: &str) {
+    let cancel_path = crate::wayland::runtime_path(&format!("{ASK_CANCEL_FILE}.{my_pid}"));
+    let target = crate::wayland::runtime_path(ASK_CANCEL_FILE);
+    if std::fs::write(&cancel_path, format!("{fifo_str}\n{my_pid}\n")).is_ok() {
+        let _ = std::fs::rename(&cancel_path, &target);
+    }
+    unsafe {
+        libc::kill(edge_pid, libc::SIGRTMIN() + 3);
+    }
+}
+
 /// Runs `infynitae-edge-rs ask ...`: sends the question to the running edge via a FIFO in
 /// `$XDG_RUNTIME_DIR` and `SIGRTMIN+3`, prints the answer, and returns the exit code
 /// (`0` answered, `1` cancelled, `2` bad question, `3` no edge running).
@@ -189,6 +202,39 @@ pub fn run_client<S: AsRef<str>>(args: &[S]) -> u8 {
         return 3;
     }
 
+    // Self-pipe for signals: SIGTERM or SIGINT wakes poll to cancel and notify edge
+    let mut sig_pipe = [-1i32; 2];
+    let pipe_created =
+        unsafe { libc::pipe2(sig_pipe.as_mut_ptr(), libc::O_NONBLOCK | libc::O_CLOEXEC) == 0 };
+    let (sig_rd, sig_wr) = if pipe_created {
+        (sig_pipe[0], sig_pipe[1])
+    } else {
+        (-1, -1)
+    };
+
+    let term_hook = if sig_wr >= 0 {
+        let wr = sig_wr;
+        unsafe {
+            signal_hook_registry::register(libc::SIGTERM, move || {
+                let _ = libc::write(wr, [1u8].as_ptr().cast(), 1);
+            })
+            .ok()
+        }
+    } else {
+        None
+    };
+    let int_hook = if sig_wr >= 0 {
+        let wr = sig_wr;
+        unsafe {
+            signal_hook_registry::register(libc::SIGINT, move || {
+                let _ = libc::write(wr, [1u8].as_ptr().cast(), 1);
+            })
+            .ok()
+        }
+    } else {
+        None
+    };
+
     let req_path = crate::wayland::runtime_path(ASK_FILE);
     for _ in 0..40 {
         if !req_path.exists() {
@@ -201,6 +247,18 @@ pub fn run_client<S: AsRef<str>>(args: &[S]) -> u8 {
     let fifo_str = fifo_path.to_string_lossy();
     let content = format_request(&fifo_str, &cli, &items);
     if std::fs::write(&tmp_path, content).is_err() {
+        if let Some(h) = term_hook {
+            signal_hook_registry::unregister(h);
+        }
+        if let Some(h) = int_hook {
+            signal_hook_registry::unregister(h);
+        }
+        if sig_rd >= 0 {
+            unsafe { libc::close(sig_rd) };
+        }
+        if sig_wr >= 0 {
+            unsafe { libc::close(sig_wr) };
+        }
         unsafe {
             libc::close(fd);
         }
@@ -211,6 +269,18 @@ pub fn run_client<S: AsRef<str>>(args: &[S]) -> u8 {
         || unsafe { libc::kill(pid, libc::SIGRTMIN() + 3) } != 0
     {
         let _ = std::fs::remove_file(&tmp_path);
+        if let Some(h) = term_hook {
+            signal_hook_registry::unregister(h);
+        }
+        if let Some(h) = int_hook {
+            signal_hook_registry::unregister(h);
+        }
+        if sig_rd >= 0 {
+            unsafe { libc::close(sig_rd) };
+        }
+        if sig_wr >= 0 {
+            unsafe { libc::close(sig_wr) };
+        }
         unsafe {
             libc::close(fd);
         }
@@ -222,17 +292,30 @@ pub fn run_client<S: AsRef<str>>(args: &[S]) -> u8 {
     let mut len = 0usize;
     let mut rc = 3u8;
     loop {
-        let mut pfd = libc::pollfd {
-            fd,
-            events: libc::POLLIN,
-            revents: 0,
-        };
-        let r = unsafe { libc::poll(&mut pfd, 1, 1000) };
+        let mut pfds = [
+            libc::pollfd {
+                fd,
+                events: libc::POLLIN,
+                revents: 0,
+            },
+            libc::pollfd {
+                fd: sig_rd,
+                events: if sig_rd >= 0 { libc::POLLIN } else { 0 },
+                revents: 0,
+            },
+        ];
+        let nfds = if sig_rd >= 0 { 2 } else { 1 };
+        let r = unsafe { libc::poll(pfds.as_mut_ptr(), nfds, 1000) };
         if r < 0 {
             let err = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
             if err == libc::EINTR {
                 continue;
             }
+            break;
+        }
+        if sig_rd >= 0 && (pfds[1].revents & libc::POLLIN) != 0 {
+            tell_edge_cancel(pid, my_pid, &fifo_str);
+            rc = 1;
             break;
         }
         if r == 0 {
@@ -271,6 +354,18 @@ pub fn run_client<S: AsRef<str>>(args: &[S]) -> u8 {
         break;
     }
 
+    if let Some(h) = term_hook {
+        signal_hook_registry::unregister(h);
+    }
+    if let Some(h) = int_hook {
+        signal_hook_registry::unregister(h);
+    }
+    if sig_rd >= 0 {
+        unsafe { libc::close(sig_rd) };
+    }
+    if sig_wr >= 0 {
+        unsafe { libc::close(sig_wr) };
+    }
     unsafe {
         libc::close(fd);
     }
@@ -287,6 +382,68 @@ pub struct AskRequest {
     pub title: String,
     pub start: String,
     pub items: Vec<String>,
+    pub pid: Option<i32>,
+    pub conn_fd: Option<i32>,
+}
+
+impl AskRequest {
+    pub fn close_fd(&mut self) {
+        if let Some(fd) = self.conn_fd.take() {
+            if fd >= 0 {
+                unsafe { libc::close(fd) };
+            }
+        }
+    }
+}
+
+/// Extracts the asker's PID from the reply FIFO path (which ends in `.<pid>`), or `None`.
+pub fn parse_pid_from_reply(reply: &str) -> Option<i32> {
+    reply.rsplit('.').next()?.parse::<i32>().ok()
+}
+
+/// Checks whether the asker is gone: first by polling its connection file descriptor for
+/// hangup/error/EOF (e.g. closed reader on FIFO or socket pair), falling back to checking
+/// whether the process is still alive with `kill(pid, 0)` if no connection file descriptor is held.
+pub fn is_asker_gone(conn_fd: Option<i32>, pid: Option<i32>) -> bool {
+    if let Some(fd) = conn_fd {
+        if fd >= 0 {
+            let mut pfd = libc::pollfd {
+                fd,
+                events: libc::POLLIN | libc::POLLERR | libc::POLLHUP,
+                revents: 0,
+            };
+            let r = unsafe { libc::poll(&mut pfd, 1, 0) };
+            if r > 0 {
+                if (pfd.revents & (libc::POLLERR | libc::POLLHUP)) != 0 {
+                    return true;
+                }
+                if (pfd.revents & libc::POLLIN) != 0 {
+                    let mut b = [0u8; 1];
+                    let k = unsafe {
+                        libc::recv(
+                            fd,
+                            b.as_mut_ptr().cast(),
+                            1,
+                            libc::MSG_PEEK | libc::MSG_DONTWAIT,
+                        )
+                    };
+                    if k == 0 {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+    }
+    if let Some(p) = pid {
+        if p > 0 && unsafe { libc::kill(p, 0) } != 0 {
+            let err = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+            if err == libc::ESRCH {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Parses the contents of an `.ask` request file.
@@ -318,6 +475,8 @@ pub fn parse_request(raw: &str) -> AskRequest {
         }
     }
 
+    let pid = parse_pid_from_reply(&reply);
+
     AskRequest {
         reply,
         text,
@@ -325,10 +484,12 @@ pub fn parse_request(raw: &str) -> AskRequest {
         title,
         start,
         items,
+        pid,
+        conn_fd: None,
     }
 }
 
-/// Verifies that `reply` is a FIFO owned by the current user under `expected_prefix` without `/..`
+/// Verifies that `reply` is a FIFO or socket owned by the current user under `expected_prefix` without `/..`
 /// (matching the checks in `ask_load` in `live/edge/infynitae-edge.c`).
 pub fn valid_reply_fifo_with_prefix(reply: &str, expected_prefix: &str, expected_uid: u32) -> bool {
     if expected_prefix.is_empty() || !reply.starts_with(expected_prefix) || reply.contains("/..") {
@@ -337,7 +498,7 @@ pub fn valid_reply_fifo_with_prefix(reply: &str, expected_prefix: &str, expected
     let Ok(meta) = std::fs::symlink_metadata(reply) else {
         return false;
     };
-    meta.file_type().is_fifo() && meta.uid() == expected_uid
+    (meta.file_type().is_fifo() || meta.file_type().is_socket()) && meta.uid() == expected_uid
 }
 
 /// Active question state inside the edge.
@@ -351,9 +512,72 @@ pub struct AskState {
     pub sel: usize,
     pub buf: String,
     pub reply: String,
+    pub conn_fd: Option<i32>,
+    pub pid: Option<i32>,
+    pub queue: Vec<AskRequest>,
 }
 
 impl AskState {
+    pub fn clear_active(&mut self) {
+        if let Some(fd) = self.conn_fd.take() {
+            if fd >= 0 {
+                unsafe { libc::close(fd) };
+            }
+        }
+        self.reply.clear();
+        self.title.clear();
+        self.items.clear();
+        self.buf.clear();
+        self.sel = 0;
+        self.pid = None;
+    }
+
+    pub fn activate_request(&mut self, mut req: AskRequest, fd: Option<i32>) {
+        self.clear_active();
+        self.reply = req.reply;
+        self.text = req.text;
+        self.secret = req.secret;
+        self.title = req.title;
+        self.buf = req.start;
+        self.items = req.items;
+        self.sel = 0;
+        self.pid = req.pid;
+        self.conn_fd = fd.or(req.conn_fd.take());
+        self.on = true;
+    }
+
+    pub fn advance_queue(&mut self) -> bool {
+        self.clear_active();
+        while !self.queue.is_empty() {
+            let mut next = self.queue.remove(0);
+            if is_asker_gone(next.conn_fd, next.pid) {
+                next.close_fd();
+                continue;
+            }
+            let fd = next.conn_fd.take();
+            self.activate_request(next, fd);
+            return true;
+        }
+        self.on = false;
+        false
+    }
+
+    pub fn push_request(&mut self, mut req: AskRequest, fd: Option<i32>) -> bool {
+        let conn = fd.or(req.conn_fd.take());
+        req.conn_fd = conn;
+        if is_asker_gone(req.conn_fd, req.pid) {
+            req.close_fd();
+            return false;
+        }
+        if !self.on {
+            let fd = req.conn_fd.take();
+            self.activate_request(req, fd);
+            true
+        } else {
+            self.queue.push(req);
+            true
+        }
+    }
     /// Parses an `INFYNITAE_EDGE_RENDER_ASK` specification (`"Title|choice1|choice2"`,
     /// `"text:Title"`, or `"secret:Title"`), with optional initial text from
     /// `INFYNITAE_EDGE_RENDER_SEARCH` and selected index from `INFYNITAE_EDGE_RENDER_SELECT`.
@@ -400,6 +624,9 @@ impl AskState {
             sel,
             buf,
             reply: String::new(),
+            conn_fd: None,
+            pid: None,
+            queue: Vec::new(),
         }
     }
 
@@ -461,10 +688,26 @@ pub fn apply(ask: &mut AskState, key: &str, out: &str) -> bool {
     true
 }
 
-/// Sends `ans` (`None` when cancelled) through `world.ask.reply` without blocking, records the
-/// outcome in `world.actions`, and closes the ask prompt (matching `ask_answer` in C).
+/// Sends `ans` (`None` when cancelled) through `world.ask.reply` or `world.ask.conn_fd`, records the
+/// outcome in `world.actions`, and advances to the next queued card if any.
 pub fn answer(world: &mut World, ans: Option<&str>) {
-    if !world.ask.reply.is_empty() {
+    let mut sent = false;
+    if let Some(fd) = world.ask.conn_fd.take() {
+        if fd >= 0 {
+            let buf = match ans {
+                Some(a) => format!("1\n{a}\n"),
+                None => "0\n".to_string(),
+            };
+            let bytes = buf.as_bytes();
+            let n = bytes.len().min(319);
+            unsafe {
+                let _ = libc::write(fd, bytes.as_ptr().cast(), n);
+                libc::close(fd);
+            }
+            sent = true;
+        }
+    }
+    if !sent && !world.ask.reply.is_empty() {
         if let Ok(c_path) = CString::new(world.ask.reply.as_bytes()) {
             let fd = unsafe {
                 libc::open(
@@ -490,9 +733,77 @@ pub fn answer(world: &mut World, ans: Option<&str>) {
         Some(a) => world.actions.push(format!("ask:answer:{a}")),
         None => world.actions.push("ask:cancel".to_string()),
     }
-    world.ask.on = false;
-    world.ask.reply.clear();
-    world.ask.buf.clear();
+    world.ask.advance_queue();
+}
+
+/// Closes the card if its asker is gone, popping the next queued card if available.
+/// Also prunes dead requests from the queue. Returns true if state changed.
+pub fn check_asker_gone(world: &mut World) -> bool {
+    let mut changed = false;
+    world.ask.queue.retain_mut(|req| {
+        if is_asker_gone(req.conn_fd, req.pid) {
+            req.close_fd();
+            changed = true;
+            false
+        } else {
+            true
+        }
+    });
+
+    if world.ask.on && is_asker_gone(world.ask.conn_fd, world.ask.pid) {
+        if let Some(fd) = world.ask.conn_fd.take() {
+            if fd >= 0 {
+                unsafe { libc::close(fd) };
+            }
+        }
+        world.actions.push("ask:cancel".to_string());
+        world.ask.advance_queue();
+        return true;
+    }
+    changed
+}
+
+/// Cancels the ask request matching `fifo` or `pid` (either active or in queue).
+pub fn cancel_request(world: &mut World, fifo: &str, pid: Option<i32>) -> bool {
+    let mut changed = false;
+    world.ask.queue.retain_mut(|req| {
+        let matches = (!fifo.is_empty() && req.reply == fifo) || (pid.is_some() && req.pid == pid);
+        if matches {
+            req.close_fd();
+            changed = true;
+            false
+        } else {
+            true
+        }
+    });
+
+    if world.ask.on {
+        let matches = (!fifo.is_empty() && world.ask.reply == fifo)
+            || (pid.is_some() && world.ask.pid == pid);
+        if matches {
+            if let Some(fd) = world.ask.conn_fd.take() {
+                if fd >= 0 {
+                    unsafe { libc::close(fd) };
+                }
+            }
+            world.actions.push("ask:cancel".to_string());
+            world.ask.advance_queue();
+            return true;
+        }
+    }
+    changed
+}
+
+/// Reads a cancel request from `cancel_path` and removes the matching card.
+pub fn handle_cancel_from_path(world: &mut World, cancel_path: &Path) -> bool {
+    let Ok(raw) = std::fs::read_to_string(cancel_path) else {
+        return false;
+    };
+    let _ = std::fs::remove_file(cancel_path);
+    let mut lines = raw.lines();
+    let fifo = lines.next().unwrap_or("").trim();
+    let pid = lines.next().and_then(|s| s.trim().parse::<i32>().ok());
+    cancel_request(world, fifo, pid)
 }
 
 /// Loads a waiting `.ask` request file into `world.ask`, validating its reply FIFO with
@@ -507,27 +818,33 @@ pub fn load_from_path_with_prefix(
         return false;
     };
     let _ = std::fs::remove_file(req_path);
-    let was_on = world.ask.on;
-    if world.ask.on {
-        answer(world, None);
-    }
-    let req = parse_request(&raw);
+    let mut req = parse_request(&raw);
     if !valid_reply_fifo_with_prefix(&req.reply, expected_prefix, expected_uid) {
-        return was_on;
+        return false;
     }
-    world.ask.reply = req.reply;
-    world.ask.text = req.text;
-    world.ask.secret = req.secret;
-    world.ask.title = req.title;
-    world.ask.buf = req.start;
-    world.ask.items = req.items;
-    world.ask.sel = 0;
-    if !world.ask.text && world.ask.items.is_empty() {
-        answer(world, None);
-        return was_on;
+    req.pid = parse_pid_from_reply(&req.reply);
+    let fd = if let Ok(c_path) = CString::new(req.reply.as_bytes()) {
+        let raw_fd = unsafe {
+            libc::open(
+                c_path.as_ptr(),
+                libc::O_WRONLY | libc::O_NONBLOCK | libc::O_CLOEXEC,
+            )
+        };
+        if raw_fd >= 0 {
+            Some(raw_fd)
+        } else {
+            return false;
+        }
+    } else {
+        return false;
+    };
+    if !req.text && req.items.is_empty() {
+        if let Some(f) = fd {
+            unsafe { libc::close(f) };
+        }
+        return false;
     }
-    world.ask.on = true;
-    true
+    world.ask.push_request(req, fd)
 }
 
 /// Loads `$XDG_RUNTIME_DIR/infynitae-edge-rs.ask` into `world.ask`.
@@ -951,5 +1268,214 @@ mod tests {
         assert!(click(&mut world, w, h, 20.0, 20.0, 1));
         assert!(!world.ask.on);
         assert_eq!(world.actions.last().map(String::as_str), Some("ask:cancel"));
+    }
+
+    fn create_socket_pair() -> (i32, i32) {
+        let mut fds = [0i32; 2];
+        assert_eq!(
+            unsafe {
+                libc::socketpair(
+                    libc::AF_UNIX,
+                    libc::SOCK_STREAM | libc::SOCK_NONBLOCK | libc::SOCK_CLOEXEC,
+                    0,
+                    fds.as_mut_ptr(),
+                )
+            },
+            0
+        );
+        (fds[0], fds[1])
+    }
+
+    #[test]
+    fn closing_asker_socket_end_removes_card() {
+        let (asker, edge) = create_socket_pair();
+        let mut world = World::now();
+        let req = AskRequest {
+            title: "Question 1".to_string(),
+            items: vec!["Yes".to_string(), "No".to_string()],
+            ..Default::default()
+        };
+        assert!(world.ask.push_request(req, Some(edge)));
+        assert!(world.ask.on);
+        assert_eq!(world.ask.title, "Question 1");
+
+        // Before closing asker end, check_asker_gone reports false
+        assert!(!check_asker_gone(&mut world));
+        assert!(world.ask.on);
+
+        // Close asker end -> check_asker_gone reports true and removes card
+        unsafe { libc::close(asker) };
+        assert!(check_asker_gone(&mut world));
+        assert!(!world.ask.on);
+    }
+
+    #[test]
+    fn asker_gone_removes_card_and_shows_next_queued_card() {
+        let (asker1, edge1) = create_socket_pair();
+        let (asker2, edge2) = create_socket_pair();
+        let mut world = World::now();
+
+        let req1 = AskRequest {
+            title: "Question 1".to_string(),
+            items: vec!["Choice 1A".to_string(), "Choice 1B".to_string()],
+            ..Default::default()
+        };
+        let req2 = AskRequest {
+            title: "Question 2".to_string(),
+            items: vec!["Choice 2A".to_string(), "Choice 2B".to_string()],
+            ..Default::default()
+        };
+
+        assert!(world.ask.push_request(req1, Some(edge1)));
+        assert!(world.ask.on);
+        assert_eq!(world.ask.title, "Question 1");
+        assert_eq!(world.ask.queue.len(), 0);
+
+        // Second card queues behind the first
+        assert!(world.ask.push_request(req2, Some(edge2)));
+        assert!(world.ask.on);
+        assert_eq!(world.ask.title, "Question 1");
+        assert_eq!(world.ask.queue.len(), 1);
+        assert_eq!(world.ask.queue[0].title, "Question 2");
+
+        // Asker 1 closes its end (e.g. killed by SIGTERM or SIGKILL)
+        unsafe { libc::close(asker1) };
+        assert!(check_asker_gone(&mut world));
+
+        // Card 1 removed, Card 2 now shows!
+        assert!(world.ask.on);
+        assert_eq!(world.ask.title, "Question 2");
+        assert_eq!(world.ask.queue.len(), 0);
+
+        // Asker 2 closes its end
+        unsafe { libc::close(asker2) };
+        assert!(check_asker_gone(&mut world));
+
+        // Card 2 removed, no cards left
+        assert!(!world.ask.on);
+    }
+
+    #[test]
+    fn queued_ask_files_and_fifo_removal_advances_queue() {
+        let dir = std::env::temp_dir().join(format!(
+            "infynitae-edge-rs-ask-qtest-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let prefix = dir.join(ASK_PIPE_PREFIX).to_string_lossy().into_owned();
+        let uid = unsafe { libc::getuid() };
+
+        let fifo1_path = dir.join(format!("{ASK_PIPE_PREFIX}1001"));
+        let fifo1_c = CString::new(fifo1_path.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(fifo1_c.as_ptr(), 0o600) }, 0);
+        let rfd1 = unsafe {
+            libc::open(
+                fifo1_c.as_ptr(),
+                libc::O_RDONLY | libc::O_NONBLOCK | libc::O_CLOEXEC,
+            )
+        };
+        assert!(rfd1 >= 0);
+
+        let fifo2_path = dir.join(format!("{ASK_PIPE_PREFIX}1002"));
+        let fifo2_c = CString::new(fifo2_path.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(fifo2_c.as_ptr(), 0o600) }, 0);
+        let rfd2 = unsafe {
+            libc::open(
+                fifo2_c.as_ptr(),
+                libc::O_RDONLY | libc::O_NONBLOCK | libc::O_CLOEXEC,
+            )
+        };
+        assert!(rfd2 >= 0);
+        let mut reader2 = unsafe { std::fs::File::from_raw_fd(rfd2) };
+
+        let req1_path = dir.join(format!("{ASK_FILE}.1"));
+        let cli1 = parse_cli_args(&["Question 1"]).unwrap();
+        let items1 = vec!["A1".to_string(), "B1".to_string()];
+        std::fs::write(
+            &req1_path,
+            format_request(&fifo1_path.to_string_lossy(), &cli1, &items1),
+        )
+        .unwrap();
+
+        let req2_path = dir.join(format!("{ASK_FILE}.2"));
+        let cli2 = parse_cli_args(&["Question 2"]).unwrap();
+        let items2 = vec!["A2".to_string(), "B2".to_string()];
+        std::fs::write(
+            &req2_path,
+            format_request(&fifo2_path.to_string_lossy(), &cli2, &items2),
+        )
+        .unwrap();
+
+        let mut world = World::now();
+        assert!(load_from_path_with_prefix(
+            &mut world, &req1_path, &prefix, uid
+        ));
+        assert!(world.ask.on);
+        assert_eq!(world.ask.title, "Question 1");
+
+        assert!(load_from_path_with_prefix(
+            &mut world, &req2_path, &prefix, uid
+        ));
+        assert_eq!(world.ask.queue.len(), 1);
+        assert_eq!(world.ask.title, "Question 1");
+
+        // Asker 1 killed (close rfd1)
+        unsafe { libc::close(rfd1) };
+        assert!(check_asker_gone(&mut world));
+
+        // Question 2 shows!
+        assert!(world.ask.on);
+        assert_eq!(world.ask.title, "Question 2");
+
+        // Answer Question 2
+        assert!(key(&mut world, 0xff0d, None));
+        assert!(!world.ask.on);
+
+        let mut got = String::new();
+        reader2.read_to_string(&mut got).unwrap();
+        assert_eq!(got, "1\nA2\n");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cancel_request_removes_active_and_queued_cards() {
+        let (asker1, edge1) = create_socket_pair();
+        let (asker2, edge2) = create_socket_pair();
+        let mut world = World::now();
+
+        let req1 = AskRequest {
+            reply: "/tmp/fake.101".to_string(),
+            title: "Q1".to_string(),
+            pid: Some(101),
+            ..Default::default()
+        };
+        let req2 = AskRequest {
+            reply: "/tmp/fake.102".to_string(),
+            title: "Q2".to_string(),
+            pid: Some(102),
+            ..Default::default()
+        };
+
+        world.ask.push_request(req1, Some(edge1));
+        world.ask.push_request(req2, Some(edge2));
+        assert_eq!(world.ask.title, "Q1");
+        assert_eq!(world.ask.queue.len(), 1);
+
+        // Cancel Q1 by pid
+        assert!(cancel_request(&mut world, "", Some(101)));
+        // Q1 removed, Q2 shows
+        assert!(world.ask.on);
+        assert_eq!(world.ask.title, "Q2");
+
+        // Cancel Q2 by fifo
+        assert!(cancel_request(&mut world, "/tmp/fake.102", None));
+        assert!(!world.ask.on);
+
+        unsafe {
+            libc::close(asker1);
+            libc::close(asker2);
+        }
     }
 }
