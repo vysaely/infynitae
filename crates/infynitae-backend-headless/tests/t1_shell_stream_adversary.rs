@@ -61,6 +61,7 @@ fn setup() -> Run {
         ShellCommand::Navigate {
             output: b,
             to: NavigateTo::Canvas(100_000.0, 0.0),
+            zoom: None,
             stream: ShellStream::Atomic,
         },
     );

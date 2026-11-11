@@ -81,6 +81,7 @@ fn super_enter_after_the_camera_moved_fits_again_instead_of_restoring() {
                 ShellCommand::Navigate {
                     output: o,
                     to: NavigateTo::Delta(3.0, 0.0),
+                    zoom: None,
                     stream: ShellStream::Atomic,
                 },
             )

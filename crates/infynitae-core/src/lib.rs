@@ -158,12 +158,13 @@ pub enum PhysicalEvent {
 /// size write and no mutable access to Core (owner decision 2026-10-20, D3).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ShellCommand {
-    /// Centres the camera of `output` on a target at its current zoom (no zoom change, D5). Atomic
-    /// (ADR-11: no animation); refused while `output` presents a protocol-fullscreen element or
-    /// an interaction owns the pointer.
+    /// Centres the camera of `output` on a target at its current zoom (no zoom change, D5), or,
+    /// with `zoom`, sets both centre and zoom. Atomic (ADR-11: no animation); refused while
+    /// `output` presents a protocol-fullscreen element or an interaction owns the pointer.
     Navigate {
         output: output::OutputId,
         to: NavigateTo,
+        zoom: Option<f64>,
         stream: ShellStream,
     },
     /// M8 `FitViewport(O, W)` named by the shell: F-FIT-1 on `element`'s window geometry now.
@@ -193,6 +194,14 @@ pub enum ShellCommand {
         element: stage::ElementRef,
         size: (i32, i32),
         maximized: Option<((f64, f64), (i32, i32))>,
+    },
+    /// Fullscreen presentation toggle by the shell (as Super+Shift+Enter does, INV-PRES-1):
+    /// sets or clears protocol fullscreen on `output`. A fullscreen request for an output that is
+    /// not connected leaves the element windowed (normal).
+    FullscreenElement {
+        element: stage::ElementRef,
+        output: Option<output::OutputId>,
+        fullscreen: bool,
     },
 }
 

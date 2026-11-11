@@ -177,7 +177,8 @@ pub fn session_of(reply: &Value) -> Option<Value> {
         .iter()
         .map(|o| {
             let center = o.get("camera").map_or(Value::Null, |c| field(c, "center"));
-            Value::obj([("id", field(o, "id")), ("center", center)])
+            let zoom = o.get("camera").map_or(Value::Null, |c| field(c, "zoom"));
+            Value::obj([("id", field(o, "id")), ("center", center), ("zoom", zoom)])
         })
         .collect();
     Some(Value::obj([
@@ -457,9 +458,18 @@ pub fn restore(
                 (o.get("id").and_then(Value::as_u64), o.get("center"))
                 && *center != Value::Null
             {
+                let zoom = o.get("zoom").cloned().unwrap_or(Value::Null);
                 log(
                     log_file,
-                    &format!("Navigating output {out} to {}", center.to_json()),
+                    &format!(
+                        "Navigating output {out} to {}{}",
+                        center.to_json(),
+                        if zoom != Value::Null {
+                            format!(" at zoom {}", zoom.to_json())
+                        } else {
+                            String::new()
+                        }
+                    ),
                 );
                 ipc(req(
                     next(),
@@ -467,6 +477,7 @@ pub fn restore(
                     [
                         ("output", out.into()),
                         ("to", Value::obj([("canvas", center.clone())])),
+                        ("zoom", zoom),
                     ],
                 ));
             }
@@ -600,6 +611,55 @@ pub fn restore(
                                 ("element", Value::Arr(vec![inst.into(), elem.into()])),
                                 ("size", size.clone()),
                                 ("maximized", maximized),
+                            ],
+                        ));
+                    }
+                    let connected_outputs: Vec<u64> = reply
+                        .get("snapshot")
+                        .and_then(|s| s.get("outputs"))
+                        .and_then(Value::as_array)
+                        .map(|outs| {
+                            outs.iter()
+                                .filter_map(|o| o.get("id").and_then(Value::as_u64))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    if let Some(fs_out) = target.get("fullscreen").and_then(Value::as_u64) {
+                        if connected_outputs.contains(&fs_out) {
+                            log(
+                                log_file,
+                                &format!(
+                                    "Fullscreening {app_id} (element [{inst}, {elem}]) on output {fs_out}"
+                                ),
+                            );
+                            ipc.request(req(
+                                next(),
+                                "fullscreen_element",
+                                [
+                                    ("element", Value::Arr(vec![inst.into(), elem.into()])),
+                                    ("output", fs_out.into()),
+                                    ("fullscreen", true.into()),
+                                ],
+                            ));
+                        } else {
+                            log(
+                                log_file,
+                                &format!(
+                                    "Restoring {app_id} (element [{inst}, {elem}]) windowed: saved fullscreen output {fs_out} is no longer connected"
+                                ),
+                            );
+                        }
+                    } else if target.get("fullscreen") == Some(&Value::Bool(true)) {
+                        log(
+                            log_file,
+                            &format!("Fullscreening {app_id} (element [{inst}, {elem}])"),
+                        );
+                        ipc.request(req(
+                            next(),
+                            "fullscreen_element",
+                            [
+                                ("element", Value::Arr(vec![inst.into(), elem.into()])),
+                                ("fullscreen", true.into()),
                             ],
                         ));
                     }
@@ -1150,6 +1210,125 @@ mod tests {
         );
         launches.sort();
         assert_eq!(launches, vec!["browser", "term", "term"]);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn camera_zoom_is_saved_and_restored_with_round_trip() {
+        let d = tmp("zoom-save");
+        let file = d.join("session.json");
+        let snapshot = json::parse(
+            r#"{"id":1,"ok":true,"snapshot":{"outputs":[{"id":1,"camera":{"center":[500.0,600.0],"zoom":1.75}}],
+            "elements":[]}}"#,
+        )
+        .unwrap();
+        let mut ipc = Fake {
+            calls: vec![],
+            reply: |_: &Value| snapshot.clone(),
+        };
+        assert!(save_snapshot(&file, &mut ipc, 1));
+        let saved = json::parse(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        let output = &saved.get("outputs").and_then(Value::as_array).unwrap()[0];
+        assert_eq!(output.get("center").unwrap().to_json(), "[500,600]");
+        assert_eq!(output.get("zoom").unwrap().to_json(), "1.75");
+
+        // Now restore this session file and check IPC navigate receives the zoom
+        let apps = d.join("apps");
+        std::fs::create_dir_all(&apps).unwrap();
+        let log_file = d.join("restore.log");
+        let mut nav_ipc = Fake {
+            calls: vec![],
+            reply: |_: &Value| json::parse(r#"{"ok":true}"#).unwrap(),
+        };
+        restore(
+            &file,
+            std::slice::from_ref(&apps),
+            &mut nav_ipc,
+            &mut |_, _| {},
+            &log_file,
+            quick(),
+        );
+        let navs: Vec<_> = nav_ipc
+            .calls
+            .iter()
+            .filter(|c| c.get("cmd").and_then(Value::as_str) == Some("navigate"))
+            .collect();
+        assert_eq!(navs.len(), 1);
+        assert_eq!(navs[0].get("output").and_then(Value::as_u64), Some(1));
+        assert_eq!(navs[0].get("zoom").unwrap().to_json(), "1.75");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn fullscreen_window_is_restored_on_existing_screen_and_windowed_if_screen_gone() {
+        let d = tmp("restore-fullscreen");
+        let apps = d.join("apps");
+        std::fs::create_dir_all(&apps).unwrap();
+        desktop(&apps, "demo-app", "Name=Demo App\nExec=demo-app-bin\n");
+        let file = d.join("session.json");
+        std::fs::write(
+            &file,
+            r#"{"windows":[
+              {"app_id":"demo-app","title":"Win 1","anchor":[100.0,200.0],"size":[1920.0,1080.0],
+               "fullscreen":1,"maximized":null},
+              {"app_id":"demo-app","title":"Win 2","anchor":[300.0,400.0],"size":[640.0,480.0],
+               "fullscreen":2,"maximized":null}],
+              "outputs":[{"id":1,"center":[1200.0,800.0],"zoom":1.0}]}"#,
+        )
+        .unwrap();
+        let log_file = d.join("restore.log");
+        let snapshot = json::parse(
+            r#"{"ok":true,"snapshot":{"elements":[
+              {"id":[1,101],"state":"mapped","app_id":"demo-app"},
+              {"id":[1,102],"state":"mapped","app_id":"demo-app"}],
+              "outputs":[{"id":1,"camera":{"center":[1200.0,800.0],"zoom":1.0}}]}}"#,
+        )
+        .unwrap();
+        let snapshots = std::cell::Cell::new(0);
+        let mut ipc = Fake {
+            calls: vec![],
+            reply: |r: &Value| {
+                if r.get("cmd").and_then(Value::as_str) == Some("snapshot") {
+                    snapshots.set(snapshots.get() + 1);
+                    if snapshots.get() == 1 {
+                        json::parse(
+                            r#"{"ok":true,"snapshot":{"elements":[],"outputs":[{"id":1}]}}"#,
+                        )
+                        .unwrap()
+                    } else {
+                        snapshot.clone()
+                    }
+                } else {
+                    json::parse(r#"{"ok":true}"#).unwrap()
+                }
+            },
+        };
+        let mut launched = Vec::new();
+        restore(
+            &file,
+            std::slice::from_ref(&apps),
+            &mut ipc,
+            &mut |a, c| launched.push((a.to_string(), c.to_vec())),
+            &log_file,
+            quick(),
+        );
+
+        let fs_calls: Vec<_> = ipc
+            .calls
+            .iter()
+            .filter(|c| c.get("cmd").and_then(Value::as_str) == Some("fullscreen_element"))
+            .collect();
+        // Only Win 1 (on output 1, which exists) should have fullscreen_element called.
+        // Win 2 was on output 2 (which does NOT exist), so it comes back normal / windowed!
+        assert_eq!(fs_calls.len(), 1);
+        assert_eq!(fs_calls[0].get("element").unwrap().to_json(), "[1,101]");
+        assert_eq!(fs_calls[0].get("output").and_then(Value::as_u64), Some(1));
+        assert_eq!(fs_calls[0].get("fullscreen"), Some(&Value::Bool(true)));
+
+        let log_content = std::fs::read_to_string(&log_file).unwrap();
+        assert!(log_content.contains("Fullscreening demo-app (element [1, 101]) on output 1"));
+        assert!(log_content.contains("Restoring demo-app (element [1, 102]) windowed: saved fullscreen output 2 is no longer connected"));
+
         let _ = std::fs::remove_dir_all(&d);
     }
 
