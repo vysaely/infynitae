@@ -65,4 +65,8 @@ check "SCREENSHARE_ASK=true gives dmenu mode=ask" "$got" "chooser_type=dmenu mod
 got=$(test_screenshare_reload "false")
 check "SCREENSHARE_ASK=false gives chooser_type=none" "$got" "chooser_type=none"
 
+# 6. RECORD_CODEC: default is hevc
+got=$(sed -n 's/^RECORD_CODEC="\${RECORD_CODEC:-\([^}]*\)}".*/\1/p' live/record/infynitae-recorder)
+check "RECORD_CODEC in infynitae-recorder defaults to hevc" "$got" "hevc"
+
 [ "$fails" = 0 ] && echo "test-config-defaults: passed" || { echo "test-config-defaults: $fails failed"; exit 1; }
