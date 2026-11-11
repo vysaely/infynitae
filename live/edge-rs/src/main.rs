@@ -2067,10 +2067,10 @@ impl Shell {
         {
             return false;
         }
-        let Some(open_idx) = self.open else {
+        if self.open.is_none() {
             return false;
-        };
-        if self.opened_by_hover || self.cfg.panels.get(open_idx).is_some_and(|p| p.hover) {
+        }
+        if self.opened_by_hover {
             self.close()
         } else {
             false
@@ -2635,6 +2635,34 @@ mod tests {
         assert!(sh.opened_by_hover);
         assert!(sh.pointer_leave());
         assert_eq!(sh.open, None);
+    }
+
+    #[test]
+    fn hover_panel_opened_by_key_stays_open_on_pointer_leave() {
+        let cfg = Config::from_text("PANEL_CONTROL=\"SUPER+A top right 380 hover clock session\"\n");
+        let mut sh = Shell::from_config(cfg);
+        let (w, h) = (1920.0, 1080.0);
+        sh.last_screen = (w, h);
+
+        // Open by shortcut / command line
+        assert!(sh.toggle_named("control"));
+        assert!(sh.open.is_some());
+        assert!(!sh.opened_by_hover);
+
+        // Mouse leaves the panel / screen
+        assert!(!sh.pointer_leave(), "pointer_leave should not close panel opened by key");
+        assert!(sh.open.is_some(), "panel must remain open");
+
+        // Now close and open by hover strip
+        sh.close();
+        let (sx, sy, _, _) = hover_strip_in(&sh.cfg.panels[0], w, h, &sh.world, &sh.theme);
+        assert!(sh.pointer_motion(w, h, sx + 1.0, sy + 1.0));
+        assert!(sh.open.is_some());
+        assert!(sh.opened_by_hover);
+
+        // Mouse leaves -> now it should close
+        assert!(sh.pointer_leave(), "pointer_leave must close panel opened by hover");
+        assert!(sh.open.is_none());
     }
 
     #[test]
