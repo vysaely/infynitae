@@ -1267,6 +1267,9 @@ pub fn run_console_with(
     }
 
     if !output_order.is_empty() {
+        if output_layout_reverse {
+            eprintln!("[infynitae] OUTPUT_ORDER overrides OUTPUT_LAYOUT");
+        }
         connected_connectors.sort_by_key(|(_, _, name, debug_name)| {
             output_order
                 .iter()

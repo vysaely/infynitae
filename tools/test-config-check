@@ -60,6 +60,24 @@ EOF
 got=$(HOME=$T sh "$T/infynitae/live/config-check" 2>&1 || true)
 check "config-check catches unclosed quote" "$got" "line 1: cannot be read (a quote left open?), skipped"
 
+# Test 4: OUTPUT_ORDER overrides OUTPUT_LAYOUT warning
+cat << 'EOF' > "$cfg"
+OUTPUT_ORDER="DP-1,HDMI-A-1"
+OUTPUT_LAYOUT="right-to-left"
+EOF
+
+got=$(HOME=$T sh "$T/infynitae/live/config-check" 2>&1 || true)
+check "config-check warns when OUTPUT_ORDER overrides OUTPUT_LAYOUT" "$got" "line 2: OUTPUT_ORDER overrides OUTPUT_LAYOUT, ignored"
+
+# Test 5: OUTPUT_ORDER with default left-to-right produces no warning
+cat << 'EOF' > "$cfg"
+OUTPUT_ORDER="DP-1,HDMI-A-1"
+OUTPUT_LAYOUT="left-to-right"
+EOF
+
+got=$(HOME=$T sh "$T/infynitae/live/config-check" 2>&1 || true)
+check "OUTPUT_ORDER with left-to-right layout produces no warning" "$got" ""
+
 if [ "$fails" = 0 ]; then
     echo "test-config-check: passed"
 else
