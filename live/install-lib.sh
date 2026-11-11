@@ -4,7 +4,8 @@
 INFY_STATE="${XDG_STATE_HOME:-$HOME/.local/state}/infynitae"
 # the optional parts left out at install (`SKIP="keyring fonts"`); infynitae-update keeps them out
 INSTALL_CHOICES="$INFY_STATE/install-choices"
-INFY_LIVE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+INFY_LIVE="$(cd "$(dirname "${BASH_SOURCE:-$0}")" 2>/dev/null && pwd -P)"
+[ -f "$INFY_LIVE/packages.txt" ] || INFY_LIVE="$HOME/infynitae/live"
 
 # pacman holds a lock while it runs: wait for another package manager (an update in a terminal,
 # pamac) instead of failing; a lock nothing holds is left by a crashed pacman, and removing it

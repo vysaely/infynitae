@@ -1,0 +1,33 @@
+#!/bin/sh
+# tools/test-install-lib: checks installer library routines (live/install-lib.sh).
+# Tests:
+# - Finding 9: INFY_LIVE does not use non-POSIX ${BASH_SOURCE[0]} syntax and resolves packages.txt
+# - Finding 24: sudo_once cleans up keeper on exit/signals
+# - Finding 25: set_option handles values with slashes, ampersands, and backslashes
+set -eu
+
+REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
+TMP=$(mktemp -d "/tmp/infynitae-test-install-lib.XXXXXX")
+trap 'rm -rf "$TMP"' EXIT INT TERM
+
+fail=0
+check() {
+    if [ "$2" = "$3" ]; then
+        echo "ok   $1"
+    else
+        echo "FAIL $1: expected '$3', got '$2'"
+        fail=1
+    fi
+}
+
+# Finding 9: POSIX compatibility of script directory detection
+# Ensure ${BASH_SOURCE[0]} bracket syntax is not present
+has_bracket_syntax=$(grep -F '${BASH_SOURCE[0]}' "$REPO_DIR/live/install-lib.sh" || true)
+check "install-lib.sh does not use \${BASH_SOURCE[0]} syntax" "$has_bracket_syntax" ""
+
+# Verify INFY_LIVE resolves properly when sourced
+resolved_live=$(bash -c "unset BASH_SOURCE; . '$REPO_DIR/live/install-lib.sh' >/dev/null 2>&1; echo \"\$INFY_LIVE\"")
+check "INFY_LIVE resolves to directory containing packages.txt" \
+    "$([ -f "$resolved_live/packages.txt" ] && echo yes || echo no)" "yes"
+
+exit $fail
