@@ -7,13 +7,15 @@
 # Asked like the panels (infynitae-edge ask; fuzzel with an edge from before it): the filesystem
 # (only those whose tools are installed), the name, then an explicit "Erase" (Cancel comes first).
 # Refused for anything not on a removable drive and for a drive that holds the running system
-# (/, /home, /boot, /usr, /var). The whole drive is erased, every partition on it: one partition
-# table (MBR, which every system reads), one partition. The automount watcher mounts it after.
+# (/, /home, /boot, /usr, /var, active swap). The whole drive is erased, every partition on it: one
+# partition table (MBR, which every system reads), one partition. The automount watcher mounts it
+# after.
 #   INFYNITAE_FORMAT_UDISKSCTL, INFYNITAE_FORMAT_GDBUS, INFYNITAE_FORMAT_LSBLK,
 #   INFYNITAE_FORMAT_FINDMNT: commands used instead of those tools (tests)
 #   INFYNITAE_FORMAT_ASK: a command printing the answer to a prompt instead of asking; it gets the
 #   prompt's kind (fs, name, confirm) as $1 and the choices on stdin (tests)
 #   INFYNITAE_FORMAT_HAVE: the mkfs tools present, space separated, instead of looking (tests)
+#   INFYNITAE_FORMAT_SWAPS: a swaps file instead of /proc/swaps (tests)
 set -u
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/infynitae"
 LOG="$STATE_DIR/format.log"
@@ -109,8 +111,13 @@ drive=$(udisks info -b "$disk" 2>/dev/null | awk '$1 == "Drive:" { d = $2; gsub(
 drive_info=$(udisks info -p "${drive#/org/freedesktop/UDisks2/}" 2>/dev/null)
 printf '%s\n' "$drive_info" | grep -qE '^[[:space:]]*(Media)?Removable:[[:space:]]+true[[:space:]]*$' \
     || fail "$disk is not a removable drive: only USB drives and cards are formatted here."
-# the running system on it (a system started from a stick): never
-system=$(blk -nro MOUNTPOINTS "$disk" 2>/dev/null | grep -xE '/|/home|/boot|/boot/efi|/efi|/usr|/var' | head -n 1)
+# the running system on it (a system started from a stick, or active swap): never
+if [ -r "${INFYNITAE_FORMAT_SWAPS:-/proc/swaps}" ] \
+        && grep -qE "^${disk}(p?[0-9]+)?[[:space:]]" "${INFYNITAE_FORMAT_SWAPS:-/proc/swaps}" 2>/dev/null; then
+    fail "$disk holds active swap of the running system."
+fi
+system=$(blk -nro MOUNTPOINTS "$disk" 2>/dev/null | grep -v '^$' \
+    | grep -xE '/|/home|/boot|/boot/efi|/efi|/usr|/var|/var/home|/opt|/srv|/root|/etc|\[SWAP\]' | head -n 1)
 [ -z "$system" ] || fail "$disk holds $system of the running system."
 if [ "$can" = 1 ]; then
     echo true
