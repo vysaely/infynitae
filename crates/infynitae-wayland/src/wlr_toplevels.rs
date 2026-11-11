@@ -92,7 +92,11 @@ impl WaylandState {
         if self.core.focus().target() == Some(id) {
             told.states.push(State::Activated as u32);
         }
-        if current.contains(xdg_toplevel::State::Fullscreen) {
+        // a window that fills a screen and counts as fullscreen there (`FIT_IS_FULLSCREEN`, fitted.rs) is told
+        // as one too: taskbars and the edge treat it the same (the edge unmaps its closed panels over it)
+        if current.contains(xdg_toplevel::State::Fullscreen)
+            || self.fitted_windows.values().any(|&w| w == id)
+        {
             told.states.push(State::Fullscreen as u32);
         }
         if self.core.stage().is_minimized(id) {

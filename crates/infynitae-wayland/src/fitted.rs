@@ -114,6 +114,9 @@ impl WaylandState {
             None => self.fitted_windows.remove(&output),
         };
         if was != window {
+            // the window list reports a window that fills a screen as fullscreen: the edge then takes its
+            // closed panels off that screen (nothing over the window, so it can go to the screen directly)
+            self.wlr_toplevels.dirty = true;
             match window {
                 Some(w) => log_line!(
                     "[infynitae] Window {w:?} fills screen {output:?}: treated as fullscreen"

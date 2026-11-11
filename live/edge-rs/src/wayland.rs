@@ -155,6 +155,12 @@ struct OutputSurface {
     buf_size: (u32, u32),
     configured: bool,
     mapped_closed: bool,
+    /// a fullscreen window is on this screen: closed, the surface is unmapped (no buffer at all), so
+    /// nothing is drawn over the window and it can be shown directly (scanout, tearing). The C edge
+    /// did the same; a closed but mapped surface, even fully transparent, is one more element over
+    /// the window and stopped direct scanout (review 2026-11-11)
+    fullscreen_under: bool,
+    unmapped: bool,
     dirty: bool,
     frame_pending: bool,
     /// the desktop's widgets (the Bottom layer, under the windows), not the panels
@@ -227,14 +233,38 @@ impl OutputSurface {
     }
 
     fn apply_mode(&mut self, qh: &QueueHandle<App>, compositor: &CompositorState, shell: &Shell) {
-        if !self.configured || self.width == 0 || self.height == 0 {
-            return;
-        }
         let active = if self.desktop {
             shell.shows_widgets()
         } else {
             shell.open.is_some() || shell.world.ask.on
         };
+        let hide = !self.desktop && !active && self.fullscreen_under;
+        if hide {
+            if !self.unmapped {
+                // a null buffer unmaps a layer surface; it maps again after a commit without one and
+                // the configure that answers it
+                self.layer.wl_surface().attach(None, 0, 0);
+                self.layer.commit();
+                self.unmapped = true;
+                self.configured = false;
+                self.mapped_closed = false;
+                self.dirty = false;
+                self.frame_pending = false;
+                self.committed_box = None;
+                for slot in self.slots.iter_mut().flatten() {
+                    slot.prev_box = None;
+                }
+            }
+            return;
+        }
+        if self.unmapped {
+            self.unmapped = false;
+            self.layer.commit();
+            return;
+        }
+        if !self.configured || self.width == 0 || self.height == 0 {
+            return;
+        }
         // the widgets take the keyboard only while edited (Escape ends it, also when the editing
         // was started by `infynitae-edge widgets`, with no click on them)
         let kb = if self.desktop {
@@ -667,6 +697,9 @@ struct ToplevelEntry {
     title: String,
     app_id: String,
     focused: bool,
+    /// fullscreen, and the screens it is on: the panels unmap over it while closed (`fullscreen_under`)
+    fullscreen: bool,
+    outputs: Vec<wl_output::WlOutput>,
 }
 
 struct App {
@@ -681,6 +714,8 @@ struct App {
     outputs: Vec<OutputSurface>,
     toplevels: Vec<ToplevelEntry>,
     next_toplevel_id: u64,
+    /// a window's fullscreen state or screens changed since the last `done`
+    fullscreen_changed: bool,
     keyboard: Option<wl_keyboard::WlKeyboard>,
     pointer: Option<wl_pointer::WlPointer>,
     touch: Option<wl_touch::WlTouch>,
@@ -1032,8 +1067,17 @@ impl App {
                 self.last_fetch = None;
             }
         }
+        self.apply_modes();
+    }
+
+    /// Each panel surface told whether a fullscreen window is on its screen, then shown or hidden.
+    fn apply_modes(&mut self) {
         let qh = self.qh.clone();
         for os in &mut self.outputs {
+            os.fullscreen_under = self
+                .toplevels
+                .iter()
+                .any(|t| t.fullscreen && t.outputs.contains(&os.output));
             os.apply_mode(&qh, &self.compositor, &self.shell);
         }
     }
@@ -1086,6 +1130,8 @@ impl App {
             buf_size: (0, 0),
             configured: false,
             mapped_closed: false,
+            fullscreen_under: false,
+            unmapped: false,
             dirty: false,
             frame_pending: false,
             desktop,
@@ -1712,6 +1758,8 @@ impl Dispatch<ZwlrForeignToplevelManagerV1, ()> for App {
                 title: String::new(),
                 app_id: String::new(),
                 focused: false,
+                fullscreen: false,
+                outputs: Vec::new(),
             });
         }
     }
@@ -1746,17 +1794,41 @@ impl Dispatch<ZwlrForeignToplevelHandleV1, ()> for App {
                 }
             }
             zwlr_foreign_toplevel_handle_v1::Event::State { state: raw } => {
-                let activated = zwlr_foreign_toplevel_handle_v1::State::Activated as u32;
-                let is_active = raw
-                    .as_chunks::<4>()
-                    .0
-                    .iter()
-                    .any(|&c| u32::from_ne_bytes(c) == activated);
+                let has = |s: zwlr_foreign_toplevel_handle_v1::State| {
+                    raw.as_chunks::<4>()
+                        .0
+                        .iter()
+                        .any(|&c| u32::from_ne_bytes(c) == s as u32)
+                };
+                let is_active = has(zwlr_foreign_toplevel_handle_v1::State::Activated);
+                let fullscreen = has(zwlr_foreign_toplevel_handle_v1::State::Fullscreen);
                 if let Some(t) = state.toplevels.iter_mut().find(|t| &t.handle == handle) {
                     t.focused = is_active;
+                    if t.fullscreen != fullscreen {
+                        t.fullscreen = fullscreen;
+                        state.fullscreen_changed = true;
+                    }
+                }
+            }
+            zwlr_foreign_toplevel_handle_v1::Event::OutputEnter { output } => {
+                if let Some(t) = state.toplevels.iter_mut().find(|t| &t.handle == handle) {
+                    if !t.outputs.contains(&output) {
+                        t.outputs.push(output);
+                        state.fullscreen_changed |= t.fullscreen;
+                    }
+                }
+            }
+            zwlr_foreign_toplevel_handle_v1::Event::OutputLeave { output } => {
+                if let Some(t) = state.toplevels.iter_mut().find(|t| &t.handle == handle) {
+                    let before = t.outputs.len();
+                    t.outputs.retain(|o| o != &output);
+                    state.fullscreen_changed |= t.fullscreen && t.outputs.len() != before;
                 }
             }
             zwlr_foreign_toplevel_handle_v1::Event::Done => {
+                if std::mem::take(&mut state.fullscreen_changed) {
+                    state.apply_modes();
+                }
                 state.toplevel_sync.mark_dirty();
                 if state
                     .toplevel_sync
@@ -1772,7 +1844,14 @@ impl Dispatch<ZwlrForeignToplevelHandleV1, ()> for App {
             }
             zwlr_foreign_toplevel_handle_v1::Event::Closed => {
                 handle.destroy();
+                let was_fullscreen = state
+                    .toplevels
+                    .iter()
+                    .any(|t| &t.handle == handle && t.fullscreen);
                 state.toplevels.retain(|t| &t.handle != handle);
+                if was_fullscreen {
+                    state.apply_modes();
+                }
                 state.toplevel_sync.mark_dirty();
                 if state
                     .toplevel_sync
@@ -1874,6 +1953,7 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
         outputs: Vec::new(),
         toplevels: Vec::new(),
         next_toplevel_id: 1,
+        fullscreen_changed: false,
         keyboard: None,
         pointer: None,
         touch: None,
