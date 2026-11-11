@@ -25,23 +25,18 @@ def drag(x, y, dx, dy):
     emit((1, BTN["left"], 0)); wait(0.8)
 def restart_edge():
     sh("pkill -x infynitae-edge; true"); wait(1.0); run_bg(f"INFYNITAE_EDGE_BOXES={BOX} infynitae-edge"); wait(2.0)
-# the bar's buttons: Undo Reset Add - + Hover Cancel Done, weighted as flow::BAR_BUTTONS
-W = [("undo", 1.0), ("reset", 1.0), ("add", 0.9), ("narrower", 0.5), ("wider", 0.5), ("edge", 1.05), ("hover", 1.0), ("cancel", 1.1), ("done", 1.0)]
-def bar_button(name):
-    b = boxes()["bar"]; inner = b[2] - 10 - 4 * (len(W) - 1); tot = sum(u for _, u in W); x = b[0] + 5
-    for k, u in W:
-        w = inner * u / tot
-        if k == name: return x + w / 2, b[1] + 5 + 13
-        x += w + 4
-# a card's bar: right to left Remove, Up (not on the first), Down (not on the last), Half, Look
-def card_button(r, name, first=False, last=False):
-    sx, sw = r[0] + 5, r[2] - 10; y = r[1] + 4 + 17
-    order = [("remove", 24)] + ([] if first else [("up", 24)]) + ([] if last else [("down", 24)]) + [("half", 40)]
-    x = sx + sw - 1
-    for k, w in order:
-        x -= w
-        if k == name: return x + w / 2, y
-        x -= 4
+# where the edge drew each button (its box dump: barbutton NAME x y w h, cardbutton MODULE NAME x y w h)
+def buttons():
+    wait(0.3)
+    out = {}
+    for l in open(BOX):
+        w = l.split()
+        if w and w[0] == "barbutton": out[("bar", w[1].lower())] = list(map(float, w[2:6]))
+        elif w and w[0] == "cardbutton": out[(w[1], w[2].lower())] = list(map(float, w[3:7]))
+    return out
+def middle(r): return r[0] + r[2] / 2, r[1] + r[3] / 2
+def bar_button(name): return middle(buttons()[("bar", name)])
+def card_button(module, name): return middle(buttons()[(module, name)])
 def hover_card(r): at(r[0] + 30, r[1] + r[3] - 8)
 
 sh(f"sed -i '/^PANEL_CONTROL=/d' {CFG}; rm -f {BACKUP}")
@@ -60,7 +55,7 @@ check("an empty module keeps a card while editing", "tray" in d["modules"] and d
 click_at(200, 500); check("a click outside leaves editing alone", boxes()["state"] == "editing")
 # 3. the clock's Down: under the sound card
 c = boxes()["modules"]["clock"]; hover_card(c); shot("f-2-clock-bar")
-click_at(*card_button(c, "down", first=True)); d = boxes()
+click_at(*card_button("clock", "down")); d = boxes()
 check("Down puts the clock under the sound card", d["modules"]["clock"][1] > d["modules"]["volume"][1], f"clock {d['modules']['clock']} volume {d['modules']['volume']}")
 # 4. Undo
 click_at(*bar_button("undo")); d = boxes()
@@ -70,8 +65,14 @@ v = d["modules"]["volume"]; n = d["modules"]["notifications"] if "notifications"
 drag(v[0] + v[2] / 2, v[1] + v[3] / 2, 0, (n[1] + n[3] - 4) - (v[1] + v[3] / 2)); d = boxes(); shot("f-3-dragged")
 check("a dragged card lands where the line was", d["modules"]["volume"][1] > n[1], f"volume {d['modules']['volume']} notifications {n}")
 click_at(*bar_button("undo"))
-# 6. Half on the clock pairs it with the sound card
-c = boxes()["modules"]["clock"]; hover_card(c); click_at(*card_button(c, "half", first=True)); d = boxes(); shot("f-4-halves")
+# 6. Half on the clock pairs it with the sound card (the panel scrolled back to its top first: the drag
+# above scrolled it)
+def to_top():
+    p = boxes()["panel"]; at(p[0] + p[2] / 2, p[1] + p[3] / 2)
+    for _ in range(30): emit((2, 8, 1)); wait(0.02)
+    wait(0.4)
+to_top()
+c = boxes()["modules"]["clock"]; hover_card(c); click_at(*card_button("clock", "half")); d = boxes(); shot("f-4-halves")
 cl, vo = d["modules"]["clock"], d["modules"]["volume"]
 check("Half: the clock and the sound card side by side", abs(cl[1] - vo[1]) < 1 and cl[2] < d["panel"][2] / 2 and vo[0] > cl[0], f"{cl} {vo}")
 # 7. Cancel puts it all back, nothing saved
@@ -80,7 +81,7 @@ check("Cancel: as before, nothing saved", d["state"] != "editing" and line() == 
 # 8. again: the clock down, then Done saves a line with no places
 chord("esc"); wait(0.5); chord("super+a"); wait(1.2)
 s = boxes()["modules"]["session"]; click_at(s[0] + 4, s[1] + 4, "right")
-c = boxes()["modules"]["clock"]; hover_card(c); click_at(*card_button(c, "down", first=True))
+c = boxes()["modules"]["clock"]; hover_card(c); click_at(*card_button("clock", "down"))
 click_at(*bar_button("narrower")); click_at(*bar_button("done")); wait(0.8); d = boxes(); shot("f-5-saved")
 l = line()
 check("Done saves the new order and width, no places", "volume clock" in l and not re.search(r"@\d", l) and " 360 " in l, l)

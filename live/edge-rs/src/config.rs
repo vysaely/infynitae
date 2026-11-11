@@ -114,7 +114,7 @@ pub enum Side {
 }
 
 impl Side {
-    fn word(self) -> &'static str {
+    pub fn word(self) -> &'static str {
         match self {
             Side::Top => "top",
             Side::Bottom => "bottom",

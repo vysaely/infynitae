@@ -65,6 +65,8 @@ pub struct EditState {
     pub snap: bool,
     pub overlap: bool,
     pub bar_rect: (f64, f64, f64, f64),
+    /// Add's list while adding (a card beside the panel; `flow::add_rect`).
+    pub add_rect: (f64, f64, f64, f64),
     pub hover_module: Option<usize>,
     /// a panel (modules/flow.rs): the card under the pointer
     pub hover_block: Option<usize>,
@@ -84,6 +86,8 @@ pub struct EditState {
 pub struct FlowDrag {
     pub block: usize,
     pub start: (f64, f64),
+    /// where the pointer was last (a card held still near the panel's edge keeps it scrolling)
+    pub last: (f64, f64),
     pub moved: bool,
 }
 
@@ -101,6 +105,7 @@ impl Default for EditState {
             snap: true,
             overlap: false,
             bar_rect: (0.0, 0.0, 0.0, 0.0),
+            add_rect: (0.0, 0.0, 0.0, 0.0),
             hover_module: None,
             hover_block: None,
             flow_drag: None,

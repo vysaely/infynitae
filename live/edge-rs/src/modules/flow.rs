@@ -27,9 +27,17 @@ pub const WIDTH_STEP: i32 = 20;
 /// Undo keeps this many steps.
 pub const UNDO_MAX: usize = 30;
 
-const BAR_H: f64 = 36.0;
-const ADD_ROW_H: f64 = 34.0;
-const STRIP_H: f64 = 34.0;
+/// The bar: two rows (the panel's name with Undo, Reset, Add and Done; the width and the rest).
+const BAR_ROW: f64 = 36.0;
+const BAR_H: f64 = 2.0 * BAR_ROW + 4.0;
+/// Add's list: a card of its own beside the panel, a title row and a row per module (its name,
+/// what it is for under it, an Add button).
+const ADD_W: f64 = 300.0;
+const ADD_TITLE_H: f64 = 40.0;
+const ADD_ROW_H: f64 = 50.0;
+/// While a panel is edited each card has this strip above it: its name, and on the card under the
+/// pointer (or the one chosen) its buttons. Reserved in the layout, so a bar never covers a card.
+pub const STRIP_H: f64 = 28.0;
 const BTN: f64 = 24.0;
 
 /// What a panel module is for, in Add's list.
@@ -202,6 +210,11 @@ pub fn block_rects(
 ) -> Vec<(usize, Rect)> {
     let mut out = Vec::new();
     let mut y = 0.0_f64;
+    let strip = if world.edit_preview && !p.desktop {
+        STRIP_H
+    } else {
+        0.0
+    };
     for (b, r) in blocks(p).into_iter().enumerate() {
         if p.items[r.start].module.is_switch() {
             let (_, card_h) = crate::modules::switches::layout_run(
@@ -209,11 +222,11 @@ pub fn block_rects(
                 world,
                 &th.switch_look,
                 pw,
-                y,
+                y + strip,
             );
             if card_h > 0.0 {
-                out.push((b, (0.0, y, pw, card_h)));
-                y += card_h + GAP;
+                out.push((b, (0.0, y + strip, pw, card_h)));
+                y += strip + card_h + GAP;
             }
         } else if let Some(&rect) = rects.get(r.start) {
             if rect.2 > 0.0 && rect.3 > 0.0 {
@@ -225,11 +238,12 @@ pub fn block_rects(
     out
 }
 
-/// The block under `(px, py)` (panel coordinates).
+/// The block under `(px, py)` while editing (panel coordinates): its card or the strip above it
+/// (where its name and buttons are).
 pub fn block_at(brects: &[(usize, Rect)], px: f64, py: f64) -> Option<usize> {
     brects
         .iter()
-        .find(|(_, r)| px >= r.0 && px <= r.0 + r.2 && py >= r.1 && py <= r.1 + r.3)
+        .find(|(_, r)| px >= r.0 && px <= r.0 + r.2 && py >= r.1 - STRIP_H && py <= r.1 + r.3)
         .map(|(b, _)| *b)
 }
 
@@ -262,7 +276,7 @@ pub enum CardButton {
 /// The buttons on block `b`'s bar, right to left as they fit, each with its rectangle in the
 /// panel; the bar's own rectangle first.
 pub fn card_buttons(p: &Panel, b: usize, r: Rect, pw: f64) -> (Rect, Vec<(CardButton, Rect)>) {
-    let strip = (r.0 + 5.0, r.1 + 4.0, (r.2 - 10.0).max(0.0), STRIP_H);
+    let strip = (r.0, r.1 - STRIP_H, r.2.max(0.0), STRIP_H - 4.0);
     let bs = blocks(p);
     let Some(range) = bs.get(b) else {
         return (strip, Vec::new());
@@ -283,13 +297,13 @@ pub fn card_buttons(p: &Panel, b: usize, r: Rect, pw: f64) -> (Rect, Vec<(CardBu
     }
     let mut out = Vec::new();
     let mut x = strip.0 + strip.2 - 1.0;
-    let left_limit = strip.0 + 40.0;
+    let left_limit = strip.0 + 22.0;
     for (k, w) in want {
         if x - w < left_limit {
             break;
         }
         x -= w;
-        out.push((k, (x, strip.1 + 5.0, w, STRIP_H - 10.0)));
+        out.push((k, (x, strip.1 + 1.0, w, strip.3 - 2.0)));
         x -= 4.0;
     }
     (strip, out)
@@ -318,16 +332,12 @@ pub enum BarButton {
     Done,
 }
 
-pub const BAR_BUTTONS: [(BarButton, f64); 9] = [
-    (BarButton::Undo, 1.0),
-    (BarButton::Reset, 1.0),
-    (BarButton::Add, 0.9),
-    (BarButton::Narrower, 0.5),
-    (BarButton::Wider, 0.5),
-    (BarButton::Edge, 1.05),
-    (BarButton::Hover, 1.0),
-    (BarButton::Cancel, 1.1),
-    (BarButton::Done, 1.0),
+/// The first row's buttons from its right end, with their widths: Done last (furthest right).
+const ROW1: [(BarButton, f64); 4] = [
+    (BarButton::Done, 56.0),
+    (BarButton::Add, 46.0),
+    (BarButton::Reset, 52.0),
+    (BarButton::Undo, 50.0),
 ];
 
 /// The next screen edge for the Edge button: top, right, bottom, left, round.
@@ -363,7 +373,8 @@ pub fn bar_rect(
 ) -> Rect {
     let (ox, oy) = origin;
     let (sw, sh) = screen;
-    let bw = pw.max(380.0).min(sw - 16.0);
+    // wide enough for the second row (the width, the edge, hover, Cancel) whatever the panel's width
+    let bw = pw.max(BAR_MIN_W).min(sw - 16.0);
     let bh = BAR_H;
     let clamp_x = |x: f64| x.clamp(8.0, (sw - bw - 8.0).max(8.0));
     let clamp_y = |y: f64| y.clamp(8.0, (sh - bh - 8.0).max(8.0));
@@ -382,38 +393,83 @@ pub fn bar_rect(
     } else {
         (clamp_x(ox), clamp_y(oy))
     };
-    let list = if adding_rows > 0 {
-        let room = ((sh - 8.0 - y - BAR_H - 6.0) / ADD_ROW_H).floor().max(1.0) as usize;
-        6.0 + adding_rows.min(room) as f64 * ADD_ROW_H
-    } else {
-        0.0
-    };
-    (x, y, bw, BAR_H + list)
+    let _ = adding_rows;
+    (x, y, bw, BAR_H)
 }
 
-/// How many of Add's rows the bar shows at once.
-pub fn add_rows_shown(bar: Rect) -> usize {
-    ((bar.3 - BAR_H - 6.0).max(0.0) / ADD_ROW_H).round() as usize
+/// How many of Add's rows its card shows at once.
+pub fn add_rows_shown(add: Rect) -> usize {
+    ((add.3 - ADD_TITLE_H - 8.0).max(0.0) / ADD_ROW_H).floor() as usize
 }
 
-/// The bar's buttons with their rectangles on the screen.
+/// The bar's buttons with their rectangles on the screen: the first row's from the right (Done,
+/// Add, Reset, Undo), the second row's from the left after the word "Width" (narrower, the width,
+/// wider) and from the right (Cancel, Hover, the edge).
 pub fn bar_buttons(bar: Rect) -> Vec<(BarButton, Rect)> {
-    let total: f64 = BAR_BUTTONS.iter().map(|(_, u)| u).sum();
-    let inner = bar.2 - 10.0 - 4.0 * (BAR_BUTTONS.len() as f64 - 1.0);
-    let mut x = bar.0 + 5.0;
-    BAR_BUTTONS
-        .iter()
-        .map(|&(k, u)| {
-            let w = inner * u / total;
-            let r = (x, bar.1 + 5.0, w, BAR_H - 10.0);
-            x += w + 4.0;
-            (k, r)
-        })
-        .collect()
+    let mut out = Vec::new();
+    let row = |i: f64| bar.1 + 4.0 + i * BAR_ROW + 4.0;
+    let h = BAR_ROW - 8.0;
+    let mut x = bar.0 + bar.2 - 8.0;
+    for (k, w) in ROW1 {
+        x -= w;
+        out.push((k, (x, row(0.0), w, h)));
+        x -= 4.0;
+    }
+    let left = bar.0 + 12.0 + WIDTH_LABEL_W;
+    out.push((BarButton::Narrower, (left, row(1.0), BTN + 4.0, h)));
+    out.push((
+        BarButton::Wider,
+        (left + BTN + 4.0 + WIDTH_VALUE_W, row(1.0), BTN + 4.0, h),
+    ));
+    let mut x = bar.0 + bar.2 - 8.0;
+    for (k, w) in [
+        (BarButton::Cancel, 62.0),
+        (BarButton::Hover, 84.0),
+        (BarButton::Edge, 92.0),
+    ] {
+        x -= w;
+        out.push((k, (x, row(1.0), w, h)));
+        x -= 4.0;
+    }
+    out
 }
 
-/// Add's rows under the bar: each module the panel can take, with its rectangle on the screen.
-pub fn add_rows(bar: Rect, choices: &[Module], scroll: usize) -> Vec<(Module, Rect)> {
+/// The bar is at least this wide: its second row's words fit.
+const BAR_MIN_W: f64 = 440.0;
+
+/// The word "Width" on the bar's second row, and the width between − and +.
+const WIDTH_LABEL_W: f64 = 46.0;
+const WIDTH_VALUE_W: f64 = 58.0;
+
+/// Add's list: a card beside the panel, on its inner side (towards the screen's middle), its top
+/// with the panel's; over the panel only when the screen has no room beside it.
+pub fn add_rect(origin: (f64, f64), pw: f64, screen: (f64, f64), rows: usize, bar: Rect) -> Rect {
+    let (ox, oy) = origin;
+    let (sw, sh) = screen;
+    let x = if ox - ADD_W - 8.0 >= 8.0 {
+        ox - ADD_W - 8.0
+    } else if ox + pw + 8.0 + ADD_W <= sw - 8.0 {
+        ox + pw + 8.0
+    } else {
+        (sw - ADD_W - 8.0).max(8.0)
+    };
+    // under the bar when the bar is on the same side (a panel as tall as the screen has its bar beside
+    // it): the two never overlap, so the bar's Add button closes the list again
+    let beside_bar = x < bar.0 + bar.2 && bar.0 < x + ADD_W;
+    let top = if beside_bar {
+        oy.max(bar.1 + bar.3 + 8.0)
+    } else {
+        oy
+    };
+    let want = ADD_TITLE_H + rows.max(1) as f64 * ADD_ROW_H + 8.0;
+    let h = want.min((sh - 8.0 - top).max(ADD_TITLE_H + ADD_ROW_H));
+    let y = top.clamp(8.0, (sh - h - 8.0).max(8.0));
+    (x, y, ADD_W, h)
+}
+
+/// Add's rows: each module the panel can take, with its rectangle on the screen, and the Add
+/// button's rectangle in it.
+pub fn add_rows(add: Rect, choices: &[Module], scroll: usize) -> Vec<(Module, Rect)> {
     choices
         .iter()
         .skip(scroll)
@@ -422,15 +478,25 @@ pub fn add_rows(bar: Rect, choices: &[Module], scroll: usize) -> Vec<(Module, Re
             (
                 m,
                 (
-                    bar.0 + 5.0,
-                    bar.1 + BAR_H + 3.0 + k as f64 * ADD_ROW_H,
-                    bar.2 - 10.0,
+                    add.0 + 8.0,
+                    add.1 + ADD_TITLE_H + k as f64 * ADD_ROW_H,
+                    add.2 - 16.0,
                     ADD_ROW_H - 4.0,
                 ),
             )
         })
-        .filter(|(_, r)| r.1 + r.3 <= bar.1 + bar.3)
+        .filter(|(_, r)| r.1 + r.3 <= add.1 + add.3)
         .collect()
+}
+
+/// The Add button in an Add row.
+fn add_button(row: Rect) -> Rect {
+    (
+        row.0 + row.2 - 54.0,
+        row.1 + (row.3 - 26.0) / 2.0,
+        50.0,
+        26.0,
+    )
 }
 
 /// Whether two rectangles share any area.
@@ -445,25 +511,28 @@ fn inside(r: Rect, x: f64, y: f64) -> bool {
 /// What a press at `(x, y)` on the screen hits in the bar.
 pub fn bar_hit(
     bar: Rect,
+    add: Rect,
     choices: &[Module],
     adding: bool,
     scroll: usize,
     x: f64,
     y: f64,
 ) -> Option<BarHit> {
+    if adding && inside(add, x, y) {
+        // a whole row adds (the button shows where; a near miss still counts)
+        for (m, r) in add_rows(add, choices, scroll) {
+            if inside(r, x, y) {
+                return Some(BarHit::Add(m));
+            }
+        }
+        return Some(BarHit::Nothing);
+    }
     if !inside(bar, x, y) {
         return None;
     }
     for (k, r) in bar_buttons(bar) {
         if inside(r, x, y) {
             return Some(BarHit::Button(k));
-        }
-    }
-    if adding {
-        for (m, r) in add_rows(bar, choices, scroll) {
-            if inside(r, x, y) {
-                return Some(BarHit::Add(m));
-            }
         }
     }
     Some(BarHit::Nothing)
@@ -571,10 +640,17 @@ pub fn draw_overlay(
         let _ = cr.stroke();
     }
 
-    // the card under the pointer: its bar
-    if let (Some(b), false) = (state.hover_block, dragging) {
-        if let Some((_, r)) = brects.iter().find(|(k, _)| *k == b) {
-            let (strip, buttons) = card_buttons(panel, b, *r, pw);
+    // above every card its name; above the one under the pointer also its buttons
+    for (b, r) in &brects {
+        let first = &panel.items[bs[*b].start];
+        let name = if first.module.is_switch() {
+            "Quick settings"
+        } else {
+            module_display_name(first.module)
+        };
+        let shown = state.hover_block == Some(*b) && !dragging;
+        let (strip, buttons) = card_buttons(panel, *b, *r, pw);
+        if shown {
             draw::round_rect(
                 cr,
                 ox + strip.0,
@@ -583,98 +659,92 @@ pub fn draw_overlay(
                 strip.3,
                 th.small_radius(),
             );
-            // solid: it covers the card's own title row
-            draw::set(cr, th.card.alpha(1.0));
+            draw::set(cr, th.card.alpha(0.95));
             let _ = cr.fill();
-            draw::round_rect(
-                cr,
-                ox + strip.0 + 0.5,
-                oy + strip.1 + 0.5,
-                strip.2 - 1.0,
-                strip.3 - 1.0,
-                th.small_radius(),
-            );
-            draw::set(cr, th.accent.alpha(0.55));
-            cr.set_line_width(1.0);
-            let _ = cr.stroke();
-            // the grip and the name
-            let first = &panel.items[bs[b].start];
-            let name = if first.module.is_switch() {
-                "Quick settings"
-            } else {
-                module_display_name(first.module)
-            };
-            draw::set(cr, th.muted);
-            for dy in [-4.0, 0.0, 4.0] {
-                for dx in [0.0, 4.0] {
-                    cr.new_sub_path();
-                    cr.arc(
-                        ox + strip.0 + 9.0 + dx,
-                        oy + strip.1 + strip.3 / 2.0 + dy,
-                        1.1,
-                        0.0,
-                        std::f64::consts::TAU,
-                    );
-                }
-            }
-            let _ = cr.fill();
-            let name_right = buttons
-                .last()
-                .map(|(_, r)| r.0 - 6.0)
-                .unwrap_or(strip.0 + strip.2 - 6.0);
-            // the name where it fits whole enough to read; on a half card the grip alone
-            let name_room = name_right - strip.0 - 22.0;
-            if name_room >= 48.0 {
-                draw::text_max(
-                    cr,
-                    ox + strip.0 + 22.0,
-                    oy + strip.1 + (strip.3 - 13.0) / 2.0 - 1.0,
-                    name_room,
-                    &Text {
-                        size: 12.0,
-                        bold: true,
-                        color: th.text,
-                        text: name,
-                    },
+        }
+        // the grip (a card is moved by dragging it) and the name
+        draw::set(cr, if shown { th.text } else { th.muted });
+        for dy in [-4.0, 0.0, 4.0] {
+            for dx in [0.0, 4.0] {
+                cr.new_sub_path();
+                cr.arc(
+                    ox + strip.0 + 9.0 + dx,
+                    oy + strip.1 + strip.3 / 2.0 + dy,
+                    1.1,
+                    0.0,
+                    std::f64::consts::TAU,
                 );
             }
-            let it = &panel.items[bs[b].start];
-            for (k, r) in buttons {
-                let r = (ox + r.0, oy + r.1, r.2, r.3);
-                match k {
-                    CardButton::Up | CardButton::Down => {
-                        button_bg(cr, th, r, false, false);
-                        arrow(cr, r, k == CardButton::Up, th.text);
-                    }
-                    CardButton::Half => {
-                        button_bg(cr, th, r, it.half, false);
-                        label(cr, r, if it.half { "Full" } else { "Half" }, th.text, false);
-                    }
-                    CardButton::Look => {
-                        button_bg(cr, th, r, false, false);
-                        label(cr, r, look_name(it).unwrap_or(""), th.text, false);
-                    }
-                    CardButton::Remove => {
-                        button_bg(cr, th, r, false, false);
-                        cross(cr, r, th.accent);
-                    }
+        }
+        let _ = cr.fill();
+        let name_right = if shown {
+            buttons
+                .last()
+                .map(|(_, r)| r.0 - 6.0)
+                .unwrap_or(strip.0 + strip.2 - 6.0)
+        } else {
+            strip.0 + strip.2 - 6.0
+        };
+        let name_room = name_right - strip.0 - 22.0;
+        if name_room >= 30.0 {
+            draw::text_max(
+                cr,
+                ox + strip.0 + 22.0,
+                oy + strip.1 + (strip.3 - 13.0) / 2.0 - 1.0,
+                name_room,
+                &Text {
+                    size: 12.0,
+                    bold: shown,
+                    color: if shown { th.text } else { th.muted },
+                    text: name,
+                },
+            );
+        }
+        if !shown {
+            continue;
+        }
+        let it = &panel.items[bs[*b].start];
+        for (k, br) in buttons {
+            let br = (ox + br.0, oy + br.1, br.2, br.3);
+            match k {
+                CardButton::Up | CardButton::Down => {
+                    button_bg(cr, th, br, false, false);
+                    arrow(cr, br, k == CardButton::Up, th.text);
+                }
+                CardButton::Half => {
+                    button_bg(cr, th, br, it.half, false);
+                    label(
+                        cr,
+                        br,
+                        if it.half { "Full" } else { "Half" },
+                        th.text,
+                        false,
+                    );
+                }
+                CardButton::Look => {
+                    button_bg(cr, th, br, false, false);
+                    label(cr, br, look_name(it).unwrap_or(""), th.text, false);
+                }
+                CardButton::Remove => {
+                    button_bg(cr, th, br, false, false);
+                    cross(cr, br, th.accent);
                 }
             }
-            // a run of switches: each switch's own x
-            if first.module.is_switch() {
-                for i in bs[b].clone() {
-                    if let Some(&cell) = rects.get(i).filter(|c| c.2 > 0.0 && c.3 > 0.0) {
-                        if overlaps(switch_x(cell), strip) {
-                            continue;
-                        }
-                        let x = switch_x(cell);
-                        let x = (ox + x.0, oy + x.1, x.2, x.3);
-                        draw::round_rect(cr, x.0, x.1, x.2, x.3, 9.0);
-                        draw::set(cr, th.card.alpha(0.9));
-                        let _ = cr.fill();
-                        cross(cr, (x.0 - 2.0, x.1 - 2.0, x.2 + 4.0, x.3 + 4.0), th.muted);
-                    }
-                }
+        }
+    }
+    // each switch's own x, on every run of switches
+    for (b, _) in &brects {
+        if !panel.items[bs[*b].start].module.is_switch() || dragging {
+            continue;
+        }
+        for i in bs[*b].clone() {
+            if let Some(&cell) = rects.get(i).filter(|c| c.2 > 0.0 && c.3 > 0.0) {
+                let x = switch_x(cell);
+                let x = (ox + x.0, oy + x.1, x.2, x.3);
+                draw::round_rect(cr, x.0, x.1, x.2, x.3, 9.0);
+                draw::set(cr, th.card.alpha(0.9));
+                let _ = cr.fill();
+                cross(cr, (x.0 - 2.0, x.1 - 2.0, x.2 + 4.0, x.3 + 4.0), th.muted);
             }
         }
     }
@@ -710,7 +780,53 @@ pub fn draw_overlay(
     draw::set(cr, th.accent.alpha(0.7));
     cr.set_line_width(1.0);
     let _ = cr.stroke();
-    for (k, r) in bar_buttons(bar) {
+    // first row: what is edited; second row: "Width" and the width between − and +
+    let buttons = bar_buttons(bar);
+    let row0 = buttons
+        .iter()
+        .find(|(k, _)| *k == BarButton::Undo)
+        .map(|(_, r)| *r)
+        .unwrap_or(bar);
+    let title = format!("Editing {}", panel_title(panel));
+    draw::text_max(
+        cr,
+        bar.0 + 12.0,
+        row0.1 + (row0.3 - 15.0) / 2.0,
+        (row0.0 - bar.0 - 20.0).max(20.0),
+        &Text {
+            size: 13.0,
+            bold: true,
+            color: th.text,
+            text: &title,
+        },
+    );
+    if let Some((_, nr)) = buttons.iter().find(|(k, _)| *k == BarButton::Narrower) {
+        let y = nr.1 + (nr.3 - 13.0) / 2.0;
+        draw::text(
+            cr,
+            bar.0 + 12.0,
+            y,
+            &Text {
+                size: 12.0,
+                bold: false,
+                color: th.muted,
+                text: "Width",
+            },
+        );
+        let value = format!("{} px", panel.width.max(0));
+        draw::text_center(
+            cr,
+            nr.0 + nr.2 + WIDTH_VALUE_W / 2.0,
+            y,
+            &Text {
+                size: 12.0,
+                bold: false,
+                color: th.text,
+                text: &value,
+            },
+        );
+    }
+    for (k, r) in buttons {
         let (text, on, primary, enabled) = match k {
             BarButton::Undo => ("Undo", false, false, !state.undo.is_empty()),
             BarButton::Reset => (
@@ -724,21 +840,30 @@ pub fn draw_overlay(
                 has_default(panel),
             ),
             BarButton::Add => ("Add", state.adding, false, true),
-            BarButton::Narrower => ("-", false, false, true),
-            BarButton::Wider => ("+", false, false, true),
+            BarButton::Narrower => ("\u{2212}", false, false, panel.width > WIDTH_MIN),
+            BarButton::Wider => ("+", false, false, panel.width < WIDTH_MAX),
             BarButton::Edge => (
                 match panel.side {
-                    crate::config::Side::Top => "Top",
-                    crate::config::Side::Right => "Right",
-                    crate::config::Side::Bottom => "Bottom",
-                    crate::config::Side::Left => "Left",
+                    crate::config::Side::Top => "Edge: top",
+                    crate::config::Side::Right => "Edge: right",
+                    crate::config::Side::Bottom => "Edge: bottom",
+                    crate::config::Side::Left => "Edge: left",
                 },
                 false,
                 false,
                 true,
             ),
-            // on: lit (a touch of the screen edge opens it)
-            BarButton::Hover => ("Hover", panel.hover, false, true),
+            // on: lit (touching the screen edge opens it)
+            BarButton::Hover => (
+                if panel.hover {
+                    "Hover: on"
+                } else {
+                    "Hover: off"
+                },
+                panel.hover,
+                false,
+                true,
+            ),
             BarButton::Cancel => ("Cancel", false, false, true),
             BarButton::Done => ("Done", false, true, true),
         };
@@ -753,56 +878,76 @@ pub fn draw_overlay(
         label(cr, r, text, color, primary);
     }
     if state.adding {
+        let add = state.add_rect;
+        draw::card(cr, th, add.0, add.1, add.2, add.3);
+        draw::title(cr, th, add.0 + 14.0, add.1 + 12.0, "Add a module");
         let choices = crate::modules::edit::addable(panel);
         if choices.is_empty() {
             draw::text(
                 cr,
-                bar.0 + 12.0,
-                bar.1 + BAR_H + 10.0,
+                add.0 + 14.0,
+                add.1 + ADD_TITLE_H + 6.0,
                 &Text {
                     size: 12.0,
                     bold: false,
                     color: th.muted,
-                    text: "The panel holds every module it can",
+                    text: "Every module is in the panel.",
                 },
             );
         }
-        for (m, r) in add_rows(bar, &choices, state.add_scroll) {
-            draw::round_rect(cr, r.0, r.1, r.2, r.3, th.small_radius());
-            draw::set(cr, th.text.alpha(0.05));
+        for (m, r) in add_rows(add, &choices, state.add_scroll) {
+            // a hairline between rows, the name over what it is for, an Add button
+            draw::set(cr, th.text.alpha(0.07));
+            cr.rectangle(r.0 + 6.0, r.1, r.2 - 12.0, 1.0);
             let _ = cr.fill();
-            let name = Text {
-                size: 13.0,
-                bold: true,
-                color: th.text,
-                text: module_display_name(m),
-            };
-            let (nw, _) = draw::measure(cr, &name);
-            draw::text(cr, r.0 + 10.0, r.1 + (r.3 - 15.0) / 2.0, &name);
+            let btn = add_button(r);
+            let text_w = (btn.0 - r.0 - 16.0).max(20.0);
             draw::text_max(
                 cr,
-                r.0 + 10.0 + nw + 10.0,
-                r.1 + (r.3 - 13.0) / 2.0,
-                (r.2 - nw - 30.0 - 40.0).max(10.0),
+                r.0 + 6.0,
+                r.1 + 6.0,
+                text_w,
                 &Text {
-                    size: 12.0,
+                    size: 13.0,
+                    bold: true,
+                    color: th.text,
+                    text: module_display_name(m),
+                },
+            );
+            draw::text_max(
+                cr,
+                r.0 + 6.0,
+                r.1 + 25.0,
+                text_w,
+                &Text {
+                    size: 11.5,
                     bold: false,
                     color: th.muted,
                     text: module_description(m),
                 },
             );
-            draw::text_right(
+            draw::round_rect(
                 cr,
-                r.0 + r.2 - 10.0,
-                r.1 + (r.3 - 13.0) / 2.0,
-                &Text {
-                    size: 12.0,
-                    bold: true,
-                    color: th.accent,
-                    text: "Add",
-                },
+                btn.0 + 0.5,
+                btn.1 + 0.5,
+                btn.2 - 1.0,
+                btn.3 - 1.0,
+                th.small_radius(),
             );
+            draw::set(cr, th.accent.alpha(0.6));
+            cr.set_line_width(1.0);
+            let _ = cr.stroke();
+            label(cr, btn, "Add", th.accent, true);
         }
+    }
+}
+
+/// The panel's name as the bar says it ("Editing Control").
+fn panel_title(panel: &Panel) -> String {
+    let mut cs = panel.name.chars();
+    match cs.next() {
+        Some(c) => c.to_uppercase().chain(cs).collect(),
+        None => "the panel".to_string(),
     }
 }
 
@@ -930,20 +1075,27 @@ mod tests {
             "{bar:?} left of the panel"
         );
         assert!(bar.1 >= 8.0 && bar.1 + bar.3 <= 1072.0);
-        // opening Add does not move the buttons: the list hangs under them
-        let closed = bar_rect((1532.0, 600.0), 380.0, 472.0, (1920.0, 1080.0), 0);
-        let bar = bar_rect((1532.0, 600.0), 380.0, 472.0, (1920.0, 1080.0), 3);
-        assert_eq!((bar.0, bar.1), (closed.0, closed.1), "the buttons stay");
+        // Add's list: a card of its own beside the panel (on the screen's side of it), never over
+        // the bar, its top with the panel's
+        let bar = bar_rect((1532.0, 600.0), 380.0, 472.0, (1920.0, 1080.0), 0);
+        let add = add_rect((1532.0, 600.0), 380.0, (1920.0, 1080.0), 3, bar);
         assert!(
-            closed.1 + closed.3 <= 600.0 - 8.0 + 0.5,
-            "{closed:?} above the panel"
+            add.0 + add.2 <= 1532.0 - 8.0 + 0.5,
+            "{add:?} left of the panel"
         );
+        assert_eq!(add.1, 600.0);
         assert_eq!(
-            add_rows(bar, &[Module::Calendar, Module::Memory, Module::System], 0).len(),
+            add_rows(add, &[Module::Calendar, Module::Memory, Module::System], 0).len(),
             3
         );
         // a short screen: as many rows as fit, the rest by scrolling
-        let short = bar_rect((1532.0, 8.0), 380.0, 400.0, (1920.0, 600.0), 20);
+        let short = add_rect(
+            (1532.0, 8.0),
+            380.0,
+            (1920.0, 600.0),
+            20,
+            (0.0, 0.0, 0.0, 0.0),
+        );
         assert!(short.1 + short.3 <= 600.0);
         let shown = add_rows_shown(short);
         assert!(shown > 0 && shown < 20);
@@ -952,6 +1104,13 @@ mod tests {
             .collect();
         let first = add_rows(short, &all, 0)[0].0;
         assert_ne!(add_rows(short, &all, 1)[0].0, first, "scrolled one row");
+        // a panel as tall as the screen: its bar beside it, the list under the bar, never over it
+        let tall_bar = bar_rect((1532.0, 8.0), 380.0, 1064.0, (1920.0, 1080.0), 0);
+        let under = add_rect((1532.0, 8.0), 380.0, (1920.0, 1080.0), 3, tall_bar);
+        assert!(!overlaps(under, tall_bar), "{under:?} {tall_bar:?}");
+        // a panel at the left edge: the list on its right
+        let left = add_rect((8.0, 8.0), 380.0, (1920.0, 1080.0), 3, (0.0, 0.0, 0.0, 0.0));
+        assert!(left.0 >= 8.0 + 380.0 + 8.0 - 0.5, "{left:?}");
     }
 
     #[test]
