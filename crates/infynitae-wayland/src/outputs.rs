@@ -43,9 +43,11 @@ impl WaylandState {
             match *effect {
                 Effect::InitialConfigure(id) | Effect::ToplevelConfigure(id) => {
                     self.configure_toplevel(id, None);
+                    self.wlr_toplevels.dirty = true;
                 }
                 Effect::ToplevelConfigureSize { element, size } => {
                     self.configure_toplevel(element, Some((size.w, size.h)));
+                    self.wlr_toplevels.dirty = true;
                 }
                 Effect::CloseRequest(element) => {
                     if let Some(t) = self.window(element).and_then(|w| w.toplevel()) {
@@ -67,6 +69,7 @@ impl WaylandState {
                     }
                 }
                 Effect::KeyboardFocus(target) => {
+                    self.wlr_toplevels.dirty = true;
                     let serial = SERIAL_COUNTER.next_serial();
                     let target_surface = target.and_then(|id| self.window_surface(id));
                     let kb = self.keyboard_handle();
@@ -197,14 +200,17 @@ impl WaylandState {
                     if self.night_light {
                         self.night_light_on(id);
                     }
+                    self.wlr_toplevels.dirty = true;
                 }
                 Effect::OutputChanged(id) => {
                     self.pointer_sent = Default::default();
                     self.output_changed(id);
+                    self.wlr_toplevels.dirty = true;
                 }
                 Effect::OutputRemoved(id) => {
                     self.pointer_sent = Default::default();
                     self.output_removed(id);
+                    self.wlr_toplevels.dirty = true;
                 }
                 Effect::Enter { output, surface } => {
                     if let (Some(h), Some(s)) =
@@ -311,21 +317,6 @@ impl WaylandState {
                     debug_assert!(applied, "unhandled effect {other:?}");
                 }
             }
-        }
-        if effects.iter().any(|e| {
-            matches!(
-                e,
-                Effect::KeyboardFocus(_)
-                    | Effect::LayerKeyboardFocus(_)
-                    | Effect::ToplevelConfigure(_)
-                    | Effect::ToplevelConfigureSize { .. }
-                    | Effect::OutputAdded(_)
-                    | Effect::OutputChanged(_)
-                    | Effect::OutputRemoved(_)
-                    | Effect::InitialConfigure(_)
-            )
-        }) {
-            self.wlr_toplevels.dirty = true;
         }
         self.drop_constraints_smithay_destroyed();
         self.sync_wlr_toplevels();
