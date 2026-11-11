@@ -37,8 +37,7 @@ edges on other hardware.
 - **Staying awake:** apps that play video or a game keep the screens on, both Wayland apps
   (idle-inhibit) and others over D-Bus (`org.freedesktop.ScreenSaver`). Locking still turns
   the screens off on time.
-- **Protocols for the usual tools:** display settings (wlr-randr, wdisplays, kanshi:
-  modes, scale, position, transform, VRR, turning screens off and on), night
+- **Protocols for the usual tools:** display settings (wlr-randr, wdisplays, kanshi), night
   light (wlsunset, gammastep), screen power (wlopm), idle tools (swayidle, hypridle), task bars
   and window switchers (waybar, rofi), apps taking the shortcuts while focused (VMs, remote
   desktops), cursor shapes, input methods (fcitx5, ibus: start one from `autostart.sh`).
@@ -155,6 +154,7 @@ These pass the test suite but have not run on a real screen or device yet:
 ## Missing
 
 - **Pens and drawing tablets,** HDR, accessibility and screen readers.
+- **Output management:** tools cannot yet turn a screen off through it (wlopm can).
 - **Hardware:** a second GPU, NVIDIA's explicit sync.
 - **Packaging** for anything other than Arch Linux. The install assumes one user and
   `~/infynitae`.

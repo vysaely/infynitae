@@ -61,7 +61,7 @@ with held sizes it no longer changes their size.
 | New mode, scale or rotation (`output_reconfigured`) | Camera kept (same centre and zoom); bars arranged again; a fullscreen window is asked for the new size; a maximized window is asked for the new usable size and keeps its centre on the Canvas (amended 2026-10-31). Any other window larger than the new room is offered the room and stays where it is (2026-10-31); the rest keep their size and place. The room (bounds) reaches each window with its next configure. |
 | A bar comes, goes or changes its exclusive zone | The usable area changes: maximized windows on that screen fill the new one (2026-10-31). |
 | A second screen | Its own camera (restored from the persisted table by its connector/EDID, else new). Placement and the room stay those of the first screen. |
-| A screen unplugged or turned off (`wlr-randr --off`) | Its camera is kept for its return; fullscreen on it ends (the size before is offered); a window maximized on it fills the first remaining screen (2026-10-31). Windows keep their Canvas places. Turning the screen on brings it back where it was. |
+| A screen unplugged | Its camera is kept for its return; fullscreen on it ends (the size before is offered); a window maximized on it fills the first remaining screen (2026-10-31). Windows keep their Canvas places. |
 
 ## After a restart
 
