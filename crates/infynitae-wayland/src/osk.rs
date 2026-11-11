@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 use smithay::wayland::text_input::TextInputSeat;
 
 use crate::WaylandState;
+use crate::log_line;
 
 /// How long after a press a text field becoming active counts as pressed.
 const PRESS_WINDOW: Duration = Duration::from_millis(700);
@@ -66,7 +67,7 @@ impl WaylandState {
             self.osk.pressed_at = Some(Instant::now());
         }
         if std::env::var_os("INFYNITAE_OSK_DEBUG").is_some() {
-            println!(
+            log_line!(
                 "[infynitae] On-screen keyboard: press (touch {touch}, counts {counts}, field active {})",
                 self.text_field_active()
             );
@@ -117,7 +118,7 @@ impl WaylandState {
     }
 
     fn osk_show(&mut self, on: bool, by_hand: bool) {
-        println!(
+        log_line!(
             "[infynitae] On-screen keyboard {}{}",
             if on { "shown" } else { "hidden" },
             if by_hand { " by hand" } else { "" }

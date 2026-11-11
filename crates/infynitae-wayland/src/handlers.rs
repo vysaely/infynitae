@@ -1,6 +1,7 @@
 //! Smithay handler implementations: protocol events become Core calls, Core's effects become
 //! protocol actions. Handlers never decide placement, order or camera state.
 
+use crate::log_line;
 use infynitae_core::protocol::ToplevelRequest;
 use smithay::backend::renderer::utils::{RendererSurfaceStateUserData, on_commit_buffer_handler};
 use smithay::desktop::{
@@ -1455,7 +1456,7 @@ impl PointerConstraintsHandler for WaylandState {
             let logged = &mut self.constraint_logged[usize::from(slot)];
             if *logged != Some(granted) {
                 *logged = Some(granted);
-                eprintln!(
+                log_line!(
                     "[infynitae] Pointer {kind:?} asked: {}",
                     if granted {
                         "granted"

@@ -14,6 +14,7 @@ use infynitae_core::protocol::Effect;
 use infynitae_core::{Core, ShellPort};
 use infynitae_ipc::ShellServer;
 use infynitae_wayland::extension::{Extension, ExtensionFactory, LoopExtension, waker};
+use infynitae_wayland::log_line;
 
 /// The default socket (C7.1), or `None` without `XDG_RUNTIME_DIR`.
 pub fn default_path() -> Option<PathBuf> {
@@ -82,7 +83,7 @@ impl LoopExtension for ShellExtension {
 pub fn factory(port: ShellPort, path: PathBuf) -> ExtensionFactory {
     Box::new(move || {
         let ext = serve(port, &path)?;
-        println!("[infynitae] Shell socket: {}", path.display());
+        log_line!("[infynitae] Shell socket: {}", path.display());
         Ok(ext)
     })
 }

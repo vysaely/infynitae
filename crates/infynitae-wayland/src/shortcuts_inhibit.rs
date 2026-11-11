@@ -16,6 +16,7 @@ use smithay::reexports::wayland_server::{
 };
 
 use crate::WaylandState;
+use crate::log_line;
 
 /// One inhibitor: the surface it is for, and whether it was last told `active`.
 #[derive(Debug)]
@@ -54,7 +55,7 @@ impl WaylandState {
             let on = focused == Some(&i.surface);
             if on != i.active {
                 if on {
-                    eprintln!("[infynitae] Focused window took the shortcuts");
+                    log_line!("[infynitae] Focused window took the shortcuts");
                     i.resource.active();
                 } else {
                     i.resource.inactive();
