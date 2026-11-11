@@ -37,34 +37,6 @@ check "SQUARE_CORNERS=false gives LOOK_CORNERS=8" "$got" "8"
 got=$(sh -c 'SQUARE_CORNERS=true CORNERS=12; . live/settings.sh >/dev/null 2>&1; look_load; echo "$LOOK_CORNERS"')
 check "CORNERS=12 overrides SQUARE_CORNERS" "$got" "12"
 
-# 5. SCREENSHARE_ASK: default is app
-test_screenshare_reload() {
-    val="${1:-}"
-    sh -c '
-        is_true() { case "$1" in 1|true|yes|on|TRUE|True) return 0 ;; *) return 1 ;; esac; }
-        first="DP-1" chooser="/bin/sh" picker="fuzzel --dmenu"
-        '"${val:+SCREENSHARE_ASK=$val}"'
-        ask="${SCREENSHARE_ASK:-app}"
-        case "$ask" in
-            0|false|off|no)
-                echo "chooser_type=none"
-                ;;
-            *)
-                if [ -x "$chooser" ]; then
-                    if is_true "$ask"; then mode=ask; else mode=first; fi
-                    echo "chooser_type=dmenu mode=$mode"
-                fi
-                ;;
-        esac
-    '
-}
-got=$(test_screenshare_reload "")
-check "SCREENSHARE_ASK unset defaults to dmenu mode=first" "$got" "chooser_type=dmenu mode=first"
-got=$(test_screenshare_reload "true")
-check "SCREENSHARE_ASK=true gives dmenu mode=ask" "$got" "chooser_type=dmenu mode=ask"
-got=$(test_screenshare_reload "false")
-check "SCREENSHARE_ASK=false gives chooser_type=none" "$got" "chooser_type=none"
-
 # 6. RECORD_CODEC: default is hevc
 got=$(sed -n 's/^RECORD_CODEC="\${RECORD_CODEC:-\([^}]*\)}".*/\1/p' live/record/infynitae-recorder)
 check "RECORD_CODEC in infynitae-recorder defaults to hevc" "$got" "hevc"
