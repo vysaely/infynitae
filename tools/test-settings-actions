@@ -51,4 +51,8 @@ HOME="$pipe_h" CONFIG_FILE="$pipe_cfg" sh "$REPO_DIR/live/settings.sh" apply >/d
 check "Thunar uca sed replacement handles pipe and ampersand characters in paths" \
     "$([ -f "$pipe_uca" ] && grep -c "$pipe_h/.local/bin/xdg-terminal-exec --dir=%f" "$pipe_uca" || true)" 1
 
+# Finding 26: config_write and cmd_set do not use predictable .tmp.$$ suffix
+has_predictable_tmp=$(grep -F '$CONFIG_FILE.tmp.$$' "$REPO_DIR/live/settings.sh" || true)
+check "settings.sh does not use predictable \$CONFIG_FILE.tmp.\$\$ temp files" "$has_predictable_tmp" ""
+
 exit $fail

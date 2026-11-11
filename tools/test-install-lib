@@ -74,4 +74,8 @@ val_got=$(grep '^NOTIFICATIONS=' "$cfg_file" | cut -d= -f2- || true)
 check "set_option replaces setting with value containing slashes, ampersands, and backslashes" \
     "$val_got" '"custom/path & flag\extra"'
 
+# Finding 26: battery rules mktemp has cleanup trap
+has_battery_trap=$(grep -A2 'tmp="$(mktemp)"' "$REPO_DIR/live/install-lib.sh" | grep 'trap.*rm.*tmp' || true)
+check "battery rules temporary file has cleanup trap" "$([ -n "$has_battery_trap" ] && echo yes || echo no)" "yes"
+
 exit $fail

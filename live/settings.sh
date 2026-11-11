@@ -132,11 +132,14 @@ put_file() {
 # at the end; the comment lines under it stay.
 config_write() {
     export CW_KEY="$1" CW_VAL="$2"
+    tmp=$(mktemp "${CONFIG_FILE}.tmp.XXXXXX")
+    trap 'rm -f "$tmp"' EXIT INT TERM
     awk 'BEGIN { k = ENVIRON["CW_KEY"]; v = ENVIRON["CW_VAL"]; found = 0 }
         substr($0, 1, length(k) + 1) == k "=" { print k "=\"" v "\""; found = 1; next }
         { print }
-        END { if (!found) print k "=\"" v "\"" }' "$CONFIG_FILE" > "$CONFIG_FILE.tmp.$$" \
-        && mv -f "$CONFIG_FILE.tmp.$$" "$CONFIG_FILE"
+        END { if (!found) print k "=\"" v "\"" }' "$CONFIG_FILE" > "$tmp" \
+        && mv -f "$tmp" "$CONFIG_FILE"
+    trap - EXIT INT TERM
 }
 
 # The theme colours from an image (infynitae-wallpaper --colors) into the config: the accent alone
@@ -737,6 +740,8 @@ cmd_set() {
 
     # Update or append in config file without sed injection
     export KEY VAL_QUOTED
+    tmp=$(mktemp "${CONFIG_FILE}.tmp.XXXXXX")
+    trap 'rm -f "$tmp"' EXIT INT TERM
     awk '
     BEGIN {
         key = ENVIRON["KEY"]
@@ -754,7 +759,8 @@ cmd_set() {
             print key "=" val
         }
     }
-    ' "$CONFIG_FILE" > "$CONFIG_FILE.tmp.$$" && mv -f "$CONFIG_FILE.tmp.$$" "$CONFIG_FILE"
+    ' "$CONFIG_FILE" > "$tmp" && mv -f "$tmp" "$CONFIG_FILE"
+    trap - EXIT INT TERM
 
     echo "==> Updated $KEY in $CONFIG_FILE"
     . "$CONFIG_FILE"
