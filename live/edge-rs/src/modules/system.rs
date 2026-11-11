@@ -87,86 +87,6 @@ pub fn read_hwmon_temp(hwmon_parent: &Path) -> Option<i32> {
     parse_hwmon_temp(&content)
 }
 
-/// Parses the CPU total and idle ticks from a `cpu ` line in `/proc/stat`.
-#[allow(dead_code)]
-pub fn parse_cpu_stat_line(line: &str) -> Option<(u64, u64)> {
-    let mut parts = line.split_whitespace();
-    if parts.next()? != "cpu" {
-        return None;
-    }
-    let user: u64 = parts.next()?.parse().ok()?;
-    let nice: u64 = parts.next()?.parse().ok()?;
-    let system: u64 = parts.next()?.parse().ok()?;
-    let idle: u64 = parts.next()?.parse().ok()?;
-    let iowait: u64 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-    let irq: u64 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-    let softirq: u64 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-    let steal: u64 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-
-    let idle_total = idle + iowait;
-    let total = user + nice + system + idle_total + irq + softirq + steal;
-    Some((total, idle_total))
-}
-
-/// Parses the CPU busy percentage between two reads of `/proc/stat`.
-#[allow(dead_code)]
-pub fn parse_cpu_stat(first: &str, second: &str) -> Option<f64> {
-    let line1 = first.lines().find(|l| l.starts_with("cpu "))?;
-    let line2 = second.lines().find(|l| l.starts_with("cpu "))?;
-    let (t1, idle1) = parse_cpu_stat_line(line1)?;
-    let (t2, idle2) = parse_cpu_stat_line(line2)?;
-    let delta_total = t2.saturating_sub(t1);
-    let delta_idle = idle2.saturating_sub(idle1);
-    if delta_total == 0 {
-        return Some(0.0);
-    }
-    let busy = delta_total.saturating_sub(delta_idle);
-    Some((busy as f64 / delta_total as f64 * 100.0).clamp(0.0, 100.0))
-}
-
-/// Parses battery capacity and status from `/sys/class/power_supply/BAT*` files into
-/// `(capacity_percent, is_charging)`.
-#[allow(dead_code)]
-pub fn parse_battery(capacity_text: &str, status_text: &str) -> (Option<u8>, bool) {
-    let cap = capacity_text.trim().parse::<u8>().ok().map(|c| c.min(100));
-    let st = status_text.trim();
-    let charging = st.eq_ignore_ascii_case("charging") || st.eq_ignore_ascii_case("full");
-    (cap, charging)
-}
-
-/// Reads the first battery (`BAT*`) found in `power_supply_dir`, returning `(capacity, is_charging)`.
-#[allow(dead_code)]
-pub fn read_battery_from(power_supply_dir: &Path) -> Option<(u8, bool)> {
-    let Ok(entries) = std::fs::read_dir(power_supply_dir) else {
-        return None;
-    };
-    let mut bat_entries: Vec<PathBuf> = entries
-        .flatten()
-        .filter_map(|e| {
-            let name = e.file_name();
-            let s = name.to_str()?;
-            if s.starts_with("BAT") {
-                Some(e.path())
-            } else {
-                None
-            }
-        })
-        .collect();
-    bat_entries.sort();
-    for bat_path in bat_entries {
-        let cap_path = bat_path.join("capacity");
-        let st_path = bat_path.join("status");
-        if let Ok(cap_str) = std::fs::read_to_string(cap_path) {
-            let st_str = std::fs::read_to_string(st_path).unwrap_or_default();
-            let (cap, charging) = parse_battery(&cap_str, &st_str);
-            if let Some(c) = cap {
-                return Some((c, charging));
-            }
-        }
-    }
-    None
-}
-
 /// Looks up `dev` and `rev` (hex strings) in `/usr/share/libdrm/amdgpu.ids` text format.
 pub fn lookup_amdgpu_ids(ids_text: &str, dev: &str, rev: &str) -> Option<String> {
     let dev_clean = dev
@@ -933,23 +853,6 @@ LAB A5b DONE
     }
 
     #[test]
-    fn parses_cpu_stat_pair_from_kernel() {
-        let stat1 = "\
-cpu  49933434 12661370 16812476 367504439 2035950 793615 342739 0 0 1890190
-cpu0 2256435 1031265 896715 33003942 252142 57277 87602 0 0 102249
-cpu1 7181386 1174642 2867389 25887343 220281 130891 144699 0 0 163908
-";
-        let stat2 = "\
-cpu  49933846 12661381 16812697 367506844 2035954 793625 342743 0 0 1890191
-cpu0 2256457 1031266 896727 33004162 252142 57278 87602 0 0 102249
-cpu1 7181461 1174643 2867437 25887472 220281 130893 144700 0 0 163908
-";
-        let pct = parse_cpu_stat(stat1, stat2).unwrap();
-        // delta_busy: 658, delta_total: 3067 -> ~21.45%
-        assert!((pct - 21.45).abs() < 0.1);
-    }
-
-    #[test]
     fn parses_hwmon_tree_in_temp_dir() {
         let dir = std::env::temp_dir().join(format!("test_hwmon_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -994,24 +897,5 @@ cpu1 7181461 1174643 2867437 25887472 220281 130893 144700 0 0 163908
         let vram_total = d.vram_total_gb.unwrap();
         assert!((vram_used - 7.271).abs() < 0.01);
         assert!((vram_total - 15.922).abs() < 0.01);
-    }
-
-    #[test]
-    fn parses_battery_and_power_supply_in_temp_dir() {
-        assert_eq!(parse_battery("85\n", "Discharging\n"), (Some(85), false));
-        assert_eq!(parse_battery("100\n", "Full\n"), (Some(100), true));
-        assert_eq!(parse_battery("42\n", "Charging\n"), (Some(42), true));
-
-        let dir = std::env::temp_dir().join(format!("test_power_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        let bat0 = dir.join("BAT0");
-        std::fs::create_dir_all(&bat0).unwrap();
-        std::fs::write(bat0.join("capacity"), "88\n").unwrap();
-        std::fs::write(bat0.join("status"), "Charging\n").unwrap();
-
-        let res = read_battery_from(&dir);
-        let _ = std::fs::remove_dir_all(&dir);
-
-        assert_eq!(res, Some((88, true)));
     }
 }
