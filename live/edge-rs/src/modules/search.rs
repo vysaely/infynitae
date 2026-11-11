@@ -10,6 +10,13 @@ use cairo::Context;
 use std::f64::consts::PI;
 
 pub const BAR_H: f64 = 46.0;
+pub const PLACEHOLDER: &str = "Search apps, windows, files, settings";
+
+/// The hint at the right end of the search bar: the panel's shortcut key from config,
+/// or `None` when no key is configured.
+pub fn key_hint(world: &World) -> Option<String> {
+    crate::config::format_key(world.panel_key)
+}
 
 pub fn height(it: &Item, world: &World) -> f64 {
     let look = it.look.unwrap_or(1);
@@ -69,9 +76,11 @@ pub fn draw(cr: &Context, th: &Theme, it: &Item, world: &World, rect: Rect) {
     draw_search_icon(cr, x + PAD_X + 9.0, cy, icon_col);
 
     let show_clear = world.panel_has_clipboard && !world.clipboard.items.is_empty();
-    let clear_w = if show_clear { 64.0 } else { 0.0 };
+    let key = if !show_clear { key_hint(world) } else { None };
+    let mut right_w = 0.0;
 
     if show_clear {
+        right_w = 64.0;
         draw::text_right(
             cr,
             x + w - PAD_X,
@@ -83,10 +92,35 @@ pub fn draw(cr: &Context, th: &Theme, it: &Item, world: &World, rect: Rect) {
                 text: "Clear",
             },
         );
+    } else if let Some(ref k) = key {
+        let (kw, _) = draw::measure(
+            cr,
+            &Text {
+                size: 12.0,
+                bold: false,
+                color: th.muted,
+                text: k,
+            },
+        );
+        // Leave room for search icon and some input text; drop key if card is too narrow
+        if w - 2.0 * PAD_X - 26.0 - kw >= 20.0 {
+            right_w = kw + 12.0;
+            draw::text_right(
+                cr,
+                x + w - PAD_X,
+                cy - 7.0,
+                &Text {
+                    size: 12.0,
+                    bold: false,
+                    color: th.muted,
+                    text: k,
+                },
+            );
+        }
     }
 
     let tx = x + PAD_X + 26.0;
-    let max_w = (w - 2.0 * PAD_X - 30.0 - clear_w).max(10.0);
+    let max_w = (w - 2.0 * PAD_X - 30.0 - right_w).max(10.0);
     if !world.search.is_empty() {
         let tw = draw::text_max(
             cr,
@@ -114,7 +148,7 @@ pub fn draw(cr: &Context, th: &Theme, it: &Item, world: &World, rect: Rect) {
                 size: 13.0,
                 bold: false,
                 color: th.muted,
-                text: "Search",
+                text: PLACEHOLDER,
             },
         );
     }
@@ -210,5 +244,43 @@ mod tests {
             half: false,
         };
         draw(&cr, &th, &item, &world, (0.0, 0.0, 380.0, 46.0));
+    }
+
+    #[test]
+    fn search_placeholder_and_key_hint() {
+        assert_eq!(PLACEHOLDER, "Search apps, windows, files, settings");
+
+        let mut world = World::now();
+        world.panel_key = Some('w');
+        assert_eq!(key_hint(&world), Some("Super+W".to_string()));
+
+        world.panel_key = Some('l');
+        assert_eq!(key_hint(&world), Some("Super+L".to_string()));
+
+        world.panel_key = None;
+        assert_eq!(key_hint(&world), None);
+    }
+
+    #[test]
+    fn search_draw_renders_key_hint_and_placeholder() {
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 380, 46).unwrap();
+        let cr = cairo::Context::new(&surf).unwrap();
+        let th = Theme::from_config(&crate::config::Config::from_text(""));
+        let mut world = World::now();
+        world.panel_key = Some('w');
+
+        let item = Item {
+            module: Module::Search,
+            look: Some(1),
+            rect: None,
+            half: false,
+        };
+        // Full width renders placeholder and key hint
+        draw(&cr, &th, &item, &world, (0.0, 0.0, 380.0, 46.0));
+
+        // Narrow width drops key hint to avoid overlap
+        let surf_narrow = cairo::ImageSurface::create(cairo::Format::ARgb32, 60, 46).unwrap();
+        let cr_narrow = cairo::Context::new(&surf_narrow).unwrap();
+        draw(&cr_narrow, &th, &item, &world, (0.0, 0.0, 60.0, 46.0));
     }
 }
