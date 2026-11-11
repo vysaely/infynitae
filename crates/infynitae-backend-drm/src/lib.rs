@@ -173,6 +173,28 @@ pub fn idle_timeout_remaining(
     }
 }
 
+/// Time remaining until the next logind idle-inhibit background query is due.
+/// Starts 5 s before the idle timeout expires so the answer is ready without
+/// blocking the main loop. None when idle blanking is disabled, already active,
+/// or inhibited by Wayland. Pure.
+pub fn logind_query_remaining(
+    idle_sleep_timeout_min: u32,
+    dpms_active: bool,
+    idle_inhibited: bool,
+    last_user_activity: std::time::Instant,
+    now: std::time::Instant,
+) -> Option<Duration> {
+    if !dpms_active && idle_sleep_timeout_min > 0 && !idle_inhibited {
+        let total = Duration::from_secs(u64::from(idle_sleep_timeout_min) * 60);
+        let lead = Duration::from_secs(5).min(total / 2);
+        let query_at = total.saturating_sub(lead);
+        let elapsed = now.saturating_duration_since(last_user_activity);
+        Some(query_at.saturating_sub(elapsed))
+    } else {
+        None
+    }
+}
+
 /// A mode's refresh in mHz, from its pixel clock (kHz) and totals; the rounded `vrefresh` when the
 /// totals are unknown. Pure.
 pub fn refresh_mhz(clock_khz: u32, htotal: u16, vtotal: u16, vrefresh: u32) -> u32 {
@@ -509,6 +531,7 @@ struct LoopData {
     idle_sleep_timeout_min: u32,
     idle_auto_lock: bool,
     lock_process: Option<std::process::Child>,
+    logind_inhibit: infynitae_wayland::idle_inhibit::LogindInhibitWatcher,
     /// The VRR setting (`ConsoleOptions::vrr`), each screen's until a tool changes it.
     vrr_mode: Option<bool>,
     /// For timers set from the render path (a refused page flip's retry).
@@ -683,15 +706,28 @@ fn read_connector_edid(drm: &impl Device, handle: connector::Handle) -> Option<e
 }
 
 /// At the idle timeout: whether logind holds an idle inhibitor (an app over D-Bus, through
-/// infynitae-portal's org.freedesktop.ScreenSaver, or `systemd-inhibit --what=idle`). If so,
+/// infynitae-portal's org.freedesktop.ScreenSaver, or `systemd-inhibit --what=idle`). Uses the
+/// last known answer delivered through the channel from the background query thread. If so,
 /// the timeout is asked again in a minute, not at every loop.
 fn logind_inhibits_idle_now(data: &mut LoopData) -> bool {
-    if !infynitae_wayland::idle_inhibit::logind_idle_inhibited() {
+    logind_inhibits_idle_decision(
+        &data.logind_inhibit,
+        data.idle_sleep_timeout_min,
+        &mut data.last_user_activity,
+    )
+}
+
+pub(crate) fn logind_inhibits_idle_decision(
+    inhibit: &infynitae_wayland::idle_inhibit::LogindInhibitWatcher,
+    idle_sleep_timeout_min: u32,
+    last_user_activity: &mut std::time::Instant,
+) -> bool {
+    if !inhibit.is_inhibited() {
         return false;
     }
-    let timeout = Duration::from_secs(u64::from(data.idle_sleep_timeout_min) * 60);
+    let timeout = Duration::from_secs(u64::from(idle_sleep_timeout_min) * 60);
     let recheck = timeout.saturating_sub(Duration::from_secs(60));
-    data.last_user_activity = std::time::Instant::now()
+    *last_user_activity = std::time::Instant::now()
         .checked_sub(recheck)
         .unwrap_or_else(std::time::Instant::now);
     true
@@ -1406,6 +1442,15 @@ pub fn run_console_with(
             }
         })
         .map_err(|e| format!("seat events: {e}"))?;
+    let (logind_inhibit, inhibit_channel) =
+        infynitae_wayland::idle_inhibit::LogindInhibitWatcher::new();
+    handle
+        .insert_source(inhibit_channel, |event, _, data| {
+            if let smithay::reexports::calloop::channel::Event::Msg(inhibited) = event {
+                data.logind_inhibit.update(inhibited);
+            }
+        })
+        .map_err(|e| format!("idle inhibit channel: {e}"))?;
     handle
         .insert_source(drm_notifier, |event, meta, data| match event {
             DrmEvent::VBlank(crtc) => {
@@ -1527,6 +1572,7 @@ pub fn run_console_with(
         idle_sleep_timeout_min: idle_timeout_min,
         idle_auto_lock,
         lock_process: None,
+        logind_inhibit,
         vrr_mode: options.vrr,
         loop_handle: handle.clone(),
         factory,
@@ -1574,6 +1620,16 @@ pub fn run_console_with(
             data.last_user_activity,
             std::time::Instant::now(),
         );
+        let query_due = logind_query_remaining(
+            data.idle_sleep_timeout_min,
+            data.dpms_active,
+            data.state.is_idle_inhibited(),
+            data.last_user_activity,
+            std::time::Instant::now(),
+        );
+        if query_due == Some(Duration::ZERO) {
+            data.logind_inhibit.query_async(std::time::Instant::now());
+        }
         let capture_mark = data
             .state
             .capture_indicator()
@@ -1586,6 +1642,7 @@ pub fn run_console_with(
             data.session.timeout(),
             restart,
             idle_timeout,
+            query_due.filter(|d| !d.is_zero()),
             capture_mark,
             rescan,
             background,
@@ -3803,6 +3860,46 @@ mod tests {
 
         // When timeout is 0 (disabled) -> None
         assert_eq!(idle_timeout_remaining(0, false, false, start, start), None);
+    }
+
+    #[test]
+    fn logind_query_remaining_schedules_lead_and_respects_inhibitions() {
+        let start = std::time::Instant::now();
+        // 10 minutes timeout (600 s): query is due 5 s before timeout (595 s)
+        let due = logind_query_remaining(10, false, false, start, start);
+        assert_eq!(due, Some(Duration::from_secs(595)));
+
+        // At 595 s elapsed: query is due immediately (0 remaining)
+        let due = logind_query_remaining(10, false, false, start, start + Duration::from_secs(595));
+        assert_eq!(due, Some(Duration::ZERO));
+
+        // When DPMS is already active -> None
+        assert_eq!(logind_query_remaining(10, true, false, start, start), None);
+
+        // When idle is inhibited -> None
+        assert_eq!(logind_query_remaining(10, false, true, start, start), None);
+
+        // When timeout is 0 (disabled) -> None
+        assert_eq!(logind_query_remaining(0, false, false, start, start), None);
+    }
+
+    #[test]
+    fn logind_inhibits_idle_decision_runs_no_process() {
+        let (mut watcher, _rx) = infynitae_wayland::idle_inhibit::LogindInhibitWatcher::new();
+        let mut activity = std::time::Instant::now();
+        let t0 = activity;
+
+        // Not inhibited: returns false, activity timestamp unchanged
+        assert!(!logind_inhibits_idle_decision(&watcher, 10, &mut activity));
+        assert_eq!(activity, t0);
+
+        // Inhibited: returns true, adjusts activity so timeout rechecks in 60 s
+        watcher.update(true);
+        assert!(logind_inhibits_idle_decision(&watcher, 10, &mut activity));
+        assert!(activity < t0, "activity pushed back for recheck");
+
+        // Evaluates in-memory without spawning any process on the main loop
+        assert!(t0.elapsed() < Duration::from_millis(5));
     }
 
     #[test]
