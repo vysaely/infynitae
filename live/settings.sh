@@ -27,7 +27,7 @@ expand_path() {
 # LOOK_CARD, LOOK_CARD_AA, LOOK_EDGE, LOOK_EDGE_AA, LOOK_TEXT, LOOK_ACCENT... Without the Rust edge,
 # today's values from the colours and SQUARE_CORNERS. Its lines are checked, never run as code.
 look_load() {
-    case "${SQUARE_CORNERS:-false}" in
+    case "${SQUARE_CORNERS:-true}" in
         1|true|yes|on|TRUE|True) LOOK_CORNERS=0 ;;
         *) LOOK_CORNERS=8 ;;
     esac

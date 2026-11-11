@@ -368,6 +368,7 @@ static void load_theme_config(LockApp *app) {
     app->border_act_rgb[0] = 0.478; app->border_act_rgb[1] = 0.635; app->border_act_rgb[2] = 0.969; /* #7aa2f7 */
     app->border_inact_rgb[0] = 0.200; app->border_inact_rgb[1] = 0.231; app->border_inact_rgb[2] = 0.329; /* #333b54 */
     app->text_rgb[0] = 0.933; app->text_rgb[1] = 0.949; app->text_rgb[2] = 0.973;             /* #eef2f8 */
+    app->square_corners = true;
 
     const char *home = getenv("HOME");
     if (!home) return;
