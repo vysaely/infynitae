@@ -45,7 +45,14 @@ notify_actions() {
 # the device under a dm cleartext device (/dev/dm-N), else nothing
 backing_device() {
     run_udisksctl info -b "$1" 2>/dev/null | awk '
-    $1 == "CryptoBackingDevice:" { d = $2; gsub(/\047/, "", d); if (d != "/") { sub(".*/", "/dev/", d); print d } }'
+    $1 == "CryptoBackingDevice:" {
+        d = $2; gsub(/\047/, "", d);
+        if (d != "/") {
+            sub(".*/", "", d);
+            gsub(/_2d/, "-", d);
+            print "/dev/" d;
+        }
+    }'
 }
 
 # unmounts DEVICE, locks its encrypted device and powers the drive off; one notification says

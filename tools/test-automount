@@ -104,6 +104,11 @@ case "\$cmd" in
             echo "    CryptoBackingDevice:        '/org/freedesktop/UDisks2/block_devices/sdi1'"
             exit 0
         fi
+        if [ "\$*" = "-b /dev/dm-8" ]; then
+            echo "  org.freedesktop.UDisks2.Block:"
+            echo "    CryptoBackingDevice:        '/org/freedesktop/UDisks2/block_devices/dm_2d0'"
+            exit 0
+        fi
         exit 1
         ;;
     unlock)
@@ -370,6 +375,19 @@ if ! grep -q "/dev/dm-7 can be removed" "$NOTIFY_LOG"; then
     exit 1
 fi
 echo "PASS: eject unmounted, locked the encrypted device and powered the drive off"
+
+rm -f "$CALLS_LOG" "$NOTIFY_LOG"
+PATH="$BIN_DIR:$PATH" \
+XDG_STATE_HOME="$STATE_DIR" \
+XDG_RUNTIME_DIR="$RUN_DIR" \
+INFYNITAE_AUTOMOUNT_UDISKSCTL="$MOCK_UDISKSCTL" \
+"$WATCHER" eject /dev/dm-8
+if ! grep -q -- "lock --no-user-interaction -b /dev/dm-0" "$CALLS_LOG"; then
+    echo "FAIL: eject did not lock decoded backing device /dev/dm-0" >&2
+    cat "$CALLS_LOG" >&2
+    exit 1
+fi
+echo "PASS: eject decodes hex-escaped backing device path"
 
 echo "=== Test 5: a label cannot forge udisks lines, and shows as plain text ==="
 rm -f "$CALLS_LOG" "$NOTIFY_LOG" "$LOG_FILE"
