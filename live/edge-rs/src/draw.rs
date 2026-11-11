@@ -138,3 +138,54 @@ pub fn title(cr: &Context, th: &Theme, x: f64, y: f64, s: &str) -> f64 {
     );
     20.0
 }
+
+/// A quiet hint in 12 px muted text, right-aligned on the title line (docs/design/EDGE_DESIGN.md).
+/// Dropped if it would overlap `title` on the left when the card is narrow.
+pub fn title_hint(
+    cr: &Context,
+    th: &Theme,
+    x: f64,
+    y: f64,
+    w: f64,
+    title: &str,
+    hint: &str,
+) -> f64 {
+    if hint.is_empty() || w <= 0.0 {
+        return 0.0;
+    }
+    let (tw, _) = measure(
+        cr,
+        &Text {
+            size: 15.0,
+            bold: true,
+            color: th.text,
+            text: title,
+        },
+    );
+    let (hw, _) = measure(
+        cr,
+        &Text {
+            size: 12.0,
+            bold: false,
+            color: th.muted,
+            text: hint,
+        },
+    );
+    // Left of hint is (x + w - PAD_X - hw); right of title is (x + PAD_X + tw).
+    // Leave at least GAP (12 px) between title and hint.
+    if tw + hw + GAP > w - 2.0 * PAD_X {
+        return 0.0;
+    }
+    text_right(
+        cr,
+        x + w - PAD_X,
+        y + PAD_Y + 2.0,
+        &Text {
+            size: 12.0,
+            bold: false,
+            color: th.muted,
+            text: hint,
+        },
+    );
+    hw
+}

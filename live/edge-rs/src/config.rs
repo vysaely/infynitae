@@ -613,6 +613,11 @@ fn truthy(v: &str) -> bool {
     matches!(t.as_str(), "true" | "1" | "yes" | "on")
 }
 
+/// Formats an optional shortcut key char as `"Super+<Key>"` (e.g. `'w'` -> `"Super+W"`).
+pub fn format_key(key: Option<char>) -> Option<String> {
+    key.map(|c| format!("Super+{}", c.to_ascii_uppercase()))
+}
+
 impl Config {
     pub fn load() -> Config {
         Config::from_text(&std::fs::read_to_string(config_path()).unwrap_or_default())
@@ -788,6 +793,22 @@ impl Config {
             c.panels[idx].apply(&value_text(&value));
         }
         c
+    }
+
+    /// The shortcut key configured for a panel containing `m` (or named after it), if any.
+    pub fn key_for_module(&self, m: Module) -> Option<char> {
+        self.panels
+            .iter()
+            .find(|p| p.has(m) || p.name.eq_ignore_ascii_case(m.word()))
+            .and_then(|p| p.key)
+    }
+
+    /// The shortcut key configured for panel `name`, if any.
+    pub fn key_for_panel(&self, name: &str) -> Option<char> {
+        self.panels
+            .iter()
+            .find(|p| p.name.eq_ignore_ascii_case(name))
+            .and_then(|p| p.key)
     }
 }
 

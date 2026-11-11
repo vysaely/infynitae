@@ -49,9 +49,7 @@ pub mod windows;
 #[cfg(test)]
 pub use calendar::{arrows as calendar_arrows, shifted_month};
 
-#[cfg(test)]
-use crate::config::Config;
-use crate::config::{Item, Module, Panel};
+use crate::config::{Config, Item, Module, Panel};
 use crate::draw::{self, Text, PAD_X, PAD_Y};
 use crate::theme::Theme;
 use cairo::Context;
@@ -279,6 +277,9 @@ pub struct World {
     pub child_pending: Option<child::ChildKind>,
     pub live: bool,
     pub panel_has_clipboard: bool,
+    pub panel_key: Option<char>,
+    pub windows_key: Option<char>,
+    pub clipboard_key: Option<char>,
     pub actions: Vec<String>,
     /// the panel is being edited: empty modules keep a placeholder card (height_in)
     pub edit_preview: bool,
@@ -316,6 +317,9 @@ impl World {
             child_pending: None,
             live: false,
             panel_has_clipboard: false,
+            panel_key: None,
+            windows_key: Some('l'),
+            clipboard_key: Some('v'),
             actions: Vec::new(),
             edit_preview: false,
         };
@@ -345,6 +349,7 @@ impl World {
         self.panel_scroll = 0.0;
         self.close_requested = false;
         self.panel_has_clipboard = false;
+        self.panel_key = None;
         self.child = child::ChildState::default();
         self.apps.scroll = 0;
         self.windows.scroll = 0;
@@ -353,6 +358,12 @@ impl World {
         if std::env::var_os("INFYNITAE_EDGE_RENDER_DATA").is_some() {
             self.load_from_helper();
         }
+    }
+
+    /// Syncs panel shortcut keys from the configuration.
+    pub fn sync_config(&mut self, cfg: &Config) {
+        self.windows_key = cfg.key_for_module(Module::Windows);
+        self.clipboard_key = cfg.key_for_module(Module::Clipboard);
     }
 
     /// Sets the search query, resets selection and list scroll positions, and re-filters `apps`

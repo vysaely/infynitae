@@ -382,6 +382,7 @@ impl Shell {
         let cfg = flowed(raw);
         let theme = theme::Theme::from_config(&cfg);
         let mut world = modules::World::now();
+        world.sync_config(&cfg);
         if world.apps.favorites.is_empty() && !cfg.favorites.is_empty() {
             world.apps.set_favorites(&cfg.favorites);
         }
@@ -412,6 +413,7 @@ impl Shell {
         let cfg = flowed(cfg);
         let theme = theme::Theme::from_config(&cfg);
         let mut world = modules::World::now();
+        world.sync_config(&cfg);
         if world.apps.favorites.is_empty() && !cfg.favorites.is_empty() {
             world.apps.set_favorites(&cfg.favorites);
         }
@@ -447,6 +449,7 @@ impl Shell {
     fn use_widgets(&mut self) {
         let p = self.cfg.widgets.clone().unwrap_or_else(Panel::no_widgets);
         self.world.panel_has_clipboard = p.has(config::Module::Clipboard);
+        self.world.panel_key = None;
         self.cfg.panels = vec![p];
         self.open = Some(0);
     }
@@ -490,6 +493,7 @@ impl Shell {
                 self.raw_lines = raw_lines(&raw);
                 self.cfg = flowed(raw);
                 self.theme = theme::Theme::from_config(&self.cfg);
+                self.world.sync_config(&self.cfg);
                 self.world.apps.set_favorites(&self.cfg.favorites);
                 self.config_mtime = mtime;
                 if !self.edit.active {
@@ -520,8 +524,10 @@ impl Shell {
 
     fn prepare_panel(&mut self, idx: usize) {
         self.world.on_open();
+        self.world.sync_config(&self.cfg);
         if let Some(p) = self.cfg.panels.get(idx) {
             self.world.panel_has_clipboard = p.has(config::Module::Clipboard);
+            self.world.panel_key = p.key;
             if p.has(config::Module::Apps) || p.has(config::Module::Favorites) {
                 self.world.apps.ensure_loaded(&self.world.search);
             }
@@ -2205,12 +2211,15 @@ fn render(name: &str, size: &str, out: &str) -> Result<(), String> {
     );
     let _ = cr.paint();
     let mut world = modules::World::now();
+    world.sync_config(&cfg);
     if let Some(open_idx) = panel_idx {
         let is_editing = std::env::var_os("INFYNITAE_EDGE_RENDER_EDIT").is_some();
         let is_adding = std::env::var_os("INFYNITAE_EDGE_RENDER_ADD").is_some();
 
         let panel = &mut cfg.panels[open_idx];
         world.edit_preview = is_editing && !panel.desktop;
+        world.panel_has_clipboard = panel.has(config::Module::Clipboard);
+        world.panel_key = panel.key;
         if panel.has(config::Module::Apps) || panel.has(config::Module::Favorites) {
             world.apps.ensure_loaded(&world.search);
         }

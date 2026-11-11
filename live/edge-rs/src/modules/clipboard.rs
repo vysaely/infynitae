@@ -274,6 +274,12 @@ pub fn scroll(world: &mut World, _size: (f64, f64), _pos: (f64, f64), dy: f64) -
     }
 }
 
+/// The hint for the clipboard card title: its shortcut key from config (default `"Super+V"`),
+/// or `None` when no key is configured.
+pub fn hint(world: &World) -> Option<String> {
+    crate::config::format_key(world.clipboard_key.or(world.panel_key))
+}
+
 pub fn draw(cr: &Context, th: &Theme, world: &World, rect: Rect) {
     let (x, y, w, h) = rect;
     if w <= 0.0 || h <= 0.0 {
@@ -281,17 +287,9 @@ pub fn draw(cr: &Context, th: &Theme, world: &World, rect: Rect) {
     }
     draw::card(cr, th, x, y, w, h);
     draw::title(cr, th, x + PAD_X, y + PAD_Y, "Clipboard");
-    draw::text_right(
-        cr,
-        x + w - PAD_X,
-        y + PAD_Y + 2.0,
-        &Text {
-            size: 12.0,
-            bold: false,
-            color: th.muted,
-            text: "Super+V",
-        },
-    );
+    if let Some(h_text) = hint(world) {
+        draw::title_hint(cr, th, x, y, w, "Clipboard", &h_text);
+    }
 
     let d = &world.clipboard;
     let top = y + PAD_Y + HEAD_H;
@@ -452,5 +450,40 @@ pin:106\t/home/alice/projects/infynitae/live/launch.sh\t2m
             world.actions.last().map(String::as_str),
             Some("printf '%s\\n' '107\t[[ binary data 24 KiB png 1920x1080 ]]' | cliphist delete 2>/dev/null")
         );
+    }
+
+    #[test]
+    fn clipboard_hint_reads_key_from_config_and_omits_when_none() {
+        let mut world = World::now();
+        world.clipboard_key = Some('v');
+        assert_eq!(hint(&world), Some("Super+V".to_string()));
+
+        world.clipboard_key = Some('c');
+        assert_eq!(hint(&world), Some("Super+C".to_string()));
+
+        world.clipboard_key = None;
+        world.panel_key = None;
+        assert_eq!(hint(&world), None);
+
+        // Falls back to panel_key when clipboard_key is None
+        world.panel_key = Some('x');
+        assert_eq!(hint(&world), Some("Super+X".to_string()));
+    }
+
+    #[test]
+    fn clipboard_draw_drops_hint_when_card_too_narrow() {
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 100, 100).unwrap();
+        let cr = cairo::Context::new(&surf).unwrap();
+        let th = Theme::from_config(&crate::config::Config::from_text(""));
+        let mut world = World::now();
+        world.clipboard_key = Some('v');
+
+        // Narrow width 100.0 drops hint without overlapping title
+        draw(&cr, &th, &world, (0.0, 0.0, 100.0, 100.0));
+
+        // Normal width 380.0 draws hint
+        let surf_wide = cairo::ImageSurface::create(cairo::Format::ARgb32, 380, 100).unwrap();
+        let cr_wide = cairo::Context::new(&surf_wide).unwrap();
+        draw(&cr_wide, &th, &world, (0.0, 0.0, 380.0, 100.0));
     }
 }
