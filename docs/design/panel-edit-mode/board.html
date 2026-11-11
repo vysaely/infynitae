@@ -1,0 +1,330 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Panel edit mode</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#e3a3cb}a:hover{color:#f3c9e2}
+</style>
+</helmet>
+<div style="width: 1440px; height: 900px; position: relative; overflow: hidden; font-family: Inter, sans-serif; color: #eef2f8; background-color: #0e0a0c">
+
+<!-- a window behind, so the panel reads as sitting over the desktop -->
+<div aria-hidden="true" style="position: absolute; left: 80px; top: 90px; width: 560px; height: 360px; border-radius: 8px; background: #171013; border: 1px solid #452e3c; display: flex; flex-direction: column; overflow: hidden">
+<div style="height: 32px; background: #21171c; display: flex; align-items: center; padding: 0 14px; font-size: 12px; color: #b7a5af">Files</div>
+<div style="flex: 1"></div>
+</div>
+
+<!-- how to get here, and what changed -->
+<div style="position: absolute; left: 80px; top: 500px; width: 560px; display: flex; flex-direction: column; gap: 10px">
+<span style="font-size: 13px; font-weight: 600; letter-spacing: 0.06em; color: #c9b8c2">EDITING THE PANEL</span>
+<span style="font-size: 14px; line-height: 1.55; color: #c9b8c2">The panel keeps its real look while you edit: cards stay cards, Quick settings stays one card, and every card is only as tall as what it shows. Each card gets a small bar on top: move it up or down, make it half or full width, pick a size, or take it out. Nothing is placed by pixels any more, so nothing can end up overlapping or leave an empty gap.</span>
+<span style="font-size: 13px; line-height: 1.5; color: #b7a5af">Right click an empty spot on the panel to start editing. Try it here: the buttons work.</span>
+<sc-if value="{{notEditing}}" hint-placeholder-val="{{false}}">
+<button onClick="{{startEdit}}" style="all: unset; cursor: pointer; align-self: flex-start; margin-top: 6px; padding: 10px 16px; border-radius: 6px; background: #cc70a9; color: #171013; font-size: 13px; font-weight: 600">Edit the panel</button>
+</sc-if>
+</div>
+
+<!-- the Add list, beside the panel while adding -->
+<sc-if value="{{adding}}" hint-placeholder-val="{{false}}">
+<section aria-label="Add a module" style="position: absolute; top: 24px; right: {{addRight}}; width: 300px; max-height: 852px; overflow-y: auto; box-sizing: border-box; background: rgba(23, 16, 19, 0.95); border: 1px solid rgba(69, 46, 60, 0.9); border-radius: 8px; padding: 16px 18px; display: flex; flex-direction: column; gap: 4px">
+<div style="display: flex; justify-content: space-between; align-items: baseline; padding-bottom: 8px"><span style="font-size: 15px; font-weight: 600">Add a module</span><button onClick="{{closeAdd}}" style="all: unset; cursor: pointer; font-size: 12px; color: #b7a5af">Close</button></div>
+<sc-for list="{{available}}" as="a" hint-placeholder-count="4">
+<div style="display: flex; align-items: center; gap: 12px; padding: 9px 0; border-top: 1px solid rgba(255,255,255,0.07)">
+<div style="flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0"><span style="font-size: 13px; font-weight: 500">{{a.name}}</span><span style="font-size: 12px; color: #b7a5af">{{a.desc}}</span></div>
+<button onClick="{{a.add}}" style="all: unset; cursor: pointer; padding: 6px 12px; border-radius: 5px; border: 1px solid rgba(204,112,169,0.6); color: #e3a3cb; font-size: 12px; font-weight: 600">Add</button>
+</div>
+</sc-for>
+<sc-if value="{{nothingLeft}}" hint-placeholder-val="{{false}}"><span style="font-size: 12px; color: #b7a5af; padding: 8px 0">Every module is in the panel.</span></sc-if>
+</section>
+</sc-if>
+
+<!-- the panel -->
+<div style="position: absolute; top: 24px; right: 24px; width: {{panelW}}; max-height: 852px; overflow-y: auto; display: flex; flex-wrap: wrap; align-content: flex-start; gap: 10px">
+
+<sc-if value="{{editing}}" hint-placeholder-val="{{true}}">
+<div style="width: 100%; box-sizing: border-box; background: rgba(23, 16, 19, 0.95); border: 1px solid #cc70a9; border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 10px">
+<div style="display: flex; align-items: center; gap: 8px">
+<span style="flex: 1; font-size: 13px; font-weight: 600">Editing Control</span>
+<button onClick="{{undo}}" disabled="{{cantUndo}}" style="all: unset; cursor: pointer; padding: 6px 10px; border-radius: 5px; font-size: 12px; color: {{undoColor}}">Undo</button>
+<button onClick="{{reset}}" style="all: unset; cursor: pointer; padding: 6px 10px; border-radius: 5px; font-size: 12px; color: #c9b8c2">Reset</button>
+<button onClick="{{openAdd}}" aria-pressed="{{adding}}" style="all: unset; cursor: pointer; padding: 6px 10px; border-radius: 5px; font-size: 12px; font-weight: 600; color: #e3a3cb; border: 1px solid rgba(204,112,169,0.6)">Add</button>
+<button onClick="{{done}}" style="all: unset; cursor: pointer; padding: 6px 12px; border-radius: 5px; font-size: 12px; font-weight: 600; background: #cc70a9; color: #171013">Done</button>
+</div>
+<div style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: #b7a5af">
+<span style="flex: 1">Width</span>
+<button aria-label="Narrower" onClick="{{narrower}}" style="all: unset; cursor: pointer; width: 24px; height: 24px; border-radius: 4px; display: flex; align-items: center; justify-content: center; background: rgba(255,255,255,0.06)"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#eef2f8" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><path d="M5 12h14"></path></svg></button>
+<span style="width: 52px; text-align: center; color: #eef2f8">{{widthLabel}}</span>
+<button aria-label="Wider" onClick="{{wider}}" style="all: unset; cursor: pointer; width: 24px; height: 24px; border-radius: 4px; display: flex; align-items: center; justify-content: center; background: rgba(255,255,255,0.06)"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#eef2f8" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg></button>
+</div>
+</div>
+</sc-if>
+
+<sc-for list="{{mods}}" as="m" hint-placeholder-count="6">
+<section aria-label="{{m.name}}" style="{{m.box}}">
+
+<sc-if value="{{m.editing}}" hint-placeholder-val="{{true}}">
+<div style="display: flex; align-items: center; gap: 4px; margin: -6px -6px 12px; padding: 0 0 8px 2px; border-bottom: 1px solid rgba(255,255,255,0.08)">
+<span style="flex: 1; font-size: 12px; color: #b7a5af; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{m.name}}</span>
+<button aria-label="Move {{m.name}} up" disabled="{{m.first}}" onClick="{{m.up}}" style="all: unset; cursor: pointer; width: 26px; height: 26px; border-radius: 4px; display: flex; align-items: center; justify-content: center; opacity: {{m.upOp}}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#eef2f8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"></path></svg></button>
+<button aria-label="Move {{m.name}} down" disabled="{{m.last}}" onClick="{{m.down}}" style="all: unset; cursor: pointer; width: 26px; height: 26px; border-radius: 4px; display: flex; align-items: center; justify-content: center; opacity: {{m.downOp}}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#eef2f8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M19 12l-7 7-7-7"></path></svg></button>
+<sc-if value="{{m.halfOk}}" hint-placeholder-val="{{true}}">
+<button onClick="{{m.toggleHalf}}" style="all: unset; cursor: pointer; padding: 4px 7px; border-radius: 4px; font-size: 11px; color: #c9b8c2; background: rgba(255,255,255,0.06)">{{m.halfLabel}}</button>
+</sc-if>
+<sc-for list="{{m.sizes}}" as="s" hint-placeholder-count="2">
+<button onClick="{{s.pick}}" aria-pressed="{{s.on}}" style="all: unset; cursor: pointer; width: 22px; height: 22px; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; background: {{s.bg}}; color: {{s.fg}}">{{s.label}}</button>
+</sc-for>
+<button aria-label="Remove {{m.name}}" onClick="{{m.remove}}" style="all: unset; cursor: pointer; width: 26px; height: 26px; border-radius: 4px; display: flex; align-items: center; justify-content: center"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#e3a3cb" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg></button>
+</div>
+</sc-if>
+
+<sc-if value="{{m.clockS}}" hint-placeholder-val="{{false}}">
+<div style="display: flex; justify-content: space-between; align-items: baseline"><span style="font-size: 18px; font-weight: 600">12:16</span><span style="font-size: 13px; color: #b7a5af">Tue 10 Nov</span></div>
+</sc-if>
+<sc-if value="{{m.clockM}}" hint-placeholder-val="{{false}}">
+<div style="display: flex; justify-content: space-between; align-items: flex-end; gap: 10px; flex-wrap: wrap"><span style="font-size: 40px; font-weight: 600; letter-spacing: -0.03em; line-height: 1">12:16</span><span style="font-size: 13px; color: #b7a5af">Tuesday, 10 November</span></div>
+</sc-if>
+
+<sc-if value="{{m.sound}}" hint-placeholder-val="{{false}}">
+<div style="display: flex; flex-direction: column; gap: 12px">
+<div style="display: flex; justify-content: space-between; align-items: baseline"><span style="display: flex; align-items: center; gap: 8px; font-size: 13px"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#eef2f8" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M11 5L6 9H2v6h4l5 4zM15.5 8.5a5 5 0 0 1 0 7"></path></svg>Volume</span><span style="font-size: 13px; font-weight: 600">80%</span></div>
+<div style="position: relative; height: 4px; border-radius: 2px; background: rgba(255,255,255,0.12)"><div style="width: 80%; height: 4px; border-radius: 2px; background: #cc70a9"></div><span style="position: absolute; left: 80%; top: -5px; width: 14px; height: 14px; margin-left: -7px; border-radius: 7px; background: #eef2f8"></span></div>
+<div style="display: flex; justify-content: space-between; font-size: 12px; color: #b7a5af"><span>Output: Headphones</span><span>Change</span></div>
+</div>
+</sc-if>
+
+<sc-if value="{{m.sw}}" hint-placeholder-val="{{false}}">
+<div style="display: flex; flex-direction: column; gap: 10px">
+<span style="font-size: 15px; font-weight: 600">Quick settings</span>
+<div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px 14px">
+<sc-for list="{{shownSwitches}}" as="s" hint-placeholder-count="6">
+<div style="display: flex; align-items: center; gap: 4px">
+<button onClick="{{s.flip}}" aria-pressed="{{s.on}}" style="all: unset; cursor: pointer; flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 6px 4px; border-radius: 4px">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="{{s.icon}}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="{{s.path}}"></path></svg>
+<span style="display: flex; flex-direction: column; min-width: 0"><span style="font-size: 13px">{{s.name}}</span><span style="font-size: 11px; color: {{s.stateColor}}">{{s.state}}</span></span>
+</button>
+<sc-if value="{{editing}}" hint-placeholder-val="{{true}}">
+<button aria-label="Take {{s.name}} out" onClick="{{s.hide}}" style="all: unset; cursor: pointer; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#b7a5af" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg></button>
+</sc-if>
+</div>
+</sc-for>
+</div>
+<sc-if value="{{showHiddenSwitches}}" hint-placeholder-val="{{true}}">
+<div style="display: flex; flex-wrap: wrap; gap: 6px; padding-top: 4px">
+<sc-for list="{{hiddenSwitches}}" as="h" hint-placeholder-count="2">
+<button onClick="{{h.show}}" style="all: unset; cursor: pointer; padding: 5px 9px; border-radius: 5px; border: 1px dashed rgba(204,112,169,0.6); font-size: 12px; color: #e3a3cb">+ {{h.name}}</button>
+</sc-for>
+</div>
+</sc-if>
+</div>
+</sc-if>
+
+<sc-if value="{{m.musicS}}" hint-placeholder-val="{{false}}">
+<div style="display: flex; align-items: center; gap: 12px">
+<span style="width: 44px; height: 44px; border-radius: 5px; background: #3a2531; flex-shrink: 0"></span>
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px"><span style="font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Просто играй - Смерть</span><span style="font-size: 12px; color: #b7a5af">Альянс</span></div>
+<button aria-label="Pause" style="all: unset; cursor: pointer; width: 34px; height: 34px; border-radius: 5px; background: #cc70a9; display: flex; align-items: center; justify-content: center"><svg width="14" height="14" viewBox="0 0 24 24" fill="#171013" aria-hidden="true"><path d="M7 4h4v16H7zM14 4h4v16h-4z"></path></svg></button>
+</div>
+</sc-if>
+<sc-if value="{{m.musicFull}}" hint-placeholder-val="{{false}}">
+<div style="display: flex; flex-direction: column; gap: 12px">
+<div style="display: flex; gap: 14px; align-items: center">
+<span style="width: 64px; height: 64px; border-radius: 6px; background: #3a2531; flex-shrink: 0"></span>
+<div style="display: flex; flex-direction: column; gap: 3px; min-width: 0"><span style="font-size: 15px; font-weight: 600">Просто играй - Смерть</span><span style="font-size: 13px; color: #b7a5af">Альянс · Melodyae</span></div>
+</div>
+<div style="display: flex; flex-direction: column; gap: 6px">
+<div style="height: 4px; border-radius: 2px; background: rgba(255,255,255,0.12)"><div style="width: 38%; height: 4px; border-radius: 2px; background: #cc70a9"></div></div>
+<div style="display: flex; justify-content: space-between; font-size: 11px; color: #b7a5af"><span>1:24</span><span>3:41</span></div>
+</div>
+<div style="display: flex; justify-content: center; align-items: center; gap: 26px">
+<button aria-label="Previous" style="all: unset; cursor: pointer; display: flex"><svg width="20" height="20" viewBox="0 0 24 24" fill="#eef2f8" aria-hidden="true"><path d="M6 5h2v14H6zM20 5v14L9 12z"></path></svg></button>
+<button aria-label="Pause" style="all: unset; cursor: pointer; width: 44px; height: 44px; border-radius: 6px; background: #cc70a9; display: flex; align-items: center; justify-content: center"><svg width="16" height="16" viewBox="0 0 24 24" fill="#171013" aria-hidden="true"><path d="M7 4h4v16H7zM14 4h4v16h-4z"></path></svg></button>
+<button aria-label="Next" style="all: unset; cursor: pointer; display: flex"><svg width="20" height="20" viewBox="0 0 24 24" fill="#eef2f8" aria-hidden="true"><path d="M16 5h2v14h-2zM4 5v14l11-7z"></path></svg></button>
+</div>
+<sc-if value="{{m.musicL}}" hint-placeholder-val="{{false}}">
+<div style="display: flex; flex-direction: column; gap: 6px; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 10px">
+<span style="font-size: 12px; color: #b7a5af">Up next · 3 songs</span>
+<sc-for list="{{queue}}" as="q" hint-placeholder-count="3"><div style="display: flex; justify-content: space-between; font-size: 13px"><span>{{q.t}}</span><span style="color: #b7a5af">{{q.d}}</span></div></sc-for>
+</div>
+</sc-if>
+</div>
+</sc-if>
+
+<sc-if value="{{m.notes}}" hint-placeholder-val="{{false}}">
+<div style="display: flex; flex-direction: column; gap: 10px">
+<div style="display: flex; justify-content: space-between; align-items: baseline"><span style="font-size: 15px; font-weight: 600">Notifications</span><button style="all: unset; cursor: pointer; font-size: 12px; color: #b7a5af">Clear all</button></div>
+<div style="display: flex; flex-direction: column; gap: 2px">
+<div style="display: flex; justify-content: space-between; font-size: 11px; color: #b7a5af"><span>Infynitae</span><span>12:10</span></div>
+<span style="font-size: 13px; font-weight: 500">Privacy Mode: ON</span>
+<span style="font-size: 12px; color: #b7a5af">Window hidden from screen share and capture</span>
+</div>
+</div>
+</sc-if>
+
+<sc-if value="{{m.tray}}" hint-placeholder-val="{{false}}">
+<div style="display: flex; flex-direction: column; gap: 8px">
+<span style="font-size: 15px; font-weight: 600">Running in the background</span>
+<div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px 14px; font-size: 13px">
+<span style="padding: 3px 0">Steam</span>
+<span style="padding: 3px 0; display: flex; justify-content: space-between">Discord<span style="font-size: 11px; color: #e3a3cb">2 new</span></span>
+<span style="padding: 3px 0; display: flex; justify-content: space-between">Melodyae<span style="font-size: 11px; color: #e3a3cb">playing</span></span>
+</div>
+</div>
+</sc-if>
+
+<sc-if value="{{m.session}}" hint-placeholder-val="{{false}}">
+<div style="display: flex; justify-content: space-around">
+<sc-for list="{{power}}" as="p" hint-placeholder-count="5">
+<button style="all: unset; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 5px; font-size: 11px; color: #c9b8c2"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#eef2f8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="{{p.path}}"></path></svg>{{p.name}}</button>
+</sc-for>
+</div>
+</sc-if>
+
+<sc-if value="{{m.cal}}" hint-placeholder-val="{{false}}">
+<div style="display: flex; flex-direction: column; gap: 10px">
+<span style="font-size: 15px; font-weight: 600">November</span>
+<div style="display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); row-gap: 4px; text-align: center; font-size: 12px">
+<sc-for list="{{days}}" as="d" hint-placeholder-count="35"><span style="height: 24px; display: flex; align-items: center; justify-content: center; border-radius: 4px; background: {{d.bg}}; color: {{d.fg}}">{{d.n}}</span></sc-for>
+</div>
+</div>
+</sc-if>
+
+<sc-if value="{{m.sys}}" hint-placeholder-val="{{false}}">
+<div style="display: flex; flex-direction: column; gap: 10px">
+<span style="font-size: 15px; font-weight: 600">System</span>
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px">
+<sc-for list="{{gauges}}" as="g" hint-placeholder-count="3">
+<div style="display: flex; flex-direction: column; gap: 5px"><span style="font-size: 11px; color: #b7a5af">{{g.name}}</span><span style="font-size: 18px; font-weight: 600">{{g.value}}</span><div style="height: 3px; border-radius: 2px; background: rgba(255,255,255,0.12)"><div style="width: {{g.pct}}; height: 3px; border-radius: 2px; background: #cc70a9"></div></div></div>
+</sc-for>
+</div>
+</div>
+</sc-if>
+
+<sc-if value="{{m.mem}}" hint-placeholder-val="{{false}}">
+<div style="display: flex; flex-direction: column; gap: 8px">
+<div style="display: flex; justify-content: space-between; align-items: baseline"><span style="font-size: 15px; font-weight: 600">Memory</span><span style="font-size: 13px">19.6 <span style="color: #b7a5af">of 32 GB</span></span></div>
+<div style="height: 3px; border-radius: 2px; background: rgba(255,255,255,0.12)"><div style="width: 61%; height: 3px; border-radius: 2px; background: #cc70a9"></div></div>
+<div style="display: flex; justify-content: space-between; font-size: 13px"><span>Steam</span><span style="color: #b7a5af">2.2 GB</span></div>
+<div style="display: flex; justify-content: space-between; font-size: 13px"><span>Discord</span><span style="color: #b7a5af">0.9 GB</span></div>
+</div>
+</sc-if>
+
+</section>
+</sc-for>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+constructor(props) {
+super(props);
+this.state = { editing: true, adding: false, width: 380, mods: this.defaults(), hidden: ['night', 'keyboard', 'osk'], on: { dnd: true }, hist: [] };
+}
+defaults() {
+return [
+{ kind: 'clock', size: 'm', half: false },
+{ kind: 'sound', size: 'm', half: false },
+{ kind: 'switches', size: 'm', half: false },
+{ kind: 'tray', size: 'm', half: false },
+{ kind: 'notifications', size: 'm', half: false },
+{ kind: 'session', size: 'm', half: false }
+];
+}
+change(next) {
+const { mods, hidden, width } = this.state;
+this.setState({ ...next, hist: [...this.state.hist, { mods, hidden, width }].slice(-30) });
+}
+renderVals() {
+const CAT = {
+clock: { name: 'Clock', desc: 'Time and date', sizes: ['s', 'm'], halfOk: true },
+sound: { name: 'Sound', desc: 'Volume and the output device', sizes: [], halfOk: false },
+switches: { name: 'Quick settings', desc: 'Wi-Fi, Bluetooth, Do not disturb and more', sizes: [], halfOk: false },
+music: { name: 'Music', desc: 'The song playing; large adds the queue', sizes: ['s', 'm', 'l'], halfOk: true },
+notifications: { name: 'Notifications', desc: 'Recent notifications', sizes: [], halfOk: false },
+tray: { name: 'Background apps', desc: 'Apps running in the background', sizes: [], halfOk: false },
+session: { name: 'Power buttons', desc: 'Lock, Sleep, Log out, Restart, Shut down', sizes: [], halfOk: false },
+calendar: { name: 'Calendar', desc: 'This month; click a day to add an event', sizes: [], halfOk: true },
+system: { name: 'System', desc: 'GPU, VRAM and temperature', sizes: [], halfOk: true },
+memory: { name: 'Memory', desc: 'What uses memory, close background apps', sizes: [], halfOk: true }
+};
+const SW = [
+{ id: 'wifi', name: 'Wi-Fi', state: 'Wired', path: 'M2 9a15 15 0 0 1 20 0M5 13a10 10 0 0 1 14 0M8.5 16.5a5 5 0 0 1 7 0M12 20h0' },
+{ id: 'bluetooth', name: 'Bluetooth', state: 'Off', path: 'M7 7l10 10-5 5V2l5 5L7 17' },
+{ id: 'dnd', name: 'Do not disturb', state: 'Off', path: 'M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M3 3l18 18' },
+{ id: 'power', name: 'Power mode', state: 'Balanced', path: 'M13 2L3 14h9l-1 8 10-12h-9z' },
+{ id: 'replay', name: 'Replay', state: 'Off', path: 'M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5' },
+{ id: 'night', name: 'Night light', state: 'Off', path: 'M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z' },
+{ id: 'keyboard', name: 'Keyboard', state: 'English (US)', path: 'M3 6h18v12H3zM7 10h0M11 10h0M15 10h0M7 14h10' },
+{ id: 'osk', name: 'Screen keyboard', state: 'Hidden', path: 'M4 4h16v10H4zM8 18h8M12 14v4' }
+];
+const st = this.state;
+const editing = st.editing;
+const n = st.mods.length;
+const move = (i, d) => () => { const m = st.mods.slice(); const t = m[i]; m[i] = m[i + d]; m[i + d] = t; this.change({ mods: m }); };
+const mods = st.mods.map((m, i) => {
+const c = CAT[m.kind];
+const half = m.half && c.halfOk;
+const box = 'box-sizing: border-box; background: rgba(23, 16, 19, 0.9); border: 1px solid ' + (editing ? 'rgba(204, 112, 169, 0.45)' : 'rgba(69, 46, 60, 0.9)') + '; border-radius: 8px; padding: 16px 18px; width: ' + (half ? 'calc(50% - 5px)' : '100%');
+return {
+name: c.name, box, editing, halfOk: c.halfOk, halfLabel: half ? 'Full' : 'Half',
+first: i === 0, last: i === n - 1, upOp: i === 0 ? 0.3 : 1, downOp: i === n - 1 ? 0.3 : 1,
+up: i > 0 ? move(i, -1) : () => {}, down: i < n - 1 ? move(i, 1) : () => {},
+remove: () => this.change({ mods: st.mods.filter((_, k) => k !== i) }),
+toggleHalf: () => this.change({ mods: st.mods.map((x, k) => k === i ? { ...x, half: !x.half } : x) }),
+sizes: c.sizes.map((s) => ({ label: s.toUpperCase(), on: m.size === s, bg: m.size === s ? '#cc70a9' : 'rgba(255,255,255,0.06)', fg: m.size === s ? '#171013' : '#c9b8c2', pick: () => this.change({ mods: st.mods.map((x, k) => k === i ? { ...x, size: s } : x) }) })),
+clockS: m.kind === 'clock' && m.size === 's', clockM: m.kind === 'clock' && m.size !== 's',
+sound: m.kind === 'sound', sw: m.kind === 'switches',
+musicS: m.kind === 'music' && m.size === 's', musicFull: m.kind === 'music' && m.size !== 's', musicL: m.kind === 'music' && m.size === 'l',
+notes: m.kind === 'notifications', tray: m.kind === 'tray', session: m.kind === 'session',
+cal: m.kind === 'calendar', sys: m.kind === 'system', mem: m.kind === 'memory'
+};
+});
+const inPanel = new Set(st.mods.map((m) => m.kind));
+const available = Object.keys(CAT).filter((k) => !inPanel.has(k)).map((k) => ({ name: CAT[k].name, desc: CAT[k].desc, add: () => this.change({ mods: [...st.mods, { kind: k, size: CAT[k].sizes.includes('m') ? 'm' : (CAT[k].sizes[0] || 'm'), half: false }] }) }));
+const shownSwitches = SW.filter((s) => !st.hidden.includes(s.id)).map((s) => {
+const on = !!st.on[s.id];
+return { ...s, on, state: s.id === 'dnd' || s.id === 'bluetooth' || s.id === 'replay' || s.id === 'night' ? (on ? 'On' : 'Off') : s.state, icon: on ? '#cc70a9' : '#eef2f8', stateColor: on ? '#e3a3cb' : '#b7a5af',
+flip: () => this.setState({ on: { ...st.on, [s.id]: !on } }),
+hide: () => this.change({ hidden: [...st.hidden, s.id] }) };
+});
+const hiddenSwitches = SW.filter((s) => st.hidden.includes(s.id)).map((s) => ({ name: s.name, show: () => this.change({ hidden: st.hidden.filter((h) => h !== s.id) }) }));
+const days = [];
+for (let i = 0; i < 35; i++) { const d = i - 5; const inM = d >= 1 && d <= 30; days.push({ n: inM ? String(d) : '', bg: d === 10 ? '#cc70a9' : 'transparent', fg: d === 10 ? '#171013' : '#eef2f8' }); }
+return {
+editing, notEditing: !editing, adding: editing && st.adding,
+panelW: st.width + 'px', widthLabel: st.width + ' px', addRight: (st.width + 48) + 'px',
+cantUndo: st.hist.length === 0, undoColor: st.hist.length ? '#c9b8c2' : 'rgba(201,184,194,0.4)',
+mods, available, nothingLeft: available.length === 0,
+shownSwitches, hiddenSwitches, showHiddenSwitches: editing && hiddenSwitches.length > 0,
+queue: [{ t: 'Группа крови', d: '4:46' }, { t: 'Кукушка', d: '6:38' }, { t: 'Звезда по имени Солнце', d: '3:45' }],
+power: [
+{ name: 'Lock', path: 'M6 11h12v10H6zM8 11V7a4 4 0 0 1 8 0v4' },
+{ name: 'Sleep', path: 'M17 4h4l-4 5h4M10 9h3l-3 4h3M4 20a8 8 0 0 0 8-8' },
+{ name: 'Log out', path: 'M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10' },
+{ name: 'Restart', path: 'M20 12a8 8 0 1 1-2.3-5.7M20 4v5h-5' },
+{ name: 'Shut down', path: 'M12 3v9M7 6a8 8 0 1 0 10 0' }
+],
+days,
+gauges: [{ name: 'GPU', value: '99%', pct: '99%' }, { name: 'VRAM', value: '15.4 GB', pct: '96%' }, { name: 'Temp', value: '75 C', pct: '68%' }],
+startEdit: () => this.setState({ editing: true }),
+done: () => this.setState({ editing: false, adding: false }),
+openAdd: () => this.setState({ adding: !st.adding }),
+closeAdd: () => this.setState({ adding: false }),
+undo: () => { if (!st.hist.length) return; const h = st.hist[st.hist.length - 1]; this.setState({ ...h, hist: st.hist.slice(0, -1) }); },
+reset: () => this.change({ mods: this.defaults(), hidden: ['night', 'keyboard', 'osk'], width: 380 }),
+narrower: () => this.change({ width: Math.max(320, st.width - 20) }),
+wider: () => this.change({ width: Math.min(480, st.width + 20) })
+};
+}
+}
+</script>
+</body>
+</html>
