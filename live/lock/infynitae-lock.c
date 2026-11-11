@@ -1363,8 +1363,6 @@ int main(int argc, char **argv) {
     strncpy(app.session_cmd, "infynitae-session", sizeof(app.session_cmd) - 1);
     load_theme_config(&app);
     const char *render_size = NULL, *render_out = NULL;
-    // no core dump and no ptrace by the same user of a process that holds the password
-    prctl(PR_SET_DUMPABLE, 0);
     (void)mlock(app.password, sizeof(app.password));
 
     // Parse options
@@ -1431,6 +1429,11 @@ int main(int argc, char **argv) {
     app.registry = wl_display_get_registry(app.display);
     wl_registry_add_listener(app.registry, &registry_listener, &app);
     wl_display_roundtrip(app.display);
+    // no core dump and no ptrace by the same user of a process that holds the password. Only now: a
+    // non-dumpable process's /proc/<pid>/exe cannot be read, and the compositor knows the lock screen by that
+    // file when it connects (an earlier call made it refuse the session lock; owner's PC, 2026-11-11). No
+    // password has been typed yet.
+    prctl(PR_SET_DUMPABLE, 0);
 
     if (!app.compositor || !app.shm || !app.lock_manager) {
         fprintf(stderr, "[infynitae-lock] Error: Wayland compositor missing required protocols (shm, ext-session-lock-v1)\n");
