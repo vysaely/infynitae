@@ -192,7 +192,7 @@ case "${NOTIFICATIONS:-auto}" in
     *) NOTIFY_CMD="$NOTIFICATIONS" ;;
 esac
 if [ -n "$NOTIFY_CMD" ]; then
-    $NOTIFY_CMD >/dev/null 2>&1 &
+    sh -c "$NOTIFY_CMD" >/dev/null 2>&1 &
 fi
 
 # 6c2. The last crash (infynitae-session wrote a report): said once, in a notification
@@ -364,7 +364,11 @@ resolve_terminal() {
 
 TERM_BIN=$(resolve_terminal)
 if [ -n "$TERM_BIN" ]; then
-    exec $TERM_BIN
+    if [ -x "$TERM_BIN" ]; then
+        exec "$TERM_BIN"
+    else
+        exec sh -c "exec $TERM_BIN"
+    fi
 else
     echo "[infynitae] Warning: No terminal emulator found. Please install alacritty, foot, or kitty." >&2
 fi

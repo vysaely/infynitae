@@ -85,3 +85,50 @@ if [ $rc -ne 0 ]; then
     exit 1
 fi
 echo "ok Finding 14: session.sh does not abort when locker writes confirmation before exit"
+
+# ----------------------------------------------------------------------
+# 3. Finding 21: Paths with spaces or compound commands in NOTIFICATIONS and TERMINAL
+# ----------------------------------------------------------------------
+HOME3="$TMP/home3"
+mkdir -p "$HOME3"
+SPACED_DIR="$TMP/dir with spaces"
+mkdir -p "$SPACED_DIR"
+
+NOTIFY_MARKER="$TMP/notify_marker"
+TERM_MARKER="$TMP/term_marker"
+
+cat > "$SPACED_DIR/custom-notify" <<EOF
+#!/bin/sh
+touch "$NOTIFY_MARKER"
+exit 0
+EOF
+chmod +x "$SPACED_DIR/custom-notify"
+
+cat > "$SPACED_DIR/custom-term" <<EOF
+#!/bin/sh
+touch "$TERM_MARKER"
+exit 0
+EOF
+chmod +x "$SPACED_DIR/custom-term"
+
+(
+    export HOME="$HOME3"
+    export WAYLAND_DISPLAY="wayland-test"
+    export START_LOCKED="0"
+    export NOTIFICATIONS="'$SPACED_DIR/custom-notify' --arg"
+    export TERMINAL="$SPACED_DIR/custom-term"
+    export START_TERMINAL="true"
+    export SESSION_RESTORE="false"
+    sh "$SESSION_SCRIPT" >/dev/null 2>&1 || true
+)
+
+sleep 0.2
+if [ ! -f "$NOTIFY_MARKER" ]; then
+    echo "FAIL Finding 21: NOTIFICATIONS with arguments/spaces failed to execute"
+    exit 1
+fi
+if [ ! -f "$TERM_MARKER" ]; then
+    echo "FAIL Finding 21: TERMINAL path with spaces failed to execute"
+    exit 1
+fi
+echo "ok Finding 21: spaced paths and commands in NOTIFICATIONS and TERMINAL execute cleanly"
