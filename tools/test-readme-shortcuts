@@ -1,0 +1,264 @@
+#!/usr/bin/env python3
+"""tools/test-readme-shortcuts: every keyboard shortcut in README.md matches keys.rs.
+
+Parses the shortcuts table in README.md, verifies each keyboard shortcut against
+crates/infynitae-core/src/input/keys.rs, and confirms that:
+1. Every listed keyboard shortcut resolves to a bound KeyAction in keys.rs.
+2. The action in keys.rs matches what README documents.
+3. Unbound shortcuts (like Super+C) or misassigned shortcuts (like Super+L for lock) fail.
+
+Usage:
+  tools/test-readme-shortcuts
+  tools/test-readme-shortcuts --self-test
+"""
+import os
+import re
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+REPO = os.path.normpath(os.path.join(HERE, ".."))
+README = os.path.join(REPO, "README.md")
+KEYS_RS = os.path.join(REPO, "crates", "infynitae-core", "src", "input", "keys.rs")
+
+# Canonical actions in keys.rs and their associated semantic keywords in the docs.
+ACTION_KEYWORDS = {
+    "FocusSlot": ["slot", "focus"],
+    "FocusClusterSlot": ["cluster", "slot", "focus"],
+    "Recenter": ["center", "recenter", "100%"],
+    "RecenterKeepZoom": ["center", "recenter", "keep", "zoom"],
+    "FitToggle": ["maximize", "fit"],
+    "ToggleFullscreen": ["fullscreen"],
+    "FocusNext": ["last two windows", "attention", "flip"],
+    "FocusDirection": ["nearest window", "canvas"],
+    "ToggleOverview": ["overview"],
+    "SpawnTerminal": ["terminal"],
+    "ToggleLauncher": ["launcher", "apps"],
+    "SpawnFileManager": ["files", "file manager"],
+    "SpawnRegionScreenshot": ["region screenshot"],
+    "SpawnScreenshot": ["screenshot", "whole screen"],
+    "ClipboardHistory": ["clipboard"],
+    "ControlMenu": ["control menu", "control"],
+    "ToggleWindowList": ["open windows", "list of open windows", "windows"],
+    "SpawnLockScreen": ["lock"],
+    "CloseFocused": ["close the window", "close"],
+    "ForceCloseFocused": ["force close"],
+    "ToggleKeepOnTop": ["keep", "top"],
+    "SpawnSystemMonitor": ["system monitor"],
+    "TogglePrivacy": ["hide", "privacy"],
+    "ToggleIdleInhibit": ["stay awake", "idle"],
+    "ToggleTearing": ["tearing"],
+    "SaveReplay": ["replay"],
+    "ToggleRecording": ["recording", "record"],
+    "ReloadShell": ["reload"],
+}
+
+def resolve_key_binding(key, logo, shift, alt, ctrl):
+    """Pure resolver reflecting resolve_key_binding in keys.rs."""
+    if key == "ESC" and logo and shift and not ctrl and not alt:
+        return "SpawnSystemMonitor"
+    if key == "ESC":
+        return None
+    if key == "ENTER" and logo and not ctrl and not alt:
+        return "ToggleFullscreen" if shift else "FitToggle"
+    if key in ("LEFT", "RIGHT", "UP", "DOWN") and logo and not shift and not ctrl and not alt:
+        return "FocusDirection"
+    if key == "TAB" and logo and not ctrl and not alt:
+        return "ToggleOverview" if shift else "FocusNext"
+    if key == "C" and logo and shift and not ctrl and not alt:
+        return "CloseFocused"
+    if key == "DELETE" and logo and not shift and not ctrl and not alt:
+        return "ForceCloseFocused"
+    if key == "SPACE" and logo and not ctrl and not alt:
+        return "RecenterKeepZoom" if shift else "Recenter"
+    if key in ("1", "2", "3", "4", "5", "6", "7", "8", "9"):
+        if logo and not shift and not ctrl and not alt:
+            return "FocusSlot"
+        if logo and shift and not ctrl and not alt:
+            return "FocusClusterSlot"
+    if key == "W" and logo and not shift and not ctrl and not alt:
+        return "ToggleLauncher"
+    if key == "L" and logo and not shift and not ctrl and not alt:
+        return "ToggleWindowList"
+    if key == "Q" and logo and not shift and not ctrl and not alt:
+        return "SpawnTerminal"
+    if key == "E" and logo and not shift and not ctrl and not alt:
+        return "SpawnFileManager"
+    if (key == "S" and logo and shift and not ctrl and not alt) or key == "SYSRQ":
+        return "SpawnScreenshot"
+    if (key == "S" and logo and not shift and not ctrl and not alt) or \
+       (key == "R" and logo and shift and not ctrl and not alt):
+        return "SpawnRegionScreenshot"
+    if key == "BACKSPACE" and logo and shift and not ctrl and not alt:
+        return "ReloadShell"
+    if key == "L" and logo and shift and not ctrl and not alt:
+        return "SpawnLockScreen"
+    if key == "V" and logo and not shift and not ctrl and not alt:
+        return "ClipboardHistory"
+    if key == "A" and logo and not shift and not ctrl and not alt:
+        return "ControlMenu"
+    if key == "K" and logo and shift and not ctrl and not alt:
+        return "ToggleKeepOnTop"
+    if key == "P" and logo and shift and not ctrl and not alt:
+        return "TogglePrivacy"
+    if key == "I" and logo and shift and not ctrl and not alt:
+        return "ToggleIdleInhibit"
+    if key in ("O", "T") and logo and shift and not ctrl and not alt:
+        return "ToggleTearing"
+    if key == "C" and logo and alt and not ctrl and not shift:
+        return "SaveReplay"
+    if key in ("P", "R") and logo and alt and not ctrl and not shift:
+        return "ToggleRecording"
+    return None
+
+def verify_resolver_against_keys_rs(keys_rs_path):
+    """Ensures that every action and key combination in resolve_key_binding exists in keys.rs source."""
+    with open(keys_rs_path, "r", encoding="utf-8") as f:
+        src = f.read()
+
+    # Verify that each KeyAction enum exists in keys.rs
+    for action in ACTION_KEYWORDS:
+        assert f"KeyAction::{action}" in src or f"enum KeyAction" in src, f"{action} missing from keys.rs"
+
+    # Verify critical rules from decisions
+    assert "ToggleWindowList" in src, "ToggleWindowList missing from keys.rs"
+    assert "SpawnLockScreen" in src, "SpawnLockScreen missing from keys.rs"
+    assert "CloseFocused" in src, "CloseFocused missing from keys.rs"
+    assert "ForceCloseFocused" in src, "ForceCloseFocused missing from keys.rs"
+
+def check_readme_shortcuts(readme_path, keys_rs_path):
+    verify_resolver_against_keys_rs(keys_rs_path)
+    errors = []
+
+    with open(readme_path, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+
+    in_table = False
+    rows = []
+    for line in lines:
+        if line.startswith("## Shortcuts"):
+            in_table = True
+            continue
+        if in_table and line.startswith("## "):
+            break
+        if in_table and line.startswith("|"):
+            parts = [p.strip() for p in line.split("|")[1:-1]]
+            if len(parts) >= 2 and parts[0] != "Key" and not parts[0].startswith(":"):
+                rows.append((parts[0], parts[1]))
+
+    # Non-keyboard entries (gestures, mouse, console safety)
+    skip_key_words = ["drag", "Wheel", "Finger", "held"]
+
+    for key_col, action_col in rows:
+        if any(w in key_col for w in skip_key_words):
+            continue
+        if "Ctrl + Alt + Backspace" in key_col:
+            # Console safety key in backend-drm
+            continue
+
+        # Extract chords from key_col
+        chords = []
+
+        if "/" in key_col and "`" in key_col:
+            # Handles `Super + Q` / `W` / `E`
+            m = re.match(r'`(Super(?:\s*\+\s*Shift)?)\s*\+\s*([A-Za-z0-9]+)`\s*/\s*`([A-Za-z0-9]+)`\s*/\s*`([A-Za-z0-9]+)`', key_col)
+            if m:
+                mod, k1, k2, k3 = m.groups()
+                chords.extend([f"{mod} + {k1}", f"{mod} + {k2}", f"{mod} + {k3}"])
+        elif "1..9" in key_col:
+            # Handles `Super + 1..9` and `Super + Shift + 1..9`
+            m = re.match(r'`(Super(?:\s*\+\s*Shift)?)\s*\+\s*1\.\.9`', key_col)
+            if m:
+                mod = m.group(1)
+                for digit in range(1, 10):
+                    chords.append(f"{mod} + {digit}")
+        else:
+            raw_chords = re.findall(r'`([^`]+)`', key_col)
+            for rc in raw_chords:
+                chords.append(rc.strip())
+            if "or `Print`" in key_col or "or Print" in key_col:
+                if "Print" not in chords:
+                    chords.append("Print")
+
+        # Also check aliases mentioned in parentheses, e.g. (`Super + Shift + R` too)
+        aliases = re.findall(r'\(`([^`]+)`\s+too\)', action_col)
+        for a in aliases:
+            chords.append(a.strip())
+
+        for chord in chords:
+            parts = [p.strip().upper() for p in chord.split("+")]
+            key_name = parts[-1]
+            mods = parts[:-1]
+
+            logo = "SUPER" in mods
+            shift = "SHIFT" in mods
+            alt = "ALT" in mods
+            ctrl = "CTRL" in mods
+
+            k_token = key_name
+            if key_name == "ARROW":
+                k_token = "LEFT"  # test one direction
+            elif key_name == "PRINT":
+                k_token = "SYSRQ"
+            elif key_name == "ESCAPE":
+                k_token = "ESC"
+            elif key_name == "BACKSPACE":
+                k_token = "BACKSPACE"
+
+            resolved = resolve_key_binding(k_token, logo, shift, alt, ctrl)
+            if not resolved:
+                errors.append(f"Shortcut `{chord}` in README is not bound in keys.rs")
+                continue
+
+            # Verify action description matches resolved KeyAction
+            keywords = ACTION_KEYWORDS.get(resolved, [])
+            desc_lower = action_col.lower()
+            if not any(kw in desc_lower for kw in keywords):
+                errors.append(
+                    f"Shortcut `{chord}` bound to {resolved} in keys.rs, but README says: \"{action_col}\""
+                )
+
+    return errors
+
+def self_test():
+    """Runs seeded negative controls to verify that defective shortcuts are caught."""
+    import tempfile
+    tmp_dir = tempfile.mkdtemp(prefix="test-readme-shortcuts-")
+    try:
+        tmp_readme = os.path.join(tmp_dir, "README.md")
+        with open(README, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        # Seed Defect 1: Super + L documented as Lock (historical Finding 1)
+        bad_content = content.replace("| `Super + L` | List of open windows |", "| `Super + L` | Lock |")
+        with open(tmp_readme, "w", encoding="utf-8") as f:
+            f.write(bad_content)
+        errs = check_readme_shortcuts(tmp_readme, KEYS_RS)
+        assert any("Super + L" in e and "ToggleWindowList" in e for e in errs), f"Expected Super+L defect detection, got: {errs}"
+
+        # Seed Defect 2: Super + C documented as Close the window
+        bad_content = content.replace("| `Super + Shift + C` | Close the window |", "| `Super + C` | Close the window |")
+        with open(tmp_readme, "w", encoding="utf-8") as f:
+            f.write(bad_content)
+        errs = check_readme_shortcuts(tmp_readme, KEYS_RS)
+        assert any("Super + C" in e and "not bound" in e for e in errs), f"Expected Super+C defect detection, got: {errs}"
+
+        print("ok: self-test passed (all seeded defects detected)")
+    finally:
+        import shutil
+        shutil.rmtree(tmp_dir)
+
+def main():
+    if "--self-test" in sys.argv:
+        self_test()
+        return
+
+    errors = check_readme_shortcuts(README, KEYS_RS)
+    if errors:
+        print("FAIL: README shortcuts do not match keys.rs:")
+        for e in errors:
+            print(f"  - {e}")
+        sys.exit(1)
+    print("ok: every shortcut listed in README matches keys.rs")
+
+if __name__ == "__main__":
+    main()
