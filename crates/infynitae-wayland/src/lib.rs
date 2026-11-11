@@ -1425,7 +1425,7 @@ impl WaylandState {
                                 self.privacy_apps = parse_list(val);
                             }
                             "PRIVACY_TITLES" => {
-                                self.privacy_titles = parse_list(val);
+                                self.privacy_titles = parse_titles(val);
                             }
                             "WINE_TRANSPARENCY" => {
                                 self.wine_transparency = !matches!(
@@ -1434,7 +1434,7 @@ impl WaylandState {
                                 );
                             }
                             "FORCE_TRANSPARENT_APPS" => {
-                                self.force_transparent_apps = parse_list(val);
+                                self.force_transparent_apps = parse_titles(val);
                             }
                             _ => {}
                         }
@@ -1892,7 +1892,17 @@ pub fn config_line(line: &str) -> Option<(String, String)> {
     Some((key.trim().to_string(), out.trim().to_string()))
 }
 
-/// Reads a comma- or whitespace-separated list from config, lowercased and trimmed.
+/// A list of window titles (or names that may be titles) from config: comma separated only, since a title can
+/// hold spaces ("Private Browsing"); lowercased and trimmed.
+pub fn parse_titles(val: &str) -> Vec<String> {
+    val.split(',')
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+/// A list of app ids or screen names from config, comma or whitespace separated (neither holds a space),
+/// lowercased and trimmed.
 pub fn parse_list(val: &str) -> Vec<String> {
     val.split([' ', ',', '\t'])
         .map(|s| s.trim().to_lowercase())
@@ -2254,6 +2264,12 @@ mod key_binding_config_tests {
         );
         assert!(parse_list("").is_empty());
         assert!(parse_list("  ,  ").is_empty());
+        // titles keep their spaces: "Private Browsing" is one title, not two words that would each match
+        use super::parse_titles;
+        assert_eq!(
+            parse_titles("Private Browsing, KeePassXC"),
+            vec!["private browsing".to_string(), "keepassxc".to_string()]
+        );
     }
 }
 

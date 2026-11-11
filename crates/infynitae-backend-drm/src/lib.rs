@@ -1180,11 +1180,7 @@ pub fn run_console_with(
                 let key = k.trim();
                 let val = v.trim();
                 if key == "OUTPUT_ORDER" {
-                    output_order = val
-                        .split([',', ' ', '\t'])
-                        .map(|s| s.trim().to_lowercase())
-                        .filter(|s| !s.is_empty())
-                        .collect();
+                    output_order = infynitae_wayland::parse_list(val);
                 } else if key == "OUTPUT_LAYOUT" && val.eq_ignore_ascii_case("right-to-left") {
                     output_layout_reverse = true;
                 } else if key == "IDLE_SLEEP_TIMEOUT_MIN" {
@@ -3807,19 +3803,5 @@ mod tests {
         let fallback =
             choose_mode_custom(&modes, Some((3840, 2160)), None).or_else(|| choose_mode(&modes));
         assert_eq!(fallback, Some(1));
-    }
-
-    #[test]
-    fn output_order_accepts_commas_and_spaces() {
-        let parse = |val: &str| -> Vec<String> {
-            val.split([',', ' ', '\t'])
-                .map(|s| s.trim().to_lowercase())
-                .filter(|s| !s.is_empty())
-                .collect()
-        };
-        let want = vec!["dp-1".to_string(), "hdmi-a-1".to_string()];
-        assert_eq!(parse("DP-1,HDMI-A-1"), want);
-        assert_eq!(parse("DP-1 HDMI-A-1"), want);
-        assert_eq!(parse("DP-1, HDMI-A-1"), want);
     }
 }

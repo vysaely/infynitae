@@ -213,7 +213,7 @@ WINE_TRANSPARENCY="true"
     # options: true  · false
 
 FORCE_TRANSPARENT_APPS=""
-    # More apps blended that way (by app id or title, comma or space separated)
+    # More apps blended that way (by app id or title, comma separated)
     # default: ""
     #   ""    none  · e.g. "steam_app"
 
@@ -693,7 +693,7 @@ PRIVACY_APPS=""
 PRIVACY_TITLES=""
     # Hidden from captures, by title (Super+Shift+P toggles a window)
     # default: ""
-    # options: ""  · e.g. "Password"
+    # options: ""  · e.g. "Password" (comma separated: a title can hold spaces)
 
 # Which apps may use the powers above the normal app's (docs/SECURITY.md). Each list holds
 # app ids (a sandboxed app, e.g. Flatpak: "com.obsproject.Studio") and program names or paths
