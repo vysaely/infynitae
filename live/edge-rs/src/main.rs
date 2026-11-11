@@ -2541,6 +2541,49 @@ mod tests {
     }
 
     #[test]
+    fn syncing_toplevels_populates_memory_window_app_ids() {
+        let mut shell_world = modules::World::now();
+        let mut widgets_world = modules::World::now();
+        assert!(shell_world.memory.window_app_ids.is_empty());
+        assert!(widgets_world.memory.window_app_ids.is_empty());
+
+        let app_ids = vec![
+            "firefox".to_string(),
+            "".to_string(),
+            "kitty".to_string(),
+        ];
+        wayland::sync_toplevel_app_ids(app_ids, &mut shell_world, &mut widgets_world);
+
+        assert_eq!(
+            shell_world.memory.window_app_ids,
+            vec!["firefox".to_string(), "kitty".to_string()]
+        );
+        assert_eq!(
+            widgets_world.memory.window_app_ids,
+            vec!["firefox".to_string(), "kitty".to_string()]
+        );
+
+        let mem = modules::memory::parse_memory(
+            "MemTotal: 33554432 kB\nMemAvailable: 13002342 kB\n\
+             firefox\t4000000\nsteam\t2000000\n",
+        );
+        shell_world.memory.total_kb = mem.total_kb;
+        shell_world.memory.used_kb = mem.used_kb;
+        shell_world.memory.apps = mem.apps;
+        shell_world.memory.ready = true;
+
+        assert_eq!(
+            modules::memory::background_apps(&shell_world.memory).len(),
+            1
+        );
+        assert_eq!(
+            modules::memory::background_apps(&shell_world.memory)[0].name,
+            "steam"
+        );
+        assert!(modules::memory::close_bg_rect(&shell_world.memory, 380.0).is_some());
+    }
+
+    #[test]
     fn hover_strip_rectangles_per_side_and_alignment() {
         let cfg_h = Config::from_text(
             "PANEL_TL=\"top left 300 hover clock\"\n\

@@ -705,6 +705,16 @@ struct App {
     exit: bool,
 }
 
+pub fn sync_toplevel_app_ids(
+    app_ids: impl IntoIterator<Item = String>,
+    shell_world: &mut modules::World,
+    widgets_world: &mut modules::World,
+) {
+    let ids: Vec<String> = app_ids.into_iter().filter(|s| !s.is_empty()).collect();
+    shell_world.memory.window_app_ids = ids.clone();
+    widgets_world.memory.window_app_ids = ids;
+}
+
 impl App {
     fn sync_toplevels_to_world(&mut self) {
         let items: Vec<modules::windows::WindowItem> = self
@@ -733,6 +743,12 @@ impl App {
             .collect();
         let query = self.shell.world.search.clone();
         self.shell.world.windows.set_windows(items, &query);
+
+        sync_toplevel_app_ids(
+            self.toplevels.iter().map(|t| t.app_id.clone()),
+            &mut self.shell.world,
+            &mut self.widgets.world,
+        );
     }
 
     fn flush_window_ops(&mut self) {
