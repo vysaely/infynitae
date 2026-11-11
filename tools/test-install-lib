@@ -30,4 +30,28 @@ resolved_live=$(bash -c "unset BASH_SOURCE; . '$REPO_DIR/live/install-lib.sh' >/
 check "INFY_LIVE resolves to directory containing packages.txt" \
     "$([ -f "$resolved_live/packages.txt" ] && echo yes || echo no)" "yes"
 
+# Finding 24: sudo_once cleans up keeper process on exit
+mock_bin="$TMP/mock_bin"
+mkdir -p "$mock_bin"
+cat << 'EOF' > "$mock_bin/sudo"
+#!/bin/sh
+exit 0
+EOF
+chmod +x "$mock_bin/sudo"
+
+keeper_pid_file="$TMP/keeper.pid"
+PATH="$mock_bin:$PATH" bash -c "
+    . '$REPO_DIR/live/install-lib.sh'
+    sudo_once
+    echo \"\$SUDO_KEEPER\" > '$keeper_pid_file'
+    # Child script exits without explicitly calling end_sudo
+    exit 0
+"
+sleep 0.2
+keeper_pid=$(cat "$keeper_pid_file")
+keeper_alive=$(kill -0 "$keeper_pid" 2>/dev/null && echo yes || echo no)
+# Clean up if still alive
+kill "$keeper_pid" 2>/dev/null || true
+check "sudo_once keeper process is terminated on script exit" "$keeper_alive" "no"
+
 exit $fail

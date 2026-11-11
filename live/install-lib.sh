@@ -187,6 +187,7 @@ sudo_once() {
     local parent=$$
     ( while kill -0 "$parent" 2>/dev/null; do sudo -n true; sleep 50; done ) >/dev/null 2>&1 &
     SUDO_KEEPER=$!
+    trap end_sudo EXIT INT TERM
 }
 
 # The root steps are done: the keeper stops and sudo's permission ends now, not minutes later,
