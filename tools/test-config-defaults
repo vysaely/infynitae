@@ -3,8 +3,11 @@
 set -u
 cd "$(dirname "$0")/.."
 # a throwaway home: the scripts read ~/.config/infynitae/config, and the tester's own settings must not decide
+# and no session: live/env.sh hands its environment to systemd and D-Bus, which must never be the desktop's
 HOME=$(mktemp -d); export HOME
-trap 'rm -rf "$HOME"' EXIT
+XDG_RUNTIME_DIR=$(mktemp -d); export XDG_RUNTIME_DIR
+unset DBUS_SESSION_BUS_ADDRESS WAYLAND_DISPLAY DISPLAY
+trap 'rm -rf "$HOME" "$XDG_RUNTIME_DIR"' EXIT
 fails=0
 check() {
     if [ "$2" = "$3" ]; then
