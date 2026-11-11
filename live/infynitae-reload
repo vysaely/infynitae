@@ -295,24 +295,45 @@ reload_screenshare() {
         echo "force_mod_linear=1"
         picker="${MENU_PICKER:-fuzzel --dmenu}"
         chooser="$HOME/infynitae/live/screenshare-chooser"
-        if [ -x "$chooser" ] && command -v "${picker%% *}" >/dev/null 2>&1; then
-            # a screen at once (or asked, with SCREENSHARE_ASK), a window from the menu
-            if is_true "${SCREENSHARE_ASK:-false}"; then mode=ask; else mode=first; fi
-            echo "chooser_type=dmenu"
-            echo "chooser_cmd=$chooser $mode '$picker'"
-        elif is_true "${SCREENSHARE_ASK:-false}" || [ -z "$first" ]; then
-            echo "chooser_type=simple"
-            echo "chooser_cmd=slurp -f %o -or"
-        else
-            echo "chooser_type=none"
-            echo "output_name=$first"
-        fi
+        ask="${SCREENSHARE_ASK:-app}"
+        case "$ask" in
+            0|false|off|no)
+                if [ -n "$first" ]; then
+                    echo "chooser_type=none"
+                    echo "output_name=$first"
+                else
+                    echo "chooser_type=simple"
+                    echo "chooser_cmd=slurp -f %o -or"
+                fi
+                ;;
+            *)
+                if [ -x "$chooser" ] && command -v "${picker%% *}" >/dev/null 2>&1; then
+                    # a screen at once (or asked, with SCREENSHARE_ASK), a window from the menu
+                    if is_true "$ask"; then mode=ask; else mode=first; fi
+                    echo "chooser_type=dmenu"
+                    echo "chooser_cmd=$chooser $mode '$picker'"
+                elif is_true "$ask" || [ -z "$first" ]; then
+                    echo "chooser_type=simple"
+                    echo "chooser_cmd=slurp -f %o -or"
+                else
+                    echo "chooser_type=none"
+                    echo "output_name=$first"
+                fi
+                ;;
+        esac
     } > "$cfg.new" && mv -f "$cfg.new" "$cfg"
     systemctl --user stop xdg-desktop-portal-wlr.service 2>/dev/null || true
-    if is_true "${SCREENSHARE_ASK:-false}"; then
+    if is_true "${SCREENSHARE_ASK:-app}"; then
         echo "screenshare: pick a screen or a window when an app asks"
     else
-        echo "screenshare: an app is asked about once; then a screen is shared at once, a window picked from a menu"
+        case "${SCREENSHARE_ASK:-app}" in
+            0|false|off|no)
+                echo "screenshare: no question, the first screen is shared at once"
+                ;;
+            *)
+                echo "screenshare: an app is asked about once; then a screen is shared at once, a window picked from a menu"
+                ;;
+        esac
     fi
 }
 
