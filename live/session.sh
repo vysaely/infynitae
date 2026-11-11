@@ -29,10 +29,13 @@ if [ -f "$HOME/infynitae/live/config.sh" ]; then
     . "$HOME/infynitae/live/config.sh"
 fi
 
-# 1a. The password store for apps (gnome-keyring) runs before the lock screen asks for the
-# password, so that password opens it (/etc/pam.d/infynitae), as a login does on other desktops;
-# apps reach it through D-Bus
-if command -v gnome-keyring-daemon >/dev/null 2>&1; then
+# 1a. The password store for apps runs before the lock screen asks for the password, so that
+# password opens it (/etc/pam.d/infynitae), as a login does on other desktops; apps reach it
+# through D-Bus. infynitae-keyring once its switch has been made (its tools/switch.sh enables its
+# user service), else gnome-keyring; never both (they would race for the same D-Bus name).
+if systemctl --user -q is-enabled infynitae-keyring.service 2>/dev/null; then
+    systemctl --user start infynitae-keyring.service >/dev/null 2>&1 || true
+elif command -v gnome-keyring-daemon >/dev/null 2>&1; then
     gnome-keyring-daemon --start --components=secrets >/dev/null 2>&1 || true
 fi
 
