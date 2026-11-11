@@ -87,3 +87,46 @@ case " $got_foreign_matching " in
         ;;
 esac
 echo "ok Finding 17: pids_of and pids_matching skip processes not owned by user"
+
+# ----------------------------------------------------------------------
+# Finding 22: Tilde and $HOME expansion for quoted WALLPAPER paths
+# ----------------------------------------------------------------------
+SPAWN_ARGS=""
+spawn() {
+    SPAWN_ARGS="$*"
+}
+first() {
+    echo "$1"
+}
+BIN_DIR="$tmp/bin"
+LIVE="$here/live"
+sed -n '/^reload_wallpaper() {/,/^}/p' "$here/live/infynitae-reload" > "$tmp/fn_wallpaper"
+. "$tmp/fn_wallpaper"
+
+WALLPAPER='~/Pictures/bg.png'
+reload_wallpaper >/dev/null
+
+expected_wp="$HOME/Pictures/bg.png"
+case "$SPAWN_ARGS" in
+    *" $expected_wp "*) ;;
+    *)
+        echo "FAIL Finding 22: reload_wallpaper did not expand tilde in '$WALLPAPER': got '$SPAWN_ARGS'"
+        exit 1
+        ;;
+esac
+
+# Also test config.sh expanding tilde and $HOME in WALLPAPER
+cfg_dir="$tmp/cfg_test/.config/infynitae"
+mkdir -p "$cfg_dir"
+printf "WALLPAPER='~/Wallpapers/nature.png'\n" > "$cfg_dir/config"
+got_cfg_wp=$(
+    export HOME="$tmp/cfg_test"
+    . "$here/live/config.sh"
+    echo "$WALLPAPER"
+)
+if [ "$got_cfg_wp" != "$tmp/cfg_test/Wallpapers/nature.png" ]; then
+    echo "FAIL Finding 22: config.sh did not expand tilde in WALLPAPER: got '$got_cfg_wp'"
+    exit 1
+fi
+
+echo "ok Finding 22: quoted tilde paths in WALLPAPER are safely expanded"

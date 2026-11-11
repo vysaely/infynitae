@@ -133,6 +133,11 @@ reload_wallpaper() {
         echo "wallpaper: not configured"
         return
     fi
+    case "$WALLPAPER" in
+        "~/"*) WALLPAPER="$HOME/${WALLPAPER#\~/}" ;;
+        '$HOME/'*) WALLPAPER="$HOME/${WALLPAPER#\$HOME/}" ;;
+        '${HOME}/'*) WALLPAPER="$HOME/${WALLPAPER#\$\{HOME\}/}" ;;
+    esac
     # a new instance replaces the old one itself; the config's WALLPAPER may hold an unexpanded
     # $HOME for the program, so pass the path this shell expanded
     spawn "$w" "$WALLPAPER" "${WALLPAPER_MODE:-fill}"
