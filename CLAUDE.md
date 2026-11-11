@@ -25,7 +25,10 @@ history, hidden from search by `.ignore`.
 - **Flaky test**: `t1_transform inc3_f09_bounded_resource_cycles` counts `/proc/self/fd` while other tests run;
   if it is the only failure, rerun the failed jobs (`gh run rerun <id> --failed`).
 - **Tests**: most are real Wayland clients against the headless backend (`crates/infynitae-backend-headless/tests`,
-  the `Lockstep` harness in `tests/common`). A fix comes with a test that failed before it.
+  the `Lockstep` harness in `tests/common`). A fix comes with a test that failed before it. Tests never touch
+  the owner's desktop: the harness points the compositor at an owned temporary folder with a stub `launch.sh`
+  and an isolated client environment, so shortcut actions never run `$HOME/infynitae/live/launch.sh` or talk
+  to the host session. It must stay so.
 - **No emoji or status symbols** in anything the system shows or in docs: plain words (maths and arrows are fine).
 - **Merging**: to `main` only when CI is green; commit messages end with the attribution line the session gives.
 - Don't restart the owner's replay recorder (`infynitae-reload recorder`, or Super+Shift+BackSpace): it clears
