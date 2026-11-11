@@ -2280,6 +2280,15 @@ fn render(data: &mut LoopData) {
                     } else {
                         // this frame waited for the refresh; the next one tries again
                         s.tearing_refused += 1;
+                        // the kernel accepts an async flip that changes only the primary plane's buffer: say
+                        // what else this frame had, once per run of refusals (review 2026-11-11, 3: amdgpu's
+                        // EINVAL is unexplained; overlay planes in use are the first suspect)
+                        if s.tearing_refused == 1 {
+                            eprintln!(
+                                "[infynitae] Tearing refused on screen {id:?}: {overlays} overlay plane(s) in use, cursor plane {}",
+                                if cursor { "in use" } else { "free" }
+                            );
+                        }
                         if s.tearing_refused == TEARING_REFUSALS {
                             s.tearing_retry_at = Some(std::time::Instant::now() + TEARING_RETRY);
                             eprintln!(
