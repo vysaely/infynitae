@@ -227,6 +227,8 @@ LATENCY="off"
     #    balanced   just in time for the refresh: about a frame less delay (experimental;
     #               misses more refreshes while the GPU is busy, e.g. a game or AI training)
     #    lowest     tighter still
+    #    direct     balanced while a fullscreen game is shown directly (the compositor only flips
+    #               then, so drawing late costs no refreshes), off otherwise
 
 LATENCY_STATS="false"
     # Input-to-screen times in ~/.local/state/infynitae/session.log every 10 s

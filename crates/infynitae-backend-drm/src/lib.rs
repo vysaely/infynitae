@@ -2069,7 +2069,8 @@ fn render(data: &mut LoopData) {
             s.schedule.set_period(std::time::Duration::from_nanos(
                 1_000_000_000_000 / u64::from(mhz),
             ));
-            s.schedule.set_mode(data.state.latency_mode);
+            s.schedule
+                .set_mode(data.state.latency_mode.for_screen(s.scanned_out));
             // a frame the GPU has to draw needs more of the refresh than one it only shows
             s.schedule.set_guard_percent(if s.scanned_out {
                 data.state.frame_guard_percent / 4
