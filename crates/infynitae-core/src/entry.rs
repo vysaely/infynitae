@@ -2664,7 +2664,12 @@ impl Core {
         }
         let mut out = Vec::new();
         match cmd {
-            ShellCommand::Navigate { output, to, stream } => {
+            ShellCommand::Navigate {
+                output,
+                to,
+                zoom,
+                stream,
+            } => {
                 if let NavigateTo::Element(element) = to {
                     let id = self.shell_chosen(element, &mut out)?;
                     self.show_chosen(id, &mut out);
@@ -2672,8 +2677,21 @@ impl Core {
                 let camera = self.shell_camera(output)?;
                 let center = self.navigate_center(camera, to)?;
                 self.shell_stream_step(stream);
-                self.cameras
-                    .navigate(authority::Authorized::mint(), camera, center);
+                match zoom {
+                    Some(z) => {
+                        let z = z.clamp(crate::geom::ZOOM_MIN, crate::geom::ZOOM_MAX);
+                        self.cameras.set_zoom_and_center(
+                            authority::Authorized::mint(),
+                            camera,
+                            z,
+                            center,
+                        );
+                    }
+                    None => {
+                        self.cameras
+                            .navigate(authority::Authorized::mint(), camera, center);
+                    }
+                }
                 self.camera_written(output, camera, &mut out);
                 self.shell_stream_end(stream, &mut out);
             }
@@ -2776,6 +2794,10 @@ impl Core {
                         };
                         self.stage.set_saved_floating(id, Some((at, before)));
                         self.set_maximized(id, Some(output));
+                        if let Some(anchor) = self.stage.anchor(id) {
+                            self.maximized_at.retain(|(e, _)| *e != id);
+                            self.maximized_at.push((id, anchor));
+                        }
                     }
                     None => {
                         self.stage.set_saved_floating(id, None);
@@ -2783,6 +2805,44 @@ impl Core {
                     }
                 }
                 out.push(Effect::ToplevelConfigureSize { element: id, size });
+            }
+            ShellCommand::FullscreenElement {
+                element,
+                output,
+                fullscreen,
+            } => {
+                let id = self.shell_mapped(element)?;
+                if fullscreen {
+                    // A fullscreen window restored on a screen that no longer exists comes back normal.
+                    let target_output = match output {
+                        Some(o) => {
+                            if !self.outputs.iter().any(|out| out.id == o) {
+                                return Ok(out);
+                            }
+                            Some(o)
+                        }
+                        None => self
+                            .pointer_output()
+                            .or_else(|| self.outputs.first().map(|o| o.id)),
+                    };
+                    self.left_fullscreen.retain(|e| *e != id);
+                    let request = crate::protocol::ToplevelRequest::SetFullscreen {
+                        output: target_output,
+                    };
+                    if self.focus.target() != Some(id) {
+                        out.extend(self.focus.set_focus(Some(id)));
+                        out.extend(self.reconcile_constraints());
+                    }
+                    if let Ok((_, t_fx)) = self.toplevel_request(id, request) {
+                        out.extend(t_fx);
+                    }
+                    if let Some(o) = target_output {
+                        self.invalidate_frame(o);
+                    }
+                    out.extend(self.visibility_pass());
+                } else if self.fullscreen_of(id).is_some() {
+                    out.extend(self.leave_fullscreen(id, None));
+                }
             }
         }
         Ok(out)

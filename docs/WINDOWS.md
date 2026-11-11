@@ -67,10 +67,11 @@ with held sizes it no longer changes their size.
 
 `infynitae restore` (`crates/infynitae/src/restore.rs`) saves every 15 s each window's app,
 title, anchor, size, fullscreen flag and maximized state (its place and size before the maximize)
-and each screen's camera centre. At login it launches each app, moves each new window of a saved
-app to the next saved anchor of that app (unless a window open before covers it), asks it for its
-saved size or maximizes it again on the first screen (`resize_element`, 2026-10-31), and puts the
-camera centres back. Not restored: zoom, fullscreen state.
+and each screen's camera centre and zoom. At login it launches each app, moves each new window of
+a saved app to the next saved anchor of that app (unless a window open before covers it), asks it
+for its saved size or maximizes it again on the first screen (`resize_element`, 2026-10-31), puts
+it back fullscreen on the screen it had (windowed if that screen no longer exists), and puts the
+camera centres and zoom back.
 
 ## Tests
 

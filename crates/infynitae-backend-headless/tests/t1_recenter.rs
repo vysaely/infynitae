@@ -41,6 +41,7 @@ fn away(focus: bool) -> (Rig, CanvasPos) {
                 ShellCommand::Navigate {
                     output: o,
                     to: NavigateTo::Delta(300.0, -100.0),
+                    zoom: None,
                     stream: ShellStream::Atomic,
                 },
             )

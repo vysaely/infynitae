@@ -971,3 +971,89 @@ fn the_shell_brings_a_window_back_at_its_size_or_maximized() {
     assert_eq!(last_size(&r, a), Some((700, 500)), "Super+Enter restores");
     assert_eq!(anchor_of(&r, ea), CanvasPoint { x: 5, y: 6 });
 }
+
+/// Session restore's fullscreen command: a window restored to fullscreen on an existing output
+/// is granted fullscreen presentation; if restored on an output that no longer exists, it
+/// remains normal (windowed).
+#[test]
+fn the_shell_brings_a_window_back_fullscreen_or_normal_if_output_gone() {
+    let mut r = rig(a_1080());
+    let o = r.ls.output();
+    let b_out = r.ls.connect(&output_k("B", (1366, 768), 120, 60_000));
+    r.ls.disconnect(b_out);
+    r.frame();
+
+    let (a, ea) = map(&mut r, "A", (800, 600));
+    let (b, eb) = map(&mut r, "B", (640, 480));
+    let resize = |r: &mut Rig, e, size, maximized| {
+        let element = infynitae_core::stage::ElementRef {
+            instance: r.ls.state.core().stage().instance(),
+            element: e,
+        };
+        let fx =
+            r.ls.state
+                .core_mut()
+                .shell_command(
+                    &mut r.ls.shell,
+                    infynitae_core::ShellCommand::ResizeElement {
+                        element,
+                        size,
+                        maximized,
+                    },
+                )
+                .expect("resize");
+        r.ls.state.apply(&fx);
+        r.ls.pump();
+        r.frame();
+    };
+
+    let fullscreen = |r: &mut Rig, e, output, fs| {
+        let element = infynitae_core::stage::ElementRef {
+            instance: r.ls.state.core().stage().instance(),
+            element: e,
+        };
+        let fx =
+            r.ls.state
+                .core_mut()
+                .shell_command(
+                    &mut r.ls.shell,
+                    infynitae_core::ShellCommand::FullscreenElement {
+                        element,
+                        output,
+                        fullscreen: fs,
+                    },
+                )
+                .expect("fullscreen");
+        r.ls.state.apply(&fx);
+        r.ls.pump();
+        r.frame();
+    };
+
+    // B was saved with size (640, 480) and fullscreen on b_out (which is now disconnected / gone):
+    // resize restores its windowed size, but fullscreen request on gone output leaves it normal (windowed).
+    resize(&mut r, eb, (640, 480), None);
+    fullscreen(&mut r, eb, Some(b_out), true);
+    assert!(
+        r.ls.state.core().fullscreen_of(eb).is_none(),
+        "output gone: remains normal"
+    );
+    assert_eq!(last_size(&r, b), Some((640, 480)));
+
+    // A was saved with size (800, 600) and fullscreen on o (which exists): it becomes fullscreen.
+    resize(&mut r, ea, (800, 600), None);
+    fullscreen(&mut r, ea, Some(o), true);
+    assert!(
+        r.ls.state.core().fullscreen_of(ea).is_some(),
+        "output exists: fullscreen"
+    );
+    assert_eq!(last_size(&r, a), Some((1920, 1080)));
+    draw(&mut r, a, (1920, 1080));
+
+    // Leaving fullscreen puts it back to windowed size.
+    fullscreen(&mut r, ea, None, false);
+    assert!(
+        r.ls.state.core().fullscreen_of(ea).is_none(),
+        "fullscreen cleared"
+    );
+    assert_eq!(last_size(&r, a), Some((800, 600)));
+}

@@ -104,6 +104,7 @@ fn navigate(output: OutputId, to: NavigateTo) -> ShellCommand {
     ShellCommand::Navigate {
         output,
         to,
+        zoom: None,
         stream: ShellStream::Atomic,
     }
 }
@@ -157,6 +158,30 @@ fn navigate_centres_the_camera_and_keeps_its_zoom() {
             y: -200 * Q
         })
     );
+}
+
+/// Navigate with zoom: applies both the canvas position and the zoom level atomically.
+#[test]
+fn navigate_with_zoom_sets_both_centre_and_zoom() {
+    let mut f = fixture();
+    f.c.shell_command(
+        &mut f.s,
+        ShellCommand::Navigate {
+            output: f.o,
+            to: NavigateTo::Canvas(500.0, 600.0),
+            zoom: Some(2.5),
+            stream: ShellStream::Atomic,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        f.c.cameras().center(0),
+        Some(CanvasPos {
+            x: 500 * Q,
+            y: 600 * Q
+        })
+    );
+    assert_eq!(f.c.cameras().zoom(0), Some(2.5));
 }
 
 /// Navigate to an element: the centre of its window geometry, exactly.
