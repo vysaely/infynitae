@@ -640,8 +640,9 @@ mod tests {
         s.set_mode(LatencyMode::Balanced);
         let m0 = s.margin();
         let mut t = ms(100.0);
+        // no frame in flight at this refresh: it does not count toward settling
         s.vblank(t);
-        for _ in 0..(SETTLE_REFRESHES - 1) {
+        for _ in 0..SETTLE_REFRESHES {
             s.rendered(t + ms(1.0), t + ms(2.0));
             t += P * 2;
             s.vblank(t);
