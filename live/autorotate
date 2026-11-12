@@ -6,6 +6,10 @@
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/infynitae"
 LOG="$STATE_DIR/autorotate.log"
 mkdir -p "$STATE_DIR" 2>/dev/null || true
+for _r in "$(dirname "$0")/log-rotate.sh" "$HOME/infynitae/live/log-rotate.sh"; do
+    [ -f "$_r" ] && { . "$_r"; break; }
+done
+unset _r
 
 log() {
     printf '%s %s\n' "$(date '+%F %T')" "$*" >> "$LOG" 2>/dev/null || true
@@ -48,6 +52,11 @@ case "${1:-}" in
         exit $?
         ;;
 esac
+
+# Remove stale -<pid> state files from previous runs
+rm -f "$STATE_DIR"/autorotate-status-[0-9]* \
+      "$STATE_DIR"/autorotate-current-orientation-[0-9]* \
+      "$STATE_DIR"/autorotate-nosensor-[0-9]* 2>/dev/null || true
 
 # 1. Prerequisite checks: exit 0 quietly if any required tool or hardware is missing
 command -v monitor-sensor >/dev/null 2>&1 || exit 0
@@ -115,6 +124,8 @@ parse_orientation() {
             ;;
     esac
 }
+
+rotate_log "$LOG"
 
 STATUS_FILE="$STATE_DIR/autorotate-status-$$"
 ORI_FILE="$STATE_DIR/autorotate-current-orientation-$$"
