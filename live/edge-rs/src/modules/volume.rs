@@ -301,20 +301,31 @@ pub fn scroll(world: &mut World, size: (f64, f64), pos: (f64, f64), dy: f64) -> 
     true
 }
 
+pub const LOADING: &str = "Loading";
+
+pub fn not_ready_text(d: &VolumeData) -> Option<&'static str> {
+    if !d.ready {
+        Some(LOADING)
+    } else {
+        None
+    }
+}
+
 pub fn draw(cr: &Context, th: &Theme, world: &World, rect: Rect) {
     let (x, y, w, h) = rect;
     draw::card(cr, th, x, y, w, h);
-    if !world.volume.ready {
+    if let Some(loading) = not_ready_text(&world.volume) {
         draw::title(cr, th, x + PAD_X, y + PAD_Y, "Volume");
-        draw::text_right(
+        draw::text_max(
             cr,
-            x + w - PAD_X,
-            y + PAD_Y + 2.0,
+            x + PAD_X,
+            y + PAD_Y + 28.0,
+            (w - 2.0 * PAD_X).max(20.0),
             &Text {
-                size: 13.0,
+                size: 12.0,
                 bold: false,
                 color: th.muted,
-                text: "...",
+                text: loading,
             },
         );
         return;
@@ -547,6 +558,24 @@ fn draw_sun_icon(cr: &Context, x: f64, y: f64, color: Rgba) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn volume_not_ready_shows_loading() {
+        let mut d = VolumeData::default();
+        assert!(!d.ready);
+        assert_eq!(not_ready_text(&d), Some("Loading"));
+        assert_ne!(not_ready_text(&d), Some("..."));
+
+        d.ready = true;
+        assert_eq!(not_ready_text(&d), None);
+
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 380, 120).unwrap();
+        let cr = cairo::Context::new(&surf).unwrap();
+        let th = Theme::from_config(&crate::config::Config::from_text(""));
+        let mut world = World::now();
+        world.volume.ready = false;
+        draw(&cr, &th, &world, (0.0, 0.0, 380.0, 120.0));
+    }
 
     #[test]
     fn parses_real_pactl_and_brightnessctl_outputs() {
