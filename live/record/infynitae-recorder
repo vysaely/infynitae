@@ -15,11 +15,8 @@ if [ -f "$HOME/infynitae/live/config.sh" ]; then
     . "$HOME/infynitae/live/config.sh"
 fi
 
-# the installed build (infynitae-update builds it); a copy built in the repo is a fallback
+# the installed build (infynitae-update builds it)
 STREAM_BIN="$HOME/.local/bin/infynitae-record-stream"
-if [ ! -x "$STREAM_BIN" ]; then
-    STREAM_BIN="$HOME/infynitae/live/record/infynitae-record-stream"
-fi
 
 RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/infynitae-runtime-$(id -u)}"
 if [ ! -d "$RUNTIME_DIR" ]; then
@@ -34,7 +31,7 @@ fi
 CLIPS_DIR="${CLIPS_DIR:-$HOME/Videos/Clips}"
 RECORDINGS_DIR="${RECORDINGS_DIR:-$HOME/Videos/Recordings}"
 REPLAY_MINUTES="${REPLAY_BUFFER_MINUTES:-20}"
-if [ -z "$REPLAY_DIR" ] || [ "$REPLAY_DIR" = "/dev/shm/infynitae-replay" ]; then
+if [ -z "$REPLAY_DIR" ] || [ "$REPLAY_DIR" = "auto" ] || [ "$REPLAY_DIR" = "/dev/shm/infynitae-replay" ]; then
     # the replay in memory (tmpfs) where it fits: at most about 135 MB a minute (18 Mbit/s), kept
     # under a quarter of the RAM; on a smaller machine it goes to the disk cache instead
     mem_mb=$(awk '/^MemTotal:/ { print int($2 / 1024) }' /proc/meminfo 2>/dev/null)
