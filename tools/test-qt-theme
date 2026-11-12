@@ -46,7 +46,8 @@ check "GTK 4 gets colour names only" "$(grep -c '^button {' "$g")" "0"
 
 # fonts: apps FONT_NAME, terminals TERMINAL_FONT, else FONT_NAME when monospace, else monospace
 fonts() {  # $1 config lines -> "gtk|foot|qt fixed"
-    h="$TMP/f$$"; rm -rf "$h"; mkdir -p "$h/.config/infynitae"; printf "$1" > "$h/.config/infynitae/config"
+    # foot in use (its folder exists): theme sync writes terminal files only for terminals in use
+    h="$TMP/f$$"; rm -rf "$h"; mkdir -p "$h/.config/infynitae" "$h/.config/foot"; printf "$1" > "$h/.config/infynitae/config"
     apply "$h"
     echo "$(sed -n 's/^gtk-font-name=//p' "$h/.config/gtk-3.0/settings.ini")|$(sed -n 's/^font=//p' "$h/.config/foot/foot.ini")|$(sed -n 's/^fixed="\([^,]*\),.*/\1/p' "$h/.config/qt6ct/qt6ct.conf")"
 }

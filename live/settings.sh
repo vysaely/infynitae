@@ -5,6 +5,7 @@ set -e
 umask 077
 
 CONFIG_FILE="${CONFIG_FILE:-$HOME/.config/infynitae/config}"
+SCRIPT_DIR=$(cd "$(dirname "$0")" 2>/dev/null && pwd || echo "$HOME/infynitae/live")
 
 # Ensure config directory and file exist (a fresh install has none yet: `set KEY VAL` read it with
 # awk and sourced it, and stopped with an error before changing anything)
@@ -209,6 +210,17 @@ folder_icon_theme() {
 }
 
 apply_settings() {
+    SETTINGS_SKIPPED=false
+    force_apply=false
+    for arg in "$@"; do
+        case "$arg" in
+            --force|-f) force_apply=true ;;
+        esac
+    done
+    case "$(cat /proc/$PPID/comm 2>/dev/null) $(cat /proc/$PPID/cmdline 2>/dev/null)" in
+        *reload*) force_apply=true ;;
+    esac
+
     # THEME_FROM_WALLPAPER: a new wallpaper (path or file changed) gives the theme its colours
     case "${THEME_FROM_WALLPAPER:-false}" in
         accent|all|true|1|yes|on)
@@ -227,6 +239,21 @@ apply_settings() {
             fi
             ;;
     esac
+
+    # Skip when neither config nor settings.sh changed since the last apply
+    stamp_file="${XDG_CACHE_HOME:-$HOME/.cache}/infynitae/settings-applied"
+    cfg_stamp=$(stat -c '%s %Y' "$CONFIG_FILE" 2>/dev/null || echo 0)
+    self_file="$0"
+    [ -L "$self_file" ] && self_file=$(readlink -f "$self_file" 2>/dev/null || echo "$0")
+    [ -f "$self_file" ] || self_file="${SCRIPT_DIR:-$HOME/infynitae/live}/settings.sh"
+    self_stamp=$(stat -c '%s %Y' "$self_file" 2>/dev/null || echo 0)
+    stamp_now="$cfg_stamp $self_stamp"
+
+    if [ "$force_apply" != true ] && [ -f "$stamp_file" ] && [ "$(cat "$stamp_file" 2>/dev/null)" = "$stamp_now" ]; then
+        SETTINGS_SKIPPED=true
+        return 0
+    fi
+
     # 1. Export standard environment variables
     export XCURSOR_THEME="$CURSOR_THEME"
     export XCURSOR_SIZE="$CURSOR_SIZE"
@@ -353,10 +380,11 @@ EOF
     card_hex="${LOOK_CARD#\#}${LOOK_CARD_AA}" edge_hex="${LOOK_EDGE#\#}${LOOK_EDGE_AA}"
     lt_hex="${LOOK_TEXT#\#}" la_hex="${LOOK_ACCENT#\#}"
 
-    mako_cfg="$HOME/.config/mako/config"
-    if [ ! -f "$mako_cfg" ] || grep -q 'managed by infynitae' "$mako_cfg" 2>/dev/null; then
-        mkdir -p "$HOME/.config/mako"
-        put_file "$mako_cfg" << EOF
+    if command -v mako >/dev/null 2>&1 || [ -d "$HOME/.config/mako" ]; then
+        mako_cfg="$HOME/.config/mako/config"
+        if [ ! -f "$mako_cfg" ] || grep -q 'managed by infynitae' "$mako_cfg" 2>/dev/null; then
+            mkdir -p "$HOME/.config/mako"
+            put_file "$mako_cfg" << EOF
 # managed by infynitae — notifications: one border, gone after 5 s, kept in the history
 font=sans-serif 10
 markup=1
@@ -381,15 +409,17 @@ anchor=top-right
 [mode=do-not-disturb]
 invisible=1
 EOF
-        if [ "$PUT_CHANGED" = true ] && command -v makoctl >/dev/null 2>&1 && pgrep -x mako >/dev/null 2>&1; then
-            makoctl reload >/dev/null 2>&1 || true
+            if [ "$PUT_CHANGED" = true ] && command -v makoctl >/dev/null 2>&1 && pgrep -x mako >/dev/null 2>&1; then
+                makoctl reload >/dev/null 2>&1 || true
+            fi
         fi
     fi
 
-    fuzzel_cfg="$HOME/.config/fuzzel/fuzzel.ini"
-    if [ ! -f "$fuzzel_cfg" ] || grep -q 'managed by infynitae' "$fuzzel_cfg" 2>/dev/null; then
-        mkdir -p "$HOME/.config/fuzzel"
-        put_file "$fuzzel_cfg" << EOF
+    if command -v fuzzel >/dev/null 2>&1 || [ -d "$HOME/.config/fuzzel" ]; then
+        fuzzel_cfg="$HOME/.config/fuzzel/fuzzel.ini"
+        if [ ! -f "$fuzzel_cfg" ] || grep -q 'managed by infynitae' "$fuzzel_cfg" 2>/dev/null; then
+            mkdir -p "$HOME/.config/fuzzel"
+            put_file "$fuzzel_cfg" << EOF
 # managed by infynitae — delete this line to keep custom fuzzel settings
 [main]
 font=sans-serif:size=11
@@ -414,12 +444,14 @@ border=${edge_hex}
 width=1
 radius=${radius}
 EOF
+        fi
     fi
 
-    foot_cfg="$HOME/.config/foot/foot.ini"
-    if [ ! -f "$foot_cfg" ] || grep -q 'managed by infynitae' "$foot_cfg" 2>/dev/null; then
-        mkdir -p "$HOME/.config/foot"
-        put_file "$foot_cfg" << EOF
+    if command -v foot >/dev/null 2>&1 || [ -d "$HOME/.config/foot" ]; then
+        foot_cfg="$HOME/.config/foot/foot.ini"
+        if [ ! -f "$foot_cfg" ] || grep -q 'managed by infynitae' "$foot_cfg" 2>/dev/null; then
+            mkdir -p "$HOME/.config/foot"
+            put_file "$foot_cfg" << EOF
 # managed by infynitae — delete this line to keep custom foot settings
 [main]
 font=${TERMINAL_FONT}:size=${FONT_SIZE}
@@ -438,11 +470,13 @@ regular5=bb9af7
 regular6=7dcfff
 regular7=c0caf5
 EOF
+        fi
     fi
 
-    kitty_theme="$HOME/.config/kitty/infynitae-theme.conf"
-    mkdir -p "$HOME/.config/kitty"
-    put_file "$kitty_theme" << EOF
+    if command -v kitty >/dev/null 2>&1 || [ -d "$HOME/.config/kitty" ]; then
+        kitty_theme="$HOME/.config/kitty/infynitae-theme.conf"
+        mkdir -p "$HOME/.config/kitty"
+        put_file "$kitty_theme" << EOF
 # managed by infynitae
 font_family      $TERMINAL_FONT
 font_size        $FONT_SIZE
@@ -453,17 +487,19 @@ selection_background #262b38
 selection_foreground #$t_hex
 window_padding_width 6
 EOF
-    kitty_cfg="$HOME/.config/kitty/kitty.conf"
-    if [ ! -f "$kitty_cfg" ] || grep -q 'managed by infynitae' "$kitty_cfg" 2>/dev/null; then
-        put_file "$kitty_cfg" << 'EOF'
+        kitty_cfg="$HOME/.config/kitty/kitty.conf"
+        if [ ! -f "$kitty_cfg" ] || grep -q 'managed by infynitae' "$kitty_cfg" 2>/dev/null; then
+            put_file "$kitty_cfg" << 'EOF'
 # managed by infynitae — delete this line to keep custom kitty settings
 include infynitae-theme.conf
 EOF
+        fi
     fi
 
-    alacritty_theme="$HOME/.config/alacritty/infynitae-theme.toml"
-    mkdir -p "$HOME/.config/alacritty"
-    put_file "$alacritty_theme" << EOF
+    if command -v alacritty >/dev/null 2>&1 || [ -d "$HOME/.config/alacritty" ]; then
+        alacritty_theme="$HOME/.config/alacritty/infynitae-theme.toml"
+        mkdir -p "$HOME/.config/alacritty"
+        put_file "$alacritty_theme" << EOF
 # managed by infynitae
 [window]
 padding = { x = 8, y = 8 }
@@ -485,21 +521,22 @@ cursor = "#$ba_hex"
 text = "#$t_hex"
 background = "#262b38"
 EOF
-    alacritty_cfg="$HOME/.config/alacritty/alacritty.toml"
-    if [ ! -f "$alacritty_cfg" ] || grep -q 'managed by infynitae' "$alacritty_cfg" 2>/dev/null; then
-        put_file "$alacritty_cfg" << 'EOF'
+        alacritty_cfg="$HOME/.config/alacritty/alacritty.toml"
+        if [ ! -f "$alacritty_cfg" ] || grep -q 'managed by infynitae' "$alacritty_cfg" 2>/dev/null; then
+            put_file "$alacritty_cfg" << 'EOF'
 # managed by infynitae — delete this line to keep custom alacritty settings
 general.import = ["~/.config/alacritty/infynitae-theme.toml"]
 EOF
-    # your own alacritty.toml: the import goes first, unless the file has a [general] table or a
-    # general.* key of its own (a second definition of the table makes TOML reject the whole file)
-    elif ! grep -q 'infynitae-theme\.toml' "$alacritty_cfg" 2>/dev/null \
-        && ! grep -qE '^[[:space:]]*(\[general\]|general\.|import[[:space:]]*=)' "$alacritty_cfg"; then
-        # Prepend import while preserving the user's existing alacritty.toml rules
-        {
-            echo 'general.import = ["~/.config/alacritty/infynitae-theme.toml"]'
-            cat "$alacritty_cfg"
-        } > "$alacritty_cfg.tmp.$$" && mv -f "$alacritty_cfg.tmp.$$" "$alacritty_cfg"
+        # your own alacritty.toml: the import goes first, unless the file has a [general] table or a
+        # general.* key of its own (a second definition of the table makes TOML reject the whole file)
+        elif ! grep -q 'infynitae-theme\.toml' "$alacritty_cfg" 2>/dev/null \
+            && ! grep -qE '^[[:space:]]*(\[general\]|general\.|import[[:space:]]*=)' "$alacritty_cfg"; then
+            # Prepend import while preserving the user's existing alacritty.toml rules
+            {
+                echo 'general.import = ["~/.config/alacritty/infynitae-theme.toml"]'
+                cat "$alacritty_cfg"
+            } > "$alacritty_cfg.tmp.$$" && mv -f "$alacritty_cfg.tmp.$$" "$alacritty_cfg"
+        fi
     fi
         ;;
     esac
@@ -716,6 +753,11 @@ EOF
             KEYBOARD_REPEAT_RATE \
             PAN_MODE 2>/dev/null || true
     fi
+
+    # 7. Record modification times stamp (~/.cache/infynitae/settings-applied)
+    mkdir -p "$(dirname "$stamp_file")"
+    cfg_stamp=$(stat -c '%s %Y' "$CONFIG_FILE" 2>/dev/null || echo 0)
+    printf '%s %s\n' "$cfg_stamp" "$self_stamp" > "$stamp_file"
 }
 
 cmd_set() {
@@ -764,7 +806,7 @@ cmd_set() {
 
     echo "==> Updated $KEY in $CONFIG_FILE"
     . "$CONFIG_FILE"
-    apply_settings
+    apply_settings --force
     echo "==> Settings synchronized successfully across all toolkits."
 }
 
@@ -835,8 +877,13 @@ cmd_list() {
 
 case "$1" in
     apply)
-        apply_settings
-        echo "==> Settings applied."
+        shift
+        apply_settings "$@"
+        if [ "${SETTINGS_SKIPPED:-false}" = true ]; then
+            echo "==> Settings unchanged."
+        else
+            echo "==> Settings applied."
+        fi
         ;;
     wallpaper-colors)
         # infynitae-settings wallpaper-colors [accent|all] [IMAGE]: the theme from the wallpaper
@@ -856,7 +903,7 @@ case "$1" in
         fi
         . "$CONFIG_FILE"
         grep -E '^(BORDER_ACTIVE|SURFACE_COLOR|CANVAS_COLOR|BORDER_INACTIVE)=' "$CONFIG_FILE"
-        apply_settings
+        apply_settings --force
         echo "==> Colours from $wc_img (before: $CONFIG_FILE.bak-colors). Panels follow at once; apps on their next start."
         ;;
     set)
@@ -905,7 +952,7 @@ case "$1" in
         echo "Usage: infynitae-settings <command>"
         echo ""
         echo "Commands:"
-        echo "  apply                Sync current ~/.config/infynitae/config across all toolkits"
+        echo "  apply [--force]      Sync current ~/.config/infynitae/config across all toolkits"
         echo "  wallpaper-colors [accent|all] [IMAGE]"
         echo "                       Take the theme's colours from the wallpaper (or IMAGE)"
         echo "  update               Pull latest changes and recompile release binary"
