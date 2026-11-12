@@ -65,6 +65,8 @@ pub fn draw(cr: &Context, th: &Theme, it: &Item, world: &World, rect: Rect) {
         );
     } else {
         draw::card(cr, th, x, y, w, h);
+        // the whole card opens the calendar
+        super::hot(cr, th, world, x + 4.0, y + 4.0, w - 8.0, h - 8.0, th.small_radius());
         if look == "big" {
             draw_face(cr, th, world, x, y);
         } else {

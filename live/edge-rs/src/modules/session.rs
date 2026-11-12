@@ -92,7 +92,7 @@ pub fn click(world: &mut World, size: (f64, f64), pos: (f64, f64), button: u32) 
     true
 }
 
-pub fn draw(cr: &Context, th: &Theme, rect: Rect) {
+pub fn draw(cr: &Context, th: &Theme, world: &World, rect: Rect) {
     let (x, y, w, h) = rect;
     if w <= 0.0 || h <= 0.0 {
         return;
@@ -107,6 +107,17 @@ pub fn draw(cr: &Context, th: &Theme, rect: Rect) {
     };
     for (i, &act) in ALL.iter().enumerate() {
         let cx = (x + PAD_X + (i as f64 + 0.5) * slot_w).round();
+        // the whole slot presses (action_at), so the whole slot lights, inset from the card's edge
+        super::hot(
+            cr,
+            th,
+            world,
+            x + PAD_X + i as f64 * slot_w + 2.0,
+            y + 6.0,
+            slot_w - 4.0,
+            h - 12.0,
+            th.small_radius(),
+        );
         draw_icon(cr, act, cx - 9.0, top.round(), th.text);
         if show_labels {
             draw::text_center(

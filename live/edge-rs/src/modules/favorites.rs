@@ -189,6 +189,16 @@ pub fn draw(cr: &Context, th: &Theme, world: &World, rect: Rect) {
             break;
         }
         let is_sel = sel_fav == Some(slot);
+        super::hot(
+            cr,
+            th,
+            world,
+            cx + 2.0,
+            cy - 4.0,
+            (col_w - 4.0).max(0.0),
+            CELL_H + 4.0,
+            8.0,
+        );
         if is_sel {
             draw::round_rect(
                 cr,

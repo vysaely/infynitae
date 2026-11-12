@@ -70,7 +70,6 @@ pub struct ChildState {
     /// the Network card: a search for networks was asked (the next list rescans)
     pub scan: bool,
     pub rect: Option<(f64, f64, f64, f64)>,
-    pub hover_row: Option<usize>,
 }
 
 /// The Network card's last row while Wi-Fi is on: search again for networks (the list is the
@@ -747,7 +746,6 @@ pub fn draw_child_card(
 
     for (i, item) in state.items.iter().enumerate() {
         let row_y = start_y + i as f64 * ROW_HEIGHT;
-        let is_hovered = state.hover_row == Some(i);
 
         // a heading ("Apps"): small and muted, a line above it
         if item.id == SAID && item.meta.is_empty() {
@@ -771,6 +769,16 @@ pub fn draw_child_card(
         // an app playing sound: its name, a slider, its level
         if let Some(level) = app_level(item) {
             let mid = row_y + ROW_HEIGHT / 2.0;
+            super::hot(
+                cr,
+                th,
+                world,
+                cx + PAD_X - 4.0,
+                row_y,
+                cw - 2.0 * PAD_X + 8.0,
+                ROW_HEIGHT - 2.0,
+                th.small_radius(),
+            );
             draw::text_max(
                 cr,
                 cx + PAD_X + 8.0,
@@ -811,8 +819,18 @@ pub fn draw_child_card(
             continue;
         }
 
-        // Row background on active / hover
-        if item.active || is_hovered {
+        // the hover light, and the active row's tint over it
+        let is_hovered = super::hot(
+            cr,
+            th,
+            world,
+            cx + PAD_X - 4.0,
+            row_y,
+            cw - 2.0 * PAD_X + 8.0,
+            ROW_HEIGHT - 2.0,
+            th.small_radius(),
+        );
+        if item.active {
             draw::round_rect(
                 cr,
                 cx + PAD_X - 4.0,
@@ -821,13 +839,8 @@ pub fn draw_child_card(
                 ROW_HEIGHT - 2.0,
                 th.small_radius(),
             );
-            if item.active {
-                draw::set(cr, th.accent.alpha(0.20));
-                let _ = cr.fill();
-            } else {
-                draw::set(cr, th.track.alpha(0.35));
-                let _ = cr.fill();
-            }
+            draw::set(cr, th.accent.alpha(0.20));
+            let _ = cr.fill();
         }
 
         // Active indicator dot/bar

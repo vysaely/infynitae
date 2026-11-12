@@ -288,6 +288,11 @@ pub struct World {
     pub actions: Vec<String>,
     /// the panel is being edited: empty modules keep a placeholder card (height_in)
     pub edit_preview: bool,
+    /// where the pointer is over the open panel (surface pixels), for the hover highlight
+    pub pointer: Option<(f64, f64)>,
+    /// every clickable target drawn in the last frame (`hot`), so a move redraws only when the
+    /// pointer goes from one target to another
+    pub hot: std::cell::RefCell<Vec<Rect>>,
 }
 
 impl Default for World {
@@ -328,6 +333,8 @@ impl World {
             clipboard_key: None,
             actions: Vec::new(),
             edit_preview: false,
+            pointer: None,
+            hot: std::cell::RefCell::new(Vec::new()),
         };
         if std::env::var_os("INFYNITAE_EDGE_RENDER_DATA").is_some() {
             w.load_from_helper();
@@ -1121,6 +1128,11 @@ pub fn sq(s: &str) -> String {
 /// neighbours, whatever size it was given.
 pub fn draw(cr: &Context, th: &Theme, it: &Item, world: &World, rect: Rect) {
     let (x, y, w, h) = rect;
+    if it.module.is_switch() {
+        // a switch is pressed anywhere in its cell: light a little more than the cell (the module
+        // draws clipped to it), so the light is not flush with the icon
+        hot(cr, th, world, x - 6.0, y - 4.0, w + 12.0, h + 8.0, th.small_radius());
+    }
     cr.save().ok();
     cr.rectangle(x - 1.0, y - 1.0, w + 2.0, h + 2.0);
     cr.clip();
@@ -1141,7 +1153,7 @@ fn draw_unclipped(cr: &Context, th: &Theme, it: &Item, world: &World, rect: Rect
         Module::System => system::draw(cr, th, world, rect),
         Module::Memory => memory::draw(cr, th, world, rect),
         Module::Drives => drives::draw(cr, th, world, rect),
-        Module::Session => session::draw(cr, th, rect),
+        Module::Session => session::draw(cr, th, world, rect),
         Module::Clipboard => clipboard::draw(cr, th, world, rect),
         Module::Notifications => notifications::draw(cr, th, world, rect),
         Module::Tray => tray::draw(cr, th, world, rect),
@@ -1198,6 +1210,38 @@ pub fn draw_placeholder(cr: &Context, th: &Theme, it: &Item, rect: Rect) {
 
 /// Draws all items of `panel` at `origin = (ox, oy)` using their laid-out `rects`, including the
 /// shared card for consecutive switch runs.
+/// Marks `(x, y, w, h)` as something the pointer can click and, when the pointer is on it, lights
+/// it with a soft fill of the text colour (`r` its corner): call it before drawing the target's
+/// content, so the light sits under it. Returns whether it is lit.
+#[allow(clippy::too_many_arguments)]
+pub fn hot(cr: &Context, th: &Theme, world: &World, x: f64, y: f64, w: f64, h: f64, r: f64) -> bool {
+    if w <= 0.0 || h <= 0.0 {
+        return false;
+    }
+    let mut list = world.hot.borrow_mut();
+    list.push((x, y, w, h));
+    let lit = world.pointer.is_some_and(|p| inside((x, y, w, h), p))
+        // the topmost target under the pointer only: the first one drawn that holds it
+        && list[..list.len() - 1].iter().all(|r| world.pointer.is_none_or(|p| !inside(*r, p)));
+    if lit {
+        draw::round_rect(cr, x, y, w, h, r);
+        draw::set(cr, th.text.alpha(0.08));
+        let _ = cr.fill();
+    }
+    lit
+}
+
+fn inside(r: Rect, (px, py): (f64, f64)) -> bool {
+    px >= r.0 && px < r.0 + r.2 && py >= r.1 && py < r.1 + r.3
+}
+
+impl World {
+    /// The target under `p` in the last frame (its place in `hot`).
+    pub fn hot_at(&self, p: (f64, f64)) -> Option<usize> {
+        self.hot.borrow().iter().position(|r| inside(*r, p))
+    }
+}
+
 pub fn draw_panel(
     cr: &Context,
     th: &Theme,
@@ -1209,6 +1253,7 @@ pub fn draw_panel(
 ) {
     let (ox, oy_raw) = origin;
     let oy = oy_raw - world.panel_scroll;
+    world.hot.borrow_mut().clear();
     if !panel.placed {
         let mut y = 0.0;
         let mut i = 0;

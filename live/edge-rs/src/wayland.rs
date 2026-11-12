@@ -155,6 +155,8 @@ struct OutputSurface {
     buf_size: (u32, u32),
     configured: bool,
     mapped_closed: bool,
+    /// a close found both buffers still held by the compositor: clear on the next frame callback
+    clear_pending: bool,
     /// a fullscreen window is on this screen: closed, the surface is unmapped (no buffer at all), so
     /// nothing is drawn over the window and it can be shown directly (scanout, tearing). The C edge
     /// did the same; a closed but mapped surface, even fully transparent, is one more element over
@@ -248,6 +250,7 @@ impl OutputSurface {
                 self.unmapped = true;
                 self.configured = false;
                 self.mapped_closed = false;
+                self.clear_pending = false;
                 self.dirty = false;
                 self.frame_pending = false;
                 self.committed_box = None;
@@ -293,11 +296,12 @@ impl OutputSurface {
         if active {
             self.dirty = true;
             self.mapped_closed = false;
+            self.clear_pending = false;
             self.render_if_needed(qh, shell);
         } else {
             self.dirty = false;
             self.frame_pending = false;
-            self.clear_and_commit();
+            self.clear_and_commit(qh);
         }
     }
 
@@ -355,7 +359,7 @@ impl OutputSurface {
         }
     }
 
-    fn clear_and_commit(&mut self) {
+    fn clear_and_commit(&mut self, qh: &QueueHandle<App>) {
         if self.mapped_closed {
             self.layer.commit();
             return;
@@ -364,8 +368,15 @@ impl OutputSurface {
         let h = self.height as i32;
         let stride = w * 4;
         let Some(idx) = self.acquire_slot() else {
+            // both buffers still held: closing now would leave the panel's last picture on screen
+            // until something else redraws, so clear as soon as the compositor gives one back
+            self.clear_pending = true;
+            let wl = self.layer.wl_surface();
+            wl.frame(qh, wl.clone());
+            self.layer.commit();
             return;
         };
+        self.clear_pending = false;
         let slot = self.slots[idx].as_mut().unwrap();
         let old = slot.prev_box.take();
         if let Some(canvas) = slot.buffer.canvas(&mut self.pool) {
@@ -373,11 +384,15 @@ impl OutputSurface {
                 Self::clear_box(canvas, stride, w, h, r);
             }
         }
+        // damage what is on screen too (the other buffer's frame, `committed_box`): this buffer's
+        // own box is two frames old, so a panel that grew or moved since kept its pixels shown
+        let shown = self.committed_box.take();
         let wl = self.layer.wl_surface();
-        if let Some((x, y, bw, bh)) = old {
-            wl.damage_buffer(x, y, bw, bh);
-        } else {
+        if old.is_none() && shown.is_none() {
             wl.damage_buffer(0, 0, w, h);
+        }
+        for (x, y, bw, bh) in [old, shown].into_iter().flatten() {
+            wl.damage_buffer(x, y, bw, bh);
         }
         if slot.buffer.attach_to(wl).is_ok() {
             self.mapped_closed = true;
@@ -1134,6 +1149,7 @@ impl App {
             buf_size: (0, 0),
             configured: false,
             mapped_closed: false,
+            clear_pending: false,
             fullscreen_under: false,
             unmapped: false,
             dirty: false,
@@ -1286,6 +1302,8 @@ impl CompositorHandler for App {
             os.frame_pending = false;
             if os.dirty {
                 os.render_if_needed(qh, &self.shell);
+            } else if os.clear_pending {
+                os.clear_and_commit(qh);
             }
         }
         if let Some(os) = self
@@ -1296,6 +1314,8 @@ impl CompositorHandler for App {
             os.frame_pending = false;
             if os.dirty {
                 os.render_if_needed(qh, &self.widgets);
+            } else if os.clear_pending {
+                os.clear_and_commit(qh);
             }
         }
     }

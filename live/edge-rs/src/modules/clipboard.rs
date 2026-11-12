@@ -349,6 +349,16 @@ pub fn draw(cr: &Context, th: &Theme, world: &World, rect: Rect) {
     let start = d.scroll.min(d.items.len().saturating_sub(shown));
     for (row, item) in d.items[start..start + shown].iter().enumerate() {
         let ry = (top + (row as f64) * ROW_H).round();
+        super::hot(
+            cr,
+            th,
+            world,
+            x + PAD_X - 8.0,
+            ry,
+            w - 2.0 * PAD_X + 16.0,
+            ROW_H - 2.0,
+            th.small_radius(),
+        );
         let mut tx = x + PAD_X;
         if item.pinned {
             draw_pin_icon(cr, tx, ry + 5.0, th.accent);

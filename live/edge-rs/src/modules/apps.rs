@@ -1248,6 +1248,16 @@ pub fn draw(cr: &Context, th: &Theme, world: &World, rect: Rect) {
         };
         let ry = y + PAD_Y + TITLE_H + k as f64 * ROW_H;
         let is_sel = sel_app_row == Some(i);
+        super::hot(
+            cr,
+            th,
+            world,
+            x + PAD_X - 8.0,
+            ry + 1.0,
+            (w - 2.0 * (PAD_X - 8.0)).max(0.0),
+            ROW_H - 2.0,
+            6.0,
+        );
 
         if is_sel {
             draw::round_rect(

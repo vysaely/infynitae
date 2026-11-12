@@ -530,17 +530,24 @@ pub fn draw(cr: &Context, th: &Theme, world: &World, rect: Rect) {
     }
     draw::card(cr, th, x, y, w, h);
     draw::title(cr, th, x + PAD_X, y + PAD_Y, "Notifications");
-    draw::text_right(
+    let clear_t = Text {
+        size: 12.0,
+        bold: false,
+        color: th.muted,
+        text: "Clear all",
+    };
+    let (cw, _) = draw::measure(cr, &clear_t);
+    super::hot(
         cr,
-        x + w - PAD_X,
-        y + PAD_Y + 2.0,
-        &Text {
-            size: 12.0,
-            bold: false,
-            color: th.muted,
-            text: "Clear all",
-        },
+        th,
+        world,
+        x + w - PAD_X - cw - 8.0,
+        y + PAD_Y - 3.0,
+        cw + 16.0,
+        22.0,
+        th.small_radius(),
     );
+    draw::text_right(cr, x + w - PAD_X, y + PAD_Y + 2.0, &clear_t);
 
     let iw = (w - 2.0 * PAD_X).max(20.0);
     let mut ry = y + PAD_Y + HEAD_H;
@@ -550,6 +557,17 @@ pub fn draw(cr: &Context, th: &Theme, world: &World, rect: Rect) {
         if idx > 0 && ry + ih > y + h - PAD_Y / 2.0 {
             break;
         }
+        // a click opens the notification (and dismisses it)
+        super::hot(
+            cr,
+            th,
+            world,
+            x + PAD_X - 8.0,
+            ry - 5.0,
+            iw + 16.0,
+            ih + ITEM_GAP,
+            th.small_radius(),
+        );
         let time_w = if !item.time.is_empty() {
             draw::text_right(
                 cr,
