@@ -685,6 +685,31 @@ pub fn draw(cr: &Context, th: &Theme, world: &World, rect: Rect) {
         let icon_cx = x + PAD_X + 8.0;
         let icon_cy = line1_y + 8.0;
 
+        // eject first: the first target drawn under the pointer is the one lit
+        if drive.removable {
+            super::hot(
+                cr,
+                th,
+                world,
+                x + w - PAD_X - 22.0,
+                ry - 4.0,
+                26.0,
+                24.0,
+                th.small_radius(),
+            );
+        }
+        // the row opens the drive's folder
+        super::hot(
+            cr,
+            th,
+            world,
+            x + PAD_X - 8.0,
+            ry - 6.0,
+            w - 2.0 * PAD_X + 16.0,
+            ROW_H - 4.0,
+            th.small_radius(),
+        );
+
         if drive.removable {
             draw_removable_icon(cr, th.muted, icon_cx, icon_cy);
         } else {

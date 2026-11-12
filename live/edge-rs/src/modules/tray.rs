@@ -456,6 +456,16 @@ pub fn draw(cr: &Context, th: &Theme, world: &World, rect: Rect) {
         }
 
         let is_selected = world.tray.open_menu == Some(i);
+        super::hot(
+            cr,
+            th,
+            world,
+            ix - 4.0,
+            iy,
+            col_w + 8.0,
+            ROW_H - 2.0,
+            th.small_radius(),
+        );
         if is_selected {
             draw::round_rect(
                 cr,
@@ -630,6 +640,18 @@ pub fn draw_menu(cr: &Context, th: &Theme, world: &World, m_rect: Rect) {
             draw::set(cr, th.track);
             let _ = cr.fill();
         } else {
+            if mi.enabled {
+                super::hot(
+                    cr,
+                    th,
+                    world,
+                    mx + 6.0,
+                    row_y,
+                    mw - 12.0,
+                    MENU_ROW_H,
+                    th.small_radius(),
+                );
+            }
             let color = if mi.enabled { th.text } else { th.muted };
             draw::text(
                 cr,

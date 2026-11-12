@@ -1643,6 +1643,8 @@ impl Shell {
     }
 
     pub fn close(&mut self) -> bool {
+        // opened again by its key, the panel lights nothing until the pointer moves
+        self.world.pointer = None;
         if self.desktop {
             // the widgets stay: closing ends editing (saving) and what was open in them
             let was =
@@ -2139,7 +2141,10 @@ impl Shell {
                     return changed;
                 }
             }
-            return false;
+            // the hover light: a redraw only when the pointer goes onto another target
+            let before = self.world.pointer.and_then(|p| self.world.hot_at(p));
+            self.world.pointer = Some((x, y));
+            return self.world.hot_at((x, y)) != before;
         }
         for i in 0..self.cfg.panels.len() {
             if !self.cfg.panels[i].hover {
@@ -2159,6 +2164,12 @@ impl Shell {
 
     pub fn pointer_leave(&mut self) -> bool {
         self.pointer_down = false;
+        // the hover light goes out with the pointer
+        let lit = self
+            .world
+            .pointer
+            .take()
+            .is_some_and(|p| self.world.hot_at(p).is_some());
         // a card held when the pointer left (to another screen) is let go where it was
         self.edit.flow_drag = None;
         self.edit.drop_at = None;
@@ -2167,15 +2178,15 @@ impl Shell {
             || self.world.child.open
             || self.world.tray.open_menu.is_some()
         {
-            return false;
+            return lit;
         }
         if self.open.is_none() {
-            return false;
+            return lit;
         }
         if self.opened_by_hover {
             self.close()
         } else {
-            false
+            lit
         }
     }
 }
@@ -2218,6 +2229,13 @@ fn render(name: &str, size: &str, out: &str) -> Result<(), String> {
     let _ = cr.paint();
     let mut world = modules::World::now();
     world.sync_config(&cfg);
+    // the pointer's place for the hover light (screen pixels "x,y"), for render tests
+    world.pointer = std::env::var("INFYNITAE_EDGE_RENDER_POINTER")
+        .ok()
+        .and_then(|v| {
+            let (a, b) = v.split_once(',')?;
+            Some((a.trim().parse().ok()?, b.trim().parse().ok()?))
+        });
     if let Some(open_idx) = panel_idx {
         let is_editing = std::env::var_os("INFYNITAE_EDGE_RENDER_EDIT").is_some();
         let is_adding = std::env::var_os("INFYNITAE_EDGE_RENDER_ADD").is_some();

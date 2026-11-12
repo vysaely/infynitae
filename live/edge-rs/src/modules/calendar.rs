@@ -187,10 +187,22 @@ fn draw_month_grid(cr: &Context, th: &Theme, world: &World, x: f64, y: f64, w: f
             text: &first.format("%Y").to_string(),
         },
     );
-    draw::set(cr, th.muted);
-    cr.set_line_width(1.5);
     let ay = y + PAD_Y + 10.0;
     let px = x + w - PAD_X - 30.0;
+    for cx in [px, x + w - PAD_X - 10.0] {
+        super::hot(
+            cr,
+            th,
+            world,
+            cx - 10.0,
+            ay - 11.0,
+            20.0,
+            22.0,
+            th.small_radius(),
+        );
+    }
+    draw::set(cr, th.muted);
+    cr.set_line_width(1.5);
     cr.move_to(px + 2.0, ay - 4.0);
     cr.line_to(px - 2.0, ay);
     cr.line_to(px + 2.0, ay + 4.0);

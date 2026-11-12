@@ -346,6 +346,17 @@ pub fn draw(cr: &Context, th: &Theme, world: &World, rect: Rect) {
     } else {
         (d.pct.min(100) as f64) / 100.0
     };
+    // each slider row and the output line are one target each (click / drag / scroll)
+    super::hot(
+        cr,
+        th,
+        world,
+        x + PAD_X - 8.0,
+        y + PAD_Y - 6.0,
+        w - 2.0 * PAD_X + 16.0,
+        SLIDER_ROW_H,
+        th.small_radius(),
+    );
     draw_slider_row(
         cr,
         th,
@@ -363,6 +374,16 @@ pub fn draw(cr: &Context, th: &Theme, world: &World, rect: Rect) {
     if let Some(br) = d.brightness {
         let br_val = format!("{}%", br.min(100));
         let br_part = (br.min(100) as f64) / 100.0;
+        super::hot(
+            cr,
+            th,
+            world,
+            x + PAD_X - 8.0,
+            oy - 6.0,
+            w - 2.0 * PAD_X + 16.0,
+            SLIDER_ROW_H,
+            th.small_radius(),
+        );
         draw_slider_row(
             cr,
             th,
@@ -386,6 +407,16 @@ pub fn draw(cr: &Context, th: &Theme, world: &World, rect: Rect) {
         text: "Change",
     };
     let (cw, _) = draw::measure(cr, &change);
+    super::hot(
+        cr,
+        th,
+        world,
+        x + PAD_X - 8.0,
+        oy - 4.0,
+        w - 2.0 * PAD_X + 16.0,
+        24.0,
+        th.small_radius(),
+    );
     draw::text_right(cr, x + w - PAD_X, oy + 2.0, &change);
     let out_text = format!("Output: {}", d.sink);
     draw::text_max(
