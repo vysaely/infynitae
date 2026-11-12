@@ -597,6 +597,14 @@ pub fn layout_run(
 
 pub const HINT: &str = "Right click: more";
 
+pub fn state_text(d: &SwitchesData, m: Module) -> Option<String> {
+    if !d.ready {
+        None
+    } else {
+        Some(info(m, d).state)
+    }
+}
+
 /// The hint for the Quick settings card title (docs/design/EDGE_DESIGN.md).
 pub fn hint(switch_look: &str) -> Option<&'static str> {
     if switch_look != "icons" && switch_look != "tiles" {
@@ -606,7 +614,7 @@ pub fn hint(switch_look: &str) -> Option<&'static str> {
     }
 }
 
-/// Draws the shared card background (and `"Quick settings"` title or `"..."` placeholder) for a
+/// Draws the shared card background (and `"Quick settings"` title) for a
 /// consecutive run of switches.
 pub fn draw_card(cr: &Context, th: &Theme, world: &World, rect: Rect) {
     let (x, y, w, h) = rect;
@@ -614,23 +622,12 @@ pub fn draw_card(cr: &Context, th: &Theme, world: &World, rect: Rect) {
         return;
     }
     draw::card(cr, th, x, y, w, h);
-    if !world.switches.ready {
+    if th.switch_look != "icons" && th.switch_look != "tiles" {
         draw::title(cr, th, x + PAD_X, y + PAD_Y, "Quick settings");
-        draw::text_right(
-            cr,
-            x + w - PAD_X,
-            y + PAD_Y + 2.0,
-            &Text {
-                size: 13.0,
-                bold: false,
-                color: th.muted,
-                text: "...",
-            },
-        );
-    } else if th.switch_look != "icons" && th.switch_look != "tiles" {
-        draw::title(cr, th, x + PAD_X, y + PAD_Y, "Quick settings");
-        if let Some(h_text) = hint(&th.switch_look) {
-            draw::title_hint(cr, th, x, y, w, "Quick settings", h_text);
+        if world.switches.ready {
+            if let Some(h_text) = hint(&th.switch_look) {
+                draw::title_hint(cr, th, x, y, w, "Quick settings", h_text);
+            }
         }
     }
 }
@@ -639,21 +636,6 @@ pub fn draw_card(cr: &Context, th: &Theme, world: &World, rect: Rect) {
 pub fn draw(cr: &Context, th: &Theme, it: &Item, world: &World, rect: Rect) {
     let (x, y, w, h) = rect;
     if w <= 0.0 || h <= 0.0 {
-        return;
-    }
-    if !world.switches.ready {
-        draw::title(cr, th, x + PAD_X, y + PAD_Y, it.module.word());
-        draw::text_right(
-            cr,
-            x + w - PAD_X,
-            y + PAD_Y + 2.0,
-            &Text {
-                size: 13.0,
-                bold: false,
-                color: th.muted,
-                text: "...",
-            },
-        );
         return;
     }
     let sw = info(it.module, &world.switches);
@@ -722,18 +704,20 @@ pub fn draw(cr: &Context, th: &Theme, it: &Item, world: &World, rect: Rect) {
                     text: sw.name,
                 },
             );
-            draw::text_max(
-                cr,
-                tx,
-                y + 18.0,
-                max_w,
-                &Text {
-                    size: 11.0,
-                    bold: false,
-                    color: state_col,
-                    text: &sw.state,
-                },
-            );
+            if let Some(state) = state_text(&world.switches, it.module) {
+                draw::text_max(
+                    cr,
+                    tx,
+                    y + 18.0,
+                    max_w,
+                    &Text {
+                        size: 11.0,
+                        bold: false,
+                        color: state_col,
+                        text: &state,
+                    },
+                );
+            }
         }
     }
 }
@@ -1040,6 +1024,34 @@ Controller AC:36:1B:F9:5D:AF (public)
         assert!(r_on.contains("ENABLE_REPLAY_BUFFER true"));
         let r_off = toggle_action(Module::Replay, &mut d).unwrap();
         assert!(r_off.contains("ENABLE_REPLAY_BUFFER false"));
+    }
+
+    #[test]
+    fn switch_not_ready_shows_no_state_line() {
+        let mut d = SwitchesData::default();
+        assert!(!d.ready);
+        assert_eq!(state_text(&d, Module::Wifi), None);
+        assert_eq!(state_text(&d, Module::Bluetooth), None);
+        assert_eq!(state_text(&d, Module::Dnd), None);
+
+        d.ready = true;
+        assert!(state_text(&d, Module::Wifi).is_some());
+
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 380, 200).unwrap();
+        let cr = cairo::Context::new(&surf).unwrap();
+        let th = Theme::from_config(&crate::config::Config::from_text(""));
+        let mut world = World::now();
+        world.switches.ready = false;
+
+        draw_card(&cr, &th, &world, (0.0, 0.0, 380.0, 200.0));
+
+        let it = Item {
+            module: Module::Wifi,
+            look: None,
+            rect: None,
+            half: false,
+        };
+        draw(&cr, &th, &it, &world, (PAD_X, PAD_Y + 28.0, 160.0, 36.0));
     }
 
     #[test]
