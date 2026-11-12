@@ -6,7 +6,7 @@ keyring gnome-keyring libsecret
 automount udisks2 gvfs exfatprogs dosfstools
 clipboard wl-clip-persist cliphist
 fonts noto-fonts noto-fonts-emoji
-recorder ffmpeg
+recorder ffmpeg gpu-screen-recorder
 files thunar tumbler ffmpegthumbnailer poppler-glib thunar-archive-plugin xarchiver gvfs-mtp
 autorotate iio-sensor-proxy wlr-randr
 osk squeekboard

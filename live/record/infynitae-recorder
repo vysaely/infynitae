@@ -48,9 +48,12 @@ RECORD_FPS="${RECORD_FPS:-60}"
 RECORD_CODEC="${RECORD_CODEC:-hevc}" # hevc, auto, av1, h264
 RECORD_AUDIO="${RECORD_AUDIO:-desktop}"
 RECORD_NOTIFY="${RECORD_NOTIFY:-true}"
-# infynitae: the compositor's capture -> ffmpeg; gpu-screen-recorder: the screen read from the display hardware
-# (KMS) and encoded on the GPU, with no work in the compositor (it must be installed)
-REPLAY_BACKEND="${REPLAY_BACKEND:-infynitae}"
+# auto: gpu-screen-recorder when it is installed and can read the screen, else the compositor's capture;
+# gpu-screen-recorder: the screen read from the display hardware (KMS) and encoded on the GPU, with no work
+# in the compositor; infynitae: the compositor's capture -> ffmpeg
+REPLAY_BACKEND="${REPLAY_BACKEND:-auto}"
+# gpu-screen-recorder failed to start this many times in a row: this session uses the compositor's capture
+GSR_FAILED_FILE="$RUNTIME_DIR/infynitae-gsr-failed"
 
 PID_FILE="$RUNTIME_DIR/infynitae-recording.pid"
 REPLAY_PID_FILE="$RUNTIME_DIR/infynitae-replay.pid"
@@ -211,12 +214,31 @@ detect_audio_args() {
 # The replay buffer with gpu-screen-recorder: it keeps the last REPLAY_MINUTES in memory itself and writes a clip
 # into CLIPS_DIR on SIGUSR1 (save_replay_clip). The screen comes from the display hardware through its
 # gsr-kms-server (installed with cap_sys_admin), so the compositor draws and copies nothing for it.
+# RECORD_CODEC when this GPU encodes it, else another the GPU encodes (hevc, h264, av1), else h264 on the
+# CPU (gpu-screen-recorder's own encoder: the screen still comes from the display hardware)
 gsr_codec() {
+    local want codecs c
     case "$(echo "$RECORD_CODEC" | tr 'A-Z' 'a-z')" in
-        av1) echo av1 ;;
-        h264) echo h264 ;;
-        *) echo hevc ;;
+        av1) want=av1 ;;
+        h264) want=h264 ;;
+        *) want=hevc ;;
     esac
+    codecs=$(gpu-screen-recorder --info 2>/dev/null | sed -n '/^section=video_codecs/,/^section=/p')
+    for c in "$want" hevc h264 av1; do
+        if printf '%s\n' "$codecs" | grep -qx "$c"; then
+            echo "$c"
+            return
+        fi
+    done
+    echo h264_software
+}
+
+# gpu-screen-recorder is installed, can read a screen (its gsr-kms-server needs cap_sys_admin, set by the
+# package) and has not kept failing this session
+gsr_usable() {
+    command -v gpu-screen-recorder >/dev/null 2>&1 || return 1
+    [ ! -e "$GSR_FAILED_FILE" ] || return 1
+    gpu-screen-recorder --list-capture-options 2>/dev/null | grep -q '|'
 }
 
 start_gsr_replay() {
@@ -232,12 +254,17 @@ start_gsr_replay() {
 }
 
 start_replay_engine() {
-    if [ "$REPLAY_BACKEND" = "gpu-screen-recorder" ]; then
-        if command -v gpu-screen-recorder >/dev/null 2>&1; then
-            start_gsr_replay
-        fi
-        echo "[infynitae-recorder] REPLAY_BACKEND is gpu-screen-recorder, which is not installed: using the compositor's capture" >&2
-    fi
+    case "$REPLAY_BACKEND" in
+        auto|gpu-screen-recorder)
+            if gsr_usable; then
+                echo gsr > "$RUNTIME_DIR/infynitae-replay-engine"
+                start_gsr_replay
+            fi
+            [ "$REPLAY_BACKEND" = auto ] \
+                || echo "[infynitae-recorder] REPLAY_BACKEND is gpu-screen-recorder, which is not installed, cannot read the screen or kept failing: using the compositor's capture" >&2
+            ;;
+    esac
+    echo capture > "$RUNTIME_DIR/infynitae-replay-engine"
     resolve_wayland_display
     mkdir -p "$REPLAY_DIR"
     chmod 700 "$REPLAY_DIR" 2>/dev/null || true
@@ -287,7 +314,20 @@ supervisor_loop() {
         echo $ENGINE_PID > "$REPLAY_PID_FILE"
 
         # Wait for engine process
+        started=$(date +%s)
         wait $ENGINE_PID || true
+        # gpu-screen-recorder that dies within 10 s three times running (a driver it cannot use):
+        # the compositor's capture for the rest of the session
+        if [ "$(cat "$RUNTIME_DIR/infynitae-replay-engine" 2>/dev/null)" = gsr ] \
+            && [ $(($(date +%s) - started)) -lt 10 ]; then
+            gsr_fails=$((${gsr_fails:-0} + 1))
+            if [ "$gsr_fails" -ge 3 ]; then
+                : > "$GSR_FAILED_FILE"
+                echo "[infynitae-recorder] gpu-screen-recorder failed to start 3 times: using the compositor's capture this session" >&2
+            fi
+        else
+            gsr_fails=0
+        fi
 
         # If supervisor still running, auto-heal and restart in 1 second
         echo "[infynitae-recorder] Replay buffer exited unexpectedly. Restarting in 1s..."
@@ -412,6 +452,9 @@ toggle_recording() {
         start_recording
     fi
 }
+
+# sourced by tools/test-recorder-backend for its functions only
+[ -z "${INFYNITAE_RECORDER_FUNCTIONS:-}" ] || return 0
 
 case "$1" in
     supervisor|daemon|autostart)

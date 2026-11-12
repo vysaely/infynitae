@@ -777,14 +777,15 @@ RECORDINGS_DIR="$HOME/Videos/Recordings"
     # default: "$HOME/Videos/Recordings"
     # options: "$HOME/Videos/Recordings"  · any folder
 
-REPLAY_BACKEND="infynitae"
+REPLAY_BACKEND="auto"
     # What keeps the replay buffer
-    # default: infynitae
+    # default: auto
+    #   auto                  gpu-screen-recorder when it is installed and can read the screen, else the
+    #                         compositor's capture (also after it fails to start 3 times in a session)
+    #   gpu-screen-recorder   reads the screen from the display hardware and encodes it on the GPU (RECORD_CODEC
+    #                         if the GPU has it, else another, else on the CPU): no work in the compositor
     #   infynitae             the compositor captures each frame and ffmpeg encodes it (the copy out of
     #                         the GPU costs the compositor time on every frame)
-    #   gpu-screen-recorder   reads the screen from the display hardware and encodes it on the GPU: no work
-    #                         in the compositor (install the gpu-screen-recorder package first; the capture
-    #                         mark does not show for it). Not yet tried on the owner's PC.
 
 RECORD_FPS="60"
     # default: 60

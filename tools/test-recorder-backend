@@ -1,0 +1,59 @@
+#!/bin/sh
+# tools/test-recorder-backend: which engine keeps the replay buffer (REPLAY_BACKEND) and which codec
+# gpu-screen-recorder gets, with a stub gpu-screen-recorder; nothing is recorded.
+set -eu
+
+REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/infynitae-test-recorder.XXXXXX")
+trap 'rm -rf "$TMP"' EXIT INT TERM
+mkdir -p "$TMP/bin" "$TMP/home" "$TMP/run"
+
+fail=0
+check() {
+    if [ "$2" = "$3" ]; then
+        echo "ok   $1"
+    else
+        echo "FAIL $1: expected '$3', got '$2'"
+        fail=1
+    fi
+}
+
+# a stub that can or cannot read a screen and lists the codecs in $STUB_CODECS
+cat > "$TMP/bin/gpu-screen-recorder" <<'STUB'
+#!/bin/sh
+case "$1" in
+    --list-capture-options) [ "${STUB_SCREEN:-yes}" = yes ] && echo "DP-1|1920x1080"; echo portal ;;
+    --info) echo section=system_info; echo 'vendor|amd'; echo section=video_codecs
+            for c in $STUB_CODECS; do echo "$c"; done; echo section=image_formats; echo jpeg ;;
+esac
+STUB
+chmod +x "$TMP/bin/gpu-screen-recorder"
+
+# runs one function of the recorder with the stub on PATH (or without it: NO_GSR=1)
+run() {
+    path="$TMP/bin:/usr/bin:/bin"
+    [ "${NO_GSR:-0}" = 1 ] && path="/usr/bin:/bin"
+    env -i HOME="$TMP/home" XDG_RUNTIME_DIR="$TMP/run" PATH="$path" \
+        INFYNITAE_RECORDER_FUNCTIONS=1 RECORD_CODEC="${RECORD_CODEC:-hevc}" \
+        STUB_CODECS="${STUB_CODECS:-}" STUB_SCREEN="${STUB_SCREEN:-yes}" \
+        sh -c ". '$REPO_DIR/live/record/infynitae-recorder'; $1" 2>/dev/null
+}
+
+STUB_CODECS="h264 h264_software hevc av1"
+check "the codec asked for, when the GPU has it" "$(RECORD_CODEC=av1 run gsr_codec)" "av1"
+check "hevc by default" "$(run gsr_codec)" "hevc"
+STUB_CODECS="h264 h264_software"
+check "another GPU codec when it lacks the one asked for" "$(RECORD_CODEC=av1 run gsr_codec)" "h264"
+STUB_CODECS="h264_software"
+check "the CPU when the GPU encodes nothing" "$(run gsr_codec)" "h264_software"
+
+check "usable: installed and reads a screen" "$(run 'gsr_usable && echo yes || echo no')" "yes"
+check "not usable: cannot read a screen" "$(STUB_SCREEN=no run 'gsr_usable && echo yes || echo no')" "no"
+check "not usable: not installed" "$(NO_GSR=1 run 'gsr_usable && echo yes || echo no')" "no"
+: > "$TMP/run/infynitae-gsr-failed"
+check "not usable: failed 3 times this session" "$(run 'gsr_usable && echo yes || echo no')" "no"
+rm "$TMP/run/infynitae-gsr-failed"
+
+check "REPLAY_BACKEND defaults to auto" "$(run 'echo $REPLAY_BACKEND')" "auto"
+
+exit $fail

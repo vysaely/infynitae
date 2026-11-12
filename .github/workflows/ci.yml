@@ -38,6 +38,7 @@ jobs:
       - run: sh tools/test-automount
       - run: sh tools/test-format-drive
       - run: sh tools/test-sleep-lock
+      - run: sh tools/test-recorder-backend
       - run: sh tools/test-edge-child-signals
       - run: sh tools/test-edge-app-search
       - run: sh tools/test-edge-config-value
