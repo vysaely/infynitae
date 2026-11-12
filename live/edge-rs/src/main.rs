@@ -1681,6 +1681,13 @@ impl Shell {
     }
 
     pub fn key(&mut self, k: Key) -> bool {
+        // the keyboard's selection shows from now on (until the pointer moves)
+        let shown_before = self.world.keyboard;
+        self.world.keyboard = true;
+        self.key_inner(k) || !shown_before
+    }
+
+    fn key_inner(&mut self, k: Key) -> bool {
         if self.world.ask.on {
             return match k {
                 Key::Escape => modules::ask::key(&mut self.world, 0xff1b, None),
@@ -2164,10 +2171,12 @@ impl Shell {
                     return changed;
                 }
             }
-            // the hover light: a redraw only when the pointer goes onto another target
+            // the hover light: a redraw only when the pointer goes onto another target; the
+            // keyboard's selection gives way to it
             let before = self.world.pointer.and_then(|p| self.world.hot_at(p));
             self.world.pointer = Some((x, y));
-            return self.world.hot_at((x, y)) != before;
+            let was_keyboard = std::mem::replace(&mut self.world.keyboard, false);
+            return self.world.hot_at((x, y)) != before || was_keyboard;
         }
         for i in 0..self.cfg.panels.len() {
             if !self.cfg.panels[i].hover {
@@ -3480,6 +3489,24 @@ mod tests {
         assert!(!sh
             .world
             .tick(t0 + std::time::Duration::from_millis(16 * 41)));
+    }
+
+    /// The keyboard's selection is drawn only once the keyboard is used, and gives way to the
+    /// pointer: opened, the first favourite is not lit beside the pointer's light.
+    #[test]
+    fn the_keyboard_selection_shows_after_a_key_and_hides_when_the_pointer_moves() {
+        let line = "PANEL_APPS=\"SUPER+W bottom center search favorites apps\"\n";
+        let mut sh = Shell::from_config(Config::from_text(line));
+        assert!(sh.toggle_named("apps"));
+        assert!(!sh.world.keyboard, "not on opening");
+        sh.key(Key::Sym {
+            keysym: 0xff54,
+            ch: None,
+        });
+        assert!(sh.world.keyboard);
+        let (w, h) = (1920.0, 1080.0);
+        sh.pointer_motion(w, h, w / 2.0, h - 100.0);
+        assert!(!sh.world.keyboard, "the pointer moved");
     }
 
     /// With a card open, a click elsewhere in the panel closes the card and does what it was

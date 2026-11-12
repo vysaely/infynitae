@@ -1247,7 +1247,7 @@ pub fn draw(cr: &Context, th: &Theme, world: &World, rect: Rect) {
             continue;
         };
         let ry = y + PAD_Y + TITLE_H + k as f64 * ROW_H;
-        let is_sel = sel_app_row == Some(i);
+        let is_sel = world.keyboard && sel_app_row == Some(i);
         super::hot(
             cr,
             th,

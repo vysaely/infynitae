@@ -302,6 +302,10 @@ pub struct World {
     pub last_tick: Option<std::time::Instant>,
     /// switches are drawn as rows (`SWITCH_LOOK` not icons or tiles): their lists open in place
     pub switch_rows: bool,
+    /// the keyboard was used since the panel opened or the pointer last moved: only then is the
+    /// keyboard's selection drawn (Enter still opens it either way). Shown from the start, the
+    /// first favourite looked stuck lit beside the pointer's light (owner 2026-11-13)
+    pub keyboard: bool,
 }
 
 /// How long one card takes to rise and fade in, and how much later each card above it starts.
@@ -356,6 +360,7 @@ impl World {
             opened_at: None,
             last_tick: None,
             switch_rows: true,
+            keyboard: false,
         };
         if std::env::var_os("INFYNITAE_EDGE_RENDER_DATA").is_some() {
             w.load_from_helper();
@@ -1314,6 +1319,7 @@ impl World {
     pub fn start_open(&mut self, now: std::time::Instant) {
         self.opened_at = Some(now);
         self.open_ms = 0.0;
+        self.keyboard = false;
     }
 
     /// Moves the animations on to `now`. True while one is running: the edge draws again on the
