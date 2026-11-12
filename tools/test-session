@@ -1,0 +1,134 @@
+#!/bin/sh
+# tools/test-session: tests for live/session.sh startup logic.
+set -eu
+
+REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
+SESSION_SCRIPT="$REPO_DIR/live/session.sh"
+
+TMP=$(mktemp -d "/tmp/infynitae-test-session.XXXXXX")
+trap 'rm -rf "$TMP"' EXIT INT TERM
+
+# Mock required binaries and paths
+MOCK_BIN="$TMP/bin"
+mkdir -p "$MOCK_BIN"
+export PATH="$MOCK_BIN:$PATH"
+
+# Fake infynitae compositor comm for $PPID check
+cat > "$MOCK_BIN/renice" <<EOF
+#!/bin/sh
+exit 0
+EOF
+chmod +x "$MOCK_BIN/renice"
+
+# ----------------------------------------------------------------------
+# 1. Finding 13: State directory created at startup on fresh install
+# ----------------------------------------------------------------------
+HOME1="$TMP/home1"
+mkdir -p "$HOME1"
+(
+    export HOME="$HOME1"
+    export WAYLAND_DISPLAY="wayland-test"
+    export START_TERMINAL="false"
+    export START_LOCKED="0"
+    unset XDG_STATE_HOME
+    # Run session.sh up to terminal exit
+    sh "$SESSION_SCRIPT" >/dev/null 2>&1 || true
+)
+
+if [ ! -d "$HOME1/.local/state/infynitae" ]; then
+    echo "FAIL Finding 13: session.sh did not create $HOME1/.local/state/infynitae"
+    exit 1
+fi
+echo "ok Finding 13: state directory created at session start"
+
+# ----------------------------------------------------------------------
+# 2. Finding 14: Screen locker verification race on fast-exiting locker
+# ----------------------------------------------------------------------
+# If a locker writes "Screen locked" and exits immediately (or daemonizes),
+# kill -0 $LOCK_PID breaks out of the loop. session.sh must do a final log
+# check to avoid falsely aborting the session.
+HOME2="$TMP/home2"
+mkdir -p "$HOME2/.local/bin"
+
+# Fast-forking locker: forks worker to write "Screen locked", initial PID exits immediately
+cat > "$HOME2/.local/bin/infynitae-lock" <<EOF
+#!/bin/sh
+( sleep 0.18; echo "Screen locked" ) &
+exit 0
+EOF
+chmod +x "$HOME2/.local/bin/infynitae-lock"
+
+# Run session.sh with START_LOCKED=1 in a subshell.
+# If the race condition exists, session.sh kills $PPID / exits with 1.
+# If fixed, it detects "Screen locked" and proceeds cleanly.
+rc=0
+(
+    export HOME="$HOME2"
+    export WAYLAND_DISPLAY="wayland-test"
+    export START_TERMINAL="false"
+    export START_LOCKED="1"
+    # Provide dummy config and env
+    mkdir -p "$HOME2/infynitae/live"
+    : > "$HOME2/infynitae/live/env.sh"
+    : > "$HOME2/infynitae/live/config.sh"
+    # Intercept kill -TERM $PPID so test runner is not terminated
+    cat > "$MOCK_BIN/kill" <<KEER
+#!/bin/sh
+exit 0
+KEER
+    chmod +x "$MOCK_BIN/kill"
+    sh "$SESSION_SCRIPT" --lock >/dev/null 2>&1
+) || rc=$?
+
+if [ $rc -ne 0 ]; then
+    echo "FAIL Finding 14: session.sh aborted (exit code $rc) on fast-exiting locker"
+    exit 1
+fi
+echo "ok Finding 14: session.sh does not abort when locker writes confirmation before exit"
+
+# ----------------------------------------------------------------------
+# 3. Finding 21: Paths with spaces or compound commands in NOTIFICATIONS and TERMINAL
+# ----------------------------------------------------------------------
+HOME3="$TMP/home3"
+mkdir -p "$HOME3"
+SPACED_DIR="$TMP/dir with spaces"
+mkdir -p "$SPACED_DIR"
+
+NOTIFY_MARKER="$TMP/notify_marker"
+TERM_MARKER="$TMP/term_marker"
+
+cat > "$SPACED_DIR/custom-notify" <<EOF
+#!/bin/sh
+touch "$NOTIFY_MARKER"
+exit 0
+EOF
+chmod +x "$SPACED_DIR/custom-notify"
+
+cat > "$SPACED_DIR/custom-term" <<EOF
+#!/bin/sh
+touch "$TERM_MARKER"
+exit 0
+EOF
+chmod +x "$SPACED_DIR/custom-term"
+
+(
+    export HOME="$HOME3"
+    export WAYLAND_DISPLAY="wayland-test"
+    export START_LOCKED="0"
+    export NOTIFICATIONS="'$SPACED_DIR/custom-notify' --arg"
+    export TERMINAL="$SPACED_DIR/custom-term"
+    export START_TERMINAL="true"
+    export SESSION_RESTORE="false"
+    sh "$SESSION_SCRIPT" >/dev/null 2>&1 || true
+)
+
+sleep 0.2
+if [ ! -f "$NOTIFY_MARKER" ]; then
+    echo "FAIL Finding 21: NOTIFICATIONS with arguments/spaces failed to execute"
+    exit 1
+fi
+if [ ! -f "$TERM_MARKER" ]; then
+    echo "FAIL Finding 21: TERMINAL path with spaces failed to execute"
+    exit 1
+fi
+echo "ok Finding 21: spaced paths and commands in NOTIFICATIONS and TERMINAL execute cleanly"

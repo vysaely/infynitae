@@ -66,13 +66,15 @@ if [ -z "$XDG_RUNTIME_DIR" ]; then
     if [ -d "/run/user/$(id -u)" ] && [ -w "/run/user/$(id -u)" ]; then
         export XDG_RUNTIME_DIR="/run/user/$(id -u)"
     else
-        FALLBACK_DIR="/tmp/infynitae-runtime-$(id -u)"
-        if [ -d "$FALLBACK_DIR" ] && [ ! -O "$FALLBACK_DIR" ]; then
-            FALLBACK_DIR=$(mktemp -d -t "infynitae-runtime-$(id -u)-XXXXXX")
+        FALLBACK_DIR="${INFYNITAE_ENV_TMP:-/tmp}/infynitae-runtime-$(id -u)"
+        if [ -d "$FALLBACK_DIR" ] && [ -O "$FALLBACK_DIR" ]; then
+            chmod 0700 "$FALLBACK_DIR"
+        elif mkdir -m 0700 "$FALLBACK_DIR" 2>/dev/null; then
+            :
         else
-            mkdir -p -m 0700 "$FALLBACK_DIR"
+            FALLBACK_DIR=$(mktemp -d -t "infynitae-runtime-$(id -u)-XXXXXX")
+            chmod 0700 "$FALLBACK_DIR"
         fi
-        chmod 0700 "$FALLBACK_DIR"
         export XDG_RUNTIME_DIR="$FALLBACK_DIR"
     fi
 fi
@@ -192,17 +194,17 @@ done
 # one instance. Every Super+key runs this file, so the running portal is found by the PID it was
 # started with (a shell builtin read, no process scan: pgrep -f cost 14 ms a press), and only
 # when that is gone by its program path (kernel process names stop at 15 characters).
-_infy_portal_pid="${XDG_RUNTIME_DIR:-/tmp}/infynitae-portal.pid"
+_infy_portal_pid="${XDG_RUNTIME_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/infynitae}/infynitae-portal.pid"
 _infy_portal_up=false
 if [ -r "$_infy_portal_pid" ] && read -r _infy_p < "$_infy_portal_pid" 2>/dev/null \
-    && [ -n "$_infy_p" ] && [ -r "/proc/$_infy_p/comm" ] && read -r _infy_c < "/proc/$_infy_p/comm" \
+    && [ -n "$_infy_p" ] && [ -d "/proc/$_infy_p" ] && [ -O "/proc/$_infy_p" ] \
+    && [ -r "/proc/$_infy_p/comm" ] && read -r _infy_c < "/proc/$_infy_p/comm" \
     && [ "$_infy_c" = "infynitae-porta" ]; then
     _infy_portal_up=true
-elif pgrep -f '(^|/)infynitae-portal( |$)' > "$_infy_portal_pid.new" 2>/dev/null; then
-    head -1 "$_infy_portal_pid.new" > "$_infy_portal_pid" 2>/dev/null
+elif _infy_p=$(pgrep -u "$(id -u)" -f '(^|/)infynitae-portal( |$)' 2>/dev/null | head -1) && [ -n "$_infy_p" ]; then
+    echo "$_infy_p" > "$_infy_portal_pid" 2>/dev/null
     _infy_portal_up=true
 fi
-rm -f "$_infy_portal_pid.new"
 if [ -x "$PORTAL_BIN" ] && [ "$_infy_portal_up" = false ]; then
     "$PORTAL_BIN" >> "$PORTAL_LOG" 2>&1 &
     echo $! > "$_infy_portal_pid" 2>/dev/null
@@ -226,10 +228,12 @@ if [ -z "$WAYLAND_DISPLAY" ] && [ -n "$XDG_RUNTIME_DIR" ]; then
     fi
 fi
 
-# Resolve DISPLAY: prioritize active unix socket
-if [ -z "$DISPLAY" ] || [ ! -S "/tmp/.X11-unix/X${DISPLAY#*:}" ]; then
-    for xsock in /tmp/.X11-unix/X*; do
-        if [ -S "$xsock" ]; then
+# Resolve DISPLAY: prioritize active unix socket owned by the current user
+# (INFYNITAE_ENV_TMP: a folder used instead of /tmp, for tests)
+_infy_x11="${INFYNITAE_ENV_TMP:-/tmp}/.X11-unix"
+if [ -z "$DISPLAY" ] || [ ! -S "$_infy_x11/X${DISPLAY#*:}" ] || [ ! -O "$_infy_x11/X${DISPLAY#*:}" ]; then
+    for xsock in "$_infy_x11"/X*; do
+        if [ -S "$xsock" ] && [ -O "$xsock" ]; then
             num="${xsock##*/X}"
             export DISPLAY=":$num"
             break
@@ -274,7 +278,7 @@ fi
 # 9. Notify D-Bus / systemd activation environment if available: once per session and again only
 # when a pushed value changed (an Xwayland restart: new DISPLAY or XAUTHORITY), not on every Super+key
 _infy_env_key="$WAYLAND_DISPLAY|$DISPLAY|$XAUTHORITY|$XDG_CURRENT_DESKTOP|$XCURSOR_THEME|$XCURSOR_SIZE|$DCONF_PROFILE|$BROWSER"
-_infy_env_stamp="${XDG_RUNTIME_DIR:-/tmp}/infynitae-env-pushed"
+_infy_env_stamp="${XDG_RUNTIME_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/infynitae}/infynitae-env-pushed"
 _infy_env_old=""
 [ -r "$_infy_env_stamp" ] && read -r _infy_env_old < "$_infy_env_stamp" 2>/dev/null
 if [ "$_infy_env_old" != "$_infy_env_key" ]; then

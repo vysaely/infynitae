@@ -5,8 +5,10 @@ set -u
 here=$(cd "$(dirname "$0")/.." && pwd)
 tmp=$(mktemp -d)
 trap 'kill $a $b 2>/dev/null; rm -rf "$tmp"' EXIT
-sed -n '/^pids_matching() {/,/^}/p' "$here/live/infynitae-reload" > "$tmp/fn"
-. "$tmp/fn"
+sed -n '/^pids_of() {/,/^}/p' "$here/live/infynitae-reload" > "$tmp/fn_of"
+sed -n '/^pids_matching() {/,/^}/p' "$here/live/infynitae-reload" > "$tmp/fn_matching"
+. "$tmp/fn_of"
+. "$tmp/fn_matching"
 cp "$(command -v sleep)" "$tmp/infynitae"
 "$tmp/infynitae" 300 5 & a=$!
 "$tmp/infynitae" 300 7 & b=$!
@@ -15,3 +17,124 @@ got=$(pids_matching infynitae 7)
 [ "$got" = "$b" ] || { echo "FAIL: expected only $b, got: $got (other copy is $a)"; exit 1; }
 if pids_matching infynitae 9 >/dev/null; then echo "FAIL: no copy has that argument"; exit 1; fi
 echo "ok: only the matching copy"
+
+# ----------------------------------------------------------------------
+# Finding 12: Wildcard path expansion when scanning process cmdlines
+# ----------------------------------------------------------------------
+# In a directory with local files matching a glob, pids_of and pids_matching
+# must not expand cmdline arguments against the local directory.
+wild_dir="$tmp/wild"
+mkdir -p "$wild_dir"
+touch "$wild_dir/match1" "$wild_dir/match2"
+
+# Start a process whose argument is '*'
+cat > "$tmp/arg_holder" <<'EOF'
+#!/bin/sh
+sleep 300
+EOF
+chmod +x "$tmp/arg_holder"
+"$tmp/arg_holder" '*' & c=$!
+sleep 0.2
+
+# Inside wild_dir (containing match1, match2), the argument '*' must NOT expand to match1
+# So searching for match1 must return nothing
+if (cd "$wild_dir" && pids_matching arg_holder "match1" >/dev/null); then
+    echo "FAIL Finding 12: cmdline '*' expanded to local file 'match1'"
+    kill $c 2>/dev/null || true
+    exit 1
+fi
+
+kill $c 2>/dev/null || true
+echo "ok Finding 12: process cmdline wildcard expansion prevented by set -f"
+
+# ----------------------------------------------------------------------
+# Finding 22: Tilde and $HOME expansion for quoted WALLPAPER paths
+# ----------------------------------------------------------------------
+SPAWN_ARGS=""
+spawn() {
+    SPAWN_ARGS="$*"
+}
+first() {
+    echo "$1"
+}
+BIN_DIR="$tmp/bin"
+LIVE="$here/live"
+sed -n '/^reload_wallpaper() {/,/^}/p' "$here/live/infynitae-reload" > "$tmp/fn_wallpaper"
+. "$tmp/fn_wallpaper"
+
+WALLPAPER='~/Pictures/bg.png'
+reload_wallpaper >/dev/null
+
+expected_wp="$HOME/Pictures/bg.png"
+case "$SPAWN_ARGS" in
+    *" $expected_wp "*) ;;
+    *)
+        echo "FAIL Finding 22: reload_wallpaper did not expand tilde in '$WALLPAPER': got '$SPAWN_ARGS'"
+        exit 1
+        ;;
+esac
+
+# Also test config.sh expanding tilde and $HOME in WALLPAPER
+cfg_dir="$tmp/cfg_test/.config/infynitae"
+mkdir -p "$cfg_dir"
+printf "WALLPAPER='~/Wallpapers/nature.png'\n" > "$cfg_dir/config"
+got_cfg_wp=$(
+    export HOME="$tmp/cfg_test"
+    . "$here/live/config.sh"
+    echo "$WALLPAPER"
+)
+if [ "$got_cfg_wp" != "$tmp/cfg_test/Wallpapers/nature.png" ]; then
+    echo "FAIL Finding 22: config.sh did not expand tilde in WALLPAPER: got '$got_cfg_wp'"
+    exit 1
+fi
+
+echo "ok Finding 22: quoted tilde paths in WALLPAPER are safely expanded"
+
+# ----------------------------------------------------------------------
+# Finding 26: Predictable temp file $cfg.new without cleanup trap
+# ----------------------------------------------------------------------
+# Test that reload_screenshare uses mktemp and cleans up on interruption,
+# and does not write to static $cfg.new.
+cfg_dir2="$tmp/portal_wlr/.config/xdg-desktop-portal-wlr"
+mkdir -p "$cfg_dir2"
+cfg_file2="$cfg_dir2/config"
+
+sed -n '/^reload_screenshare() {/,/^}/p' "$here/live/infynitae-reload" > "$tmp/fn_screenshare"
+is_true() { case "$1" in 1|true|yes|on|TRUE|True) return 0 ;; *) return 1 ;; esac; }
+# the function stops the portal service: never the session's real one
+systemctl() { :; }
+. "$tmp/fn_screenshare"
+
+# Verify that static $cfg.new symlink is not written through
+HOME="$tmp/portal_wlr"
+STATE_DIR="$tmp/portal_wlr/state"
+mkdir -p "$STATE_DIR"
+victim_file="$tmp/victim_file"
+echo "precious data" > "$victim_file"
+static_new="$cfg_file2.new"
+rm -f "$static_new"
+ln -s "$victim_file" "$static_new"
+
+reload_screenshare >/dev/null
+
+if [ "$(cat "$victim_file" 2>/dev/null)" != "precious data" ]; then
+    echo "FAIL Finding 26: reload_screenshare wrote through symlink at predictable $cfg_file2.new"
+    exit 1
+fi
+rm -f "$victim_file" "$static_new"
+
+# Verify that reload_screenshare cleans up temp file when interrupted
+(
+    HOME="$tmp/portal_wlr"
+    # Intercept fuzzel or subshell to trigger exit during generation
+    MENU_PICKER="sh -c 'kill -TERM \$\$'"
+    reload_screenshare >/dev/null 2>&1 || true
+)
+
+leftover_temps=$(ls "$cfg_dir2"/config.* 2>/dev/null || true)
+if [ -n "$leftover_temps" ]; then
+    echo "FAIL Finding 26: leftover temp files in config dir after interruption: $leftover_temps"
+    exit 1
+fi
+
+echo "ok Finding 26: reload_screenshare uses safe temp file with cleanup trap"

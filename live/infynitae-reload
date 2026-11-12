@@ -21,7 +21,7 @@ if [ -z "$WAYLAND_DISPLAY" ] || [ ! -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ]; th
     sock=$(grep -o 'Listening on Wayland socket: [^ ]*' "$STATE_DIR/session.log" 2>/dev/null | tail -1 | cut -d' ' -f5)
     [ -n "$sock" ] && export WAYLAND_DISPLAY="$sock"
 fi
-if [ -z "$WAYLAND_DISPLAY" ] || ! pgrep -x infynitae >/dev/null 2>&1; then
+if [ -z "$WAYLAND_DISPLAY" ] || ! pgrep -u "$(id -u)" -x infynitae >/dev/null 2>&1; then
     echo "infynitae-reload: no running Infynitae session found" >&2
     exit 1
 fi
@@ -46,8 +46,11 @@ spawn() {
 pids_of() {
     found=1
     for d in /proc/[0-9]*; do
+        [ -O "$d" ] || continue
         [ "${d#/proc/}" = "$$" ] && continue
+        set -f
         set -- "$1" $( { tr '\0' ' ' < "$d/cmdline"; } 2>/dev/null)
+        set +f
         [ $# -ge 2 ] || continue
         prog=${2##*/}
         case "$prog" in
@@ -79,8 +82,11 @@ pids_matching() {
     want_prog=$1
     want_arg=$2
     for d in /proc/[0-9]*; do
+        [ -O "$d" ] || continue
         [ "${d#/proc/}" = "$$" ] && continue
+        set -f
         set -- $( { tr '\0' ' ' < "$d/cmdline"; } 2>/dev/null)
+        set +f
         [ $# -ge 1 ] || continue
         prog=${1##*/}
         case "$prog" in
@@ -127,6 +133,11 @@ reload_wallpaper() {
         echo "wallpaper: not configured"
         return
     fi
+    case "$WALLPAPER" in
+        "~/"*) WALLPAPER="$HOME/${WALLPAPER#\~/}" ;;
+        '$HOME/'*) WALLPAPER="$HOME/${WALLPAPER#\$HOME/}" ;;
+        '${HOME}/'*) WALLPAPER="$HOME/${WALLPAPER#\$\{HOME\}/}" ;;
+    esac
     # a new instance replaces the old one itself; the config's WALLPAPER may hold an unexpanded
     # $HOME for the program, so pass the path this shell expanded
     spawn "$w" "$WALLPAPER" "${WALLPAPER_MODE:-fill}"
@@ -144,8 +155,8 @@ reload_recorder() {
     fi
     stop_helper infynitae-record-stream
     # its ffmpeg encoder can outlive both; it is the one writing into the replay dir
-    pkill -f "^ffmpeg .*${RUNTIME_DIR}/infynitae-replay/chunk" 2>/dev/null || true
-    pkill -f "^ffmpeg .*/dev/shm/infynitae-replay/chunk" 2>/dev/null || true
+    pkill -u "$(id -u)" -f "^ffmpeg .*${RUNTIME_DIR}/infynitae-replay/chunk" 2>/dev/null || true
+    pkill -u "$(id -u)" -f "^ffmpeg .*/dev/shm/infynitae-replay/chunk" 2>/dev/null || true
     if [ -n "$r" ] && is_true "${ENABLE_REPLAY_BUFFER:-false}"; then
         spawn "$r" supervisor
         echo "recorder: restarted"
@@ -288,7 +299,9 @@ reload_screenshare() {
         END { print n }' "$STATE_DIR/session.log" 2>/dev/null)
     first=$(echo $screens | cut -d' ' -f1)
     mkdir -p "${cfg%/*}"
-    {
+    _infy_tmp=$(mktemp "${cfg}.XXXXXX") || return 1
+    trap 'rm -f "$_infy_tmp"' EXIT INT TERM
+    if {
         echo "# managed by infynitae: written from SCREENSHARE_ASK in ~/.config/infynitae/config;"
         echo "# delete this line to keep your own settings"
         echo "[screencast]"
@@ -307,7 +320,14 @@ reload_screenshare() {
             echo "chooser_type=none"
             echo "output_name=$first"
         fi
-    } > "$cfg.new" && mv -f "$cfg.new" "$cfg"
+    } > "$_infy_tmp" && mv -f "$_infy_tmp" "$cfg"; then
+        rm -f "$_infy_tmp"
+        trap - EXIT INT TERM
+    else
+        rm -f "$_infy_tmp"
+        trap - EXIT INT TERM
+        return 1
+    fi
     systemctl --user stop xdg-desktop-portal-wlr.service 2>/dev/null || true
     if is_true "${SCREENSHARE_ASK:-false}"; then
         echo "screenshare: pick a screen or a window when an app asks"
@@ -337,13 +357,13 @@ reload_clipboard() {
 }
 
 status() {
-    printf '%-26s %s\n' infynitae "$(pgrep -x infynitae | tr '\n' ' ')"
+    printf '%-26s %s\n' infynitae "$(pgrep -u "$(id -u)" -x infynitae | tr '\n' ' ')"
     for n in infynitae-wallpaper infynitae-edge infynitae-recorder infynitae-record-stream infynitae-portal infynitae-polkit infynitae-lock; do
         pids=$(pids_of "$n" | tr '\n' ' ')
         printf '%-26s %s\n' "$n" "${pids:-not running}"
     done
     # the compositor's file on disk was replaced since it started: a restart picks up the update
-    exe=$(readlink "/proc/$(pgrep -x infynitae | head -1)/exe" 2>/dev/null)
+    exe=$(readlink "/proc/$(pgrep -u "$(id -u)" -x infynitae | head -1)/exe" 2>/dev/null)
     case "$exe" in
         *" (deleted)") echo "compositor: an updated binary is installed; Ctrl+Alt+Backspace loads it" ;;
         *) echo "compositor: running the installed binary" ;;

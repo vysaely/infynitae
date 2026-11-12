@@ -69,6 +69,12 @@ if [ "$START_LOCKED" = "1" ] || [ "$START_LOCKED" = "true" ] || [ "$1" = "--lock
             sleep 0.1
             i=$((i + 1))
         done
+        if [ "$LOCKED" != "true" ]; then
+            sleep 0.2
+            if grep -q "Screen locked" "$LOCK_LOG" 2>/dev/null; then
+                LOCKED=true
+            fi
+        fi
     fi
     if [ "$LOCKED" != "true" ]; then
         echo "[infynitae] START_LOCKED: the lock screen could not be engaged (${LOCK_BIN:-infynitae-lock not installed}); ending the session" >&2
@@ -186,7 +192,7 @@ case "${NOTIFICATIONS:-auto}" in
     *) NOTIFY_CMD="$NOTIFICATIONS" ;;
 esac
 if [ -n "$NOTIFY_CMD" ]; then
-    $NOTIFY_CMD >/dev/null 2>&1 &
+    sh -c "$NOTIFY_CMD" >/dev/null 2>&1 &
 fi
 
 # 6c2. The last crash (infynitae-session wrote a report): said once, in a notification
@@ -358,7 +364,11 @@ resolve_terminal() {
 
 TERM_BIN=$(resolve_terminal)
 if [ -n "$TERM_BIN" ]; then
-    exec $TERM_BIN
+    if [ -x "$TERM_BIN" ]; then
+        exec "$TERM_BIN"
+    else
+        exec sh -c "exec $TERM_BIN"
+    fi
 else
     echo "[infynitae] Warning: No terminal emulator found. Please install alacritty, foot, or kitty." >&2
 fi
