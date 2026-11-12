@@ -283,7 +283,7 @@ pub fn widget_default_size(m: Module) -> (i32, i32) {
         Module::Clock => 150,
         Module::Calendar => 330,
         Module::Media => 234,
-        Module::Notifications | Module::Memory | Module::System => 240,
+        Module::Notifications | Module::Memory | Module::System | Module::Drives => 240,
         _ => h,
     };
     (w, h)
@@ -314,6 +314,7 @@ pub fn module_display_name(m: Module) -> &'static str {
         Module::Calendar => "Calendar",
         Module::Memory => "Memory",
         Module::System => "System",
+        Module::Drives => "Drives",
     }
 }
 
@@ -362,6 +363,7 @@ pub const ALL_MODULES: &[Module] = &[
     Module::Calendar,
     Module::Memory,
     Module::System,
+    Module::Drives,
 ];
 
 /// Returns index of module under point `(px, py)` in panel coordinates, or `None`.

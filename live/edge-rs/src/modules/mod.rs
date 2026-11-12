@@ -32,6 +32,7 @@ pub mod calendar;
 pub mod child;
 pub mod clipboard;
 pub mod clock;
+pub mod drives;
 pub mod edit;
 pub mod favorites;
 pub mod flow;
@@ -138,6 +139,9 @@ pub fn run_sh(key: &str, cmd: &str) -> String {
     }
     if key == "system" {
         return system::fetch_string();
+    }
+    if key == "drives" {
+        return drives::fetch_string();
     }
     Command::new("sh")
         .arg("-c")
@@ -259,6 +263,7 @@ pub struct World {
     pub volume: volume::VolumeData,
     pub system: system::SystemData,
     pub memory: memory::MemoryData,
+    pub drives: drives::DrivesData,
     pub clipboard: clipboard::ClipboardData,
     pub notifications: notifications::NotificationsData,
     pub tray: tray::TrayData,
@@ -300,6 +305,7 @@ impl World {
             volume: volume::VolumeData::default(),
             system: system::SystemData::default(),
             memory: memory::MemoryData::default(),
+            drives: drives::DrivesData::default(),
             clipboard: clipboard::ClipboardData::default(),
             notifications: notifications::NotificationsData::default(),
             tray: tray::TrayData::default(),
@@ -353,6 +359,7 @@ impl World {
         self.child = child::ChildState::default();
         self.apps.scroll = 0;
         self.windows.scroll = 0;
+        drives::invalidate_cache();
         self.apps.update_filter(&self.search);
         self.windows.update_filter(&self.search);
         if std::env::var_os("INFYNITAE_EDGE_RENDER_DATA").is_some() {
@@ -524,6 +531,7 @@ impl World {
             .chain(notifications::CMDS.iter())
             .chain(tray::CMDS.iter())
             .chain(media::CMDS.iter())
+            .chain(drives::CMDS.iter())
         {
             let out = run_sh(k, c);
             self.apply(k, &out);
@@ -621,6 +629,7 @@ impl World {
             || notifications::apply(&mut self.notifications, key, out)
             || tray::apply(&mut self.tray, key, out)
             || media::apply(&mut self.media, key, out)
+            || drives::apply(&mut self.drives, key, out)
             || apps::apply(&mut self.apps, key, out, &self.search)
             || windows::apply(&mut self.windows, key, out, &self.search)
             || ask::apply(&mut self.ask, key, out)
@@ -720,6 +729,7 @@ pub fn refresh_cmds(m: Module) -> &'static [(&'static str, &'static str)] {
         Module::Notifications => notifications::CMDS,
         Module::Tray => tray::CMDS,
         Module::Media => media::CMDS,
+        Module::Drives => drives::CMDS,
         _ => &[],
     }
 }
@@ -764,6 +774,7 @@ fn shown_height(it: &Item, world: &World, th: &Theme, w: f64) -> f64 {
         Module::Volume => volume::height(world),
         Module::System => system::height(world),
         Module::Memory => memory::height(world),
+        Module::Drives => drives::height(world),
         Module::Session => session::height(),
         Module::Clipboard => clipboard::height(world),
         Module::Notifications => notifications::height(world),
@@ -941,6 +952,7 @@ pub fn click(it: &Item, world: &mut World, size: (f64, f64), pos: (f64, f64), bu
         Module::Volume => volume::click(world, size, pos, button),
         Module::System => system::click(world, size, pos, button),
         Module::Memory => memory::click(world, size, pos, button),
+        Module::Drives => drives::click(world, size, pos, button),
         Module::Session => session::click(world, size, pos, button),
         Module::Clipboard => clipboard::click(world, size, pos, button),
         Module::Notifications => notifications::click(world, size, pos, button),
@@ -1123,6 +1135,7 @@ fn draw_unclipped(cr: &Context, th: &Theme, it: &Item, world: &World, rect: Rect
         Module::Volume => volume::draw(cr, th, world, rect),
         Module::System => system::draw(cr, th, world, rect),
         Module::Memory => memory::draw(cr, th, world, rect),
+        Module::Drives => drives::draw(cr, th, world, rect),
         Module::Session => session::draw(cr, th, rect),
         Module::Clipboard => clipboard::draw(cr, th, world, rect),
         Module::Notifications => notifications::draw(cr, th, world, rect),
