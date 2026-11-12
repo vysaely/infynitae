@@ -849,7 +849,12 @@ pub fn load_child_list(kind: child::ChildKind, bt_scan: bool, live: bool) -> Vec
                         meta: String::new(),
                         active: false,
                     });
+                    head.push(child::hidden_row());
                 }
+                head.extend(child::vpn_rows(&run_sh(
+                    "vpn",
+                    "nmcli -t -f NAME,TYPE,ACTIVE connection show 2>/dev/null",
+                )));
                 if wifi_on && head.iter().all(|r| r.id.starts_with('#')) {
                     head.push(child::none_found("No networks found"));
                 }

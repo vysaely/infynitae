@@ -583,7 +583,7 @@ pub struct Config {
     pub text: [u8; 3],
     pub accent: [u8; 3],
     pub hair: Option<[u8; 3]>,
-    /// CORNERS (SQUARE_CORNERS="true" before it: 0)
+    /// CORNERS, 8 unless set (owner 2026-11-12: 8 everywhere; SQUARE_CORNERS only squares apps)
     pub corners: f64,
     /// THEME_SCHEME
     pub scheme: String,
@@ -606,11 +606,6 @@ pub fn parse_hex(v: &str) -> Option<[u8; 3]> {
     }
     let n = u32::from_str_radix(h, 16).ok()?;
     Some([(n >> 16) as u8, (n >> 8) as u8, n as u8])
-}
-
-fn truthy(v: &str) -> bool {
-    let t = value_text(v).to_ascii_lowercase();
-    matches!(t.as_str(), "true" | "1" | "yes" | "on")
 }
 
 /// Formats an optional shortcut key char as `"Super+<Key>"` (e.g. `'w'` -> `"Super+W"`).
@@ -658,7 +653,6 @@ impl Config {
             Module::Session,
         ];
         let mut lines: Vec<(String, String)> = Vec::new();
-        let mut corners_set = false;
         for raw in text.lines() {
             let p = raw.trim_start_matches([' ', '\t']);
             let Some((key, v)) = p.split_once('=') else {
@@ -693,15 +687,9 @@ impl Config {
                 "BORDER_INACTIVE" => c.hair = parse_hex(v).or(c.hair),
                 "BORDER_ACTIVE" => c.accent = parse_hex(v).unwrap_or(c.accent),
                 "TEXT_COLOR" => c.text = parse_hex(v).unwrap_or(c.text),
-                "SQUARE_CORNERS" if !corners_set => {
-                    if truthy(v) {
-                        c.corners = 0.0
-                    }
-                }
                 "CORNERS" => {
                     if let Ok(n) = value_text(v).parse::<f64>() {
                         c.corners = n.clamp(0.0, 28.0);
-                        corners_set = true;
                     }
                 }
                 "THEME_SCHEME" => c.scheme = value_text(v).to_ascii_lowercase(),
@@ -900,7 +888,10 @@ mod tests {
         let c = Config::from_text(
             "SQUARE_CORNERS=\"true\"\nBORDER_ACTIVE=\"#cc70a9\"\nCARD_OPACITY=\"55\"\n",
         );
-        assert_eq!(c.corners, 0.0);
+        assert_eq!(
+            c.corners, 8.0,
+            "SQUARE_CORNERS squares apps only, not the edge"
+        );
         assert_eq!(c.accent, [0xcc, 0x70, 0xa9]);
         assert!((c.opacity - 0.55).abs() < 1e-9);
         let c = Config::from_text("CORNERS=\"12\"\nSQUARE_CORNERS=\"true\"\n");

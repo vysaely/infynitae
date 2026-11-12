@@ -174,7 +174,8 @@ BORDER_IGNORE_CSD="true"
     # options: true  · false
 
 SQUARE_CORNERS="true"
-    # Apps draw square corners and no shadow (they are told they are tiled), flush with the border
+    # Apps draw square corners and no shadow (they are told they are tiled), flush with the border;
+    # the compositor then rounds every window itself (WINDOW_CORNERS)
     # default: true
     #   true     square
     #    false   their own rounded look
@@ -188,8 +189,8 @@ WINDOW_CORNERS="8"
 
 #CORNERS="8"
     # The corners of what Infynitae draws: the panels and widgets, notifications, menus, GTK's
-    # widgets (three quarters of it) [reload]. Unset: SQUARE_CORNERS decides (true 0, else 8)
-    # default: unset
+    # widgets (three quarters of it), the lock screen [reload]. Windows: WINDOW_CORNERS
+    # default: 8
     # options: 0 (square) to 28
 
 THEME_SCHEME="yours"
