@@ -33,12 +33,15 @@ pub fn panel_width(p: &Panel, w: f64) -> f64 {
     } else {
         380.0
     };
-    pw.min(w - 16.0)
+    pw.min(w - 2.0 * PANEL_MARGIN)
 }
 
-/// Where a panel of pw x ph goes: 8 px from its edge, at its place along it (panel_origin).
+/// A panel's distance from the screen's edges (EDGE_DESIGN: "24 px from the edges").
+pub const PANEL_MARGIN: f64 = 24.0;
+
+/// Where a panel of pw x ph goes: 24 px from its edge (docs/design/EDGE_DESIGN.md), at its place along it (panel_origin).
 pub fn panel_origin(p: &Panel, w: f64, h: f64, pw: f64, ph: f64) -> (f64, f64) {
-    const M: f64 = 8.0;
+    const M: f64 = PANEL_MARGIN;
     if p.desktop {
         return (0.0, 0.0);
     }
@@ -208,7 +211,7 @@ pub fn ph_of(p: &Panel, content_h: f64, h: f64) -> f64 {
 }
 
 pub fn max_panel_height(h: f64) -> f64 {
-    (h - 16.0).max(0.0)
+    (h - 2.0 * PANEL_MARGIN).max(0.0)
 }
 
 /// The panel's rectangle `(x, y, w, h)` on an output of size `w x h`.
@@ -2727,15 +2730,19 @@ mod tests {
         let (w, h) = (1920.0, 1080.0);
         let (_, ph) = layout(find_h("tl"), 300.0);
 
-        assert_eq!(hover_strip(find_h("tl"), w, h), (8.0, 0.0, 300.0, 2.0));
+        let m = PANEL_MARGIN;
+        assert_eq!(hover_strip(find_h("tl"), w, h), (m, 0.0, 300.0, 2.0));
         assert_eq!(hover_strip(find_h("tc"), w, h), (810.0, 0.0, 300.0, 2.0));
-        assert_eq!(hover_strip(find_h("tr"), w, h), (1612.0, 0.0, 300.0, 2.0));
+        assert_eq!(
+            hover_strip(find_h("tr"), w, h),
+            (w - 300.0 - m, 0.0, 300.0, 2.0)
+        );
 
-        assert_eq!(hover_strip(find_h("bl"), w, h), (8.0, 1078.0, 300.0, 2.0));
+        assert_eq!(hover_strip(find_h("bl"), w, h), (m, 1078.0, 300.0, 2.0));
         assert_eq!(hover_strip(find_h("bc"), w, h), (810.0, 1078.0, 300.0, 2.0));
         assert_eq!(
             hover_strip(find_h("br"), w, h),
-            (1612.0, 1078.0, 300.0, 2.0)
+            (w - 300.0 - m, 1078.0, 300.0, 2.0)
         );
 
         let cfg_v = Config::from_text(
@@ -2748,11 +2755,11 @@ mod tests {
         );
         let find_v = |name: &str| cfg_v.panels.iter().find(|p| p.name == name).unwrap();
         let mid_y = ((h - ph) / 2.0).round();
-        let bot_y = h - ph - 8.0;
-        assert_eq!(hover_strip(find_v("lt"), w, h), (0.0, 8.0, 2.0, ph));
+        let bot_y = h - ph - m;
+        assert_eq!(hover_strip(find_v("lt"), w, h), (0.0, m, 2.0, ph));
         assert_eq!(hover_strip(find_v("lc"), w, h), (0.0, mid_y, 2.0, ph));
         assert_eq!(hover_strip(find_v("lb"), w, h), (0.0, bot_y, 2.0, ph));
-        assert_eq!(hover_strip(find_v("rt"), w, h), (1918.0, 8.0, 2.0, ph));
+        assert_eq!(hover_strip(find_v("rt"), w, h), (1918.0, m, 2.0, ph));
         assert_eq!(hover_strip(find_v("rc"), w, h), (1918.0, mid_y, 2.0, ph));
         assert_eq!(hover_strip(find_v("rb"), w, h), (1918.0, bot_y, 2.0, ph));
     }
@@ -3135,7 +3142,7 @@ mod tests {
     }
 
     #[test]
-    fn tall_panel_clamps_to_screen_height_minus_16_and_scrolls_by_wheel_and_keys() {
+    fn tall_panel_clamps_to_the_screen_height_and_scrolls_by_wheel_and_keys() {
         let cfg = Config::from_text(
             "FAVORITES=\"app0 app1 app2 app3 app4 app5\"\n\
              PANEL_APPS=\"SUPER+W top center search favorites apps windows\"\n",
@@ -3159,7 +3166,7 @@ mod tests {
         sh.last_screen = (w, h);
         let panel = sh.cfg.panels[sh.open.unwrap()].clone();
         let (_, _, _, ph) = panel_rect_in(&panel, w, h, &sh.world, &sh.theme);
-        assert_eq!(ph, h - 16.0);
+        assert_eq!(ph, h - 2.0 * PANEL_MARGIN);
 
         // Arrow Down past the 8 visible rows of Apps scrolls the Apps card and the panel
         for _ in 0..16 {
@@ -3177,7 +3184,7 @@ mod tests {
 
         // Scrolling with the wheel over the search bar (which does not scroll internally) scrolls the panel
         let prev_panel_scroll = sh.world.panel_scroll;
-        assert!(sh.scroll(w, h, 960.0, 12.0, -1.0));
+        assert!(sh.scroll(w, h, 960.0, PANEL_MARGIN + 4.0, -1.0));
         assert!(sh.world.panel_scroll < prev_panel_scroll);
     }
 

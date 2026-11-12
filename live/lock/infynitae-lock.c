@@ -368,7 +368,7 @@ static void load_theme_config(LockApp *app) {
     app->border_act_rgb[0] = 0.478; app->border_act_rgb[1] = 0.635; app->border_act_rgb[2] = 0.969; /* #7aa2f7 */
     app->border_inact_rgb[0] = 0.200; app->border_inact_rgb[1] = 0.231; app->border_inact_rgb[2] = 0.329; /* #333b54 */
     app->text_rgb[0] = 0.933; app->text_rgb[1] = 0.949; app->text_rgb[2] = 0.973;             /* #eef2f8 */
-    app->square_corners = true;
+    app->square_corners = false; /* CORNERS 8 unless the look file says 0 */
 
     const char *home = getenv("HOME");
     if (!home) return;
@@ -386,11 +386,6 @@ static void load_theme_config(LockApp *app) {
         else if (strncmp(p, "BORDER_ACTIVE=", 14) == 0) parse_hex_rgb(p + 14, app->border_act_rgb);
         else if (strncmp(p, "BORDER_INACTIVE=", 16) == 0) parse_hex_rgb(p + 16, app->border_inact_rgb);
         else if (strncmp(p, "TEXT_COLOR=", 11) == 0) parse_hex_rgb(p + 11, app->text_rgb);
-        else if (strncmp(p, "SQUARE_CORNERS=", 15) == 0) {
-            const char *v = p + 15;
-            while (*v == '"' || *v == '\'') v++;
-            app->square_corners = strncmp(v, "true", 4) == 0 || strncmp(v, "1", 1) == 0 || strncmp(v, "yes", 3) == 0 || strncmp(v, "on", 2) == 0;
-        }
     }
     fclose(f);
     read_look(app, home);
@@ -670,7 +665,7 @@ static const struct wl_touch_listener touch_listener = {
     .cancel = touch_cancel,
 };
 
-/* A rounded rectangle (or a square one when SQUARE_CORNERS is set) as the current path. */
+/* A rounded rectangle (or a square one when CORNERS is 0) as the current path. */
 static void scene_rect(cairo_t *cr, const LockApp *app, double x, double y, double w, double h, double r) {
     if (app->square_corners || r <= 0) {
         cairo_rectangle(cr, x, y, w, h);

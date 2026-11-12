@@ -274,6 +274,41 @@ pub fn app_slider_span(cx: f64, cw: f64) -> (f64, f64) {
     (cx + PAD_X + 118.0, cx + cw - PAD_X - 44.0)
 }
 
+/// The Network card's "Hidden network..." row: asks the network's name, then its password.
+pub const HIDDEN: &str = "#hidden";
+/// A VPN's row in the Network card: id VPN_PREFIX + its NetworkManager connection name.
+pub const VPN_PREFIX: &str = "@vpn:";
+
+/// The VPNs set up in NetworkManager, from `nmcli -t -f NAME,TYPE,ACTIVE connection show`: one
+/// row each (VPN and WireGuard connections), "Connected" or "Off".
+pub fn vpn_rows(out: &str) -> Vec<ChildItem> {
+    out.lines()
+        .filter_map(|l| {
+            // nmcli -t escapes a ':' in a name as "\:"; the last two fields never hold one
+            let mut parts = l.rsplitn(3, ':');
+            let active = parts.next()? == "yes";
+            let kind = parts.next()?;
+            let name = parts.next()?.replace("\\:", ":");
+            (kind == "vpn" || kind == "wireguard").then(|| ChildItem {
+                id: format!("{VPN_PREFIX}{name}"),
+                label: name,
+                meta: if active { "Connected" } else { "Off" }.into(),
+                active,
+            })
+        })
+        .collect()
+}
+
+/// The "Hidden network..." row.
+pub fn hidden_row() -> ChildItem {
+    ChildItem {
+        id: HIDDEN.into(),
+        label: "Hidden network...".into(),
+        meta: String::new(),
+        active: false,
+    }
+}
+
 /// Parses raw nmcli wifi list output into `ChildItem`s.
 pub fn parse_wifi_list(output: &str) -> Vec<ChildItem> {
     let mut items = Vec::new();
@@ -535,6 +570,25 @@ pub fn action_for_child_item(kind: ChildKind, item: &ChildItem) -> Option<String
     }
     if item.id == WIFI_OFF {
         return Some("nmcli radio wifi off >/dev/null 2>&1".into());
+    }
+    if item.id == HIDDEN {
+        return Some(
+            "s=$(infynitae-edge ask --text \"Network name\") || exit 0; [ -n \"$s\" ] || exit 0; \
+             pw=$(infynitae-edge ask --text --secret \"Password for $s (empty for an open network)\") || exit 0; \
+             if [ -n \"$pw\" ]; then nmcli dev wifi connect \"$s\" password \"$pw\" hidden yes >/dev/null 2>&1; \
+             else nmcli dev wifi connect \"$s\" hidden yes >/dev/null 2>&1; fi || \
+             notify-send -a Infynitae Wi-Fi \"Could not join $s\""
+                .into(),
+        );
+    }
+    if let Some(name) = item.id.strip_prefix(VPN_PREFIX) {
+        let name = sq(name);
+        let verb = if item.active { "down" } else { "up" };
+        return Some(format!(
+            "nmcli connection {verb} id {name} >/dev/null 2>&1 || \
+             notify-send -a Infynitae VPN \"Could not turn {} {verb}\"",
+            item.label.replace('"', "")
+        ));
     }
     if item.id.starts_with(APP_PREFIX) {
         // an app's volume: the level is set by where the slider was clicked (click_child)
@@ -981,6 +1035,41 @@ pub fn click_child(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vpns_come_from_nmcli_and_turn_on_or_off() {
+        let rows = vpn_rows(
+            "Home:802-11-wireless:yes\nWork VPN:vpn:no\nwg0:wireguard:yes\nOffice\\:Main:vpn:no\n",
+        );
+        let names: Vec<_> = rows
+            .iter()
+            .map(|r| (r.label.as_str(), r.meta.as_str()))
+            .collect();
+        assert_eq!(
+            names,
+            [
+                ("Work VPN", "Off"),
+                ("wg0", "Connected"),
+                ("Office:Main", "Off")
+            ]
+        );
+        let up = action_for_child_item(ChildKind::Wifi, &rows[0]).unwrap();
+        assert!(up.starts_with("nmcli connection up id 'Work VPN'"), "{up}");
+        let down = action_for_child_item(ChildKind::Wifi, &rows[1]).unwrap();
+        assert!(down.starts_with("nmcli connection down id 'wg0'"), "{down}");
+    }
+
+    #[test]
+    fn the_hidden_network_row_asks_the_name_then_joins_hidden() {
+        let row = hidden_row();
+        assert!(
+            row.id.starts_with('#'),
+            "counts as a control row, not a network"
+        );
+        let cmd = action_for_child_item(ChildKind::Wifi, &row).unwrap();
+        assert!(cmd.contains("ask --text \"Network name\""), "{cmd}");
+        assert!(cmd.contains("hidden yes"), "{cmd}");
+    }
 
     #[test]
     fn the_microphone_row_says_its_level_and_who_listens() {

@@ -26,12 +26,10 @@ expand_path() {
 # The look shared by everything Infynitae draws (docs/EDGE_RUST.md, stage 7: CORNERS, THEME_SCHEME,
 # CARD_OPACITY), as the Rust edge resolves it (infynitae-edge-rs --print-theme): LOOK_CORNERS,
 # LOOK_CARD, LOOK_CARD_AA, LOOK_EDGE, LOOK_EDGE_AA, LOOK_TEXT, LOOK_ACCENT... Without the Rust edge,
-# today's values from the colours and SQUARE_CORNERS. Its lines are checked, never run as code.
+# today's values from the colours and CORNERS. Its lines are checked, never run as code.
 look_load() {
-    case "${SQUARE_CORNERS:-true}" in
-        1|true|yes|on|TRUE|True) LOOK_CORNERS=0 ;;
-        *) LOOK_CORNERS=8 ;;
-    esac
+    # 8 unless CORNERS says (owner 2026-11-12); SQUARE_CORNERS only tells apps to draw square
+    LOOK_CORNERS=8
     case "${CORNERS:-}" in
         '' | *[!0-9]*) ;;
         *)
@@ -374,7 +372,7 @@ EOF
     bi_hex="${BORDER_INACTIVE#\#}"
     t_hex="${TEXT_COLOR#\#}"
     # one look with the edge and the lock screen (2026-11-06): sans-serif 13 px, the hairline
-    # outline, rounded unless SQUARE_CORNERS
+    # outline, rounded by CORNERS
     # (the cards' corners and colours: look_load)
     radius=$LOOK_CORNERS
     card_hex="${LOOK_CARD#\#}${LOOK_CARD_AA}" edge_hex="${LOOK_EDGE#\#}${LOOK_EDGE_AA}"
