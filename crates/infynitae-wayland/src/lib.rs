@@ -1526,10 +1526,8 @@ impl WaylandState {
                 self.overlay_planes = overlay_planes;
                 self.wine_transparency = wine_transparency;
                 self.frame_guard_percent = frame_guard;
-                if !window_corners_given {
-                    if let Some(c) = corners {
-                        window_corners = c.clamp(0.0, 24.0);
-                    }
+                if let (false, Some(c)) = (window_corners_given, corners) {
+                    window_corners = c.clamp(0.0, 24.0);
                 }
                 self.window_corners = window_corners;
                 if !background_priority {
