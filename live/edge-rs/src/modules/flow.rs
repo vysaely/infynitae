@@ -742,7 +742,7 @@ pub fn draw_overlay(
             if let Some(&cell) = rects.get(i).filter(|c| c.2 > 0.0 && c.3 > 0.0) {
                 let x = switch_x(cell);
                 let x = (ox + x.0, oy + x.1, x.2, x.3);
-                draw::round_rect(cr, x.0, x.1, x.2, x.3, 9.0);
+                draw::round_rect(cr, x.0, x.1, x.2, x.3, th.small_radius().min(x.2 / 2.0));
                 draw::set(cr, th.card.alpha(0.9));
                 let _ = cr.fill();
                 cross(cr, (x.0 - 2.0, x.1 - 2.0, x.2 + 4.0, x.3 + 4.0), th.muted);

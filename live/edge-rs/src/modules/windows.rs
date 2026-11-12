@@ -421,7 +421,7 @@ pub fn draw(cr: &Context, th: &Theme, world: &World, rect: Rect) {
             ry + 1.0,
             (w - 2.0 * (PAD_X - 8.0)).max(0.0),
             ROW_H - 2.0,
-            6.0,
+            th.small_radius(),
         );
 
         if is_sel {
@@ -431,7 +431,7 @@ pub fn draw(cr: &Context, th: &Theme, world: &World, rect: Rect) {
                 ry + 1.0,
                 (w - 2.0 * (PAD_X - 8.0)).max(0.0),
                 ROW_H - 2.0,
-                6.0,
+                th.small_radius(),
             );
             draw::set(cr, Rgba(th.accent.0, th.accent.1, th.accent.2, 0.18));
             let _ = cr.fill();

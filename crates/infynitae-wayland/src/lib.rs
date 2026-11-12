@@ -1151,6 +1151,10 @@ impl WaylandState {
                 let mut wine_transparency = true;
                 let mut frame_guard = DEFAULT_FRAME_GUARD;
                 let mut window_corners = 8.0f32;
+                // one corner for windows and the interface (owner 2026-11-13): WINDOW_CORNERS, else
+                // CORNERS, else 8
+                let mut window_corners_given = false;
+                let mut corners: Option<f32> = None;
                 for line in content.lines() {
                     if let Some((key, val)) = config_line(line) {
                         let (key, val) = (key.as_str(), val.as_str());
@@ -1340,7 +1344,11 @@ impl WaylandState {
                             "WINDOW_CORNERS" => {
                                 if let Ok(r) = val.parse::<f32>() {
                                     window_corners = r.clamp(0.0, 24.0);
+                                    window_corners_given = true;
                                 }
+                            }
+                            "CORNERS" => {
+                                corners = val.parse::<f32>().ok();
                             }
                             "BORDER_WIDTH" => {
                                 if let Ok(w) = val.parse::<i32>() {
@@ -1518,6 +1526,11 @@ impl WaylandState {
                 self.overlay_planes = overlay_planes;
                 self.wine_transparency = wine_transparency;
                 self.frame_guard_percent = frame_guard;
+                if !window_corners_given {
+                    if let Some(c) = corners {
+                        window_corners = c.clamp(0.0, 24.0);
+                    }
+                }
                 self.window_corners = window_corners;
                 if !background_priority {
                     self.background_restore_all();

@@ -197,7 +197,7 @@ pub fn draw(cr: &Context, th: &Theme, world: &World, rect: Rect) {
             cy - 4.0,
             (col_w - 4.0).max(0.0),
             CELL_H + 4.0,
-            8.0,
+            th.small_radius(),
         );
         if is_sel {
             draw::round_rect(
@@ -206,7 +206,7 @@ pub fn draw(cr: &Context, th: &Theme, world: &World, rect: Rect) {
                 cy - 4.0,
                 (col_w - 4.0).max(0.0),
                 CELL_H + 4.0,
-                8.0,
+                th.small_radius(),
             );
             draw::set(cr, Rgba(th.accent.0, th.accent.1, th.accent.2, 0.18));
             let _ = cr.fill();

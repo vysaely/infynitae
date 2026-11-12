@@ -255,12 +255,35 @@ static void apply_css(void) {
         g_free(cfg_path);
     }
 
+    /* the corners of windows and the edge (LOOK_CORNERS in the look file infynitae-settings
+     * writes): the dialog takes them, its field and buttons the smaller ones (0.55 x, as the edge) */
+    int radius = 8;
+    {
+        const char *cache = g_getenv("XDG_CACHE_HOME");
+        gchar *look = (cache && *cache) ? g_build_filename(cache, "infynitae", "look", NULL)
+                                        : g_build_filename(home ? home : "", ".cache", "infynitae", "look", NULL);
+        FILE *lf = fopen(look, "r");
+        if (lf) {
+            char line[128];
+            while (fgets(line, sizeof(line), lf)) {
+                if (strncmp(line, "LOOK_CORNERS=", 13) == 0) {
+                    const char *v = line + 13;
+                    while (*v == '"') v++;
+                    if (*v >= '0' && *v <= '9') radius = atoi(v) > 28 ? 28 : atoi(v);
+                }
+            }
+            fclose(lf);
+        }
+        g_free(look);
+    }
+    int small = (radius * 55 + 50) / 100;
+
     GtkCssProvider *provider = gtk_css_provider_new();
     gchar *css = g_strdup_printf(
         "window.infynitae-polkit {\n"
         "    background-color: %s;\n"
         "    border: 1px solid %s;\n"
-        "    border-radius: 0px;\n"
+        "    border-radius: %dpx;\n"
         "    font-family: Sans;\n"
         "}\n"
         "label.title {\n"
@@ -281,7 +304,7 @@ static void apply_css(void) {
         "    background-color: %s;\n"
         "    color: %s;\n"
         "    border: 1px solid %s;\n"
-        "    border-radius: 0px;\n"
+        "    border-radius: %dpx;\n"
         "    padding: 6px 10px;\n"
         "    font-size: 12px;\n"
         "}\n"
@@ -292,7 +315,7 @@ static void apply_css(void) {
         "    background-color: #262b38;\n"
         "    color: %s;\n"
         "    font-weight: 600;\n"
-        "    border-radius: 0px;\n"
+        "    border-radius: %dpx;\n"
         "    padding: 6px 14px;\n"
         "    border: 1px solid %s;\n"
         "}\n"
@@ -302,7 +325,7 @@ static void apply_css(void) {
         "button.btn-cancel {\n"
         "    background-color: %s;\n"
         "    color: #9aa5b8;\n"
-        "    border-radius: 0px;\n"
+        "    border-radius: %dpx;\n"
         "    padding: 6px 14px;\n"
         "    border: 1px solid %s;\n"
         "}\n"
@@ -310,8 +333,8 @@ static void apply_css(void) {
         "    background-color: #1c2028;\n"
         "    color: %s;\n"
         "}\n",
-        surface, border_inact, text_col, canvas, text_col, border_inact,
-        border_act, text_col, border_act, surface, border_inact, text_col);
+        surface, border_inact, radius, text_col, canvas, text_col, border_inact, small,
+        border_act, text_col, small, border_act, surface, small, border_inact, text_col);
 
     gtk_css_provider_load_from_data(provider, css, -1, NULL);
     g_free(css);

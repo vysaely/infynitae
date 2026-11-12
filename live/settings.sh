@@ -28,13 +28,15 @@ expand_path() {
 # LOOK_CARD, LOOK_CARD_AA, LOOK_EDGE, LOOK_EDGE_AA, LOOK_TEXT, LOOK_ACCENT... Without the Rust edge,
 # today's values from the colours and CORNERS. Its lines are checked, never run as code.
 look_load() {
-    # 8 unless CORNERS says (owner 2026-11-12); SQUARE_CORNERS only tells apps to draw square
+    # CORNERS, else WINDOW_CORNERS (one corner for windows and the interface, owner 2026-11-13),
+    # else 8; SQUARE_CORNERS only tells apps to draw square
     LOOK_CORNERS=8
-    case "${CORNERS:-}" in
+    case "${CORNERS:-${WINDOW_CORNERS:-}}" in
         '' | *[!0-9]*) ;;
         *)
             # as a number (a leading 0 is not octal here), at most 28
-            LOOK_CORNERS=${CORNERS#"${CORNERS%%[!0]*}"}
+            look_c=${CORNERS:-${WINDOW_CORNERS:-}}
+            LOOK_CORNERS=${look_c#"${look_c%%[!0]*}"}
             LOOK_CORNERS=${LOOK_CORNERS:-0}
             [ "${#LOOK_CORNERS}" -le 2 ] && [ "$LOOK_CORNERS" -le 28 ] || LOOK_CORNERS=28
             ;;
