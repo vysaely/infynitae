@@ -61,3 +61,28 @@ case "${WALLPAPER:-}" in
     '$HOME/'*) WALLPAPER="$HOME/${WALLPAPER#\$HOME/}" ;;
     '${HOME}/'*) WALLPAPER="$HOME/${WALLPAPER#\$\{HOME\}/}" ;;
 esac
+
+# Find helper program: installed build (~/.local/bin), live script, or PATH
+infy_bin() {
+    for _infy_b in "$@"; do
+        if [ -x "$HOME/.local/bin/$_infy_b" ]; then
+            echo "$HOME/.local/bin/$_infy_b"
+            return 0
+        elif [ -x "$HOME/infynitae/live/$_infy_b" ]; then
+            echo "$HOME/infynitae/live/$_infy_b"
+            return 0
+        elif command -v "$_infy_b" >/dev/null 2>&1; then
+            command -v "$_infy_b"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Boolean setting evaluation: accepts 1, true, yes, on, TRUE, True and nothing else
+infy_on() {
+    case "${1:-}" in
+        1|true|yes|on|TRUE|True) return 0 ;;
+        *) return 1 ;;
+    esac
+}

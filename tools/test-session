@@ -132,3 +132,23 @@ if [ ! -f "$TERM_MARKER" ]; then
     exit 1
 fi
 echo "ok Finding 21: spaced paths and commands in NOTIFICATIONS and TERMINAL execute cleanly"
+
+# ----------------------------------------------------------------------
+# 4. infy_on accepts 1 true yes on TRUE True and nothing else
+# ----------------------------------------------------------------------
+(
+    . "$REPO_DIR/live/config.sh"
+    for val in 1 true yes on TRUE True; do
+        if ! infy_on "$val"; then
+            echo "FAIL infy_on: rejected truthy '$val'"
+            exit 1
+        fi
+    done
+    for val in 0 false no off FALSE False 2 "" "true1" "auto" "random" "YES" "ON"; do
+        if infy_on "$val"; then
+            echo "FAIL infy_on: accepted non-truthy '$val'"
+            exit 1
+        fi
+    done
+)
+echo "ok infy_on: accepts 1 true yes on TRUE True and nothing else"
