@@ -580,22 +580,40 @@ pub fn layout_run(
         }
         _ => {
             let col_w = (pw - 2.0 * PAD_X - draw::GAP) / 2.0;
+            // a list open in place (`child::opens_in_place`) sits under its switch's row: the
+            // rows after it move down by the room it takes now, and the card grows by as much
+            let open_row = world.child.shown.and_then(|kind| {
+                vis.iter()
+                    .position(|&k| items[k].module == kind.parent_module())
+                    .map(|idx| idx / 2)
+            });
+            let extra = if open_row.is_some() {
+                crate::modules::child::inplace_extra(&world.child)
+            } else {
+                0.0
+            };
             for (idx, &k) in vis.iter().enumerate() {
                 let col = idx % 2;
                 let row = idx / 2;
+                let below = if open_row.is_some_and(|r| row > r) {
+                    extra
+                } else {
+                    0.0
+                };
                 rects[k] = (
                     PAD_X + (col as f64) * (col_w + draw::GAP),
-                    y0 + PAD_Y + 28.0 + (row as f64) * ROW_H,
+                    y0 + PAD_Y + 28.0 + (row as f64) * ROW_H + below,
                     col_w,
                     36.0,
                 );
             }
+            return (rects, card_h + extra);
         }
     }
     (rects, card_h)
 }
 
-pub const HINT: &str = "Right click: more";
+pub const HINT: &str = "Point at one: More";
 
 pub fn state_text(d: &SwitchesData, m: Module) -> Option<String> {
     if !d.ready {
@@ -630,6 +648,73 @@ pub fn draw_card(cr: &Context, th: &Theme, world: &World, rect: Rect) {
             }
         }
     }
+}
+
+/// The list a switch's More button opens in place (`child::opens_in_place`).
+pub fn more_kind(m: Module) -> Option<crate::modules::child::ChildKind> {
+    use crate::modules::child::ChildKind;
+    match m {
+        Module::Wifi => Some(ChildKind::Wifi),
+        Module::Bluetooth => Some(ChildKind::Bluetooth),
+        Module::Power => Some(ChildKind::Power),
+        Module::Replay => Some(ChildKind::Replay),
+        _ => None,
+    }
+}
+
+/// The More button at the right of a switch's cell `rect`.
+pub fn more_rect(rect: Rect) -> Rect {
+    let (x, y, w, h) = rect;
+    (x + w - MORE_W, y + (h - MORE_H) / 2.0, MORE_W, MORE_H)
+}
+pub const MORE_W: f64 = 42.0;
+pub const MORE_H: f64 = 20.0;
+
+/// The More button of the switch `it` in its cell `rect`, when it shows: a stacked switch drawn
+/// as a row whose list opens in place, pointed at or with its list open. Gives the list, the
+/// button's rectangle and whether the list is open.
+pub fn more_shown(
+    it: &Item,
+    world: &World,
+    rect: Rect,
+) -> Option<(crate::modules::child::ChildKind, Rect, bool)> {
+    let kind = more_kind(it.module)?;
+    if !world.switch_rows || it.rect.is_some() {
+        return None;
+    }
+    let (x, y, w, h) = rect;
+    let open = world.child.open && world.child.kind == Some(kind);
+    let pointed = world.pointer.is_some_and(|(px, py)| {
+        px >= x - 6.0 && px < x + w + 6.0 && py >= y - 4.0 && py < y + h + 4.0
+    });
+    (open || pointed).then(|| (kind, more_rect(rect), open))
+}
+
+/// Draws the More button (Less while its list is open): a thin outline and a small word.
+pub fn draw_more(cr: &Context, th: &Theme, r: Rect, open: bool) {
+    let (x, y, w, h) = r;
+    draw::round_rect(
+        cr,
+        x + 0.5,
+        y + 0.5,
+        w - 1.0,
+        h - 1.0,
+        th.small_radius().min(h / 2.0),
+    );
+    draw::set(cr, th.edge);
+    cr.set_line_width(1.0);
+    let _ = cr.stroke();
+    draw::text_center(
+        cr,
+        x + w / 2.0,
+        y + 3.0,
+        &Text {
+            size: 11.0,
+            bold: false,
+            color: if open { th.text } else { th.muted },
+            text: if open { "Less" } else { "More" },
+        },
+    );
 }
 
 /// Draws a single switch item inside its cell `rect`.
@@ -691,7 +776,13 @@ pub fn draw(cr: &Context, th: &Theme, it: &Item, world: &World, rect: Rect) {
             let state_col = if sw.on { th.accent } else { th.muted };
             draw_icon(cr, it.module, x.round(), (y + 7.0).round(), icon_col);
             let tx = x + 26.0;
-            let max_w = (w - 26.0).max(16.0);
+            // room for the More button when it shows
+            let more = if more_shown(it, world, rect).is_some() {
+                MORE_W + 6.0
+            } else {
+                0.0
+            };
+            let max_w = (w - 26.0 - more).max(16.0);
             draw::text_max(
                 cr,
                 tx,
@@ -1091,9 +1182,9 @@ Controller AC:36:1B:F9:5D:AF (public)
     }
 
     #[test]
-    fn switches_hint_shows_right_click_more_in_row_look() {
-        assert_eq!(hint("rows"), Some("Right click: more"));
-        assert_eq!(hint(""), Some("Right click: more"));
+    fn switches_hint_points_to_more_in_row_look() {
+        assert_eq!(hint("rows"), Some("Point at one: More"));
+        assert_eq!(hint(""), Some("Point at one: More"));
         assert_eq!(hint("icons"), None);
         assert_eq!(hint("tiles"), None);
 
