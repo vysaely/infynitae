@@ -57,6 +57,7 @@ pub fn module_description(m: Module) -> &'static str {
         Module::Session => "Lock, sleep, log out, restart, shut down",
         Module::Memory => "What uses memory; close what you do not need",
         Module::System => "Graphics card, video memory, heat",
+        Module::Drives => "Each drive and its free space",
         Module::Wifi => "Wired or Wi-Fi, and the networks",
         Module::Bluetooth => "On or off, and the devices",
         Module::Dnd => "Hold notifications back",

@@ -30,6 +30,7 @@ pub enum Module {
     Calendar,
     Memory,
     System,
+    Drives,
 }
 
 /// Every word a module answers to; the first one of a module is the one written back.
@@ -59,6 +60,7 @@ const WORDS: &[(&str, Module)] = &[
     ("calendar", Module::Calendar),
     ("memory", Module::Memory),
     ("system", Module::System),
+    ("drives", Module::Drives),
 ];
 
 impl Module {
@@ -905,5 +907,21 @@ mod tests {
         assert!((c.opacity - 0.55).abs() < 1e-9);
         let c = Config::from_text("CORNERS=\"12\"\nSQUARE_CORNERS=\"true\"\n");
         assert_eq!(c.corners, 12.0);
+    }
+
+    #[test]
+    fn drives_module_word_and_not_in_default_panels() {
+        assert_eq!(Module::of_word("drives"), Some(Module::Drives));
+        assert_eq!(Module::Drives.word(), "drives");
+        assert!(!Module::Drives.is_switch());
+
+        let c = Config::load();
+        for p in &c.panels {
+            assert!(
+                !p.has(Module::Drives),
+                "drives must not be in default panel {}",
+                p.name
+            );
+        }
     }
 }
