@@ -52,7 +52,7 @@ pub fn is_opaque(format: smithay::backend::allocator::Fourcc) -> bool {
 
 #[derive(Debug)]
 pub struct Fitted {
-    pub(crate) enabled: bool,
+    pub enabled: bool,
 }
 
 impl Default for Fitted {

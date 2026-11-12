@@ -364,7 +364,7 @@ pub struct WaylandState {
     /// The linux-dmabuf global, replaced when the backend names its GPU (`set_dmabuf_main_device`).
     dmabuf_global: Option<smithay::wayland::dmabuf::DmabufGlobal>,
     /// FIT_IS_FULLSCREEN and the window now filling each screen (`fitted`).
-    pub(crate) fitted: fitted::Fitted,
+    pub fitted: fitted::Fitted,
     pub(crate) fitted_windows: fitted::FittedWindows,
     /// FRAME_GUARD: LATENCY off, how late in a refresh, in percent, a frame waits for the next.
     pub frame_guard_percent: u32,
@@ -437,6 +437,7 @@ pub struct WaylandState {
     pub hardware_cursor: bool,
     pub wallpaper: Option<String>,
     pub wallpaper_mode: Option<String>,
+    pub wallpaper_parallax: Option<String>,
     /// The config was read once: a wallpaper change after it restarts the wallpaper (the
     /// session script starts the first one).
     wallpaper_loaded: bool,
@@ -792,11 +793,12 @@ impl WaylandState {
             border_commits: std::collections::HashMap::new(),
             rendered_elements: Vec::new(),
             input_config: InputDeviceConfig::default(),
-            direct_scanout: None,
+            direct_scanout: Some(true),
             overlay_planes: false,
             hardware_cursor: true,
             wallpaper: None,
             wallpaper_mode: None,
+            wallpaper_parallax: None,
             wallpaper_loaded: false,
             keyboard_repeat_delay: repeat_delay,
             keyboard_repeat_rate: repeat_rate,
@@ -1111,6 +1113,7 @@ impl WaylandState {
                     .set(trust_policy(std::path::Path::new(home), &content));
                 let mut new_wallpaper: Option<String> = None;
                 let mut new_wallpaper_mode: Option<String> = None;
+                let mut new_wallpaper_parallax: Option<String> = None;
                 let mut free_cursor_on_super = true;
                 let mut bind_lines: Vec<(String, String)> = Vec::new();
                 let mut exec_lines: Vec<(String, String)> = Vec::new();
@@ -1121,6 +1124,16 @@ impl WaylandState {
                 let (mut background_priority, mut game_mode) = (true, true);
                 let mut gpu_relief = true;
                 let (mut tearing, mut tearing_always) = (true, true);
+                let mut fit_is_fullscreen = true;
+                let mut latency_mode = crate::frame_schedule::LatencyMode::Direct;
+                // without a DIRECT_SCANOUT line: the environment's, as at start (main.rs), else on
+                let mut direct_scanout = std::env::var("DIRECT_SCANOUT").map_or(true, |v| {
+                    !matches!(v.to_lowercase().as_str(), "0" | "false" | "off" | "no")
+                });
+                let mut hardware_cursor = true;
+                let mut overlay_planes = false;
+                let mut wine_transparency = true;
+                let mut frame_guard = DEFAULT_FRAME_GUARD;
                 for line in content.lines() {
                     if let Some((key, val)) = config_line(line) {
                         let (key, val) = (key.as_str(), val.as_str());
@@ -1197,13 +1210,13 @@ impl WaylandState {
                                 tearing_always = v == "always";
                             }
                             "FIT_IS_FULLSCREEN" => {
-                                self.fitted.enabled = !matches!(
+                                fit_is_fullscreen = !matches!(
                                     val.to_lowercase().as_str(),
                                     "0" | "false" | "off" | "no"
                                 );
                             }
                             "FRAME_GUARD" => {
-                                self.frame_guard_percent = val
+                                frame_guard = val
                                     .parse::<u32>()
                                     .map_or(DEFAULT_FRAME_GUARD, |p| p.min(90));
                             }
@@ -1313,7 +1326,7 @@ impl WaylandState {
                                 }
                             }
                             "LATENCY" => {
-                                self.latency_mode = crate::frame_schedule::LatencyMode::parse(val);
+                                latency_mode = crate::frame_schedule::LatencyMode::parse(val);
                             }
                             "LATENCY_STATS" => {
                                 self.latency_stats = matches!(
@@ -1374,10 +1387,10 @@ impl WaylandState {
                                 zoom_sharpen_after = !val.eq_ignore_ascii_case("live")
                             }
                             "DIRECT_SCANOUT" => {
-                                self.direct_scanout = Some(matches!(
+                                direct_scanout = !matches!(
                                     val.to_lowercase().as_str(),
-                                    "1" | "true" | "yes" | "on"
-                                ));
+                                    "0" | "false" | "off" | "no"
+                                );
                             }
                             "FOCUS_ON_ACTIVATE" => {
                                 use infynitae_core::input::focus::ActivationPolicy;
@@ -1397,13 +1410,13 @@ impl WaylandState {
                                 );
                             }
                             "HARDWARE_CURSOR" => {
-                                self.hardware_cursor = !matches!(
+                                hardware_cursor = !matches!(
                                     val.to_lowercase().as_str(),
                                     "0" | "false" | "off" | "no"
                                 );
                             }
                             "OVERLAY_PLANES" => {
-                                self.overlay_planes = matches!(
+                                overlay_planes = matches!(
                                     val.to_lowercase().as_str(),
                                     "1" | "true" | "yes" | "on"
                                 );
@@ -1418,6 +1431,12 @@ impl WaylandState {
                                 let trimmed = val.trim();
                                 if !trimmed.is_empty() {
                                     new_wallpaper_mode = Some(trimmed.to_string());
+                                }
+                            }
+                            "WALLPAPER_PARALLAX" => {
+                                let trimmed = val.trim();
+                                if !trimmed.is_empty() {
+                                    new_wallpaper_parallax = Some(trimmed.to_string());
                                 }
                             }
                             "KEYBOARD_REPEAT_DELAY" => {
@@ -1443,7 +1462,7 @@ impl WaylandState {
                                 self.privacy_titles = parse_titles(val);
                             }
                             "WINE_TRANSPARENCY" => {
-                                self.wine_transparency = !matches!(
+                                wine_transparency = !matches!(
                                     val.to_lowercase().as_str(),
                                     "0" | "false" | "off" | "no"
                                 );
@@ -1470,13 +1489,24 @@ impl WaylandState {
                 self.set_tearing_always(tearing_always);
                 self.background.enabled = background_priority;
                 self.gpu_relief = gpu_relief;
+                self.fitted.enabled = fit_is_fullscreen;
+                self.latency_mode = latency_mode;
+                self.direct_scanout = Some(direct_scanout);
+                self.hardware_cursor = hardware_cursor;
+                self.overlay_planes = overlay_planes;
+                self.wine_transparency = wine_transparency;
+                self.frame_guard_percent = frame_guard;
                 if !background_priority {
                     self.background_restore_all();
                 }
                 let first_load = !std::mem::replace(&mut self.wallpaper_loaded, true);
-                if new_wallpaper != self.wallpaper || new_wallpaper_mode != self.wallpaper_mode {
+                if new_wallpaper != self.wallpaper
+                    || new_wallpaper_mode != self.wallpaper_mode
+                    || new_wallpaper_parallax != self.wallpaper_parallax
+                {
                     self.wallpaper = new_wallpaper;
                     self.wallpaper_mode = new_wallpaper_mode;
+                    self.wallpaper_parallax = new_wallpaper_parallax;
                     // infynitae-reload finds this session's socket (the compositor itself has no
                     // WAYLAND_DISPLAY on the console) and expands the path; at the first load the
                     // session script starts the wallpaper
