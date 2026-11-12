@@ -125,6 +125,9 @@ These pass the test suite but have not run on a real screen or device yet:
   continuously. While a fullscreen window or one that plays like a game (pointer held, asked to
   tear, game content type, an X11 window) is on, notifications wait (`GAME_QUIET`): one drawn
   over a game ends its direct path to the screen and tearing.
+- **Real-time audio and desktop** (`--no-realtime`): real-time scheduling rights (`rtkit`, `realtime` group from `realtime-privileges`).
+- **ntsync**: fast NT synchronisation for Wine and Proton loaded at boot (`/etc/modules-load.d/ntsync.conf`) when the kernel has the module.
+- **No background memory compaction**: `vm.compaction_proactiveness = 0` (`/etc/sysctl.d/99-infynitae-memory.conf`) prevents latency spikes under load.
 - **A full GPU slows the windows out of use** (`GPU_RELIEF`): while a game fills a screen, a
   screen missing one refresh in twenty for a second completes the frames of windows that are
   neither focused nor filling it at about 60 FPS for 30 s, longer if it had to start again at

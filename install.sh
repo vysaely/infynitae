@@ -39,6 +39,7 @@ Leave out a part:
   --no-autorotate      screen rotation on convertibles (iio-sensor-proxy)
   --no-osk             an on-screen keyboard on convertibles and touchscreens (squeekboard)
   --no-gamemode        the CPU at full speed while a fullscreen game runs (gamemode)
+  --no-realtime        real-time audio and desktop priority (rtkit, realtime-privileges)
   --no-thermal         Intel's thermal manager on Intel laptops (thermald)
   --no-viewers         apps for videos and music (celluloid), pictures (ristretto) and text
                        (mousepad)
@@ -71,13 +72,13 @@ MENU=false
 [ $# -eq 0 ] && [ -t 0 ] && [ -t 1 ] && [ -n "${TERM:-}" ] && [ "$TERM" != dumb ] && MENU=true
 for arg in "$@"; do
     case "$arg" in
-        --no-notifications | --no-keyring | --no-automount | --no-clipboard | --no-fonts | --no-recorder | --no-autorotate | --no-files | --no-osk | --no-gamemode | --no-thermal | --no-viewers)
+        --no-notifications | --no-keyring | --no-automount | --no-clipboard | --no-fonts | --no-recorder | --no-autorotate | --no-files | --no-osk | --no-gamemode | --no-realtime | --no-thermal | --no-viewers)
             SKIP="$SKIP ${arg#--no-}" ;;
         --no-terminal) TERMINAL_PKG=false ;;
         --no-bluetooth) BLUETOOTH=false ;;
         --no-power-profiles) POWER_PROFILES=false ;;
         --minimal)
-            SKIP="notifications keyring automount clipboard fonts recorder autorotate files osk gamemode thermal viewers"
+            SKIP="notifications keyring automount clipboard fonts recorder autorotate files osk gamemode realtime thermal viewers"
             TERMINAL_PKG=false BLUETOOTH=false POWER_PROFILES=false ;;
         --no-autologin) AUTOLOGIN=false ;;
         --replay-buffer) REPLAY_BUFFER=true ;;

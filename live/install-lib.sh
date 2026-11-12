@@ -264,6 +264,27 @@ install_root_file() {
     sudo install -D -m "$3" "$1" "$2" || warn "Could not install $2"
 }
 
+# System speed settings: real-time scheduling rights, ntsync, memory compaction.
+install_speed_settings() {
+    local src="$1"
+    # real-time priority needs the realtime group (realtime-privileges)
+    if getent group realtime >/dev/null && ! id -nG "$USER" | grep -qw realtime; then
+        if sudo usermod -aG realtime "$USER"; then
+            echo "==> Added $USER to the realtime group (applies from the next login)"
+        else
+            warn "Could not add you to the realtime group"
+        fi
+    fi
+    # ntsync: fast NT synchronisation for Wine and Proton games
+    if modinfo ntsync >/dev/null 2>&1; then
+        install_root_file "$src/live/ntsync.conf" /etc/modules-load.d/ntsync.conf 644
+        sudo modprobe ntsync || true
+    fi
+    # background memory compaction causes latency spikes and stutter under memory pressure
+    install_root_file "$src/live/99-infynitae-memory.conf" /etc/sysctl.d/99-infynitae-memory.conf 644
+    sudo sysctl -p /etc/sysctl.d/99-infynitae-memory.conf || true
+}
+
 # What outside the home folder Infynitae needs, for this machine.
 install_system_files() {
     local src="$1" tmp
@@ -354,6 +375,7 @@ GUARD
     systemctl --user daemon-reload 2>/dev/null || true
     systemctl --user enable --now infynitae-shutdown-guard.service 2>/dev/null || true
     sh "$src/live/setup-autologin.sh" --autostart >/dev/null 2>&1 || true
+    install_speed_settings "$src"
 }
 
 # The parts' own apps open their files: folders in Thunar (not a terminal that also says it opens
