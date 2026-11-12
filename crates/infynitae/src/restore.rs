@@ -115,8 +115,8 @@ fn ok(reply: &Value) -> bool {
     reply.get("ok") == Some(&Value::Bool(true))
 }
 
-/// Writes `data` to `path` whole or not at all (a temporary file, synced, then renamed).
-fn save_file(path: &Path, data: &Value) -> std::io::Result<()> {
+/// Writes `text` to `path` whole or not at all (a temporary file, synced, then renamed).
+fn save_file(path: &Path, text: &str) -> std::io::Result<()> {
     use std::io::Write;
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
@@ -124,7 +124,7 @@ fn save_file(path: &Path, data: &Value) -> std::io::Result<()> {
     let tmp = path.with_extension(format!("json.tmp.{}", std::process::id()));
     let result = (|| {
         let mut f = std::fs::File::create(&tmp)?;
-        f.write_all(data.to_json().as_bytes())?;
+        f.write_all(text.as_bytes())?;
         f.write_all(b"\n")?;
         f.sync_all()?;
         std::fs::rename(&tmp, path)
@@ -133,6 +133,25 @@ fn save_file(path: &Path, data: &Value) -> std::io::Result<()> {
         let _ = std::fs::remove_file(&tmp);
     }
     result
+}
+
+/// Removes temporary files left by earlier watcher processes that were killed.
+pub fn clean_stale_tmp_files(dir: &Path) -> usize {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    let mut removed = 0;
+    for entry in entries.flatten() {
+        if entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| name.starts_with("session.json.tmp."))
+            && std::fs::remove_file(entry.path()).is_ok()
+        {
+            removed += 1;
+        }
+    }
+    removed
 }
 
 /// The session in a snapshot reply: its mapped windows that have an app, and each screen's
@@ -188,11 +207,22 @@ pub fn session_of(reply: &Value) -> Option<Value> {
 }
 
 /// One snapshot saved to `path`; false (and the file untouched) when the compositor did not
-/// answer.
-pub fn save_snapshot(path: &Path, ipc: &mut impl Ipc, id: u64) -> bool {
+/// answer. When `last` already holds this snapshot's text, the write is skipped.
+pub fn save_snapshot(path: &Path, ipc: &mut impl Ipc, id: u64, last: &mut Option<String>) -> bool {
     let reply = ipc.request(req(id, "snapshot", []));
     match session_of(&reply) {
-        Some(session) => save_file(path, &session).is_ok(),
+        Some(session) => {
+            let text = session.to_json();
+            if last.as_deref() == Some(&text) {
+                return true;
+            }
+            if save_file(path, &text).is_ok() {
+                *last = Some(text);
+                true
+            } else {
+                false
+            }
+        }
         None => false,
     }
 }
@@ -781,9 +811,11 @@ pub fn run(args: &[String]) -> ExitCode {
                 let _ = std::fs::remove_file(session_path());
                 return ExitCode::SUCCESS;
             }
+            clean_stale_tmp_files(&state_dir());
             let mut ipc = Socket(0);
+            let mut last = None;
             let first_id = ipc.next().as_u64().unwrap_or(1);
-            save_snapshot(&session_path(), &mut ipc, first_id);
+            save_snapshot(&session_path(), &mut ipc, first_id, &mut last);
             // a minute without an answer: the compositor is gone (the session ended, or this was
             // started outside one), and the next session starts its own watcher
             let mut unanswered = 0;
@@ -794,7 +826,7 @@ pub fn run(args: &[String]) -> ExitCode {
                     return ExitCode::SUCCESS;
                 }
                 let id = ipc.next().as_u64().unwrap_or(1);
-                if save_snapshot(&session_path(), &mut ipc, id) {
+                if save_snapshot(&session_path(), &mut ipc, id, &mut last) {
                     unanswered = 0;
                 } else {
                     unanswered += 1;
@@ -812,7 +844,7 @@ pub fn run(args: &[String]) -> ExitCode {
             }
             let mut ipc = Socket(0);
             let id = ipc.next().as_u64().unwrap_or(1);
-            if save_snapshot(&path, &mut ipc, id) {
+            if save_snapshot(&path, &mut ipc, id, &mut None) {
                 ExitCode::SUCCESS
             } else {
                 ExitCode::FAILURE
@@ -938,7 +970,7 @@ mod tests {
             calls: vec![],
             reply: |_: &Value| snapshot.clone(),
         };
-        assert!(save_snapshot(&file, &mut ipc, 1));
+        assert!(save_snapshot(&file, &mut ipc, 1, &mut None));
         let saved = json::parse(&std::fs::read_to_string(&file).unwrap()).unwrap();
         let windows = saved.get("windows").and_then(Value::as_array).unwrap();
         assert_eq!(windows.len(), 2);
@@ -963,7 +995,7 @@ mod tests {
             calls: vec![],
             reply: |_: &Value| json::parse(r#"{"ok":false}"#).unwrap(),
         };
-        assert!(!save_snapshot(&file, &mut failing, 2));
+        assert!(!save_snapshot(&file, &mut failing, 2, &mut None));
         let kept = json::parse(&std::fs::read_to_string(&file).unwrap()).unwrap();
         assert_eq!(
             kept.get("windows").and_then(Value::as_array).unwrap().len(),
@@ -1226,7 +1258,7 @@ mod tests {
             calls: vec![],
             reply: |_: &Value| snapshot.clone(),
         };
-        assert!(save_snapshot(&file, &mut ipc, 1));
+        assert!(save_snapshot(&file, &mut ipc, 1, &mut None));
         let saved = json::parse(&std::fs::read_to_string(&file).unwrap()).unwrap();
         let output = &saved.get("outputs").and_then(Value::as_array).unwrap()[0];
         assert_eq!(output.get("center").unwrap().to_json(), "[500,600]");
@@ -1338,5 +1370,68 @@ mod tests {
         assert_eq!(t.len(), 19, "{t}");
         assert_eq!(&t[4..5], "-");
         assert_eq!(&t[13..14], ":");
+    }
+
+    #[test]
+    fn two_snapshots_with_the_same_content_write_once() {
+        let d = tmp("write-once");
+        let file = d.join("session.json");
+        let snapshot = json::parse(
+            r#"{"id":1,"ok":true,"snapshot":{"outputs":[{"id":1,"camera":{"center":[500.0,600.0]}}],
+            "elements":[{"id":[1,1],"state":"mapped","app_id":"demo-app","title":"Window 1","anchor":[10.0,20.0],"size":[100.0,100.0],"fullscreen":null}]}}"#,
+        )
+        .unwrap();
+        let mut ipc = Fake {
+            calls: vec![],
+            reply: |_: &Value| snapshot.clone(),
+        };
+        let mut last = None;
+        assert!(save_snapshot(&file, &mut ipc, 1, &mut last));
+        let mtime1 = std::fs::metadata(&file).unwrap().modified().unwrap();
+
+        std::thread::sleep(Duration::from_millis(20));
+        assert!(save_snapshot(&file, &mut ipc, 2, &mut last));
+        let mtime2 = std::fs::metadata(&file).unwrap().modified().unwrap();
+        assert_eq!(
+            mtime1, mtime2,
+            "file was not rewritten when content did not change"
+        );
+
+        let different = json::parse(
+            r#"{"id":3,"ok":true,"snapshot":{"outputs":[{"id":1,"camera":{"center":[500.0,600.0]}}],
+            "elements":[{"id":[1,1],"state":"mapped","app_id":"demo-app","title":"Window 1","anchor":[99.0,99.0],"size":[100.0,100.0],"fullscreen":null}]}}"#,
+        )
+        .unwrap();
+        let mut ipc_diff = Fake {
+            calls: vec![],
+            reply: |_: &Value| different.clone(),
+        };
+        std::thread::sleep(Duration::from_millis(20));
+        assert!(save_snapshot(&file, &mut ipc_diff, 3, &mut last));
+        let mtime3 = std::fs::metadata(&file).unwrap().modified().unwrap();
+        assert_ne!(mtime2, mtime3, "file was rewritten when content changed");
+
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn stale_tmp_files_are_removed_at_start() {
+        let d = tmp("clean-stale");
+        let stale1 = d.join("session.json.tmp.12345");
+        let stale2 = d.join("session.json.tmp.67890");
+        let session = d.join("session.json");
+        let other = d.join("other.tmp.123");
+        std::fs::write(&stale1, "stale 1\n").unwrap();
+        std::fs::write(&stale2, "stale 2\n").unwrap();
+        std::fs::write(&session, "{}\n").unwrap();
+        std::fs::write(&other, "other\n").unwrap();
+
+        assert_eq!(clean_stale_tmp_files(&d), 2);
+        assert!(!stale1.exists());
+        assert!(!stale2.exists());
+        assert!(session.exists());
+        assert!(other.exists());
+
+        let _ = std::fs::remove_dir_all(&d);
     }
 }
