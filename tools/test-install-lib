@@ -49,4 +49,158 @@ val_got=$(grep '^NOTIFICATIONS=' "$cfg_file" | cut -d= -f2- || true)
 check "set_option replaces setting with value containing slashes, ampersands, and backslashes" \
     "$val_got" '"custom/path & flag\extra"'
 
+# Installer speed settings tests
+STUB_DIR="$TMP/bin"
+mkdir -p "$STUB_DIR"
+
+cat << 'EOF' > "$STUB_DIR/sudo"
+#!/bin/sh
+echo "sudo $*" >> "$STUB_LOG"
+if [ "$1" = "install" ]; then
+    shift
+    echo "install $*" >> "$STUB_LOG"
+    exit 0
+fi
+"$@"
+EOF
+chmod +x "$STUB_DIR/sudo"
+
+cat << 'EOF' > "$STUB_DIR/install"
+#!/bin/sh
+echo "install $*" >> "$STUB_LOG"
+exit 0
+EOF
+chmod +x "$STUB_DIR/install"
+
+cat << 'EOF' > "$STUB_DIR/modinfo"
+#!/bin/sh
+echo "modinfo $*" >> "$STUB_LOG"
+exit "${STUB_MODINFO_EXIT:-0}"
+EOF
+chmod +x "$STUB_DIR/modinfo"
+
+cat << 'EOF' > "$STUB_DIR/modprobe"
+#!/bin/sh
+echo "modprobe $*" >> "$STUB_LOG"
+exit 0
+EOF
+chmod +x "$STUB_DIR/modprobe"
+
+cat << 'EOF' > "$STUB_DIR/sysctl"
+#!/bin/sh
+echo "sysctl $*" >> "$STUB_LOG"
+exit 0
+EOF
+chmod +x "$STUB_DIR/sysctl"
+
+cat << 'EOF' > "$STUB_DIR/usermod"
+#!/bin/sh
+echo "usermod $*" >> "$STUB_LOG"
+exit 0
+EOF
+chmod +x "$STUB_DIR/usermod"
+
+cat << 'EOF' > "$STUB_DIR/getent"
+#!/bin/sh
+echo "getent $*" >> "$STUB_LOG"
+if [ "$1" = "group" ] && [ "$2" = "realtime" ]; then
+    exit "${STUB_GETENT_REALTIME_EXIT:-0}"
+fi
+exit 1
+EOF
+chmod +x "$STUB_DIR/getent"
+
+cat << 'EOF' > "$STUB_DIR/id"
+#!/bin/sh
+echo "id $*" >> "$STUB_LOG"
+if [ "$1" = "-nG" ]; then
+    echo "${STUB_ID_GROUPS:-testuser}"
+    exit 0
+fi
+echo "${USER:-testuser}"
+EOF
+chmod +x "$STUB_DIR/id"
+
+cat << 'EOF' > "$STUB_DIR/cmp"
+#!/bin/sh
+exit 1
+EOF
+chmod +x "$STUB_DIR/cmp"
+
+run_speed_settings() {
+    modinfo_exit="$1"
+    getent_exit="$2"
+    id_groups="$3"
+    STUB_LOG="$TMP/stub.log"
+    : > "$STUB_LOG"
+    OUT_LOG="$TMP/out.log"
+    : > "$OUT_LOG"
+    PATH="$STUB_DIR:$PATH" \
+    STUB_LOG="$STUB_LOG" \
+    STUB_MODINFO_EXIT="$modinfo_exit" \
+    STUB_GETENT_REALTIME_EXIT="$getent_exit" \
+    STUB_ID_GROUPS="$id_groups" \
+    USER="testuser" \
+    bash -c '
+        src="'"$REPO_DIR"'"
+        . "'"$REPO_DIR"'/live/install-lib.sh"
+        install_speed_settings "$src"
+    ' > "$OUT_LOG" 2>&1 || true
+}
+
+# 1. Full run: modinfo succeeds, realtime group exists, user not in it
+run_speed_settings 0 0 "testuser wheel"
+has_ntsync_file=$(grep -c '^install -D -m 644 .*live/ntsync\.conf /etc/modules-load\.d/ntsync\.conf$' "$TMP/stub.log" || true)
+check "ntsync conf installed when modinfo succeeds" "$has_ntsync_file" "1"
+
+has_modprobe=$(grep -c '^modprobe ntsync$' "$TMP/stub.log" || true)
+check "ntsync modprobe called when modinfo succeeds" "$has_modprobe" "1"
+
+has_usermod=$(grep -c '^usermod -aG realtime testuser$' "$TMP/stub.log" || true)
+check "usermod called when realtime group exists and user not in it" "$has_usermod" "1"
+
+has_login_msg=$(grep -c 'applies from the next login' "$TMP/out.log" || true)
+check "login message printed on usermod" "$has_login_msg" "1"
+
+has_sysctl_file=$(grep -c '^install -D -m 644 .*live/99-infynitae-memory\.conf /etc/sysctl\.d/99-infynitae-memory\.conf$' "$TMP/stub.log" || true)
+check "memory sysctl conf installed" "$has_sysctl_file" "1"
+
+has_sysctl_p=$(grep -c '^sysctl -p /etc/sysctl\.d/99-infynitae-memory\.conf$' "$TMP/stub.log" || true)
+check "sysctl -p applied for memory conf" "$has_sysctl_p" "1"
+
+# 2. Kernel without ntsync module (modinfo fails)
+run_speed_settings 1 0 "testuser wheel"
+has_ntsync_file=$(grep -c 'ntsync\.conf' "$TMP/stub.log" || true)
+check "ntsync conf omitted when modinfo fails" "$has_ntsync_file" "0"
+
+has_modprobe=$(grep -c 'modprobe' "$TMP/stub.log" || true)
+check "ntsync modprobe omitted when modinfo fails" "$has_modprobe" "0"
+
+has_sysctl_file=$(grep -c '^install -D -m 644 .*live/99-infynitae-memory\.conf /etc/sysctl\.d/99-infynitae-memory\.conf$' "$TMP/stub.log" || true)
+check "memory sysctl conf still installed when modinfo fails" "$has_sysctl_file" "1"
+
+# 3. User already in realtime group
+run_speed_settings 0 0 "testuser wheel realtime"
+has_usermod=$(grep -c 'usermod' "$TMP/stub.log" || true)
+check "usermod omitted when user already in realtime group" "$has_usermod" "0"
+
+# 4. Realtime group does not exist
+run_speed_settings 0 1 "testuser wheel"
+has_usermod=$(grep -c 'usermod' "$TMP/stub.log" || true)
+check "usermod omitted when realtime group does not exist" "$has_usermod" "0"
+
+# 5. File contents
+ntsync_content=$(cat "$REPO_DIR/live/ntsync.conf" 2>/dev/null || true)
+check "live/ntsync.conf content is exactly 'ntsync'" "$ntsync_content" "ntsync"
+
+has_compaction=$(grep -c '^vm\.compaction_proactiveness = 0' "$REPO_DIR/live/99-infynitae-memory.conf" 2>/dev/null || true)
+check "live/99-infynitae-memory.conf sets vm.compaction_proactiveness = 0" "$has_compaction" "1"
+
+has_comment=$(grep -c '^#' "$REPO_DIR/live/99-infynitae-memory.conf" 2>/dev/null || true)
+check "live/99-infynitae-memory.conf has a comment" "$has_comment" "1"
+
+# 6. Delegation from install_system_files
+has_call=$(grep -c 'install_speed_settings' "$REPO_DIR/live/install-lib.sh" || true)
+check "install_system_files delegates to install_speed_settings" "$([ "$has_call" -ge 2 ] && echo yes || echo no)" "yes"
+
 exit $fail

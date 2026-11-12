@@ -39,6 +39,7 @@ part_label() {
         autorotate) echo "Screen rotation (convertible)" ;;
         osk) echo "On-screen keyboard (opens when a text field is tapped)" ;;
         gamemode) echo "Game mode: full CPU speed in games" ;;
+        realtime) echo "Real-time audio and desktop: no sound crackle or stutter under load" ;;
         thermal) echo "Intel's thermal manager (thermald)" ;;
         viewers) echo "Video, picture and text apps" ;;
         terminal) echo "A terminal (alacritty)" ;;
