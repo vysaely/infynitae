@@ -15,6 +15,7 @@
 pub mod background;
 pub mod capture_indicator;
 pub mod convert;
+pub mod corners;
 pub mod cursor;
 pub mod desk;
 pub mod extension;
@@ -411,6 +412,12 @@ pub struct WaylandState {
     pub latency_stats: bool,
     /// GPU_RELIEF: a screen missing refreshes slows the windows out of use.
     pub gpu_relief: bool,
+    /// WINDOW_CORNERS: the radius of a window's free corners, logical px (0 square; corners.rs).
+    pub window_corners: f32,
+    /// This frame's rounded windows and border pieces, by the element drawn (convert.rs fills it
+    /// per screen, the DRM backend draws from it).
+    pub rounding:
+        std::collections::HashMap<smithay::backend::renderer::element::Id, corners::Rounding>,
     pub border_active: smithay::backend::renderer::Color32F,
     pub border_inactive: smithay::backend::renderer::Color32F,
     pub border_ids: std::collections::HashMap<
@@ -426,6 +433,8 @@ pub struct WaylandState {
             smithay::backend::renderer::utils::CommitCounter,
         ),
     >,
+    /// Each window's corner radii as its border was last drawn: a change is a new commit.
+    pub border_shapes: std::collections::HashMap<infynitae_core::stage::ElementId, [f32; 4]>,
     pub rendered_elements: Vec<infynitae_core::stage::ElementId>,
     pub input_config: InputDeviceConfig,
     pub direct_scanout: Option<bool>,
@@ -789,6 +798,9 @@ impl WaylandState {
             gpu_relief: true,
             border_active: smithay::backend::renderer::Color32F::new(0.48, 0.64, 0.97, 1.0),
             border_inactive: smithay::backend::renderer::Color32F::new(0.20, 0.23, 0.33, 0.8),
+            window_corners: 0.0,
+            border_shapes: std::collections::HashMap::new(),
+            rounding: std::collections::HashMap::new(),
             border_ids: std::collections::HashMap::new(),
             border_commits: std::collections::HashMap::new(),
             rendered_elements: Vec::new(),
@@ -1134,6 +1146,7 @@ impl WaylandState {
                 let mut overlay_planes = false;
                 let mut wine_transparency = true;
                 let mut frame_guard = DEFAULT_FRAME_GUARD;
+                let mut window_corners = 0.0f32;
                 for line in content.lines() {
                     if let Some((key, val)) = config_line(line) {
                         let (key, val) = (key.as_str(), val.as_str());
@@ -1320,6 +1333,11 @@ impl WaylandState {
                                     self.set_clear_color(c);
                                 }
                             }
+                            "WINDOW_CORNERS" => {
+                                if let Ok(r) = val.parse::<f32>() {
+                                    window_corners = r.clamp(0.0, 24.0);
+                                }
+                            }
                             "BORDER_WIDTH" => {
                                 if let Ok(w) = val.parse::<i32>() {
                                     self.border_width = w.max(0);
@@ -1496,6 +1514,7 @@ impl WaylandState {
                 self.overlay_planes = overlay_planes;
                 self.wine_transparency = wine_transparency;
                 self.frame_guard_percent = frame_guard;
+                self.window_corners = window_corners;
                 if !background_priority {
                     self.background_restore_all();
                 }

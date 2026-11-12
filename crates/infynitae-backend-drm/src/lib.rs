@@ -1200,6 +1200,7 @@ pub fn run_console_with(
     } else {
         smooth::program(&mut renderer)
     };
+    smooth::init_corners(&mut renderer);
     let allocator = GbmAllocator::new(
         gbm.clone(),
         GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT,
@@ -2090,6 +2091,7 @@ fn recover_renderer(data: &mut LoopData) {
     } else {
         smooth::program(&mut renderer)
     };
+    smooth::init_corners(&mut renderer);
     data.renderer = renderer;
     // copies started on the lost renderer cannot be read: their captures fail (the client asks again)
     for c in data.capture_copies.drain(..) {
@@ -2212,7 +2214,14 @@ fn render(data: &mut LoopData, turn: &mut TurnClock) {
         };
         let elements: Vec<_> = elements
             .into_iter()
-            .map(|e| smooth::Smoothed::new(e, data.smooth_program.clone()))
+            .map(|e| {
+                let round = data
+                    .state
+                    .rounding
+                    .get(smithay::backend::renderer::element::Element::id(&e))
+                    .copied();
+                smooth::Smoothed::new(e, data.smooth_program.clone()).rounded(round)
+            })
             .collect();
         turn.mark("element building");
         // VRR auto: on while this screen shows a fullscreen window
@@ -2623,7 +2632,13 @@ fn serve_captures(
     };
     let elements: Vec<_> = elements
         .into_iter()
-        .map(|e| smooth::Smoothed::new(e, smooth_program.cloned()))
+        .map(|e| {
+            let round = state
+                .rounding
+                .get(smithay::backend::renderer::element::Element::id(&e))
+                .copied();
+            smooth::Smoothed::new(e, smooth_program.cloned()).rounded(round)
+        })
         .collect();
     // a capture that may wait is served once its consumer's last capture differs, with what
     // changed as its damage (whole for a region or a turned screen); else it waits
