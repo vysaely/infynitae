@@ -437,6 +437,7 @@ pub struct WaylandState {
     pub hardware_cursor: bool,
     pub wallpaper: Option<String>,
     pub wallpaper_mode: Option<String>,
+    pub wallpaper_parallax: Option<String>,
     /// The config was read once: a wallpaper change after it restarts the wallpaper (the
     /// session script starts the first one).
     wallpaper_loaded: bool,
@@ -797,6 +798,7 @@ impl WaylandState {
             hardware_cursor: true,
             wallpaper: None,
             wallpaper_mode: None,
+            wallpaper_parallax: None,
             wallpaper_loaded: false,
             keyboard_repeat_delay: repeat_delay,
             keyboard_repeat_rate: repeat_rate,
@@ -1111,6 +1113,7 @@ impl WaylandState {
                     .set(trust_policy(std::path::Path::new(home), &content));
                 let mut new_wallpaper: Option<String> = None;
                 let mut new_wallpaper_mode: Option<String> = None;
+                let mut new_wallpaper_parallax: Option<String> = None;
                 let mut free_cursor_on_super = true;
                 let mut bind_lines: Vec<(String, String)> = Vec::new();
                 let mut exec_lines: Vec<(String, String)> = Vec::new();
@@ -1427,6 +1430,12 @@ impl WaylandState {
                                     new_wallpaper_mode = Some(trimmed.to_string());
                                 }
                             }
+                            "WALLPAPER_PARALLAX" => {
+                                let trimmed = val.trim();
+                                if !trimmed.is_empty() {
+                                    new_wallpaper_parallax = Some(trimmed.to_string());
+                                }
+                            }
                             "KEYBOARD_REPEAT_DELAY" => {
                                 if let Ok(d) = val.parse::<i32>() {
                                     self.keyboard_repeat_delay = d;
@@ -1488,9 +1497,13 @@ impl WaylandState {
                     self.background_restore_all();
                 }
                 let first_load = !std::mem::replace(&mut self.wallpaper_loaded, true);
-                if new_wallpaper != self.wallpaper || new_wallpaper_mode != self.wallpaper_mode {
+                if new_wallpaper != self.wallpaper
+                    || new_wallpaper_mode != self.wallpaper_mode
+                    || new_wallpaper_parallax != self.wallpaper_parallax
+                {
                     self.wallpaper = new_wallpaper;
                     self.wallpaper_mode = new_wallpaper_mode;
+                    self.wallpaper_parallax = new_wallpaper_parallax;
                     // infynitae-reload finds this session's socket (the compositor itself has no
                     // WAYLAND_DISPLAY on the console) and expands the path; at the first load the
                     // session script starts the wallpaper
