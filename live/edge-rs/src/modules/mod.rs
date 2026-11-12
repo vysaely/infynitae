@@ -1131,7 +1131,16 @@ pub fn draw(cr: &Context, th: &Theme, it: &Item, world: &World, rect: Rect) {
     if it.module.is_switch() {
         // a switch is pressed anywhere in its cell: light a little more than the cell (the module
         // draws clipped to it), so the light is not flush with the icon
-        hot(cr, th, world, x - 6.0, y - 4.0, w + 12.0, h + 8.0, th.small_radius());
+        hot(
+            cr,
+            th,
+            world,
+            x - 6.0,
+            y - 4.0,
+            w + 12.0,
+            h + 8.0,
+            th.small_radius(),
+        );
     }
     cr.save().ok();
     cr.rectangle(x - 1.0, y - 1.0, w + 2.0, h + 2.0);
@@ -1214,7 +1223,16 @@ pub fn draw_placeholder(cr: &Context, th: &Theme, it: &Item, rect: Rect) {
 /// it with a soft fill of the text colour (`r` its corner): call it before drawing the target's
 /// content, so the light sits under it. Returns whether it is lit.
 #[allow(clippy::too_many_arguments)]
-pub fn hot(cr: &Context, th: &Theme, world: &World, x: f64, y: f64, w: f64, h: f64, r: f64) -> bool {
+pub fn hot(
+    cr: &Context,
+    th: &Theme,
+    world: &World,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+    r: f64,
+) -> bool {
     if w <= 0.0 || h <= 0.0 {
         return false;
     }

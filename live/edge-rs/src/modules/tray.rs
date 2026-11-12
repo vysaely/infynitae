@@ -456,7 +456,16 @@ pub fn draw(cr: &Context, th: &Theme, world: &World, rect: Rect) {
         }
 
         let is_selected = world.tray.open_menu == Some(i);
-        super::hot(cr, th, world, ix - 4.0, iy, col_w + 8.0, ROW_H - 2.0, th.small_radius());
+        super::hot(
+            cr,
+            th,
+            world,
+            ix - 4.0,
+            iy,
+            col_w + 8.0,
+            ROW_H - 2.0,
+            th.small_radius(),
+        );
         if is_selected {
             draw::round_rect(
                 cr,

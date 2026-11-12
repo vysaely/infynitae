@@ -492,7 +492,16 @@ fn draw_small(cr: &Context, th: &Theme, world: &World, rect: Rect) {
     let btn_y = y + ((h - 32.0) / 2.0).max(2.0);
     let play_x = x + w - PAD_X - btn_total_w;
     super::hot(cr, th, world, play_x, btn_y, 36.0, 32.0, th.small_radius());
-    super::hot(cr, th, world, play_x + 44.0, btn_y, 32.0, 32.0, th.small_radius());
+    super::hot(
+        cr,
+        th,
+        world,
+        play_x + 44.0,
+        btn_y,
+        32.0,
+        32.0,
+        th.small_radius(),
+    );
     draw::round_rect(cr, play_x, btn_y, 36.0, 32.0, th.small_radius());
     draw::set(cr, th.accent);
     let _ = cr.fill();

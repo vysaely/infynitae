@@ -2230,10 +2230,12 @@ fn render(name: &str, size: &str, out: &str) -> Result<(), String> {
     let mut world = modules::World::now();
     world.sync_config(&cfg);
     // the pointer's place for the hover light (screen pixels "x,y"), for render tests
-    world.pointer = std::env::var("INFYNITAE_EDGE_RENDER_POINTER").ok().and_then(|v| {
-        let (a, b) = v.split_once(',')?;
-        Some((a.trim().parse().ok()?, b.trim().parse().ok()?))
-    });
+    world.pointer = std::env::var("INFYNITAE_EDGE_RENDER_POINTER")
+        .ok()
+        .and_then(|v| {
+            let (a, b) = v.split_once(',')?;
+            Some((a.trim().parse().ok()?, b.trim().parse().ok()?))
+        });
     if let Some(open_idx) = panel_idx {
         let is_editing = std::env::var_os("INFYNITAE_EDGE_RENDER_EDIT").is_some();
         let is_adding = std::env::var_os("INFYNITAE_EDGE_RENDER_ADD").is_some();

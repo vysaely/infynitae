@@ -190,7 +190,16 @@ fn draw_month_grid(cr: &Context, th: &Theme, world: &World, x: f64, y: f64, w: f
     let ay = y + PAD_Y + 10.0;
     let px = x + w - PAD_X - 30.0;
     for cx in [px, x + w - PAD_X - 10.0] {
-        super::hot(cr, th, world, cx - 10.0, ay - 11.0, 20.0, 22.0, th.small_radius());
+        super::hot(
+            cr,
+            th,
+            world,
+            cx - 10.0,
+            ay - 11.0,
+            20.0,
+            22.0,
+            th.small_radius(),
+        );
     }
     draw::set(cr, th.muted);
     cr.set_line_width(1.5);
