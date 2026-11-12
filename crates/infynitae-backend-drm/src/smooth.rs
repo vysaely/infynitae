@@ -15,7 +15,7 @@ use smithay::backend::renderer::gles::{
 };
 use smithay::utils::Size;
 
-use infynitae_wayland::corners::Rounding;
+use infynitae_wayland::convert::Rounding;
 use smithay::backend::renderer::utils::{CommitCounter, DamageSet, OpaqueRegions};
 use smithay::utils::{Buffer as BufferCoords, Physical, Point, Rectangle, Scale, Transform};
 
@@ -211,8 +211,9 @@ thread_local! {
     static CORNERS: std::cell::RefCell<Option<Corners>> = const { std::cell::RefCell::new(None) };
 }
 
-/// Compiles the corner shaders for `renderer` (at start and after a new renderer).
-pub fn init_corners(renderer: &mut GlesRenderer) {
+/// Compiles the corner shaders for `renderer` (at start and after a new renderer); whether they
+/// are ready.
+pub fn init_corners(renderer: &mut GlesRenderer) -> bool {
     let shared = [
         UniformName::new("u_offset", UniformType::_2f),
         UniformName::new("u_window", UniformType::_2f),
@@ -235,7 +236,9 @@ pub fn init_corners(renderer: &mut GlesRenderer) {
             None
         }
     };
+    let ready = corners.is_some();
     CORNERS.with(|c| *c.borrow_mut() = corners);
+    ready
 }
 
 fn shape_uniforms(round: &Rounding, dst: Rectangle<i32, Physical>) -> Vec<Uniform<'static>> {

@@ -414,10 +414,13 @@ pub struct WaylandState {
     pub gpu_relief: bool,
     /// WINDOW_CORNERS: the radius of a window's free corners, logical px (0 square; corners.rs).
     pub window_corners: f32,
+    /// Whether the backend draws rounded corners (the DRM backend, once its corner shaders
+    /// compiled): elsewhere windows stay square and borders keep their plain layout.
+    pub corners_drawn: bool,
     /// This frame's rounded windows and border pieces, by the element drawn (convert.rs fills it
     /// per screen, the DRM backend draws from it).
     pub rounding:
-        std::collections::HashMap<smithay::backend::renderer::element::Id, corners::Rounding>,
+        std::collections::HashMap<smithay::backend::renderer::element::Id, convert::Rounding>,
     pub border_active: smithay::backend::renderer::Color32F,
     pub border_inactive: smithay::backend::renderer::Color32F,
     pub border_ids: std::collections::HashMap<
@@ -798,7 +801,8 @@ impl WaylandState {
             gpu_relief: true,
             border_active: smithay::backend::renderer::Color32F::new(0.48, 0.64, 0.97, 1.0),
             border_inactive: smithay::backend::renderer::Color32F::new(0.20, 0.23, 0.33, 0.8),
-            window_corners: 0.0,
+            window_corners: 8.0,
+            corners_drawn: false,
             border_shapes: std::collections::HashMap::new(),
             rounding: std::collections::HashMap::new(),
             border_ids: std::collections::HashMap::new(),
@@ -1146,7 +1150,7 @@ impl WaylandState {
                 let mut overlay_planes = false;
                 let mut wine_transparency = true;
                 let mut frame_guard = DEFAULT_FRAME_GUARD;
-                let mut window_corners = 0.0f32;
+                let mut window_corners = 8.0f32;
                 for line in content.lines() {
                     if let Some((key, val)) = config_line(line) {
                         let (key, val) = (key.as_str(), val.as_str());

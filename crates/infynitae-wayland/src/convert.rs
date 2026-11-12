@@ -885,7 +885,7 @@ where
         {
             state.rounding.insert(
                 smithay::backend::renderer::element::Element::id(&e).clone(),
-                crate::corners::Rounding {
+                Rounding {
                     window: physical_rect(g),
                     radii: *r,
                     border: None,
@@ -902,6 +902,22 @@ where
     Ok(())
 }
 
+/// How a window is rounded this frame: its geometry in output pixels and each corner's radius
+/// (top left, top right, bottom right, bottom left; 0 square).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Rounding {
+    pub window: Rectangle<i32, Physical>,
+    pub radii: [f32; 4],
+    /// For a border piece: its width and colour (the ring drawn just outside `window`).
+    pub border: Option<(f32, smithay::backend::renderer::Color32F)>,
+}
+
+impl Rounding {
+    pub fn is_round(&self) -> bool {
+        self.radii.iter().any(|r| *r > 0.0)
+    }
+}
+
 /// Each window's corner radii in output pixels (WINDOW_CORNERS, corners.rs): none for a window
 /// that fills the screen (fullscreen or fitted), and only windows with a round corner are listed.
 fn window_radii(
@@ -911,7 +927,7 @@ fn window_radii(
     view: (i64, i64),
 ) -> std::collections::HashMap<infynitae_core::stage::ElementId, [f32; 4]> {
     let mut out = std::collections::HashMap::new();
-    if state.window_corners <= 0.0 {
+    if state.window_corners <= 0.0 || !state.corners_drawn {
         return out;
     }
     for e in entries {
@@ -1021,7 +1037,7 @@ fn border_elements<R>(
         if let Some(r) = round {
             state.rounding.insert(
                 id.clone(),
-                crate::corners::Rounding {
+                Rounding {
                     window: physical_rect(&g),
                     radii: r,
                     border: Some((w as f32, color)),

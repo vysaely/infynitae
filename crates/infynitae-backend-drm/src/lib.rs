@@ -1200,7 +1200,7 @@ pub fn run_console_with(
     } else {
         smooth::program(&mut renderer)
     };
-    smooth::init_corners(&mut renderer);
+    let corners_ready = smooth::init_corners(&mut renderer);
     let allocator = GbmAllocator::new(
         gbm.clone(),
         GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT,
@@ -1606,6 +1606,7 @@ pub fn run_console_with(
         virtual_screen_enabled: options.virtual_screen,
         virtual_screen: None,
     };
+    data.state.corners_drawn = corners_ready;
     update_virtual_screen(&mut data);
 
     data.state.reload_config();
@@ -2091,7 +2092,7 @@ fn recover_renderer(data: &mut LoopData) {
     } else {
         smooth::program(&mut renderer)
     };
-    smooth::init_corners(&mut renderer);
+    data.state.corners_drawn = smooth::init_corners(&mut renderer);
     data.renderer = renderer;
     // copies started on the lost renderer cannot be read: their captures fail (the client asks again)
     for c in data.capture_copies.drain(..) {

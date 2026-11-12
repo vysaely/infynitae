@@ -179,11 +179,11 @@ SQUARE_CORNERS="true"
     #   true     square
     #    false   their own rounded look
 
-WINDOW_CORNERS="0"
+WINDOW_CORNERS="8"
     # Windows drawn with soft rounded corners, this many px (a gentle squircle; their border
     # follows the curve). Square where a corner touches the screen's edge, and for a window that
     # fills the screen (fullscreen or fitted), which still goes to the screen directly [reload]
-    # default: 0 (square)
+    # default: 8 (0 square)
     # options: 0 to 24 · 8 about Windows 11's
 
 #CORNERS="8"

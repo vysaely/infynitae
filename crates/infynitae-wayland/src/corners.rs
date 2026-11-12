@@ -8,27 +8,8 @@
 //! (owner: "when the app fills the viewport the corners should be straight"), so a window snapped
 //! to half the screen meets the edges with no empty space.
 //!
-//! This module only decides the shape; the DRM backend draws it (`smooth.rs`), other backends
-//! draw windows square.
-
-use smithay::backend::renderer::Color32F;
-use smithay::utils::{Physical, Rectangle};
-
-/// How a window is rounded this frame: its geometry in output pixels and each corner's radius
-/// (top left, top right, bottom right, bottom left; 0 square).
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Rounding {
-    pub window: Rectangle<i32, Physical>,
-    pub radii: [f32; 4],
-    /// For a border piece: its width and colour (the ring drawn just outside `window`).
-    pub border: Option<(f32, Color32F)>,
-}
-
-impl Rounding {
-    pub fn is_round(&self) -> bool {
-        self.radii.iter().any(|r| *r > 0.0)
-    }
-}
+//! This module only decides the shape (`convert::Rounding` carries it per element); the DRM
+//! backend draws it (`smooth.rs`), other backends draw windows square.
 
 /// Each corner's radius for a window at `g` (x0, y0, x1, y1, output pixels) on a view of
 /// `view` pixels, with `radius` pixels for a free corner: 0 for a corner on the view's edge or
