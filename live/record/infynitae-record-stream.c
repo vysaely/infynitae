@@ -352,6 +352,12 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    struct stat st;
+    if (fstat(STDOUT_FILENO, &st) == 0 && S_ISFIFO(st.st_mode)) {
+        /* 8.3 MB frames take 127 blocking writes each in a 64 KB pipe; 1 MB cuts that to 8. */
+        fcntl(STDOUT_FILENO, F_SETPIPE_SZ, 1 << 20);
+    }
+
     // Start first frame
     request_frame(&state);
 
