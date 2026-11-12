@@ -18,10 +18,13 @@ history, hidden from search by `.ignore`.
   `live/launch.sh`). A merge or a branch switch here changes the running desktop at once, while the binaries in
   `~/.local/bin` change only with `infynitae-update`. A script must keep working with the binaries installed
   before an update (e.g. a renamed helper falls back to its old name). Work on branches in a separate worktree.
-- **No builds on the owner's PC while it trains a model** (`systemctl --user is-active mind-labq`): no cargo
-  build/check/test/clippy, no GPU use. Verify through GitHub CI (runs on every push: fmt, check, build, test,
-  clippy, verify-architecture, verify-test-efficacy, foundation docs, C helpers) or in the test VM
-  (`~/.cache/infynitae-vm/run/`, software rendering, its own CPUs). Lab files in `~/aevyternae-mind` are not ours.
+- **Builds on the owner's PC pause the lab first** (owner 2026-11-12: "pause the ai training and just continue
+  whenever done"): `~/aevyternae-mind/scripts/lab-pause on` before cargo build/check/test/clippy, `lab-pause off`
+  after (training resumes from its last checkpoint). Never build beside a running training. Tests still only through
+  the sandboxes (`safe-cargo`, `safe-run`): never against the live desktop. GitHub CI runs on every push (fmt,
+  check, build, test, clippy, verify-architecture, verify-test-efficacy, foundation docs, C helpers); the test VM
+  (`~/.cache/infynitae-vm/run/`, software rendering, its own CPUs) for what needs a screen. Lab files in
+  `~/aevyternae-mind` are not ours.
 - **Flaky test**: `t1_transform inc3_f09_bounded_resource_cycles` counts `/proc/self/fd` while other tests run;
   if it is the only failure, rerun the failed jobs (`gh run rerun <id> --failed`).
 - **Tests**: most are real Wayland clients against the headless backend (`crates/infynitae-backend-headless/tests`,
