@@ -101,6 +101,13 @@ impl WaylandState {
                 .is_some_and(|s| t.hints.iter().any(|h| h.current && h.surface == s))
     }
 
+    /// Whether `window` itself asked to tear (`wp_tearing_control_v1`) or was made to tear
+    /// (Super+Shift+T), apart from `TEARING="always"`.
+    pub(crate) fn tearing_asked(&self, window: ElementId, surface: &WlSurface) -> bool {
+        let t = &self.tearing;
+        t.forced.contains(&window) || t.hints.iter().any(|h| h.current && &h.surface == surface)
+    }
+
     /// Super+Shift+O (or Super+Shift+T): tearing on or off for the focused window (it tears while fullscreen), with
     /// a notification saying which.
     pub fn toggle_tearing_focused(&mut self) {

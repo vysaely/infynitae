@@ -119,9 +119,12 @@ These pass the test suite but have not run on a real screen or device yet:
   next surface commit, and destroying the control object restores vsync on the next commit) or after Super+Shift+O on it (X11 games, which cannot ask). A
   driver that refuses gets the usual flip. In the test suite; this GPU (amdgpu) reports support,
   not yet seen in a game.
-- **Game mode** (`GAME_MODE`, `--no-gamemode`): a fullscreen window the GPU shows directly is
-  a game, registered with Feral's gamemode (full CPU speed) until it has been off screen for 5 s
-  continuously. A fullscreen video shown directly counts too.
+- **Game mode** (`GAME_MODE`, `--no-gamemode`): a fullscreen window, or one filling the screen
+  that tears (with `TEARING="always"` any, a maximised browser too), shown directly or not, is
+  registered with Feral's gamemode (full CPU speed) until it has been off screen for 5 s
+  continuously. While a fullscreen window or one that plays like a game (pointer held, asked to
+  tear, game content type, an X11 window) is on, notifications wait (`GAME_QUIET`): one drawn
+  over a game ends its direct path to the screen and tearing.
 - **A full GPU slows the windows out of use** (`GPU_RELIEF`): while a game fills a screen, a
   screen missing one refresh in twenty for a second completes the frames of windows that are
   neither focused nor filling it at about 60 FPS for 30 s, longer if it had to start again at

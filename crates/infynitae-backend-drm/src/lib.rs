@@ -2029,6 +2029,7 @@ pub fn run_console_with(
         let next_deferred = data.screens.iter().filter_map(|s| s.deferred).min();
         data.session.set_render_deadline(next_deferred, now);
         latency_summary(&mut data);
+        turn.mark("latency summary");
 
         let now = infynitae_wayland::presentation_clock_now();
         let deadline = data.state.frame_fallback(now);
@@ -2118,6 +2119,7 @@ const TEARING_RETRY: Duration = Duration::from_secs(5);
 /// nothing completes its frame callbacks now; a queued one at its vblank.
 fn render(data: &mut LoopData, turn: &mut TurnClock) {
     deliver_copies(&mut data.renderer, &mut data.capture_copies);
+    turn.mark("capture copies");
     let locked = data.state.is_locked();
     let clear = if locked {
         convert::LOCKED_CLEAR
@@ -2142,6 +2144,8 @@ fn render(data: &mut LoopData, turn: &mut TurnClock) {
             size,
             clear,
         );
+        // screen copies (the replay recorder, screen sharing) drawn and read back on this thread
+        turn.mark("captures");
 
         if data.screens[i].pending {
             continue;
@@ -2370,12 +2374,14 @@ fn render(data: &mut LoopData, turn: &mut TurnClock) {
                     s.tearing_retry_at = None;
                 }
                 let tear = wants_tearing && s.tearing_refused < TEARING_REFUSALS;
-                // the compositor drops async itself on a refusal, so this is said on a real change
-                if tear != s.tearing_logged {
-                    s.tearing_logged = tear;
+                // said on a real change: not for the single frames a moving cursor waits (they
+                // were logged on and off at every mouse move, about once a frame)
+                let tearing_state = scanout && tears_now && s.tearing_refused < TEARING_REFUSALS;
+                if tearing_state != s.tearing_logged {
+                    s.tearing_logged = tearing_state;
                     log_line!(
                         "[infynitae] Tearing {} on screen {id:?}",
-                        if tear { "on" } else { "off" }
+                        if tearing_state { "on" } else { "off" }
                     );
                 }
                 if tear != s.compositor.async_flip() {
@@ -2528,6 +2534,8 @@ fn render(data: &mut LoopData, turn: &mut TurnClock) {
         );
         let now = infynitae_wayland::presentation_clock_now();
         data.state.frame_tick(v.id, now);
+        // was counted as "flush", the next mark (review 2026-11-12: 374 slow "flush" turns)
+        turn.mark("virtual screen captures");
     }
     confirm_lock(data);
     // a capture copied out of the GPU this turn is handed over at the next one: make sure there is one

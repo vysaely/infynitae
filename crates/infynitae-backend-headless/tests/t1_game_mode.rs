@@ -168,3 +168,30 @@ fn game_mode_hysteresis_stays_on_briefly_and_clears_after_hold() {
     t.ls.state.background_update(t1 + Duration::from_secs(6));
     assert_eq!(t.ls.state.game(), None, "ends after 6 s off screen");
 }
+
+/// A window that fills the screen and tears is in game mode too, a maximised browser included
+/// (owner 2026-11-12: "i want the desktop to be responsive too"); with tearing off for it, it is
+/// not.
+#[test]
+fn a_window_filling_the_screen_that_tears_gets_game_mode() {
+    let mut t = T {
+        ls: Lockstep::new(Some(output((640, 480), 120))),
+    };
+    let o = t.ls.output();
+    let (_w, id) = t.map("browser");
+    t.ls.state.set_tearing_always(true);
+    t.ls.state.set_fitted_window(o, Some(id));
+    assert!(
+        !t.ls.state.toggle_tearing(id),
+        "Super+Shift+O: no tearing for it"
+    );
+    t.ls.state.fullscreen_frame_shown(o);
+    assert_eq!(
+        t.ls.state.game(),
+        None,
+        "fills the screen, does not tear: no game mode"
+    );
+    assert!(t.ls.state.toggle_tearing(id), "tearing back on");
+    t.ls.state.fullscreen_frame_shown(o);
+    assert_eq!(t.ls.state.game(), Some((id, std::process::id())));
+}

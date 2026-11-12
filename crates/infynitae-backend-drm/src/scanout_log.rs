@@ -40,6 +40,12 @@ pub(crate) fn install() {
 
 /// A refusal, as opposed to Smithay's other trace lines.
 fn is_refusal(message: &str) -> bool {
+    // Smithay says this of every element that is not the cursor when it tries the cursor plane,
+    // every frame: not why a window was not shown directly (review 2026-11-12: 369 such lines
+    // pointed at windows and popups that were never the cause)
+    if message.contains("element kind not cursor") {
+        return false;
+    }
     ["skipping", "failed", "could not", "Can't obtain", "too big"]
         .iter()
         .any(|word| message.contains(word))
@@ -124,5 +130,18 @@ mod tests {
             "element 3 too big for cursor plane(s), skipping"
         ));
         assert!(!super::is_refusal("assigned element 3 to primary"));
+    }
+}
+
+#[cfg(test)]
+mod refusal_tests {
+    use super::is_refusal;
+
+    #[test]
+    fn the_cursor_plane_note_on_other_elements_is_no_refusal() {
+        assert!(!is_refusal(
+            "skipping element Id(1) on cursor plane(s), element kind not cursor"
+        ));
+        assert!(is_refusal("skipping primary plane, no damage"));
     }
 }
