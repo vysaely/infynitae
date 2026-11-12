@@ -1,0 +1,89 @@
+#!/bin/sh
+# tools/test-settings-sync: tests lean theme sync (live/settings.sh apply).
+# - writes terminal theme files only when installed or config folder exists
+# - skips apply when neither config nor settings.sh changed since last apply
+# - re-applies when config changed
+# - force flag re-applies even when unchanged
+set -eu
+
+REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
+TMP=$(mktemp -d "/tmp/infynitae-test-settings-sync.XXXXXX")
+trap 'rm -rf "$TMP"' EXIT INT TERM
+
+fail=0
+check() {
+    if [ "$2" = "$3" ]; then
+        echo "ok   $1"
+    else
+        echo "FAIL $1: expected '$3', got '$2'"
+        fail=1
+    fi
+}
+
+apply() {
+    h="$1"
+    shift
+    HOME="$h" CONFIG_FILE="$h/.config/infynitae/config" sh "$REPO_DIR/live/settings.sh" apply "$@" >/dev/null 2>&1 || true
+}
+
+# 1. With foot not installed and no ~/.config/foot, apply writes nothing there
+H1="$TMP/h1"
+mkdir -p "$H1/.config/infynitae"
+printf 'SURFACE_COLOR="#111317"\nBORDER_ACTIVE="#7aa2f7"\n' > "$H1/.config/infynitae/config"
+
+apply "$H1"
+check "with foot not installed and no ~/.config/foot, apply writes nothing there" \
+    "$([ -e "$H1/.config/foot" ] && echo exists || echo none)" "none"
+check "with alacritty not installed and no ~/.config/alacritty, apply writes nothing there" \
+    "$([ -e "$H1/.config/alacritty" ] && echo exists || echo none)" "none"
+
+# Also check with a minimal PATH where kitty is not found
+MIN_BIN="$TMP/minbin"
+mkdir -p "$MIN_BIN"
+for cmd in sh cat cmp mv rm mkdir stat sed awk grep; do
+    p=$(command -v "$cmd" 2>/dev/null || true)
+    [ -n "$p" ] && ln -sf "$p" "$MIN_BIN/$cmd"
+done
+H_nokitty="$TMP/h_nokitty"
+mkdir -p "$H_nokitty/.config/infynitae"
+printf 'SURFACE_COLOR="#111317"\nBORDER_ACTIVE="#7aa2f7"\n' > "$H_nokitty/.config/infynitae/config"
+PATH="$MIN_BIN" apply "$H_nokitty"
+check "with kitty not installed and no ~/.config/kitty, apply writes nothing there" \
+    "$([ -e "$H_nokitty/.config/kitty" ] && echo exists || echo none)" "none"
+
+# 2. When config folder already exists, apply writes the theme file
+H2="$TMP/h2"
+mkdir -p "$H2/.config/infynitae" "$H2/.config/foot" "$H2/.config/alacritty"
+printf 'SURFACE_COLOR="#111317"\nBORDER_ACTIVE="#7aa2f7"\n' > "$H2/.config/infynitae/config"
+
+apply "$H2"
+check "when ~/.config/foot exists, apply writes foot.ini" \
+    "$([ -f "$H2/.config/foot/foot.ini" ] && echo yes || echo no)" "yes"
+check "when ~/.config/alacritty exists, apply writes infynitae-theme.toml" \
+    "$([ -f "$H2/.config/alacritty/infynitae-theme.toml" ] && echo yes || echo no)" "yes"
+
+# 3. Second apply with nothing changed writes nothing (skips)
+stamp="$H2/.cache/infynitae/settings-applied"
+check "stamp file created on apply" "$([ -f "$stamp" ] && echo yes || echo no)" "yes"
+
+# Touch a file that apply manages to a custom sentinel value
+printf 'custom-marker\n' > "$H2/.icons/default/index.theme"
+apply "$H2"
+check "second apply with nothing changed writes nothing (marker preserved)" \
+    "$(cat "$H2/.icons/default/index.theme" 2>/dev/null || echo missing)" "custom-marker"
+
+# 4. A changed config writes again
+# Sleep briefly or use touch -d to ensure timestamp advance
+touch -d "+2 seconds" "$H2/.config/infynitae/config"
+printf 'SURFACE_COLOR="#222530"\n' >> "$H2/.config/infynitae/config"
+apply "$H2"
+check "changed config writes again (marker overwritten)" \
+    "$([ "$(cat "$H2/.icons/default/index.theme" 2>/dev/null)" = "custom-marker" ] && echo unchanged || echo overwritten)" "overwritten"
+
+# 5. --force re-applies even when unchanged
+printf 'custom-marker-force\n' > "$H2/.icons/default/index.theme"
+HOME="$H2" CONFIG_FILE="$H2/.config/infynitae/config" sh "$REPO_DIR/live/settings.sh" apply --force >/dev/null 2>&1 || true
+check "apply --force writes even when unchanged" \
+    "$([ "$(cat "$H2/.icons/default/index.theme" 2>/dev/null)" = "custom-marker-force" ] && echo unchanged || echo overwritten)" "overwritten"
+
+exit $fail
