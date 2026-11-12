@@ -44,6 +44,11 @@ if [ -f "$HOME/infynitae/live/env.sh" ]; then
     . "$HOME/infynitae/live/env.sh"
 fi
 
+for _r in "$(dirname "$0")/log-rotate.sh" "$HOME/infynitae/live/log-rotate.sh"; do
+    [ -f "$_r" ] && { . "$_r"; break; }
+done
+unset _r
+
 # In console mode, do not inherit any stale display env.sh might have found on disk
 if [ -n "$TTY_MODE" ]; then
     unset WAYLAND_DISPLAY DISPLAY
@@ -51,7 +56,7 @@ fi
 
 export RUST_BACKTRACE=1
 SESSION_LOG="$STATE_DIR/session.log"
-LOG_MAX_BYTES=20000000
+LOG_MAX_BYTES=5242880
 FAST_FAIL_SECS=5
 MAX_FAST_FAILS=3
 
@@ -90,9 +95,7 @@ FAILS=0
 
 while true; do
     # keep one old log; the current one restarts past LOG_MAX_BYTES
-    if [ -f "$SESSION_LOG" ] && [ "$(wc -c < "$SESSION_LOG")" -gt "$LOG_MAX_BYTES" ]; then
-        mv -f "$SESSION_LOG" "$SESSION_LOG.old"
-    fi
+    rotate_log "$SESSION_LOG" "$LOG_MAX_BYTES"
 
     START_TIME=$(date +%s)
     START_BYTES=0
