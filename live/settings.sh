@@ -240,11 +240,11 @@ apply_settings() {
 
     # Skip when neither config nor settings.sh changed since the last apply
     stamp_file="${XDG_CACHE_HOME:-$HOME/.cache}/infynitae/settings-applied"
-    cfg_stamp=$(stat -c '%s %Y' "$CONFIG_FILE" 2>/dev/null || echo 0)
+    cfg_stamp=$(cksum < "$CONFIG_FILE" 2>/dev/null || echo 0)
     self_file="$0"
     [ -L "$self_file" ] && self_file=$(readlink -f "$self_file" 2>/dev/null || echo "$0")
     [ -f "$self_file" ] || self_file="${SCRIPT_DIR:-$HOME/infynitae/live}/settings.sh"
-    self_stamp=$(stat -c '%s %Y' "$self_file" 2>/dev/null || echo 0)
+    self_stamp=$(cksum < "$self_file" 2>/dev/null || echo 0)
     stamp_now="$cfg_stamp $self_stamp"
 
     if [ "$force_apply" != true ] && [ -f "$stamp_file" ] && [ "$(cat "$stamp_file" 2>/dev/null)" = "$stamp_now" ]; then
@@ -752,9 +752,9 @@ EOF
             PAN_MODE 2>/dev/null || true
     fi
 
-    # 7. Record modification times stamp (~/.cache/infynitae/settings-applied)
+    # 7. Record what was applied (a checksum of the config and of this script: a change within the same second, same size, still counts) (~/.cache/infynitae/settings-applied)
     mkdir -p "$(dirname "$stamp_file")"
-    cfg_stamp=$(stat -c '%s %Y' "$CONFIG_FILE" 2>/dev/null || echo 0)
+    cfg_stamp=$(cksum < "$CONFIG_FILE" 2>/dev/null || echo 0)
     printf '%s %s\n' "$cfg_stamp" "$self_stamp" > "$stamp_file"
 }
 

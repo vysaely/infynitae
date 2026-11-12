@@ -28,7 +28,10 @@ for qt in qt6ct qt5ct; do
 done
 c="$H/.config/qt6ct/qt6ct.conf"
 check "qt6ct.conf uses the palette" "$(sed -n 's/^color_scheme_path=//p' "$c")" "$H/.config/qt6ct/colors/infynitae.conf"
-check "qt6ct.conf has the icon theme" "$(sed -n 's/^icon_theme=//p' "$c")" "Papirus-Dark"
+# Papirus installed here: the folder-coloured copy Infynitae makes of it (folder_icon_theme); else the plain name
+icon=$(sed -n 's/^icon_theme=//p' "$c")
+[ "$icon" = "Infynitae-Papirus-Dark" ] && icon="Papirus-Dark"
+check "qt6ct.conf has the icon theme" "$icon" "Papirus-Dark"
 
 g="$H/.config/gtk-4.0/gtk.css"
 check "GTK 4 window_bg_color is SURFACE_COLOR" "$(sed -n 's/^@define-color window_bg_color \(.*\);$/\1/p' "$g")" "#202124"
