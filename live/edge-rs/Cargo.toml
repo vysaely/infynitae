@@ -22,7 +22,9 @@ libc = "0.2"
 zbus = { version = "5.19", features = ["blocking-api"] }
 
 [profile.release]
+opt-level = "s"
 lto = "thin"
+codegen-units = 1
 strip = true
 
 # not a member of the compositor's workspace
