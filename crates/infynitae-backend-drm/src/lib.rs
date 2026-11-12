@@ -2020,6 +2020,9 @@ pub fn run_console_with(
             .any(|s| s.deferred.is_some_and(|t| t <= now));
         turn.mark("new windows");
         if (data.session.frame_due() || has_screencopy || deferred_due) && data.active {
+            // what this turn's input made goes to the clients first: a game reads its mouse motion
+            // now, not after the compositor's own drawing (review 2026-11-12)
+            data.session.flush();
             render(&mut data, &mut turn);
         }
         let now = infynitae_wayland::presentation_clock_now();

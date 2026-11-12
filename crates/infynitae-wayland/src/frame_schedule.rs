@@ -63,8 +63,13 @@ const SAMPLES: usize = 128;
 const RECENT: usize = 8;
 /// A missed refresh widens the margin by this much.
 const MISS_STEP: Duration = Duration::from_micros(750);
-/// Frames made in a row before the margin shrinks by one tenth of a step.
+/// Frames made in a row before the margin shrinks by a whole step: from the widest back to the
+/// narrowest in about seven seconds at 165 Hz (a tenth of a step took about a minute, so a few early
+/// misses cost a game most of `LATENCY="direct"`'s gain for that long; review 2026-11-12).
 const SHRINK_AFTER: u32 = 240;
+/// After the mode changes (a game starts being shown directly) this many refreshes do not widen the
+/// margin: the first frames carry the switch's own work, not the game's.
+const SETTLE_REFRESHES: u32 = 30;
 /// The margin never exceeds this.
 const MARGIN_MAX: Duration = Duration::from_millis(4);
 /// Refreshes drawn at once after a miss at the largest margin: frames keep missing although the
@@ -90,6 +95,8 @@ pub struct FrameSchedule {
     next: usize,
     margin: Duration,
     made_in_a_row: u32,
+    /// Refreshes left in which a miss does not widen the margin (SETTLE_REFRESHES after a mode change).
+    settling: u32,
     misses: u64,
     frames: u64,
     /// Refreshes left drawn at once (PAUSE_REFRESHES).
@@ -137,6 +144,7 @@ impl FrameSchedule {
             next: 0,
             margin: mode.margins().0,
             made_in_a_row: 0,
+            settling: 0,
             misses: 0,
             frames: 0,
             paused: 0,
@@ -152,6 +160,7 @@ impl FrameSchedule {
         if mode != self.mode {
             self.mode = mode;
             self.margin = mode.margins().0;
+            self.settling = SETTLE_REFRESHES;
         }
     }
 
@@ -283,7 +292,11 @@ impl FrameSchedule {
                 self.made_in_a_row = 0;
             }
             let late_scheduled = !paused && self.mode != LatencyMode::Off;
-            if late_scheduled && missed {
+            let settling = self.settling > 0;
+            self.settling = self.settling.saturating_sub(1);
+            if late_scheduled && missed && settling {
+                // the switch's own frames: counted as missed, the margin left alone
+            } else if late_scheduled && missed {
                 if self.margin >= MARGIN_MAX {
                     self.paused = PAUSE_REFRESHES;
                     self.pauses += 1;
@@ -296,7 +309,7 @@ impl FrameSchedule {
                 if self.made_in_a_row >= SHRINK_AFTER {
                     self.made_in_a_row = 0;
                     let floor = self.mode.margins().1;
-                    self.margin = self.margin.saturating_sub(MISS_STEP / 10).max(floor);
+                    self.margin = self.margin.saturating_sub(MISS_STEP).max(floor);
                 }
             }
         }
@@ -591,6 +604,54 @@ mod tests {
             s.vblank(t);
         }
         assert_eq!(s.margin(), Duration::from_micros(500));
+    }
+
+    /// From the widest margin back to the narrowest in seconds, not a minute: a whole step per
+    /// SHRINK_AFTER refreshes made (review 2026-11-12).
+    #[test]
+    fn the_margin_comes_back_from_its_widest_in_seconds() {
+        let mut s = warmed(LatencyMode::Balanced, 1.0);
+        let mut t = ms(100.0);
+        s.vblank(t);
+        // widened to 3.5 ms by four misses
+        for _ in 0..4 {
+            s.rendered(t + ms(1.0), t + ms(2.0));
+            t += P * 2;
+            s.vblank(t);
+        }
+        assert!(s.margin() >= Duration::from_micros(3500));
+        let steps =
+            (s.margin() - Duration::from_micros(500)).as_micros() / MISS_STEP.as_micros() + 1;
+        for _ in 0..(SHRINK_AFTER as u128 * steps) {
+            s.rendered(t + P - ms(2.0), t + P - ms(1.0));
+            t += P;
+            s.vblank(t);
+        }
+        assert_eq!(s.margin(), Duration::from_micros(500));
+        // at 165 Hz that is under ten seconds
+        assert!(SHRINK_AFTER as u128 * steps < 165 * 10);
+    }
+
+    /// The refreshes right after the mode changes (a game starts going to the screen directly) do not
+    /// widen the margin: they carry the switch's own work.
+    #[test]
+    fn misses_right_after_the_mode_changes_leave_the_margin_alone() {
+        let mut s = warmed(LatencyMode::Off, 1.0);
+        s.set_mode(LatencyMode::Balanced);
+        let m0 = s.margin();
+        let mut t = ms(100.0);
+        s.vblank(t);
+        for _ in 0..(SETTLE_REFRESHES - 1) {
+            s.rendered(t + ms(1.0), t + ms(2.0));
+            t += P * 2;
+            s.vblank(t);
+        }
+        assert_eq!(s.margin(), m0, "settling: no widening");
+        assert!(s.counts().1 > 0, "still counted as missed");
+        s.rendered(t + ms(1.0), t + ms(2.0));
+        t += P * 2;
+        s.vblank(t);
+        assert!(s.margin() > m0, "after settling a miss widens it");
     }
 
     #[test]
