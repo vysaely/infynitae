@@ -26,7 +26,15 @@ struct T {
 }
 
 impl T {
+    /// `TEARING="true"`: a window tears when it asks or after Super+Shift+O (the tests below).
     fn new() -> T {
+        let mut t = T::always();
+        t.ls.state.set_tearing_always(false);
+        t
+    }
+
+    /// The default, `TEARING="always"`.
+    fn always() -> T {
         T {
             ls: Lockstep::new(Some(output((640, 480), 120))),
         }
@@ -245,4 +253,20 @@ fn presentation_hint_applies_on_commit_not_on_request() {
     t.ls.probe.surfaces[w].wl.commit();
     t.adv();
     assert!(!t.ls.state.tears(o), "vsync after the commit");
+}
+
+/// `TEARING="always"` (the default, owner 2026-11-12: "i prefer low latency tearing on"): a fullscreen window
+/// tears without asking; Super+Shift+O still turns it off for that window; not fullscreen, no tearing.
+#[test]
+fn tearing_always_needs_no_ask() {
+    let mut t = T::always();
+    let o = t.ls.output();
+    let (w, id) = t.map("game that never asks");
+    assert!(!t.ls.state.tears(o), "not fullscreen: no tearing");
+    t.fullscreen(w, true);
+    assert!(t.ls.state.tears(o), "fullscreen: tears without asking");
+    assert!(!t.ls.state.toggle_tearing(id), "the key turns it off");
+    assert!(!t.ls.state.tears(o));
+    assert!(t.ls.state.toggle_tearing(id), "and on again");
+    assert!(t.ls.state.tears(o));
 }

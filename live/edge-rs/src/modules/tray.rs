@@ -132,12 +132,49 @@ pub struct TrayData {
     pub open_menu: Option<usize>,
 }
 
+/// `$XDG_RUNTIME_DIR/infynitae/capturing`: the programs capturing the screen, one a line (the compositor
+/// writes it while any captures, `CAPTURE_INDICATOR="edge"`).
+fn read_capturing() -> String {
+    std::env::var_os("XDG_RUNTIME_DIR")
+        .map(|d| {
+            std::path::PathBuf::from(d)
+                .join("infynitae")
+                .join("capturing")
+        })
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .unwrap_or_default()
+}
+
+/// The row that says the screen is being captured, and by what: "Screen capture" with the programs as its
+/// status in the accent. None while nothing captures.
+pub fn capture_item(capturing: &str) -> Option<TrayItem> {
+    let names: Vec<&str> = capturing
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    if names.is_empty() {
+        return None;
+    }
+    Some(TrayItem {
+        id: "screen-capture".into(),
+        title: "Screen capture".into(),
+        status: names.join(", "),
+        attention: true,
+        ..TrayItem::default()
+    })
+}
+
 /// Applies raw output (from `run_sh` or `INFYNITAE_EDGE_RENDER_DATA`) to `TrayData`.
 pub fn apply(d: &mut TrayData, key: &str, out: &str) -> bool {
     if key != "tray" {
         return false;
     }
     let mut items = parse_tray_data(out);
+    // a screen capture is said here, first (the compositor draws no dot by default: CAPTURE_INDICATOR)
+    if let Some(it) = capture_item(&read_capturing()) {
+        items.insert(0, it);
+    }
     // a menu fetched on a right click stays (the refresh every 2 s has none: it turned an app's
     // open menu into Open / Quit / Force Kill under the pointer); the open menu stays on its app
     for it in &mut items {
@@ -492,6 +529,11 @@ pub fn click(world: &mut World, size: (f64, f64), pos: (f64, f64), button: u32) 
     for i in 0..world.tray.items.len() {
         if let Some((sx, sy, sw, sh)) = item_slot(size, i) {
             if px >= sx && px <= sx + sw && py >= sy && py <= sy + sh {
+                // the capture row says something; it is no app to activate, and its fallback menu
+                // (Quit, Force Kill) would have no process to act on
+                if world.tray.items[i].id == "screen-capture" {
+                    return true;
+                }
                 if is_left_button(button) {
                     let id = world.tray.items[i].id.clone();
                     let bus = world.tray.items[i].bus_name.clone();
@@ -916,6 +958,24 @@ fn fetch_on(conn: &zbus::blocking::Connection, register: bool) -> Option<String>
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_capture_is_a_row_naming_its_programs_and_nothing_else() {
+        assert!(super::capture_item("").is_none());
+        assert!(super::capture_item("\n  \n").is_none());
+        let it = super::capture_item("obs\nfirefox\n").unwrap();
+        assert_eq!(it.display_name(), "Screen capture");
+        assert_eq!(it.note(), "obs, firefox");
+        assert!(it.attention, "in the accent");
+        let mut world = crate::modules::World::default();
+        world.tray.items = vec![it];
+        world.tray.ready = true;
+        let size = (380.0, super::height(&world));
+        let (x, y, w, h) = super::item_slot(size, 0).unwrap();
+        let at = (x + w / 2.0, y + h / 2.0);
+        assert!(super::click(&mut world, size, at, 0x111));
+        assert_eq!(world.tray.open_menu, None, "no menu for it");
+    }
+
     use super::*;
 
     #[test]

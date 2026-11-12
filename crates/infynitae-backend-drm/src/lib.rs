@@ -286,6 +286,13 @@ struct Screen {
     tearing_retry_at: Option<std::time::Instant>,
     /// Whether the session log last said tearing was on.
     tearing_logged: bool,
+    /// The cursor as the last frame showed it (element, its commit, where): tearing waits only on a frame
+    /// that changes it.
+    last_cursor: Option<(
+        smithay::backend::renderer::element::Id,
+        smithay::backend::renderer::utils::CommitCounter,
+        smithay::utils::Rectangle<i32, smithay::utils::Physical>,
+    )>,
     /// The monitor and driver support VRR on this connector.
     vrr_supported: bool,
     /// VRR is on now.
@@ -1035,6 +1042,7 @@ fn connect_screen(
         tearing_refused: 0,
         tearing_retry_at: None,
         tearing_logged: false,
+        last_cursor: None,
         vrr_supported,
         vrr_on,
         vrr_mode: f.vrr,
@@ -1386,6 +1394,14 @@ pub fn run_console_with(
                 .and_then(|d| d.authority_path().map(|p| p.to_path_buf())),
         },
     )?;
+    // the edge says what captures the screen from this file (CAPTURE_INDICATOR="edge")
+    if let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR") {
+        state.capture_indicator().set_file(
+            std::path::PathBuf::from(dir)
+                .join("infynitae")
+                .join("capturing"),
+        );
+    }
     // the shortcut actions get this session's socket and X display too (INV-XWAYLAND-1)
     state.set_client_env(
         session.socket_name(),
@@ -2326,10 +2342,21 @@ fn render(data: &mut LoopData, turn: &mut TurnClock) {
                 );
                 // tearing: a scanned-out frame of a window that tears flips at once (async)
                 let tears_now = data.state.tears(id);
-                // not with a cursor on screen: the kernel refuses an async flip that moves it, so
-                // with a menu or the Steam overlay open every flip was refused, then waited
-                // (owner, 2026-11-05: CS2's overlay lagged in fullscreen only)
-                let wants_tearing = scanout && tears_now && !cursor;
+                // not on a frame that changes the cursor: the kernel refuses an async flip that moves
+                // it, so with a menu or the Steam overlay open every flip was refused, then waited
+                // (owner, 2026-11-05: CS2's overlay lagged in fullscreen only). A cursor that stays as
+                // it was (a game showing one) no longer stops tearing (review 2026-11-11)
+                let cursor_now = result.cursor_element.map(|e| {
+                    use smithay::backend::renderer::element::Element;
+                    (
+                        e.id().clone(),
+                        e.current_commit(),
+                        e.geometry(smithay::utils::Scale::from(k)),
+                    )
+                });
+                let cursor_changed = cursor_now != s.last_cursor;
+                s.last_cursor = cursor_now;
+                let wants_tearing = scanout && tears_now && !cursor_changed;
                 // a composited frame says nothing of the driver; only a window that stops
                 // tearing, or the wait's end, starts the count again
                 if !tears_now

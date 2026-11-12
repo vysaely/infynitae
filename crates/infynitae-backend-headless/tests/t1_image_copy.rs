@@ -293,6 +293,9 @@ fn solid_rects(r: &mut Rig, for_capture: bool) -> Vec<(i32, i32, i32, i32)> {
 fn a_capture_shows_the_mark_on_the_screen_and_not_in_the_capture() {
     use infynitae_wayland::capture_indicator::HOLD;
     let mut r = Rig::new(common::Lockstep::new(Some(a_1080())));
+    r.ls.state
+        .capture_indicator()
+        .set_mode(infynitae_wayland::capture_indicator::CaptureMode::Dot);
     let s = session(&mut r);
     assert!(solid_rects(&mut r, false).is_empty(), "no capture, no mark");
 
@@ -324,6 +327,9 @@ fn a_capture_shows_the_mark_on_the_screen_and_not_in_the_capture() {
 #[test]
 fn over_a_fullscreen_window_the_mark_steps_aside_and_the_capture_is_announced_once() {
     let mut r = Rig::x8();
+    r.ls.state
+        .capture_indicator()
+        .set_mode(infynitae_wayland::capture_indicator::CaptureMode::Dot);
     let o = r.ls.output();
     let w = r.ls.state.elements().last().expect("W");
     infynitae_backend_headless::set_focus(&mut r.ls.state, &mut r.ls.input, Some(w))
@@ -353,4 +359,32 @@ fn over_a_fullscreen_window_the_mark_steps_aside_and_the_capture_is_announced_on
     r.frame();
     assert!(!r.ls.state.capture_mark_hidden(o));
     assert!(!solid_rects(&mut r, false).is_empty(), "the mark is back");
+}
+
+/// Shown by the edge (`CAPTURE_INDICATOR="edge"`, the default): nothing is drawn on the screen, the capturing
+/// program is named for the edge while it captures and forgotten `HOLD` after (owner 2026-11-12).
+#[test]
+fn shown_by_the_edge_a_capture_draws_nothing_and_names_its_program() {
+    use infynitae_wayland::capture_indicator::HOLD;
+    let mut r = Rig::new(common::Lockstep::new(Some(a_1080())));
+    let file = std::env::temp_dir().join(format!("infynitae-capturing-{}", std::process::id()));
+    r.ls.state.capture_indicator().set_file(file.clone());
+    let s = session(&mut r);
+    capture(&mut r, &s, (1920, 1080));
+    let now = std::time::Instant::now();
+    r.ls.state.capture_indicator().update(now);
+    assert!(
+        solid_rects(&mut r, false).is_empty(),
+        "no dot on the screen"
+    );
+    assert_eq!(
+        r.ls.state.capture_indicator().written().len(),
+        1,
+        "one program"
+    );
+    let text = std::fs::read_to_string(&file).expect("written for the edge");
+    assert_eq!(text.lines().count(), 1);
+    r.ls.state.capture_indicator().update(now + HOLD);
+    assert!(r.ls.state.capture_indicator().written().is_empty());
+    assert!(!file.exists(), "gone once nothing captures");
 }

@@ -25,10 +25,39 @@ use crate::log_line;
 /// How long the mark stays after a client's last frame: a share at 1 frame per second keeps it.
 pub const HOLD: Duration = Duration::from_secs(3);
 
+/// Where a capture is shown (`CAPTURE_INDICATOR`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CaptureMode {
+    /// The red dot in the screen's corner (`dot`; `true` from before 2026-11-12).
+    Dot,
+    /// No dot: the edge says it, in its background apps module, from `$XDG_RUNTIME_DIR/infynitae/capturing`
+    /// (the default; owner 2026-11-12: "its better to put it in tray or module"). The dot was one more element
+    /// over a fullscreen game, which kept it from going to the screen directly.
+    Edge,
+    /// Nowhere (`false`).
+    Off,
+}
+
+impl CaptureMode {
+    pub fn parse(v: &str) -> CaptureMode {
+        match v.to_ascii_lowercase().as_str() {
+            "dot" | "true" | "on" | "yes" | "1" => CaptureMode::Dot,
+            "false" | "off" | "no" | "0" | "none" => CaptureMode::Off,
+            _ => CaptureMode::Edge,
+        }
+    }
+}
+
 pub struct CaptureIndicator {
-    /// Whether the mark is drawn at all (`CAPTURE_INDICATOR`, on by default).
-    pub(crate) enabled: bool,
+    pub(crate) mode: CaptureMode,
     seen: Seen<ClientId>,
+    /// Each capturing client's program, by name, for the edge (`capturing`).
+    names: HashMap<ClientId, String>,
+    /// What `capturing` holds now (nothing written while it is unchanged).
+    written: Vec<String>,
+    /// Where the edge reads it (`$XDG_RUNTIME_DIR/infynitae/capturing`): set by a real session only, so a
+    /// test never writes into the desktop's runtime folder.
+    file: Option<std::path::PathBuf>,
     /// The dot's stable element id (an unchanged mark is no damage).
     pub(crate) ids: [Id; 1],
     /// This capture was announced by a notification (the mark was hidden by a fullscreen window).
@@ -38,8 +67,11 @@ pub struct CaptureIndicator {
 impl Default for CaptureIndicator {
     fn default() -> Self {
         Self {
-            enabled: true,
+            mode: CaptureMode::Edge,
             seen: Seen::default(),
+            names: HashMap::new(),
+            written: Vec::new(),
+            file: None,
             ids: [Id::new()],
             noticed: false,
         }
@@ -47,9 +79,25 @@ impl Default for CaptureIndicator {
 }
 
 impl CaptureIndicator {
-    /// Whether the mark is drawn at `now`.
+    /// `CAPTURE_INDICATOR` set by hand (tests).
+    pub fn set_mode(&mut self, mode: CaptureMode) {
+        self.mode = mode;
+    }
+
+    /// Where the edge reads what captures; a session sets it at its start.
+    pub fn set_file(&mut self, file: std::path::PathBuf) {
+        let _ = std::fs::remove_file(&file);
+        self.file = Some(file);
+    }
+
+    /// The programs named as capturing now, for the edge (`capturing`).
+    pub fn written(&self) -> &[String] {
+        &self.written
+    }
+
+    /// Whether the mark is drawn at `now` (only as a dot).
     pub fn active(&self, now: Instant) -> bool {
-        self.enabled && self.seen.active(now)
+        self.mode == CaptureMode::Dot && self.seen.active(now)
     }
 
     /// How long until the drawn mark goes away by itself (the backend wakes then).
@@ -57,9 +105,28 @@ impl CaptureIndicator {
         self.seen.due(now)
     }
 
-    /// Records whether the mark is drawn now; true when that changed (the screens need a frame).
+    /// Records whether a capture is shown now; true when that changed (the screens need a frame for the
+    /// dot). Shown by the edge, the capturing programs' names go to `capturing` when they change.
     pub fn update(&mut self, now: Instant) -> bool {
-        self.seen.update(now, self.enabled)
+        let changed = self.seen.update(now, self.mode != CaptureMode::Off);
+        self.names.retain(|k, _| self.seen.last.contains_key(k));
+        let mut now_names: Vec<String> = if self.mode == CaptureMode::Edge {
+            self.seen
+                .shown_keys(now)
+                .filter_map(|k| self.names.get(k).cloned())
+                .collect()
+        } else {
+            Vec::new()
+        };
+        now_names.sort();
+        now_names.dedup();
+        if now_names != self.written {
+            if let Some(file) = &self.file {
+                write_capturing(file, &now_names);
+            }
+            self.written = now_names;
+        }
+        changed
     }
 }
 
@@ -85,6 +152,14 @@ impl<K: Hash + Eq> Seen<K> {
     /// `client` asked for a frame at `now`; `exempt` is asked only when the client is new.
     fn note(&mut self, client: K, now: Instant, exempt: impl FnOnce() -> bool) {
         self.last.entry(client).or_insert_with(|| (exempt(), now)).1 = now;
+    }
+
+    /// The clients that show a capture now.
+    fn shown_keys(&self, now: Instant) -> impl Iterator<Item = &K> + '_ {
+        self.last
+            .iter()
+            .filter(move |(_, (exempt, t))| !exempt && now.saturating_duration_since(*t) < HOLD)
+            .map(|(k, _)| k)
     }
 
     /// The times of the clients that show the mark.
@@ -117,9 +192,30 @@ impl<K: Hash + Eq> Seen<K> {
     }
 }
 
+/// `capturing`: one capturing program per line while any captures, gone after.
+fn write_capturing(path: &std::path::Path, names: &[String]) {
+    if names.is_empty() {
+        let _ = std::fs::remove_file(path);
+    } else {
+        let tmp = path.with_extension("tmp");
+        if std::fs::write(&tmp, names.join("\n") + "\n").is_ok() {
+            let _ = std::fs::rename(tmp, path);
+        }
+    }
+}
+
 impl WaylandState {
     /// A client asked for a capture frame: the mark shows (unless the client is left out).
     pub(crate) fn note_capture(&mut self, client: &Client) {
+        self.capture_indicator
+            .names
+            .entry(client.id())
+            .or_insert_with(|| {
+                client
+                    .get_data::<crate::ClientState>()
+                    .and_then(|s| s.identity().map(|i| i.app_name()))
+                    .unwrap_or_else(|| "An app".to_string())
+            });
         self.capture_indicator
             .seen
             .note(client.id(), Instant::now(), || {
@@ -221,6 +317,36 @@ mod tests {
     }
 
     #[test]
+    fn the_settings_words_pick_the_place() {
+        assert_eq!(CaptureMode::parse("edge"), CaptureMode::Edge);
+        assert_eq!(CaptureMode::parse("dot"), CaptureMode::Dot);
+        assert_eq!(
+            CaptureMode::parse("true"),
+            CaptureMode::Dot,
+            "true from before"
+        );
+        assert_eq!(CaptureMode::parse("false"), CaptureMode::Off);
+        assert_eq!(CaptureMode::parse(""), CaptureMode::Edge, "the default");
+    }
+
+    /// Shown by the edge: no dot is drawn, the capturing program is named while it captures and forgotten
+    /// HOLD after its last frame.
+    #[test]
+    fn shown_by_the_edge_it_names_the_capturing_program_and_draws_no_dot() {
+        let t0 = Instant::now();
+        let mut s = Seen::default();
+        s.note(1, t0, || false);
+        s.note(2, t0, || true);
+        assert!(s.update(t0, true));
+        let shown: Vec<_> = s.shown_keys(t0).copied().collect();
+        assert_eq!(shown, vec![1], "the recorder is left out");
+        assert_eq!(s.shown_keys(at(t0, 3000)).count(), 0, "gone HOLD after");
+        let ind = CaptureIndicator::default();
+        assert_eq!(ind.mode, CaptureMode::Edge);
+        assert!(!ind.active(t0), "no dot");
+    }
+
+    #[test]
     fn turned_off_it_is_never_shown() {
         let t0 = Instant::now();
         let mut s = Seen::default();
@@ -239,6 +365,7 @@ mod tests {
             infynitae_core::Core::new(infynitae_core::navigation::PersistedCameras::default());
         let display: Display<WaylandState> = Display::new().unwrap();
         let mut state = WaylandState::new(&display.handle(), core);
+        state.capture_indicator.mode = CaptureMode::Dot;
         let insert = |data: crate::ClientState| {
             let (server, client) = std::os::unix::net::UnixStream::pair().unwrap();
             let c = display

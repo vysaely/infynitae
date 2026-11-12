@@ -75,9 +75,11 @@ this time, always, or deny.
   portal checked; another program calling it directly is refused.
 - `SCREENSHARE_ASK="false"` shares without asking (the old behaviour); `"true"` asks and also
   always lets you pick the screen or window.
-- While anything captures the screen, a red dot shows in the corner of every screen
-  (`CAPTURE_INDICATOR`). Only the replay buffer Infynitae itself started is left out; it is
-  known by a private socket the compositor gives it, never by a program name.
+- While anything captures the screen, the edge's background apps module says "Screen capture" and
+  which app (`CAPTURE_INDICATOR="edge"`, the default since 2026-11-12, the owner's choice), or a red dot
+  shows in the corner of every screen (`"dot"`). The edge's line is seen only when a panel with that
+  module is open. Only the replay buffer Infynitae itself started is left out; it is known by a private
+  socket the compositor gives it, never by a program name.
 
 ## While the screen is locked
 
