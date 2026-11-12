@@ -106,15 +106,33 @@ case "$ACTION" in
         fi
         ;;
     game-mode)
-        # a fullscreen game shown directly started ("on <pid>") or ended ("off <pid>"): Feral's
-        # gamemode, when installed, runs the CPU at full speed while it lasts. An X11 game's
-        # process is xwayland-satellite's, which is enough for the CPU mode
-        gm_mode=${2%% *}
-        gm_pid=${2#* }
+        # a fullscreen game started ("on <pid>") or ended ("off <pid>"), shown directly or not:
+        # Feral's gamemode, when installed, runs the CPU at full speed while it lasts. An X11
+        # game's process is xwayland-satellite's, which is enough for the CPU mode
+        # "on <pid> quiet": a fullscreen window or one that plays like a game (not a maximised
+        # browser): notifications wait too
+        read -r gm_mode gm_pid gm_quiet <<GM_ARGS
+$2
+GM_ARGS
         [ "$gm_mode" = on ] && call=RegisterGame || call=UnregisterGame
         gdbus call --session --dest com.feralinteractive.GameMode \
             --object-path /com/feralinteractive/GameMode \
             --method "com.feralinteractive.GameMode.$call" "$gm_pid" >/dev/null 2>&1
+        # GAME_QUIET: a notification drawn over the game ends its direct path to the screen
+        # (and tearing) until it goes; mako's do-not-disturb holds them back until the game
+        # ends. One the owner turned on stays on (only the one set here is removed)
+        if [ "${GAME_QUIET:-true}" = true ] && command -v makoctl >/dev/null 2>&1; then
+            gm_mark="${XDG_RUNTIME_DIR:-/tmp}/infynitae/game-quiet"
+            if [ "$gm_mode" = on ] && [ "$gm_quiet" = quiet ]; then
+                if ! makoctl mode 2>/dev/null | grep -qx do-not-disturb; then
+                    makoctl mode -a do-not-disturb >/dev/null 2>&1 \
+                        && mkdir -p "${gm_mark%/*}" && : > "$gm_mark"
+                fi
+            elif [ "$gm_mode" = off ] && [ -e "$gm_mark" ]; then
+                makoctl mode -r do-not-disturb >/dev/null 2>&1
+                rm -f "$gm_mark"
+            fi
+        fi
         ;;
     system-monitor)
         # Super+Shift+Escape: a window of its own if one is installed, else in the terminal

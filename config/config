@@ -267,8 +267,14 @@ FRAME_GUARD="33"
     # default: 33
 
 GAME_MODE="true"
-    # While a game is fullscreen (shown directly), gamemode runs the CPU at full speed
-    # (when installed); ends once it has been off screen for 5 s continuously
+    # While a game is fullscreen, gamemode runs the CPU at full speed (when installed); ends
+    # once it has been off screen for 5 s continuously
+    # default: true
+    # options: true  · false
+
+GAME_QUIET="true"
+    # While game mode is on, notifications wait (mako's do-not-disturb) and show when the game
+    # ends: one drawn over a game takes it off its direct path to the screen and stops tearing
     # default: true
     # options: true  · false
 

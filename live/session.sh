@@ -13,8 +13,15 @@ fi
 # 0. The compositor's own thread runs ahead of apps (nice -10, the most the gamemode group's limit
 # allows without root): if it is starved, every window stutters with it. Only its main thread is
 # raised; the apps this script starts stay at nice 0.
+# With real-time rights (the realtime group: `ulimit -r` above 0) the same thread also gets
+# round-robin real-time priority 2, as KWin does through rtkit: a busy CPU (a build, a training
+# run) can no longer delay a frame or input. Low on purpose: audio (PipeWire, about 88) and the
+# kernel's own threads still come first, and the kernel's real-time limit keeps 5% for the rest.
 if [ "$(cat /proc/$PPID/comm 2>/dev/null)" = "infynitae" ]; then
     renice -n -10 -p "$PPID" >/dev/null 2>&1 || true
+    if [ "$(ulimit -r 2>/dev/null || echo 0)" != 0 ] && command -v chrt >/dev/null 2>&1; then
+        chrt -r -p 2 "$PPID" >/dev/null 2>&1 || true
+    fi
 fi
 
 # the state directory every log below writes to (a fresh install has none: the logs and the

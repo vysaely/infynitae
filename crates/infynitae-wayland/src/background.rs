@@ -10,8 +10,8 @@
 //! back (`RLIMIT_NICE`, which the installer sets so apps return to nice 0 and never above it);
 //! without that limit nothing is lowered.
 //!
-//! Game mode (`GAME_MODE`, on by default): a fullscreen window the GPU shows directly (direct
-//! [`WaylandState::fullscreen_frame_shown`]) is a game. Its app is registered with Feral's
+//! Game mode (`GAME_MODE`, on by default): a fullscreen window with a frame on screen, shown
+//! directly or composited ([`WaylandState::fullscreen_frame_shown`]), is a game. Its app is registered with Feral's
 //! gamemode, when installed (`launch.sh game-mode`), until the window has been off screen for
 //! [`GAME_MODE_HOLD`] continuously.
 
@@ -183,7 +183,10 @@ impl WaylandState {
         if !self.background.game_mode {
             return;
         }
-        // fitting alone isn't a game: a maximized editor is not; a fitted window that tears is
+        // fitting alone isn't a game: a maximized editor is not; a fitted window that tears is.
+        // With TEARING="always" that is every window filling the screen (a maximised browser
+        // too): the owner wants the desktop as quick as a game (2026-11-12, "i want the desktop
+        // to be responsive too"); only holding notifications back asks for a real game
         let fullscreen = self
             .core
             .presentation(output)
@@ -201,20 +204,49 @@ impl WaylandState {
                 return;
             }
             log_line!("[infynitae] Game mode off for process {cur_pid}");
-            self.gamemode(false, cur_pid);
+            self.gamemode(false, cur_pid, false);
         }
-        log_line!("[infynitae] Game mode on for process {pid}");
+        // notifications wait (GAME_QUIET) for a fullscreen window or one that plays like a game,
+        // never for a maximised browser
+        let quiet = fullscreen == Some(window) || self.plays_like_a_game(window);
+        log_line!(
+            "[infynitae] Game mode on for process {pid}{}",
+            if quiet { ", notifications held" } else { "" }
+        );
         self.background.game = Some((window, pid));
         self.background.game_off_since = None;
-        self.gamemode(true, pid);
+        self.gamemode(true, pid, quiet);
+    }
+
+    /// A window filling the screen without asking for fullscreen plays like a game when it asked to
+    /// tear or was made to (Super+Shift+T), says it shows a game (`wp_content_type_v1`), holds
+    /// the pointer (locked or confined), or is an X11 window (they come through one
+    /// xwayland-satellite; a screen-filling X11 window is a game far more often than not).
+    /// Checked once per new game window, never per frame.
+    pub(crate) fn plays_like_a_game(&self, window: ElementId) -> bool {
+        use smithay::reexports::wayland_protocols::wp::content_type::v1::server::wp_content_type_v1::Type;
+        let Some(surface) = self.window_surface(window) else {
+            return false;
+        };
+        let asked = self.tearing_asked(window, &surface);
+        let game_content = self.content_type(window) == Type::Game;
+        let key = self.registry.key(&surface);
+        let holds_pointer = key.is_some()
+            && self
+                .core
+                .constraint()
+                .is_some_and(|c| Some(c.surface) == key);
+        asked || game_content || holds_pointer || self.client_pid(window).is_some_and(is_satellite)
     }
 
     /// Registers the game with gamemode or ends it (`launch.sh game-mode`); never for this
     /// process (a client in the compositor's own process, as in the test suite).
-    fn gamemode(&mut self, on: bool, pid: u32) {
+    /// `quiet`: notifications wait until it ends (`GAME_QUIET`).
+    fn gamemode(&mut self, on: bool, pid: u32, quiet: bool) {
         if pid != std::process::id() {
             let state = if on { "on" } else { "off" };
-            self.spawn_action_with("game-mode", &format!("{state} {pid}"));
+            let quiet = if quiet { " quiet" } else { "" };
+            self.spawn_action_with("game-mode", &format!("{state} {pid}{quiet}"));
         }
     }
 
@@ -241,7 +273,7 @@ impl WaylandState {
                     .any(|o| self.exclusive_window(o.id) == Some(window));
             if let Some(ended_pid) = self.background.update_game(now, still) {
                 log_line!("[infynitae] Game mode off for process {ended_pid}");
-                self.gamemode(false, ended_pid);
+                self.gamemode(false, ended_pid, false);
             }
         }
         let bg = &self.background;
