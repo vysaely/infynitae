@@ -14,6 +14,13 @@ pub const ROW_H: f64 = 28.0;
 
 pub const CMDS: &[(&str, &str)] = &[("clipboard", "cliphist list 2>/dev/null | head -n 24")];
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClipKind {
+    Link,
+    Image,
+    Text,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClipItem {
     pub raw_line: String,
@@ -21,6 +28,35 @@ pub struct ClipItem {
     pub time: String,
     pub is_image: bool,
     pub pinned: bool,
+}
+
+/// Returns true when `s` is an http, https or ftp URL alone on the row.
+pub fn is_url_alone(s: &str) -> bool {
+    let t = s.trim();
+    if t.contains(char::is_whitespace) {
+        return false;
+    }
+    let rest = if t.len() >= 8 && t[..8].eq_ignore_ascii_case("https://") {
+        &t[8..]
+    } else if t.len() >= 7 && t[..7].eq_ignore_ascii_case("http://") {
+        &t[7..]
+    } else if t.len() >= 6 && t[..6].eq_ignore_ascii_case("ftp://") {
+        &t[6..]
+    } else {
+        return false;
+    };
+    !rest.is_empty()
+}
+
+/// Returns the clipboard entry kind: link (URL alone on the row), image (`is_image`), or text.
+pub fn kind_of(entry: &ClipItem) -> ClipKind {
+    if entry.is_image {
+        ClipKind::Image
+    } else if is_url_alone(&entry.preview) {
+        ClipKind::Link
+    } else {
+        ClipKind::Text
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -316,8 +352,10 @@ pub fn draw(cr: &Context, th: &Theme, world: &World, rect: Rect) {
         let mut tx = x + PAD_X;
         if item.pinned {
             draw_pin_icon(cr, tx, ry + 5.0, th.accent);
-            tx += 24.0;
+        } else {
+            draw_icon(cr, kind_of(item), tx, ry + 5.0, th.muted);
         }
+        tx += 24.0;
         let time_w = if !item.time.is_empty() {
             draw::text_right(
                 cr,
@@ -370,6 +408,76 @@ pub fn draw_pin_icon(cr: &Context, x: f64, y: f64, color: Rgba) {
     cr.move_to(cx, cy + 1.5);
     cr.line_to(cx, cy + 7.0);
     let _ = cr.stroke();
+}
+
+/// Draws a 14 px stroked line icon at `(x, y)` in `color` for clipboard kind `kind`.
+pub fn draw_icon(cr: &Context, kind: ClipKind, x: f64, y: f64, color: Rgba) {
+    draw::set(cr, color);
+    cr.set_line_width(1.5);
+    cr.set_line_cap(cairo::LineCap::Round);
+    cr.set_line_join(cairo::LineJoin::Round);
+    let cx = x + 9.0;
+    let cy = y + 9.0;
+    match kind {
+        ClipKind::Link => {
+            let _ = cr.save();
+            cr.translate(cx, cy);
+            cr.rotate(-std::f64::consts::FRAC_PI_4);
+            // Left loop
+            cr.new_sub_path();
+            cr.move_to(-1.0, 2.2);
+            cr.line_to(-2.5, 2.2);
+            cr.arc(
+                -2.5,
+                0.0,
+                2.2,
+                0.5 * std::f64::consts::PI,
+                1.5 * std::f64::consts::PI,
+            );
+            cr.line_to(-1.0, -2.2);
+            // Right loop
+            cr.new_sub_path();
+            cr.move_to(1.0, -2.2);
+            cr.line_to(2.5, -2.2);
+            cr.arc(
+                2.5,
+                0.0,
+                2.2,
+                -0.5 * std::f64::consts::PI,
+                0.5 * std::f64::consts::PI,
+            );
+            cr.line_to(1.0, 2.2);
+            // Center connecting bar
+            cr.move_to(-1.5, 0.0);
+            cr.line_to(1.5, 0.0);
+            let _ = cr.stroke();
+            let _ = cr.restore();
+        }
+        ClipKind::Image => {
+            draw::round_rect(cr, cx - 6.0, cy - 4.5, 12.0, 9.0, 1.5);
+            let _ = cr.stroke();
+            // Sun dot
+            cr.new_sub_path();
+            cr.arc(cx + 2.5, cy - 1.8, 0.9, 0.0, 2.0 * std::f64::consts::PI);
+            let _ = cr.fill();
+            // Mountain peaks
+            cr.move_to(cx - 4.5, cy + 2.5);
+            cr.line_to(cx - 1.5, cy - 0.8);
+            cr.line_to(cx + 1.2, cy + 2.0);
+            cr.line_to(cx + 3.0, cy + 0.6);
+            cr.line_to(cx + 4.5, cy + 2.0);
+            let _ = cr.stroke();
+        }
+        ClipKind::Text => {
+            cr.move_to(cx - 5.0, cy - 3.5);
+            cr.line_to(cx + 5.0, cy - 3.5);
+            cr.move_to(cx - 5.0, cy);
+            cr.line_to(cx + 5.0, cy);
+            cr.move_to(cx - 5.0, cy + 3.5);
+            cr.line_to(cx + 1.0, cy + 3.5);
+            let _ = cr.stroke();
+        }
+    }
 }
 
 #[cfg(test)]
@@ -485,5 +593,143 @@ pin:106\t/home/alice/projects/infynitae/live/launch.sh\t2m
         let surf_wide = cairo::ImageSurface::create(cairo::Format::ARgb32, 380, 100).unwrap();
         let cr_wide = cairo::Context::new(&surf_wide).unwrap();
         draw(&cr_wide, &th, &world, (0.0, 0.0, 380.0, 100.0));
+    }
+
+    #[test]
+    fn kind_of_distinguishes_links_images_and_text() {
+        let item = |preview: &str, is_image: bool| ClipItem {
+            raw_line: format!("1\t{preview}"),
+            preview: preview.to_string(),
+            time: "1m".to_string(),
+            is_image,
+            pinned: false,
+        };
+
+        // A link: http, https, ftp URL alone on the row
+        assert_eq!(
+            kind_of(&item("https://github.com/vysaely/infynitae", false)),
+            ClipKind::Link
+        );
+        assert_eq!(
+            kind_of(&item("http://localhost:8080/index.html", false)),
+            ClipKind::Link
+        );
+        assert_eq!(
+            kind_of(&item("ftp://ftp.example.org/pub/file.tar.gz", false)),
+            ClipKind::Link
+        );
+        assert_eq!(
+            kind_of(&item("HTTPS://EXAMPLE.COM/DOCS", false)),
+            ClipKind::Link
+        );
+
+        // A URL inside a sentence is text
+        assert_eq!(
+            kind_of(&item("see https://example.com for details", false)),
+            ClipKind::Text
+        );
+        assert_eq!(
+            kind_of(&item("https://example.com is our site", false)),
+            ClipKind::Text
+        );
+        assert_eq!(
+            kind_of(&item("download from ftp://ftp.gnu.org now", false)),
+            ClipKind::Text
+        );
+
+        // An image
+        assert_eq!(kind_of(&item("Image 1920x1080", true)), ClipKind::Image);
+        assert_eq!(kind_of(&item("Image 640x480", true)), ClipKind::Image);
+        assert_eq!(kind_of(&item("Image", true)), ClipKind::Image);
+
+        // Plain text
+        assert_eq!(
+            kind_of(&item("git push origin main", false)),
+            ClipKind::Text
+        );
+        assert_eq!(kind_of(&item("(Clipboard item)", false)), ClipKind::Text);
+        assert_eq!(kind_of(&item("https://", false)), ClipKind::Text);
+        assert_eq!(kind_of(&item("http://", false)), ClipKind::Text);
+        assert_eq!(kind_of(&item("ftp://", false)), ClipKind::Text);
+        assert_eq!(
+            kind_of(&item("file:///home/user/test.png", false)),
+            ClipKind::Text
+        );
+    }
+
+    #[test]
+    fn clipboard_draw_renders_kind_icons_and_keeps_pin_for_pinned_rows() {
+        let mut surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 380, 200).unwrap();
+        let cr = cairo::Context::new(&surf).unwrap();
+        let th = Theme::from_config(&crate::config::Config::from_text(""));
+        let mut world = World::now();
+        world.clipboard.items = vec![
+            ClipItem {
+                raw_line: "1\thttps://example.com".into(),
+                preview: "https://example.com".into(),
+                time: "1m".into(),
+                is_image: false,
+                pinned: true, // Pinned row keeps pin icon even though it's a link
+            },
+            ClipItem {
+                raw_line: "2\thttps://github.com/vysaely/infynitae".into(),
+                preview: "https://github.com/vysaely/infynitae".into(),
+                time: "2m".into(),
+                is_image: false,
+                pinned: false, // Unpinned link shows link icon
+            },
+            ClipItem {
+                raw_line: "3\t[[ binary data png 1920x1080 ]]".into(),
+                preview: "Image 1920x1080".into(),
+                time: "3m".into(),
+                is_image: true,
+                pinned: false, // Unpinned image shows image icon
+            },
+            ClipItem {
+                raw_line: "4\tgit push origin main".into(),
+                preview: "git push origin main".into(),
+                time: "4m".into(),
+                is_image: false,
+                pinned: false, // Unpinned text shows text icon
+            },
+        ];
+
+        draw(&cr, &th, &world, (0.0, 0.0, 380.0, 200.0));
+        drop(cr);
+
+        // Surface has drawn contents (non-zero alpha pixels)
+        let data = surf.data().unwrap();
+        assert!(data.iter().any(|&b| b > 0));
+    }
+
+    #[test]
+    fn draw_icon_renders_pixels_for_all_kinds() {
+        let th = Theme::from_config(&crate::config::Config::from_text(""));
+        for kind in [ClipKind::Link, ClipKind::Image, ClipKind::Text] {
+            let mut surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 24, 28).unwrap();
+            let cr = cairo::Context::new(&surf).unwrap();
+            draw_icon(&cr, kind, 0.0, 5.0, th.muted);
+            drop(cr);
+            let data = surf.data().unwrap();
+            let drawn_pixels = data.as_chunks::<4>().0.iter().filter(|p| p[3] > 0).count();
+            assert!(
+                drawn_pixels > 10,
+                "kind {kind:?} should draw visible line strokes, got {drawn_pixels} pixels"
+            );
+        }
+
+        // Pin icon also draws visible pixels
+        let mut surf_pin = cairo::ImageSurface::create(cairo::Format::ARgb32, 24, 28).unwrap();
+        let cr_pin = cairo::Context::new(&surf_pin).unwrap();
+        draw_pin_icon(&cr_pin, 0.0, 5.0, th.accent);
+        drop(cr_pin);
+        let data_pin = surf_pin.data().unwrap();
+        let pin_pixels = data_pin
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|p| p[3] > 0)
+            .count();
+        assert!(pin_pixels > 10, "pin should draw visible strokes");
     }
 }
