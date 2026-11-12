@@ -1126,7 +1126,10 @@ impl WaylandState {
                 let (mut tearing, mut tearing_always) = (true, true);
                 let mut fit_is_fullscreen = true;
                 let mut latency_mode = crate::frame_schedule::LatencyMode::Direct;
-                let mut direct_scanout = true;
+                // without a DIRECT_SCANOUT line: the environment's, as at start (main.rs), else on
+                let mut direct_scanout = std::env::var("DIRECT_SCANOUT").map_or(true, |v| {
+                    !matches!(v.to_lowercase().as_str(), "0" | "false" | "off" | "no")
+                });
                 let mut hardware_cursor = true;
                 let mut overlay_planes = false;
                 let mut wine_transparency = true;
