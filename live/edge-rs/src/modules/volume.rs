@@ -347,7 +347,7 @@ pub fn draw(cr: &Context, th: &Theme, world: &World, rect: Rect) {
         (d.pct.min(100) as f64) / 100.0
     };
     // each slider row and the output line are one target each (click / drag / scroll)
-    super::hot(
+    let vol_lit = super::hot(
         cr,
         th,
         world,
@@ -368,13 +368,14 @@ pub fn draw(cr: &Context, th: &Theme, world: &World, rect: Rect) {
         "Volume",
         &vol_val,
         vol_part,
+        vol_lit,
     );
 
     let mut oy = y + PAD_Y + SLIDER_ROW_H;
     if let Some(br) = d.brightness {
         let br_val = format!("{}%", br.min(100));
         let br_part = (br.min(100) as f64) / 100.0;
-        super::hot(
+        let br_lit = super::hot(
             cr,
             th,
             world,
@@ -395,6 +396,7 @@ pub fn draw(cr: &Context, th: &Theme, world: &World, rect: Rect) {
             "Brightness",
             &br_val,
             br_part,
+            br_lit,
         );
         oy += SLIDER_ROW_H;
     }
@@ -492,6 +494,7 @@ fn draw_slider_row(
     label: &str,
     value: &str,
     part: f64,
+    lit: bool,
 ) {
     let icon_col = if muted { th.muted } else { th.text };
     if is_brightness {
@@ -522,20 +525,24 @@ fn draw_slider_row(
         },
     );
 
-    let ty = (y + 26.0).round();
-    draw::round_rect(cr, x, ty, w, 4.0, 2.0);
+    // under the pointer the track thickens and the knob grows a little: it can be dragged or
+    // scrolled here
+    let (bar, knob) = if lit { (8.0, 8.0) } else { (4.0, 7.0) };
+    let mid = (y + 26.0).round() + 2.0;
+    let ty = mid - bar / 2.0;
+    draw::round_rect(cr, x, ty, w, bar, bar / 2.0);
     draw::set(cr, th.track);
     let _ = cr.fill();
 
     let clamped = part.clamp(0.0, 1.0);
     let kx = x + w * clamped;
     if clamped > 0.0 {
-        draw::round_rect(cr, x, ty, (w * clamped).max(4.0), 4.0, 2.0);
+        draw::round_rect(cr, x, ty, (w * clamped).max(bar), bar, bar / 2.0);
         draw::set(cr, th.accent);
         let _ = cr.fill();
     }
     cr.new_sub_path();
-    cr.arc(kx, ty + 2.0, 7.0, 0.0, 2.0 * PI);
+    cr.arc(kx, mid, knob, 0.0, 2.0 * PI);
     draw::set(cr, th.text);
     let _ = cr.fill();
 }
