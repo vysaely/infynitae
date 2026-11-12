@@ -801,8 +801,17 @@ where
             .into_iter()
             .map(OutputElement::Surface),
     );
-    window_elements(state, renderer, &entries, view.k, view.scale, &mut elements)
-        .map_err(RenderOutputError::Renderer)?;
+    state.rounding.clear();
+    window_elements(
+        state,
+        renderer,
+        &entries,
+        view.k,
+        view.scale,
+        (i64::from(view.size.0), i64::from(view.size.1)),
+        &mut elements,
+    )
+    .map_err(RenderOutputError::Renderer)?;
     elements.extend(
         layer_render_elements(renderer, &state.registry, &layers.below, view.k)
             .map_err(RenderOutputError::Renderer)?
@@ -821,6 +830,7 @@ fn window_elements<R>(
     entries: &[FrameEntry],
     k: f64,
     scale: f64,
+    view: (i64, i64),
     elements: &mut Vec<OutputElement<R>>,
 ) -> Result<(), R::Error>
 where
@@ -828,6 +838,7 @@ where
     R::TextureId: Send + Clone + 'static,
 {
     let geometry = window_geometry_rects(state.core.stage(), entries);
+    let radii = window_radii(state, entries, &geometry, view);
     let fitted: Vec<_> = state.fitted_windows.values().copied().collect();
     let windows = {
         let stage = state.core.stage();
@@ -865,17 +876,91 @@ where
             && prev != entry.element
             && bordered.insert(prev)
         {
-            border_elements(state, &geometry, prev, scale, elements);
+            border_elements(state, &geometry, &radii, prev, scale, elements);
         }
         current = Some(entry.element);
+        // the window's own surfaces are cut to its rounded corners; its popups and menus are not
+        if let (Some(r), Some(g)) = (radii.get(&entry.element), geometry.get(&entry.element))
+            && clipped_surface(state.core.stage(), entry.element, entry.surface)
+        {
+            state.rounding.insert(
+                smithay::backend::renderer::element::Element::id(&e).clone(),
+                Rounding {
+                    window: physical_rect(g),
+                    radii: *r,
+                    border: None,
+                },
+            );
+        }
         elements.push(OutputElement::Surface(e));
     }
     if let Some(last) = current
         && bordered.insert(last)
     {
-        border_elements(state, &geometry, last, scale, elements);
+        border_elements(state, &geometry, &radii, last, scale, elements);
     }
     Ok(())
+}
+
+/// How a window is rounded this frame: its geometry in output pixels and each corner's radius
+/// (top left, top right, bottom right, bottom left; 0 square).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Rounding {
+    pub window: Rectangle<i32, Physical>,
+    pub radii: [f32; 4],
+    /// For a border piece: its width and colour (the ring drawn just outside `window`).
+    pub border: Option<(f32, smithay::backend::renderer::Color32F)>,
+}
+
+impl Rounding {
+    pub fn is_round(&self) -> bool {
+        self.radii.iter().any(|r| *r > 0.0)
+    }
+}
+
+/// Each window's corner radii in output pixels (WINDOW_CORNERS, corners.rs): none for a window
+/// that fills the screen (fullscreen or fitted), and only windows with a round corner are listed.
+fn window_radii(
+    state: &WaylandState,
+    entries: &[FrameEntry],
+    geometry: &std::collections::HashMap<infynitae_core::stage::ElementId, PhysicalRect>,
+    view: (i64, i64),
+) -> std::collections::HashMap<infynitae_core::stage::ElementId, [f32; 4]> {
+    let mut out = std::collections::HashMap::new();
+    if state.window_corners <= 0.0 || !state.corners_drawn {
+        return out;
+    }
+    for e in entries {
+        if out.contains_key(&e.element)
+            || state.core.fullscreen_of(e.element).is_some()
+            || state.fitted_windows.values().any(|w| *w == e.element)
+            || e.size.w <= 0
+        {
+            continue;
+        }
+        let Some(g) = geometry.get(&e.element) else {
+            continue;
+        };
+        // logical px to output px as this window is drawn (zoom and screen scale together)
+        let k = (e.rect.x1 - e.rect.x0) as f64 / f64::from(e.size.w);
+        let r = crate::corners::corner_radii(
+            (g.x0, g.y0, g.x1, g.y1),
+            view,
+            (f64::from(state.window_corners) * k) as f32,
+        );
+        if r.iter().any(|v| *v > 0.0) {
+            out.insert(e.element, r);
+        }
+    }
+    out
+}
+
+fn physical_rect(g: &PhysicalRect) -> Rectangle<i32, Physical> {
+    let c = |v: i64| v.clamp(i64::from(i32::MIN / 2), i64::from(i32::MAX / 2)) as i32;
+    Rectangle::new(
+        (c(g.x0), c(g.y0)).into(),
+        (c(g.x1 - g.x0), c(g.y1 - g.y0)).into(),
+    )
 }
 
 /// A window's border (BORDER_WIDTH, logical px): four rects just outside its geometry, in the
@@ -884,6 +969,7 @@ where
 fn border_elements<R>(
     state: &mut WaylandState,
     geometry: &std::collections::HashMap<infynitae_core::stage::ElementId, PhysicalRect>,
+    radii: &std::collections::HashMap<infynitae_core::stage::ElementId, [f32; 4]>,
     element: infynitae_core::stage::ElementId,
     scale: f64,
     out: &mut Vec<OutputElement<R>>,
@@ -912,24 +998,34 @@ fn border_elements<R>(
         .entry(element)
         .or_insert_with(|| std::array::from_fn(|_| Id::new()))
         .clone();
-    // a new colour is a new commit: without it the damage tracker keeps the old border on screen
+    let round = radii.get(&element).copied();
+    // a new colour or corner shape is a new commit: without it the damage tracker keeps the old
+    // border on screen
+    let shape = round.unwrap_or([0.0; 4]);
+    let reshaped = state
+        .border_shapes
+        .insert(element, shape)
+        .is_some_and(|s| s != shape);
     let commit = {
         let (last, counter) = state
             .border_commits
             .entry(element)
             .or_insert((color, CommitCounter::default()));
-        if *last != color {
+        if *last != color || reshaped {
             *last = color;
             counter.increment();
         }
         *counter
     };
-    // top and bottom span the corners; left and right fit between them
+    // top and bottom span the corners; left and right fit between them. Rounded, the top and
+    // bottom also reach in by the radius, so each corner's curve lies inside one piece, which the
+    // DRM backend draws as part of the ring (corners.rs)
+    let reach = round.map_or(0, |r| r.iter().fold(0.0f32, |a, b| a.max(*b)).ceil() as i64);
     let sides = [
-        (g.x0 - w, g.y0 - w, g.x1 + w, g.y0),
-        (g.x0 - w, g.y1, g.x1 + w, g.y1 + w),
-        (g.x0 - w, g.y0, g.x0, g.y1),
-        (g.x1, g.y0, g.x1 + w, g.y1),
+        (g.x0 - w, g.y0 - w, g.x1 + w, g.y0 + reach),
+        (g.x0 - w, g.y1 - reach, g.x1 + w, g.y1 + w),
+        (g.x0 - w, g.y0 + reach, g.x0, g.y1 - reach),
+        (g.x1, g.y0 + reach, g.x1 + w, g.y1 - reach),
     ];
     let limit = i64::from(i32::MAX / 2);
     for ((x0, y0, x1, y1), id) in sides.into_iter().zip(ids) {
@@ -937,6 +1033,16 @@ fn border_elements<R>(
         let (x1, y1) = (x1.clamp(-limit, limit), y1.clamp(-limit, limit));
         if x1 <= x0 || y1 <= y0 {
             continue;
+        }
+        if let Some(r) = round {
+            state.rounding.insert(
+                id.clone(),
+                Rounding {
+                    window: physical_rect(&g),
+                    radii: r,
+                    border: Some((w as f32, color)),
+                },
+            );
         }
         out.push(OutputElement::Solid(SolidColorRenderElement::new(
             id,
@@ -1056,8 +1162,17 @@ where
             .into_iter()
             .map(OutputElement::Surface),
     );
-    window_elements(state, renderer, &entries, view.k, view.scale, &mut elements)
-        .map_err(RenderOutputError::Renderer)?;
+    state.rounding.clear();
+    window_elements(
+        state,
+        renderer,
+        &entries,
+        view.k,
+        view.scale,
+        (i64::from(view.size.0), i64::from(view.size.1)),
+        &mut elements,
+    )
+    .map_err(RenderOutputError::Renderer)?;
     elements.extend(
         layer_render_elements(renderer, &state.registry, &layers.below, view.k)
             .map_err(RenderOutputError::Renderer)?

@@ -9,7 +9,13 @@
 //! turns it off.
 
 use smithay::backend::renderer::element::{Element, Id, Kind, RenderElement, UnderlyingStorage};
-use smithay::backend::renderer::gles::{GlesError, GlesFrame, GlesRenderer, GlesTexProgram};
+use smithay::backend::renderer::gles::{
+    GlesError, GlesFrame, GlesPixelProgram, GlesRenderer, GlesTexProgram, Uniform, UniformName,
+    UniformType,
+};
+use smithay::utils::Size;
+
+use infynitae_wayland::convert::Rounding;
 use smithay::backend::renderer::utils::{CommitCounter, DamageSet, OpaqueRegions};
 use smithay::utils::{Buffer as BufferCoords, Physical, Point, Rectangle, Scale, Transform};
 
@@ -70,6 +76,213 @@ void main() {
 }
 "#;
 
+/// The rounded-rect shape both corner shaders share (WINDOW_CORNERS, `corners.rs`): how much of
+/// the pixel at `p` (pixels from the rect's top left) is inside a rect of `size` whose corners
+/// (top left, top right, bottom right, bottom left) have radii `r`, with an anti-aliased edge.
+/// The curve is a gentle squircle (exponent 2.6; a circle is 2, iOS about 5): softer than an arc,
+/// still a desktop corner.
+const SHAPE: &str = r#"
+float corner_inside(vec2 p, vec2 size, vec4 r) {
+    bool left = p.x < size.x * 0.5;
+    bool top = p.y < size.y * 0.5;
+    float rad = top ? (left ? r.x : r.y) : (left ? r.w : r.z);
+    // distance to the nearest straight edge, for the straight parts
+    float edge = min(min(p.x, p.y), min(size.x - p.x, size.y - p.y));
+    float straight = clamp(edge + 0.5, 0.0, 1.0);
+    if (rad <= 0.0) {
+        return straight;
+    }
+    vec2 c = vec2(left ? rad : size.x - rad, top ? rad : size.y - rad);
+    vec2 q = vec2(left ? c.x - p.x : p.x - c.x, top ? c.y - p.y : p.y - c.y);
+    if (q.x <= 0.0 || q.y <= 0.0) {
+        return straight;
+    }
+    vec2 u = q / rad;
+    float n = 2.6;
+    float d = pow(pow(u.x, n) + pow(u.y, n), 1.0 / n);
+    return clamp((1.0 - d) * rad + 0.5, 0.0, 1.0) * straight;
+}
+"#;
+
+/// A window's own surfaces, cut to its rounded corners. The pixel's place in the drawn rect comes
+/// from inverting the texture matrix the vertex stage used, so any crop, scale or buffer
+/// transform is right; `u_offset` places that rect within the window.
+const ROUND_TEX: &str = r#"#version 100
+//_DEFINES_
+#if defined(EXTERNAL)
+#extension GL_OES_EGL_image_external : require
+#endif
+
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
+precision mediump float;
+#endif
+#if defined(EXTERNAL)
+uniform samplerExternalOES tex;
+#else
+uniform sampler2D tex;
+#endif
+
+uniform float alpha;
+uniform highp mat3 tex_matrix;
+uniform vec2 u_offset;
+uniform vec2 u_window;
+uniform vec4 u_radii;
+varying vec2 v_coords;
+
+#if defined(DEBUG_FLAGS)
+uniform float tint;
+#endif
+//_SHAPE_
+void main() {
+    vec2 b = v_coords - vec2(tex_matrix[2][0], tex_matrix[2][1]);
+    float m00 = tex_matrix[0][0];
+    float m01 = tex_matrix[0][1];
+    float m10 = tex_matrix[1][0];
+    float m11 = tex_matrix[1][1];
+    float det = m00 * m11 - m10 * m01;
+    vec2 pos = vec2(m11 * b.x - m10 * b.y, -m01 * b.x + m00 * b.y) / det;
+    float inside = corner_inside(pos + u_offset, u_window, u_radii);
+
+    vec4 color = texture2D(tex, v_coords);
+#if defined(NO_ALPHA)
+    color = vec4(color.rgb, 1.0) * alpha;
+#else
+    color = color * alpha;
+#endif
+    color = color * inside;
+
+#if defined(DEBUG_FLAGS)
+    if (tint == 1.0)
+        color = vec4(0.0, 0.2, 0.0, 0.2) + color * 0.8;
+#endif
+    gl_FragColor = color;
+}
+"#;
+
+/// A window's border as a ring around its rounded geometry: inside the outer shape (the window
+/// grown by the border width, radii grown with it) and outside the window's own shape.
+const RING: &str = r#"
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
+precision mediump float;
+#endif
+uniform vec2 size;
+uniform float alpha;
+uniform vec2 u_offset;
+uniform vec2 u_window;
+uniform vec4 u_radii;
+uniform float u_width;
+uniform vec4 u_color;
+varying vec2 v_coords;
+#if defined(DEBUG_FLAGS)
+uniform float tint;
+#endif
+//_SHAPE_
+void main() {
+    vec2 p = v_coords * size + u_offset;
+    vec4 grown = vec4(
+        u_radii.x > 0.0 ? u_radii.x + u_width : 0.0,
+        u_radii.y > 0.0 ? u_radii.y + u_width : 0.0,
+        u_radii.z > 0.0 ? u_radii.z + u_width : 0.0,
+        u_radii.w > 0.0 ? u_radii.w + u_width : 0.0);
+    float outer = corner_inside(p + vec2(u_width), u_window + vec2(2.0 * u_width), grown);
+    float inner = corner_inside(p, u_window, u_radii);
+    float a = outer * (1.0 - inner);
+    vec4 color = u_color * a * alpha;
+#if defined(DEBUG_FLAGS)
+    if (tint == 1.0)
+        color = vec4(0.0, 0.2, 0.0, 0.2) + color * 0.8;
+#endif
+    gl_FragColor = color;
+}
+"#;
+
+/// The corner shaders, compiled once (`init_corners`); `None` where the GPU cannot: then windows
+/// are square, as before.
+pub struct Corners {
+    round: GlesTexProgram,
+    ring: GlesPixelProgram,
+}
+
+thread_local! {
+    static CORNERS: std::cell::RefCell<Option<Corners>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Compiles the corner shaders for `renderer` (at start and after a new renderer); whether they
+/// are ready.
+pub fn init_corners(renderer: &mut GlesRenderer) -> bool {
+    let shared = [
+        UniformName::new("u_offset", UniformType::_2f),
+        UniformName::new("u_window", UniformType::_2f),
+        UniformName::new("u_radii", UniformType::_4f),
+    ];
+    let mut ring_names = shared.to_vec();
+    ring_names.push(UniformName::new("u_width", UniformType::_1f));
+    ring_names.push(UniformName::new("u_color", UniformType::_4f));
+    let round =
+        renderer.compile_custom_texture_shader(ROUND_TEX.replace("//_SHAPE_", SHAPE), &shared);
+    let ring = renderer.compile_custom_pixel_shader(RING.replace("//_SHAPE_", SHAPE), &ring_names);
+    let corners = match (round, ring) {
+        (Ok(round), Ok(ring)) => Some(Corners { round, ring }),
+        (r, g) => {
+            log_line!(
+                "[infynitae] Rounded window corners unavailable (square instead): {:?} {:?}",
+                r.err(),
+                g.err()
+            );
+            None
+        }
+    };
+    let ready = corners.is_some();
+    CORNERS.with(|c| *c.borrow_mut() = corners);
+    ready
+}
+
+fn shape_uniforms(round: &Rounding, dst: Rectangle<i32, Physical>) -> Vec<Uniform<'static>> {
+    let [a, b, c, d] = round.radii;
+    vec![
+        Uniform::new(
+            "u_offset",
+            (
+                (dst.loc.x - round.window.loc.x) as f32,
+                (dst.loc.y - round.window.loc.y) as f32,
+            ),
+        ),
+        Uniform::new(
+            "u_window",
+            (round.window.size.w as f32, round.window.size.h as f32),
+        ),
+        Uniform::new("u_radii", (a, b, c, d)),
+    ]
+}
+
+/// The four corner squares of a rounded window, in the coordinates of an element at `at`: what
+/// may show through there, so not opaque.
+fn corner_squares(round: &Rounding, at: Point<i32, Physical>) -> [Rectangle<i32, Physical>; 4] {
+    let w = round.window;
+    let r = |v: f32| v.ceil() as i32;
+    let [tl, tr, br, bl] = round.radii;
+    let o = |x: i32, y: i32| Point::<i32, Physical>::from((x - at.x, y - at.y));
+    [
+        Rectangle::new(o(w.loc.x, w.loc.y), (r(tl), r(tl)).into()),
+        Rectangle::new(
+            o(w.loc.x + w.size.w - r(tr), w.loc.y),
+            (r(tr), r(tr)).into(),
+        ),
+        Rectangle::new(
+            o(w.loc.x + w.size.w - r(br), w.loc.y + w.size.h - r(br)),
+            (r(br), r(br)).into(),
+        ),
+        Rectangle::new(
+            o(w.loc.x, w.loc.y + w.size.h - r(bl)),
+            (r(bl), r(bl)).into(),
+        ),
+    ]
+}
+
 /// The averaging shader, or `None` (logged) where the GPU cannot compile it: then shrinking is
 /// plain linear filtering, as before.
 pub fn program(renderer: &mut GlesRenderer) -> Option<GlesTexProgram> {
@@ -92,11 +305,25 @@ pub fn shrinks(src: Rectangle<f64, BufferCoords>, dst: Rectangle<i32, Physical>)
 pub struct Smoothed<E> {
     inner: E,
     program: Option<GlesTexProgram>,
+    /// A rounded window's surface, or a piece of its border (`corners.rs`).
+    round: Option<Rounding>,
 }
 
 impl<E> Smoothed<E> {
     pub fn new(inner: E, program: Option<GlesTexProgram>) -> Self {
-        Self { inner, program }
+        Self {
+            inner,
+            program,
+            round: None,
+        }
+    }
+
+    /// Drawn with rounded corners (`round` from the frame's `WaylandState::rounding`), when the
+    /// corner shaders compiled.
+    pub fn rounded(mut self, round: Option<Rounding>) -> Self {
+        let ready = CORNERS.with(|c| c.borrow().is_some());
+        self.round = round.filter(|r| ready && r.is_round());
+        self
     }
 }
 
@@ -127,7 +354,21 @@ impl<E: Element> Element for Smoothed<E> {
         self.inner.damage_since(scale, commit)
     }
     fn opaque_regions(&self, scale: Scale<f64>) -> OpaqueRegions<i32, Physical> {
-        self.inner.opaque_regions(scale)
+        match &self.round {
+            // a border piece is mostly see-through around the curve
+            Some(r) if r.border.is_some() => OpaqueRegions::default(),
+            // the window's corners let what is behind show
+            Some(r) => {
+                let at = self.inner.geometry(scale).loc;
+                let corners = corner_squares(r, at);
+                self.inner
+                    .opaque_regions(scale)
+                    .iter()
+                    .flat_map(|rect| rect.subtract_rects(corners.iter().copied()))
+                    .collect()
+            }
+            None => self.inner.opaque_regions(scale),
+        }
     }
     fn alpha(&self) -> f32 {
         self.inner.alpha()
@@ -146,6 +387,42 @@ impl<E: RenderElement<GlesRenderer>> RenderElement<GlesRenderer> for Smoothed<E>
         damage: &[Rectangle<i32, Physical>],
         opaque_regions: &[Rectangle<i32, Physical>],
     ) -> Result<(), GlesError> {
+        if let Some(round) = &self.round {
+            let drawn = CORNERS.with(|c| {
+                let c = c.borrow();
+                let corners = c.as_ref()?;
+                let mut uniforms = shape_uniforms(round, dst);
+                Some(match round.border {
+                    // a border piece: the ring's part inside this rect
+                    Some((width, color)) => {
+                        let local: Vec<_> = damage.to_vec();
+                        uniforms.push(Uniform::new("u_width", width));
+                        let [r, g, b, a] = color.components();
+                        uniforms.push(Uniform::new("u_color", (r, g, b, a)));
+                        frame.render_pixel_shader_to(
+                            &corners.ring,
+                            Rectangle::from_size(
+                                (f64::from(dst.size.w), f64::from(dst.size.h)).into(),
+                            ),
+                            dst,
+                            Size::from((dst.size.w, dst.size.h)),
+                            Some(&local),
+                            self.inner.alpha(),
+                            &uniforms,
+                        )
+                    }
+                    None => {
+                        frame.override_default_tex_program(corners.round.clone(), uniforms);
+                        let drawn = self.inner.draw(frame, src, dst, damage, opaque_regions);
+                        frame.clear_tex_program_override();
+                        drawn
+                    }
+                })
+            });
+            if let Some(drawn) = drawn {
+                return drawn;
+            }
+        }
         match &self.program {
             Some(program) if shrinks(src, dst) => {
                 frame.override_default_tex_program(program.clone(), Vec::new());
@@ -158,7 +435,12 @@ impl<E: RenderElement<GlesRenderer>> RenderElement<GlesRenderer> for Smoothed<E>
     }
 
     fn underlying_storage(&self, renderer: &mut GlesRenderer) -> Option<UnderlyingStorage<'_>> {
-        // direct scanout sees the window's own buffer, as without the wrapper
+        // a rounded window is drawn by the GPU (its corners cut); never one that fills the
+        // screen, which is square, so direct scanout is untouched. Otherwise the window's own
+        // buffer, as without the wrapper
+        if self.round.is_some() {
+            return None;
+        }
         self.inner.underlying_storage(renderer)
     }
 }
