@@ -550,11 +550,13 @@ impl OutputSurface {
         }
 
         if shell.edit.active {
-            let (bx, by, bw, bh) = shell.edit.bar_rect;
-            min_x = min_x.min(bx.floor() as i32 - pad);
-            min_y = min_y.min(by.floor() as i32 - pad);
-            max_x = max_x.max((bx + bw).ceil() as i32 + pad);
-            max_y = max_y.max((by + bh).ceil() as i32 + pad);
+            let adding = shell.edit.adding.then_some(shell.edit.add_rect);
+            for (bx, by, bw, bh) in std::iter::once(shell.edit.bar_rect).chain(adding) {
+                min_x = min_x.min(bx.floor() as i32 - pad);
+                min_y = min_y.min(by.floor() as i32 - pad);
+                max_x = max_x.max((bx + bw).ceil() as i32 + pad);
+                max_y = max_y.max((by + bh).ceil() as i32 + pad);
+            }
         }
 
         if let Some(cr_rect) = child_draw_rect {
@@ -671,6 +673,8 @@ impl OutputSurface {
                 } else {
                     child_draw_rect
                 },
+                (shell.edit.active && shell.edit.adding).then_some(shell.edit.add_rect),
+                shell.world.panel_scroll,
             );
         }
 
@@ -2157,6 +2161,13 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
             if let Some((w, h)) = dims {
                 app.apply_touch_actions(vec![action], w, h, is_desk);
             }
+        }
+        // a card held near the edited panel's edge: it keeps scrolling, a step a frame
+        if app.shell.drag_autoscroll() {
+            app.sync_all();
+            timeout = Some(timeout.map_or(Duration::from_millis(16), |t| {
+                t.min(Duration::from_millis(16))
+            }));
         }
         event_loop
             .dispatch(timeout, &mut app)

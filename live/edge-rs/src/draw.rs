@@ -138,3 +138,80 @@ pub fn title(cr: &Context, th: &Theme, x: f64, y: f64, s: &str) -> f64 {
     );
     20.0
 }
+
+/// A quiet hint in 12 px muted text, right-aligned on the title line (docs/design/EDGE_DESIGN.md).
+/// Dropped if it would overlap `title` on the left when the card is narrow.
+pub fn title_hint(
+    cr: &Context,
+    th: &Theme,
+    x: f64,
+    y: f64,
+    w: f64,
+    title: &str,
+    hint: &str,
+) -> f64 {
+    if hint.is_empty() || w <= 0.0 {
+        return 0.0;
+    }
+    let (tw, _) = measure(
+        cr,
+        &Text {
+            size: 15.0,
+            bold: true,
+            color: th.text,
+            text: title,
+        },
+    );
+    let (hw, _) = measure(
+        cr,
+        &Text {
+            size: 12.0,
+            bold: false,
+            color: th.muted,
+            text: hint,
+        },
+    );
+    // Left of hint is (x + w - PAD_X - hw); right of title is (x + PAD_X + tw).
+    // Leave at least GAP (12 px) between title and hint.
+    if tw + hw + GAP > w - 2.0 * PAD_X {
+        return 0.0;
+    }
+    text_right(
+        cr,
+        x + w - PAD_X,
+        y + PAD_Y + 2.0,
+        &Text {
+            size: 12.0,
+            bold: false,
+            color: th.muted,
+            text: hint,
+        },
+    );
+    hw
+}
+
+#[cfg(test)]
+mod hint_tests {
+    use super::*;
+
+    #[test]
+    fn a_title_hint_is_drawn_where_it_fits_and_dropped_where_it_would_touch_the_title() {
+        let th = Theme::from_config(&crate::config::Config::from_text(""));
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 400, 60).unwrap();
+        let cr = cairo::Context::new(&surf).unwrap();
+        assert!(title_hint(&cr, &th, 0.0, 0.0, 380.0, "Apps", "Recent first") > 0.0);
+        assert_eq!(
+            title_hint(
+                &cr,
+                &th,
+                0.0,
+                0.0,
+                120.0,
+                "Quick settings",
+                "Right click: more"
+            ),
+            0.0
+        );
+        assert_eq!(title_hint(&cr, &th, 0.0, 0.0, 380.0, "Apps", ""), 0.0);
+    }
+}

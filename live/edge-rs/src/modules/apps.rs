@@ -36,6 +36,7 @@ pub struct DesktopApp {
     pub command: String,
     pub icon: String,
     pub id: String,
+    pub startup_wm_class: String,
     pub name_fold: String,
     pub other_fold: String,
     pub last_launched: i64,
@@ -65,10 +66,16 @@ impl DesktopApp {
             command,
             icon,
             id,
+            startup_wm_class: String::new(),
             name_fold,
             other_fold,
             last_launched: 0,
         }
+    }
+
+    pub fn with_startup_wm_class(mut self, wm_class: impl Into<String>) -> Self {
+        self.startup_wm_class = wm_class.into();
+        self
     }
 }
 
@@ -106,6 +113,7 @@ pub fn parse_desktop_entry(id: &str, text: &str) -> Option<DesktopApp> {
     let mut keywords = String::new();
     let mut exec = String::new();
     let mut icon = String::new();
+    let mut startup_wm_class = String::new();
 
     for raw in text.lines() {
         let line = raw.trim_end_matches(['\r', '\n']);
@@ -144,6 +152,10 @@ pub fn parse_desktop_entry(id: &str, text: &str) -> Option<DesktopApp> {
             if icon.is_empty() {
                 icon = rest.trim().to_string();
             }
+        } else if let Some(rest) = line.strip_prefix("StartupWMClass=") {
+            if startup_wm_class.is_empty() {
+                startup_wm_class = rest.trim().to_string();
+            }
         }
     }
 
@@ -154,7 +166,9 @@ pub fn parse_desktop_entry(id: &str, text: &str) -> Option<DesktopApp> {
     if command.is_empty() {
         return None;
     }
-    Some(DesktopApp::new(name, generic, keywords, command, icon, id))
+    let mut app = DesktopApp::new(name, generic, keywords, command, icon, id);
+    app.startup_wm_class = startup_wm_class;
+    Some(app)
 }
 
 /// Loads `.desktop` files from `dirs` in order. A `.desktop` filename seen in an earlier directory
@@ -520,17 +534,52 @@ pub fn parse_apps(out: &str) -> Vec<DesktopApp> {
             .get(6)
             .and_then(|s| s.trim().parse::<i64>().ok())
             .unwrap_or(0);
+        let startup_wm_class = parts.get(7).copied().unwrap_or("").trim();
         let mut app = DesktopApp::new(name, generic, keywords, command, icon, id);
         app.last_launched = last_launched;
+        app.startup_wm_class = startup_wm_class.to_string();
         apps.push(app);
     }
     apps
 }
 
-/// Checks whether `app` matches any open window in `windows`.
-pub fn is_app_running(app: &DesktopApp, windows: &[WindowItem]) -> bool {
+/// Checks whether a desktop `app` matches a window's `app_id` (by desktop file ID without
+/// `.desktop`, `StartupWMClass`, app name, or binary name from `Exec`, all case-insensitive).
+pub fn app_matches_window_id(app: &DesktopApp, window_app_id: &str) -> bool {
+    let w_stem = window_app_id
+        .trim()
+        .strip_suffix(".desktop")
+        .unwrap_or(window_app_id.trim());
+    if w_stem.is_empty() {
+        return false;
+    }
+    let w_last = w_stem.rsplit('.').next().unwrap_or(w_stem);
+
     let app_stem = app.id.strip_suffix(".desktop").unwrap_or(&app.id);
     let app_last = app_stem.rsplit('.').next().unwrap_or(app_stem);
+    if w_stem.eq_ignore_ascii_case(app_stem)
+        || (!app_last.is_empty() && w_last.eq_ignore_ascii_case(app_last))
+    {
+        return true;
+    }
+
+    if !app.startup_wm_class.is_empty() {
+        let wm_stem = app
+            .startup_wm_class
+            .strip_suffix(".desktop")
+            .unwrap_or(&app.startup_wm_class);
+        let wm_last = wm_stem.rsplit('.').next().unwrap_or(wm_stem);
+        if w_stem.eq_ignore_ascii_case(wm_stem)
+            || (!wm_last.is_empty() && w_last.eq_ignore_ascii_case(wm_last))
+        {
+            return true;
+        }
+    }
+
+    if w_stem.eq_ignore_ascii_case(&app.name) || w_last.eq_ignore_ascii_case(&app.name) {
+        return true;
+    }
+
     let cmd_bin = app
         .command
         .split_whitespace()
@@ -539,24 +588,36 @@ pub fn is_app_running(app: &DesktopApp, windows: &[WindowItem]) -> bool {
         .rsplit('/')
         .next()
         .unwrap_or("");
-
-    for w in windows {
-        let w_stem = w.app_id.strip_suffix(".desktop").unwrap_or(&w.app_id);
-        if w_stem.is_empty() {
-            continue;
-        }
-        let w_last = w_stem.rsplit('.').next().unwrap_or(w_stem);
-        if w_stem.eq_ignore_ascii_case(app_stem)
-            || (!app_last.is_empty() && w_last.eq_ignore_ascii_case(app_last))
-            || w_stem.eq_ignore_ascii_case(&app.name)
-            || w_last.eq_ignore_ascii_case(&app.name)
-            || (!cmd_bin.is_empty()
-                && (w_stem.eq_ignore_ascii_case(cmd_bin) || w_last.eq_ignore_ascii_case(cmd_bin)))
-        {
-            return true;
-        }
+    if !cmd_bin.is_empty()
+        && (w_stem.eq_ignore_ascii_case(cmd_bin) || w_last.eq_ignore_ascii_case(cmd_bin))
+    {
+        return true;
     }
+
     false
+}
+
+/// Finds the desktop app corresponding to `window_app_id` from `apps`.
+pub fn find_app_for_window<'a>(
+    apps: &'a [DesktopApp],
+    window_app_id: &str,
+) -> Option<&'a DesktopApp> {
+    apps.iter()
+        .find(|app| app_matches_window_id(app, window_app_id))
+}
+
+/// Returns the app's display name for `window_app_id` if known, or `window_app_id` itself.
+pub fn app_name_for_window<'a>(apps: &'a [DesktopApp], window_app_id: &'a str) -> &'a str {
+    find_app_for_window(apps, window_app_id)
+        .map(|a| a.name.as_str())
+        .unwrap_or(window_app_id)
+}
+
+/// Checks whether `app` matches any open window in `windows`.
+pub fn is_app_running(app: &DesktopApp, windows: &[WindowItem]) -> bool {
+    windows
+        .iter()
+        .any(|w| app_matches_window_id(app, &w.app_id))
 }
 
 /// Resolves an icon name or path from a `.desktop` file to a PNG or SVG file on disk.
@@ -1136,10 +1197,26 @@ pub fn scroll(world: &mut World, size: (f64, f64), _pos: (f64, f64), dy: f64) ->
     }
 }
 
+/// The hint for the apps card title: `"Recent first"` when the list is sorted by recent use,
+/// or `None` when searching, empty, or sorted purely alphabetically (no launched apps).
+pub fn hint(world: &World) -> Option<&'static str> {
+    if !world.search.trim().is_empty() || world.apps.filtered.is_empty() {
+        return None;
+    }
+    if world.apps.apps.iter().any(|a| a.last_launched > 0) {
+        Some("Recent first")
+    } else {
+        None
+    }
+}
+
 pub fn draw(cr: &Context, th: &Theme, world: &World, rect: Rect) {
     let (x, y, w, h) = rect;
     draw::card(cr, th, x, y, w, h);
     draw::title(cr, th, x + PAD_X, y + PAD_Y, "Apps");
+    if let Some(h_text) = hint(world) {
+        draw::title_hint(cr, th, x, y, w, "Apps", h_text);
+    }
 
     let count = world.apps.filtered.len();
     if count == 0 {
@@ -1551,5 +1628,154 @@ mod tests {
             assert_eq!(svg_loaded.height(), 44);
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn apps_hint_shows_recent_first_only_when_sorted_by_recent_use() {
+        let mut world = World::now();
+        world.apps.apps = sample_apps();
+        world.apps.update_filter("");
+
+        // When all last_launched are 0, sort is purely alphabetical -> hint is None
+        assert_eq!(hint(&world), None);
+
+        // When at least one app was launched -> hint is "Recent first"
+        world.apps.apps[0].last_launched = 100;
+        assert_eq!(hint(&world), Some("Recent first"));
+
+        // When user is searching -> ranking is by match relevance, not recent use -> hint is None
+        world.search = "foot".to_string();
+        world.apps.update_filter(&world.search);
+        assert_eq!(hint(&world), None);
+
+        // When search is empty again -> hint returns
+        world.search.clear();
+        world.apps.update_filter("");
+        assert_eq!(hint(&world), Some("Recent first"));
+
+        // When filtered is empty -> hint is None
+        world.apps.filtered.clear();
+        assert_eq!(hint(&world), None);
+    }
+
+    #[test]
+    fn apps_draw_drops_hint_when_card_too_narrow() {
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 380, 200).unwrap();
+        let cr = cairo::Context::new(&surf).unwrap();
+        let th = Theme::from_config(&crate::config::Config::from_text(""));
+        let mut world = World::now();
+        world.apps.apps = sample_apps();
+        world.apps.apps[0].last_launched = 100;
+        world.apps.update_filter("");
+
+        // Wide card (380.0) renders title and hint
+        draw(&cr, &th, &world, (0.0, 0.0, 380.0, 200.0));
+
+        // Narrow card (60.0) drops hint to prevent overlap with title
+        let surf_narrow = cairo::ImageSurface::create(cairo::Format::ARgb32, 60, 200).unwrap();
+        let cr_narrow = cairo::Context::new(&surf_narrow).unwrap();
+        draw(&cr_narrow, &th, &world, (0.0, 0.0, 60.0, 200.0));
+    }
+
+    #[test]
+    fn parse_desktop_entry_reads_startup_wm_class() {
+        let text = "[Desktop Entry]\nName=Discord\nExec=/usr/bin/discord %U\nStartupWMClass=discord\nIcon=discord\n";
+        let app =
+            parse_desktop_entry("discord.desktop", text).expect("discord desktop entry parses");
+        assert_eq!(app.name, "Discord");
+        assert_eq!(app.startup_wm_class, "discord");
+        assert_eq!(app.command, "/usr/bin/discord");
+    }
+
+    #[test]
+    fn app_window_matching_by_desktop_id_startup_wm_class_exec_and_no_match() {
+        let apps = vec![
+            DesktopApp::new(
+                "Files",
+                "File Manager",
+                "",
+                "nautilus --new-window",
+                "org.gnome.Nautilus",
+                "org.gnome.Nautilus.desktop",
+            ),
+            DesktopApp::new(
+                "Discord",
+                "Instant Messaging",
+                "",
+                "discord-bin",
+                "discord",
+                "com.discordapp.Discord.desktop",
+            )
+            .with_startup_wm_class("discord"),
+            DesktopApp::new(
+                "Settings",
+                "Preferences",
+                "",
+                "gnome-control-center",
+                "preferences",
+                "org.gnome.Settings.desktop",
+            ),
+        ];
+
+        // 1. Matched by desktop id (case-insensitive, with/without .desktop)
+        let win_files = WindowItem {
+            app_id: "org.gnome.Nautilus".to_string(),
+            title: "Home".to_string(),
+            ..Default::default()
+        };
+        assert!(app_matches_window_id(&apps[0], &win_files.app_id));
+        assert_eq!(app_name_for_window(&apps, &win_files.app_id), "Files");
+        assert!(is_app_running(&apps[0], std::slice::from_ref(&win_files)));
+        assert!(!is_app_running(&apps[1], std::slice::from_ref(&win_files)));
+
+        // 2. Matched by StartupWMClass
+        let win_discord = WindowItem {
+            app_id: "discord".to_string(),
+            title: "Discord — #general".to_string(),
+            ..Default::default()
+        };
+        assert!(app_matches_window_id(&apps[1], &win_discord.app_id));
+        assert_eq!(app_name_for_window(&apps, &win_discord.app_id), "Discord");
+        assert!(is_app_running(&apps[1], std::slice::from_ref(&win_discord)));
+        assert!(!is_app_running(
+            &apps[0],
+            std::slice::from_ref(&win_discord)
+        ));
+
+        // 3. Matched by Exec
+        let win_settings = WindowItem {
+            app_id: "gnome-control-center".to_string(),
+            title: "Settings".to_string(),
+            ..Default::default()
+        };
+        assert!(app_matches_window_id(&apps[2], &win_settings.app_id));
+        assert_eq!(app_name_for_window(&apps, &win_settings.app_id), "Settings");
+        assert!(is_app_running(
+            &apps[2],
+            std::slice::from_ref(&win_settings)
+        ));
+
+        // 4. No match keeps the raw id
+        let win_unknown = WindowItem {
+            app_id: "com.custom.Tool".to_string(),
+            title: "Custom Tool".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            app_name_for_window(&apps, &win_unknown.app_id),
+            "com.custom.Tool"
+        );
+        assert!(!is_app_running(
+            &apps[0],
+            std::slice::from_ref(&win_unknown)
+        ));
+        assert!(!is_app_running(
+            &apps[1],
+            std::slice::from_ref(&win_unknown)
+        ));
+        assert!(!is_app_running(
+            &apps[2],
+            std::slice::from_ref(&win_unknown)
+        ));
     }
 }

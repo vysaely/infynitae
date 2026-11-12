@@ -42,24 +42,22 @@ def drag(x, y, dx, dy):
     emit((1, BTN["left"], 0)); wait(0.8)
 def restart_edge():
     sh("pkill -x infynitae-edge; true"); wait(1.0); run_bg(f"INFYNITAE_EDGE_BOXES={BOX} infynitae-edge"); wait(2.0)
-W = [("undo", 1.0), ("reset", 1.0), ("add", 0.9), ("narrower", 0.5), ("wider", 0.5), ("edge", 1.05), ("hover", 1.0), ("cancel", 1.1), ("done", 1.0)]
-def bar_button(name):
-    b = boxes()["bar"]; inner = b[2] - 10 - 4 * (len(W) - 1); tot = sum(u for _, u in W); x = b[0] + 5
-    for k, u in W:
-        w = inner * u / tot
-        if k == name: return x + w / 2, b[1] + 5 + 13
-        x += w + 4
-def add_row(word, panel_words):
-    b = boxes()["bar"]; avail = [m for m in ALL if m not in panel_words]
-    k = avail.index(word); return b[0] + b[2] / 2, b[1] + 36 + 3 + k * 34 + 15
-def card_button(r, name, first=False, last=False):
-    sx, sw = r[0] + 5, r[2] - 10; y = r[1] + 4 + 17
-    order = [("remove", 24)] + ([] if first else [("up", 24)]) + ([] if last else [("down", 24)]) + [("half", 40)]
-    x = sx + sw - 1
-    for k, w in order:
-        x -= w
-        if k == name: return x + w / 2, y
-        x -= 4
+# where the edge drew each button and Add row (its box dump: barbutton NAME x y w h, cardbutton MODULE
+# NAME x y w h, addrow MODULE x y w h)
+def drawn():
+    wait(0.3)
+    out = {}
+    for l in open(BOX):
+        w = l.split()
+        if w and w[0] == "barbutton": out[("bar", w[1].lower())] = list(map(float, w[2:6]))
+        elif w and w[0] == "cardbutton": out[(w[1], w[2].lower())] = list(map(float, w[3:7]))
+        elif w and w[0] == "addrow": out[("add", w[1])] = list(map(float, w[2:6]))
+        elif w and w[0] == "add": out[("add", "")] = list(map(float, w[1:5]))
+    return out
+def middle(r): return r[0] + r[2] / 2, r[1] + r[3] / 2
+def bar_button(name): return middle(drawn()[("bar", name)])
+def add_row(word, panel_words): return middle(drawn()[("add", word)])
+def card_button(module, name): return middle(drawn()[(module, name)])
 def hover_card(r): at(r[0] + 30, r[1] + r[3] - 8)
 def words():
     l = sh("infynitae-edge --print-panels").splitlines()
@@ -97,21 +95,27 @@ chord("super+a"); wait(1.2); d0 = boxes(); start = words()
 s = d0["modules"]["session"]; ms = click_at(s[0] + 4, s[1] + 4, "right", name="edit"); d = boxes(); shot("u-07-edit")
 check(f"a right click starts editing ({ms:.0f} ms)", d["state"] == "editing" and d["bar"] is not None)
 ms = click_at(*bar_button("add"), name="Add"); shot("u-08-add")
-b = boxes()["bar"]; check(f"Add opens its list under the bar's buttons ({ms:.0f} ms)", b[3] > 40 and abs(b[1] - d["bar"][1]) < 1, f"{d['bar']} -> {b}")
+a = drawn().get(("add", "")); b = boxes()["bar"]
+check(f"Add opens its list beside the panel, the bar's buttons stay ({ms:.0f} ms)", a is not None and abs(b[1] - d["bar"][1]) < 1 and (a[0] + a[2] <= d["panel"][0] or a[0] >= d["panel"][0] + d["panel"][2]), f"{a} bar {d['bar']} -> {b}")
 click_at(*add_row("calendar", start), name="add Calendar"); d = boxes(); shot("u-09-calendar")
 check("Calendar added at the bottom", "calendar" in d["modules"] and d["modules"]["calendar"][1] > d["modules"]["session"][1], str(d["modules"].get("calendar")))
 click_at(*bar_button("add"), name="close Add")
-cal = d["modules"]["calendar"]; top = d["modules"]["clock"]
-drag(cal[0] + cal[2] / 2, cal[1] + 40, 0, (top[1] + 4) - (cal[1] + 40)); d = boxes(); shot("u-10-dragged")
+# held near the panel's top edge the panel scrolls up: the calendar can go to the very top
+cal = d["modules"]["calendar"]; top_y = d["panel"][1] + 6
+drag(cal[0] + cal[2] / 2, cal[1] + 40, 0, top_y - (cal[1] + 40)); d = boxes(); shot("u-10-dragged")
 check("the calendar dragged to the top", d["modules"]["calendar"][1] < d["modules"]["volume"][1], f"{d['modules']['calendar']}")
-ck = d["modules"]["clock"]; hover_card(ck); click_at(*card_button(ck, "half"), name="Half"); d = boxes(); shot("u-11-half")
+ck = d["modules"]["clock"]; hover_card(ck); click_at(*card_button("clock", "half"), name="Half"); d = boxes(); shot("u-11-half")
 check("Half puts the clock beside its neighbour", d["modules"]["clock"][2] < d["panel"][2] / 2 + 1, str(d["modules"]["clock"]))
-p0 = d["panel"]; ms = click_at(*bar_button("edge"), name="Edge"); d = boxes(); shot("u-12-edge")
-check(f"Edge moves the panel to the next screen edge ({ms:.0f} ms)", d["panel"] != p0, f"{p0} -> {d['panel']}")
+# the screen edge the panel is on (the box dump's panel line ends with it: a panel as tall as the screen
+# looks the same on two edges)
+side = lambda: [l for l in open(BOX) if l.startswith("panel ")][0].split()[-1]
+p0 = d["panel"]; s0 = side()
+ms = click_at(*bar_button("edge"), name="Edge"); d = boxes(); shot("u-12-edge")
+check(f"Edge moves the panel to the next screen edge ({ms:.0f} ms)", side() != s0, f"{s0} -> {side()} {d['panel']}")
 click_at(*bar_button("undo"), name="Undo edge"); d = boxes()
-check("Undo puts it back", d["panel"] == p0, f"{d['panel']}")
+check("Undo puts it back", side() == s0 and d["panel"] == p0, f"{side()} {d['panel']}")
 tr = d["modules"].get("tray") or d["modules"].get("notifications"); key = "tray" if "tray" in d["modules"] else "notifications"
-hover_card(tr); click_at(*card_button(tr, "remove"), name="remove"); d = boxes(); shot("u-13-removed")
+hover_card(tr); click_at(*card_button(key, "remove"), name="remove"); d = boxes(); shot("u-13-removed")
 check(f"x takes the {key} card out", key not in d["modules"])
 click_at(*bar_button("done"), name="Done"); wait(0.8); l = line(); shot("u-14-saved")
 check("Done saves it, calendar first, clock half, no places", l.find("calendar") < l.find("volume") and "clock@half" in l and not re.search(r"@\d", l), l)

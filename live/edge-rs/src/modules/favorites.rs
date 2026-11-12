@@ -152,6 +152,13 @@ pub fn click(world: &mut World, size: (f64, f64), pos: (f64, f64), button: u32) 
     false
 }
 
+pub const HINT: &str = "Right click an app to pin";
+
+/// The hint for the favorites card title (docs/design/EDGE_DESIGN.md).
+pub fn hint() -> &'static str {
+    HINT
+}
+
 pub fn draw(cr: &Context, th: &Theme, world: &World, rect: Rect) {
     if world.apps.fav_indices.is_empty() || !world.search.is_empty() {
         return;
@@ -162,6 +169,7 @@ pub fn draw(cr: &Context, th: &Theme, world: &World, rect: Rect) {
     }
     draw::card(cr, th, x, y, w, h);
     draw::title(cr, th, x + PAD_X, y + PAD_Y, "Favorites");
+    draw::title_hint(cr, th, x, y, w, "Favorites", hint());
 
     let gx = x + PAD_X;
     let gy = y + PAD_Y + TITLE_H;
@@ -336,5 +344,25 @@ mod tests {
             3
         ));
         assert_eq!(world.apps.fav_indices.len(), 5);
+    }
+
+    #[test]
+    fn favorites_hint_text_and_narrow_card_drop() {
+        assert_eq!(hint(), "Right click an app to pin");
+
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 380, 100).unwrap();
+        let cr = cairo::Context::new(&surf).unwrap();
+        let th = Theme::from_config(&crate::config::Config::from_text(""));
+        let mut world = World::now();
+        world.apps.apps = test_apps();
+        world.apps.set_favorites("foot firefox");
+
+        // Wide card (380.0) renders title and hint
+        draw(&cr, &th, &world, (0.0, 0.0, 380.0, 100.0));
+
+        // Narrow card (140.0) drops hint to prevent overlap with title
+        let surf_narrow = cairo::ImageSurface::create(cairo::Format::ARgb32, 140, 100).unwrap();
+        let cr_narrow = cairo::Context::new(&surf_narrow).unwrap();
+        draw(&cr_narrow, &th, &world, (0.0, 0.0, 140.0, 100.0));
     }
 }

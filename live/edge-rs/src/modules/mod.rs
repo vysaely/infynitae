@@ -49,9 +49,7 @@ pub mod windows;
 #[cfg(test)]
 pub use calendar::{arrows as calendar_arrows, shifted_month};
 
-#[cfg(test)]
-use crate::config::Config;
-use crate::config::{Item, Module, Panel};
+use crate::config::{Config, Item, Module, Panel};
 use crate::draw::{self, Text, PAD_X, PAD_Y};
 use crate::theme::Theme;
 use cairo::Context;
@@ -279,6 +277,9 @@ pub struct World {
     pub child_pending: Option<child::ChildKind>,
     pub live: bool,
     pub panel_has_clipboard: bool,
+    pub panel_key: Option<char>,
+    pub windows_key: Option<char>,
+    pub clipboard_key: Option<char>,
     pub actions: Vec<String>,
     /// the panel is being edited: empty modules keep a placeholder card (height_in)
     pub edit_preview: bool,
@@ -316,6 +317,9 @@ impl World {
             child_pending: None,
             live: false,
             panel_has_clipboard: false,
+            panel_key: None,
+            windows_key: None,
+            clipboard_key: None,
             actions: Vec::new(),
             edit_preview: false,
         };
@@ -345,6 +349,7 @@ impl World {
         self.panel_scroll = 0.0;
         self.close_requested = false;
         self.panel_has_clipboard = false;
+        self.panel_key = None;
         self.child = child::ChildState::default();
         self.apps.scroll = 0;
         self.windows.scroll = 0;
@@ -353,6 +358,12 @@ impl World {
         if std::env::var_os("INFYNITAE_EDGE_RENDER_DATA").is_some() {
             self.load_from_helper();
         }
+    }
+
+    /// Syncs panel shortcut keys from the configuration.
+    pub fn sync_config(&mut self, cfg: &Config) {
+        self.windows_key = cfg.key_for_module(Module::Windows);
+        self.clipboard_key = cfg.key_for_module(Module::Clipboard);
     }
 
     /// Sets the search query, resets selection and list scroll positions, and re-filters `apps`
@@ -984,14 +995,17 @@ pub fn dump_boxes(
     (ox, oy, pw, ph): Rect,
     bar: Option<Rect>,
     child: Option<Rect>,
+    add: Option<Rect>,
+    scroll: f64,
 ) {
     let Some(path) = std::env::var_os("INFYNITAE_EDGE_BOXES").filter(|p| !p.is_empty()) else {
         return;
     };
     let mut out = format!(
-        "panel {} {ox:.0} {oy:.0} {pw:.0} {ph:.0} {}\n",
+        "panel {} {ox:.0} {oy:.0} {pw:.0} {ph:.0} {} {}\n",
         panel.name,
-        if bar.is_some() { "editing" } else { "locked" }
+        if bar.is_some() { "editing" } else { "locked" },
+        panel.side.word()
     );
     for (it, r) in panel.items.iter().zip(rects) {
         if r.3 > 0.0 {
@@ -999,7 +1013,7 @@ pub fn dump_boxes(
                 "module {} {:.0} {:.0} {:.0} {:.0}\n",
                 it.module.word(),
                 ox + r.0,
-                oy + r.1,
+                oy + r.1 - scroll,
                 r.2,
                 r.3
             );
@@ -1007,9 +1021,39 @@ pub fn dump_boxes(
     }
     if let Some((x, y, w, h)) = bar {
         out += &format!("bar {x:.0} {y:.0} {w:.0} {h:.0}\n");
+        if !panel.desktop {
+            // where each button is (the VM tests click them by name)
+            for (k, (x, y, w, h)) in flow::bar_buttons((x, y, w, h)) {
+                out += &format!("barbutton {k:?} {x:.0} {y:.0} {w:.0} {h:.0}\n");
+            }
+            for (bi, range) in flow::blocks(panel).into_iter().enumerate() {
+                let first = &panel.items[range.start];
+                let Some(&r) = rects.get(range.start).filter(|r| r.3 > 0.0) else {
+                    continue;
+                };
+                if first.module.is_switch() {
+                    continue;
+                }
+                for (k, (x, y, w, h)) in flow::card_buttons(panel, bi, r, pw).1 {
+                    out += &format!(
+                        "cardbutton {} {k:?} {:.0} {:.0} {w:.0} {h:.0}\n",
+                        first.module.word(),
+                        ox + x,
+                        oy + y - scroll
+                    );
+                }
+            }
+        }
     }
     if let Some((x, y, w, h)) = child {
         out += &format!("child {x:.0} {y:.0} {w:.0} {h:.0}\n");
+    }
+    if let Some((x, y, w, h)) = add {
+        out += &format!("add {x:.0} {y:.0} {w:.0} {h:.0}\n");
+        let choices = edit::addable(panel);
+        for (m, (x, y, w, h)) in flow::add_rows((x, y, w, h), &choices, 0) {
+            out += &format!("addrow {} {x:.0} {y:.0} {w:.0} {h:.0}\n", m.word());
+        }
     }
     let _ = std::fs::write(path, out);
 }
@@ -1150,6 +1194,12 @@ pub fn draw_panel(
     if !panel.placed {
         let mut y = 0.0;
         let mut i = 0;
+        // the strip each card has above it while the panel is edited (as `layout_in` lays it)
+        let strip = if world.edit_preview && !panel.desktop {
+            flow::STRIP_H
+        } else {
+            0.0
+        };
         while i < panel.items.len() {
             if panel.items[i].module.is_switch() {
                 let mut j = i + 1;
@@ -1157,10 +1207,10 @@ pub fn draw_panel(
                     j += 1;
                 }
                 let (_, card_h) =
-                    switches::layout_run(&panel.items[i..j], world, &th.switch_look, pw, y);
+                    switches::layout_run(&panel.items[i..j], world, &th.switch_look, pw, y + strip);
                 if card_h > 0.0 {
-                    switches::draw_card(cr, th, world, (ox, oy + y, pw, card_h));
-                    y += card_h + draw::GAP;
+                    switches::draw_card(cr, th, world, (ox, oy + y + strip, pw, card_h));
+                    y += strip + card_h + draw::GAP;
                 }
                 i = j;
             } else {

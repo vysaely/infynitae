@@ -70,6 +70,19 @@ pub fn flowed(mut cfg: Config) -> Config {
     cfg
 }
 
+/// How far a panel scrolls for a card held at `y` while dragged (the panel's top at `oy`, `ph` tall):
+/// up within 48 px of its top, down within 48 px of its bottom, faster the nearer the edge.
+pub fn drag_scroll_step(y: f64, oy: f64, ph: f64) -> f64 {
+    const EDGE: f64 = 48.0;
+    if y < oy + EDGE {
+        -0.3 * (oy + EDGE - y).min(EDGE + 40.0)
+    } else if y > oy + ph - EDGE {
+        0.3 * (y - (oy + ph - EDGE)).min(EDGE + 40.0)
+    } else {
+        0.0
+    }
+}
+
 /// Below this panel width two halves do not fit side by side: each takes the full width.
 pub const HALF_MIN_PANEL: f64 = 340.0;
 
@@ -127,7 +140,15 @@ pub fn layout_in(
     let mut y = 0.0;
     let mut rects = Vec::with_capacity(p.items.len());
     let mut i = 0;
+    // while a panel is edited each card has a strip above it for its name and buttons
+    // (modules/flow.rs): reserved here, so the strip never covers the card
+    let strip = if world.edit_preview && !p.desktop {
+        modules::flow::STRIP_H
+    } else {
+        0.0
+    };
     while i < p.items.len() {
+        y += strip;
         if p.items[i].module.is_switch() {
             let mut j = i + 1;
             while j < p.items.len() && p.items[j].module.is_switch() {
@@ -138,6 +159,8 @@ pub fn layout_in(
             rects.extend(run_rects);
             if card_h > 0.0 {
                 y += card_h + draw::GAP;
+            } else {
+                y -= strip;
             }
             i = j;
         } else {
@@ -164,6 +187,8 @@ pub fn layout_in(
             rects.push((0.0, y, pw, h));
             if h > 0.0 {
                 y += h + draw::GAP;
+            } else {
+                y -= strip;
             }
             i += 1;
         }
@@ -357,6 +382,7 @@ impl Shell {
         let cfg = flowed(raw);
         let theme = theme::Theme::from_config(&cfg);
         let mut world = modules::World::now();
+        world.sync_config(&cfg);
         if world.apps.favorites.is_empty() && !cfg.favorites.is_empty() {
             world.apps.set_favorites(&cfg.favorites);
         }
@@ -387,6 +413,7 @@ impl Shell {
         let cfg = flowed(cfg);
         let theme = theme::Theme::from_config(&cfg);
         let mut world = modules::World::now();
+        world.sync_config(&cfg);
         if world.apps.favorites.is_empty() && !cfg.favorites.is_empty() {
             world.apps.set_favorites(&cfg.favorites);
         }
@@ -422,6 +449,7 @@ impl Shell {
     fn use_widgets(&mut self) {
         let p = self.cfg.widgets.clone().unwrap_or_else(Panel::no_widgets);
         self.world.panel_has_clipboard = p.has(config::Module::Clipboard);
+        self.world.panel_key = None;
         self.cfg.panels = vec![p];
         self.open = Some(0);
     }
@@ -465,6 +493,7 @@ impl Shell {
                 self.raw_lines = raw_lines(&raw);
                 self.cfg = flowed(raw);
                 self.theme = theme::Theme::from_config(&self.cfg);
+                self.world.sync_config(&self.cfg);
                 self.world.apps.set_favorites(&self.cfg.favorites);
                 self.config_mtime = mtime;
                 if !self.edit.active {
@@ -495,9 +524,14 @@ impl Shell {
 
     fn prepare_panel(&mut self, idx: usize) {
         self.world.on_open();
+        self.world.sync_config(&self.cfg);
         if let Some(p) = self.cfg.panels.get(idx) {
             self.world.panel_has_clipboard = p.has(config::Module::Clipboard);
-            if p.has(config::Module::Apps) || p.has(config::Module::Favorites) {
+            self.world.panel_key = p.key;
+            if p.has(config::Module::Apps)
+                || p.has(config::Module::Favorites)
+                || p.has(config::Module::Windows)
+            {
                 self.world.apps.ensure_loaded(&self.world.search);
             }
             if self.world.apps.favorites.is_empty() && !self.cfg.favorites.is_empty() {
@@ -739,12 +773,10 @@ impl Shell {
         self.edit.bar_rect = if panel.desktop {
             modules::edit::calculate_bar_rect(panel, (ox, oy), pw, ph, (w, h), self.edit.adding)
         } else {
-            let rows = if self.edit.adding {
-                modules::flow::add_row_count(panel)
-            } else {
-                0
-            };
-            modules::flow::bar_rect((ox, oy), pw, ph, (w, h), rows)
+            let rows = modules::flow::add_row_count(panel);
+            let bar = modules::flow::bar_rect((ox, oy), pw, ph, (w, h), 0);
+            self.edit.add_rect = modules::flow::add_rect((ox, oy), pw, (w, h), rows, bar);
+            bar
         };
     }
 
@@ -1124,6 +1156,7 @@ impl Shell {
         let choices = modules::edit::addable(panel);
         if let Some(hit) = flow::bar_hit(
             self.edit.bar_rect,
+            self.edit.add_rect,
             &choices,
             self.edit.adding,
             self.edit.add_scroll,
@@ -1213,7 +1246,12 @@ impl Shell {
                 BarHit::Button(BarButton::Done) => {
                     self.edit_exit();
                 }
-                BarHit::Add(m) => self.flow_change(|p| flow::add_module(p, m)),
+                BarHit::Add(m) => {
+                    self.flow_change(|p| flow::add_module(p, m));
+                    // the new card, last, scrolled into view (an edited panel is often taller
+                    // than the screen)
+                    self.scroll_to_last_item();
+                }
                 BarHit::Nothing => {}
             }
             return Some(true);
@@ -1268,6 +1306,7 @@ impl Shell {
         self.edit.flow_drag = Some(modules::edit::FlowDrag {
             block: b,
             start: (x, y),
+            last: (x, y),
             moved: false,
         });
         self.edit.drop_at = None;
@@ -1276,6 +1315,36 @@ impl Shell {
     }
 
     /// One change to the panel being edited, kept for Undo.
+    /// While a card is dragged and held near the open panel's top or bottom edge: the panel scrolled
+    /// one step (the event loop calls this about 60 times a second); whether it moved.
+    pub fn drag_autoscroll(&mut self) -> bool {
+        let Some(d) = self.edit.flow_drag.filter(|d| d.moved) else {
+            return false;
+        };
+        let before = self.world.panel_scroll;
+        self.edit_drag(d.last.0, d.last.1);
+        self.world.panel_scroll != before
+    }
+
+    /// The open panel scrolled so its last module's card (and the strip above it) is in view.
+    fn scroll_to_last_item(&mut self) {
+        let (w, h) = self.last_screen;
+        let Some(panel) = self.open.and_then(|i| self.cfg.panels.get(i)) else {
+            return;
+        };
+        let pw = panel_width(panel, w);
+        let (rects, content_h) = layout_in(panel, pw, &self.world, &self.theme);
+        let ph = ph_of(panel, content_h, h);
+        if let Some(r) = rects.iter().rev().find(|r| r.3 > 0.0) {
+            let top = (r.1 - modules::flow::STRIP_H).max(0.0);
+            let bottom = r.1 + r.3;
+            let s = self.world.panel_scroll;
+            let s = if bottom > s + ph { bottom - ph } else { s };
+            let s = if top < s { top } else { s };
+            self.world.panel_scroll = s.clamp(0.0, (content_h - ph).max(0.0));
+        }
+    }
+
     fn flow_change(&mut self, f: impl FnOnce(&mut config::Panel)) {
         let Some(i) = self.open else { return };
         let Some(p) = self.cfg.panels.get_mut(i) else {
@@ -1308,11 +1377,17 @@ impl Shell {
                 return false;
             }
             d.moved = true;
+            d.last = (x, y);
             self.edit.flow_drag = Some(d);
             let pw = panel_width(panel, w);
             let (rects, content_h) = layout_in(panel, pw, &self.world, &self.theme);
             let ph = ph_of(panel, content_h, h);
             let (_, oy) = panel_origin(panel, w, h, pw, ph);
+            // a card held near the panel's top or bottom edge scrolls it (an edited panel is often
+            // taller than the screen, and a card is moved to where it cannot be seen yet)
+            let max_scroll = (content_h - ph).max(0.0);
+            let step = drag_scroll_step(y, oy, ph);
+            self.world.panel_scroll = (self.world.panel_scroll + step).clamp(0.0, max_scroll);
             let brects = modules::flow::block_rects(panel, &rects, &self.world, &self.theme, pw);
             let n = modules::flow::blocks(panel).len();
             self.edit.drop_at = Some(modules::flow::drop_index(
@@ -1918,7 +1993,16 @@ impl Shell {
 
     pub fn scroll(&mut self, w: f64, h: f64, x: f64, y: f64, dy: f64) -> bool {
         self.last_screen = (w, h);
-        let bar = self.edit.bar_rect;
+        // Add's list: a card of its own beside a panel (the widgets' bar holds theirs)
+        let flow_panel = self
+            .open
+            .and_then(|i| self.cfg.panels.get(i))
+            .is_some_and(|p| !p.desktop);
+        let bar = if flow_panel {
+            self.edit.add_rect
+        } else {
+            self.edit.bar_rect
+        };
         if self.edit.active
             && self.edit.adding
             && x >= bar.0
@@ -2130,13 +2214,19 @@ fn render(name: &str, size: &str, out: &str) -> Result<(), String> {
     );
     let _ = cr.paint();
     let mut world = modules::World::now();
+    world.sync_config(&cfg);
     if let Some(open_idx) = panel_idx {
         let is_editing = std::env::var_os("INFYNITAE_EDGE_RENDER_EDIT").is_some();
         let is_adding = std::env::var_os("INFYNITAE_EDGE_RENDER_ADD").is_some();
 
         let panel = &mut cfg.panels[open_idx];
         world.edit_preview = is_editing && !panel.desktop;
-        if panel.has(config::Module::Apps) || panel.has(config::Module::Favorites) {
+        world.panel_has_clipboard = panel.has(config::Module::Clipboard);
+        world.panel_key = panel.key;
+        if panel.has(config::Module::Apps)
+            || panel.has(config::Module::Favorites)
+            || panel.has(config::Module::Windows)
+        {
             world.apps.ensure_loaded(&world.search);
         }
         if world.apps.favorites.is_empty() && !cfg.favorites.is_empty() {
@@ -2249,7 +2339,14 @@ fn render(name: &str, size: &str, out: &str) -> Result<(), String> {
                 0
             };
             edit_state.bar_rect =
-                modules::flow::bar_rect((ox, oy), pw, ph, (w as f64, h as f64), rows);
+                modules::flow::bar_rect((ox, oy), pw, ph, (w as f64, h as f64), 0);
+            edit_state.add_rect = modules::flow::add_rect(
+                (ox, oy),
+                pw,
+                (w as f64, h as f64),
+                rows,
+                edit_state.bar_rect,
+            );
             modules::flow::draw_overlay(
                 &cr,
                 &th,
@@ -2281,12 +2378,14 @@ fn render(name: &str, size: &str, out: &str) -> Result<(), String> {
             );
         }
         if is_editing {
-            let (bx, by, bw, bh) = edit_state.bar_rect;
-            let min_x = total_rect.0.min(bx.round() as i32 - 2);
-            let min_y = total_rect.1.min(by.round() as i32 - 2);
-            let max_x = (total_rect.0 + total_rect.2).max((bx + bw).round() as i32 + 2);
-            let max_y = (total_rect.1 + total_rect.3).max((by + bh).round() as i32 + 2);
-            total_rect = (min_x, min_y, max_x - min_x, max_y - min_y);
+            let adding = (is_adding && !panel.desktop).then_some(edit_state.add_rect);
+            for (bx, by, bw, bh) in std::iter::once(edit_state.bar_rect).chain(adding) {
+                let min_x = total_rect.0.min(bx.round() as i32 - 2);
+                let min_y = total_rect.1.min(by.round() as i32 - 2);
+                let max_x = (total_rect.0 + total_rect.2).max((bx + bw).round() as i32 + 2);
+                let max_y = (total_rect.1 + total_rect.3).max((by + bh).round() as i32 + 2);
+                total_rect = (min_x, min_y, max_x - min_x, max_y - min_y);
+            }
         }
 
         let mut drawn_child_rect = None;
@@ -2319,6 +2418,8 @@ fn render(name: &str, size: &str, out: &str) -> Result<(), String> {
             (ox, oy, pw, ph),
             is_editing.then_some(edit_state.bar_rect),
             drawn_child_rect,
+            (is_editing && is_adding && !panel.desktop).then_some(edit_state.add_rect),
+            world.panel_scroll,
         );
 
         if std::env::var_os("INFYNITAE_EDGE_RENDER_RECT").is_some() {
@@ -2404,6 +2505,29 @@ fn main() -> ExitCode {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_card_held_near_the_panels_edge_scrolls_it_faster_nearer_the_edge() {
+        // a panel from y 100, 800 tall
+        assert_eq!(
+            super::drag_scroll_step(500.0, 100.0, 800.0),
+            0.0,
+            "in the middle"
+        );
+        assert!(
+            super::drag_scroll_step(120.0, 100.0, 800.0) < 0.0,
+            "near the top: up"
+        );
+        assert!(
+            super::drag_scroll_step(890.0, 100.0, 800.0) > 0.0,
+            "near the bottom: down"
+        );
+        assert!(
+            super::drag_scroll_step(101.0, 100.0, 800.0)
+                < super::drag_scroll_step(140.0, 100.0, 800.0),
+            "faster nearer the edge"
+        );
+    }
+
     use super::*;
 
     fn widgets_shell(line: &str) -> Shell {
