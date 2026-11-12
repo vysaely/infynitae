@@ -29,6 +29,22 @@ if [ -f "$HOME/infynitae/live/config.sh" ]; then
     . "$HOME/infynitae/live/config.sh"
 fi
 
+if ! command -v infy_bin >/dev/null 2>&1; then
+    infy_bin() {
+        for _infy_b in "$@"; do
+            if [ -x "$HOME/.local/bin/$_infy_b" ]; then echo "$HOME/.local/bin/$_infy_b"; return 0;
+            elif [ -x "$HOME/infynitae/live/$_infy_b" ]; then echo "$HOME/infynitae/live/$_infy_b"; return 0;
+            elif command -v "$_infy_b" >/dev/null 2>&1; then command -v "$_infy_b"; return 0; fi
+        done
+        return 1
+    }
+fi
+if ! command -v infy_on >/dev/null 2>&1; then
+    infy_on() {
+        case "${1:-}" in 1|true|yes|on|TRUE|True) return 0 ;; *) return 1 ;; esac
+    }
+fi
+
 # 1a. The password store for apps runs before the lock screen asks for the password, so that
 # password opens it (/etc/pam.d/infynitae), as a login does on other desktops; apps reach it
 # through D-Bus. infynitae-keyring once its switch has been made (its tools/switch.sh enables its
@@ -42,16 +58,9 @@ fi
 # 1b. Start Screen (replacing the TTY prompt with the lock screen). First, before any window can
 # open: nothing else starts until the compositor has confirmed the lock. If it cannot be engaged
 # (no locker installed, the locker failed), the session ends rather than stay unlocked.
-if [ "$START_LOCKED" = "1" ] || [ "$START_LOCKED" = "true" ] || [ "$1" = "--lock" ] \
+if infy_on "${START_LOCKED:-0}" || [ "$1" = "--lock" ] \
     || [ "${INFYNITAE_RESTART_LOCKED:-}" = "1" ]; then
-    LOCK_BIN=""
-    if [ -x "$HOME/.local/bin/infynitae-lock" ]; then
-        LOCK_BIN="$HOME/.local/bin/infynitae-lock"
-    elif [ -x "$HOME/infynitae/live/lock/infynitae-lock" ]; then
-        LOCK_BIN="$HOME/infynitae/live/lock/infynitae-lock"
-    elif command -v infynitae-lock >/dev/null 2>&1; then
-        LOCK_BIN="infynitae-lock"
-    fi
+    LOCK_BIN=$(infy_bin infynitae-lock || true)
     LOCK_LOG="$HOME/.local/state/infynitae/lock.log"
     mkdir -p "$HOME/.local/state/infynitae"
     LOCKED=false
@@ -94,12 +103,10 @@ fi
 systemctl --user start infynitae-shutdown-guard.service 2>/dev/null || true
 
 # 2b. Screen sharing: the portal's config for the screens present (infynitae-reload screenshare)
-for r in "$HOME/.local/bin/infynitae-reload" "$HOME/infynitae/live/infynitae-reload"; do
-    if [ -x "$r" ]; then
-        "$r" screenshare >/dev/null 2>&1 || true
-        break
-    fi
-done
+RELOAD_BIN=$(infy_bin infynitae-reload || true)
+if [ -n "$RELOAD_BIN" ]; then
+    "$RELOAD_BIN" screenshare >/dev/null 2>&1 || true
+fi
 
 # 3. Native Polkit authentication agent (for sudo / system prompts in GUI)
 case "${POLKIT_AGENT:-auto}" in
@@ -117,15 +124,7 @@ case "${POLKIT_AGENT:-auto}" in
 esac
 
 # 4. Wallpaper & Canvas Background (Configured or Auto-Detected)
-WP_BIN=""
-if [ -x "$HOME/.local/bin/infynitae-wallpaper" ]; then
-    WP_BIN="$HOME/.local/bin/infynitae-wallpaper"
-elif [ -x "$HOME/infynitae/live/wallpaper/infynitae-wallpaper" ]; then
-    WP_BIN="$HOME/infynitae/live/wallpaper/infynitae-wallpaper"
-elif command -v infynitae-wallpaper >/dev/null 2>&1; then
-    WP_BIN="infynitae-wallpaper"
-fi
-
+WP_BIN=$(infy_bin infynitae-wallpaper || true)
 if [ -n "$WP_BIN" ]; then
     if [ -n "$WALLPAPER" ]; then
         "$WP_BIN" "$WALLPAPER" "${WALLPAPER_MODE:-fill}" &
@@ -135,44 +134,34 @@ if [ -n "$WP_BIN" ]; then
 fi
 
 # 4b. The edge: window strip, control panel and clipboard (ENABLE_EDGE)
-case "${ENABLE_EDGE:-true}" in
-    0|false|no|off|FALSE|False) ;;
-    *)
-        # its name before 2026-10-31, until an update builds the new one
-        for _edge in "$HOME/.local/bin/infynitae-edge" "$HOME/.local/bin/infynitae-island"; do
-            if [ -x "$_edge" ]; then "$_edge" >/dev/null 2>&1 & break; fi
-        done
-        unset _edge
-        ;;
-esac
-
+if infy_on "${ENABLE_EDGE:-true}"; then
+    EDGE_BIN=$(infy_bin infynitae-edge infynitae-island || true)
+    if [ -n "$EDGE_BIN" ]; then
+        "$EDGE_BIN" >/dev/null 2>&1 &
+    fi
+fi
 
 # 6. Screen recorder and replay buffer (the last 20 minutes; a supervisor restarts it)
-if [ "${ENABLE_REPLAY_BUFFER:-false}" = "true" ] || [ "${ENABLE_REPLAY_BUFFER:-false}" = "1" ]; then
-    if [ -x "$HOME/.local/bin/infynitae-recorder" ]; then
-        "$HOME/.local/bin/infynitae-recorder" supervisor >/dev/null 2>&1 &
-    elif [ -x "$HOME/infynitae/live/record/infynitae-recorder" ]; then
-        "$HOME/infynitae/live/record/infynitae-recorder" supervisor >/dev/null 2>&1 &
+if infy_on "${ENABLE_REPLAY_BUFFER:-false}"; then
+    RECORDER_BIN=$(infy_bin infynitae-recorder || true)
+    if [ -n "$RECORDER_BIN" ]; then
+        "$RECORDER_BIN" supervisor >/dev/null 2>&1 &
     fi
 fi
 
 # 6b. Clipboard persistence and history
-case "${CLIPBOARD_PERSIST:-true}" in
-    1|true|yes|on|TRUE|True)
-        if command -v wl-clip-persist >/dev/null 2>&1; then
-            wl-clip-persist --clipboard regular >/dev/null 2>&1 &
-        fi
-        ;;
-esac
+if infy_on "${CLIPBOARD_PERSIST:-true}"; then
+    if command -v wl-clip-persist >/dev/null 2>&1; then
+        wl-clip-persist --clipboard regular >/dev/null 2>&1 &
+    fi
+fi
 
-case "${CLIPBOARD_HISTORY:-true}" in
-    1|true|yes|on|TRUE|True)
-        if command -v cliphist >/dev/null 2>&1 && command -v wl-paste >/dev/null 2>&1; then
-            wl-paste --type text --watch cliphist store >/dev/null 2>&1 &
-            wl-paste --type image --watch cliphist store >/dev/null 2>&1 &
-        fi
-        ;;
-esac
+if infy_on "${CLIPBOARD_HISTORY:-true}"; then
+    if command -v cliphist >/dev/null 2>&1 && command -v wl-paste >/dev/null 2>&1; then
+        wl-paste --type text --watch cliphist store >/dev/null 2>&1 &
+        wl-paste --type image --watch cliphist store >/dev/null 2>&1 &
+    fi
+fi
 
 # 6c. Theme sync: the config's colors and fonts to mako, fuzzel, GTK, Qt and terminals
 if [ -f "$HOME/infynitae/live/settings.sh" ]; then
@@ -217,21 +206,14 @@ if [ -x "$HOME/infynitae/live/config-check" ]; then
 fi
 
 # 6d. USB drives and SD cards mount when plugged in (infynitae-automount, through udisks2): AUTOMOUNT
-case "${AUTOMOUNT:-true}" in
-    1|true|yes|on|TRUE|True)
-        started=0
-        for s in "$HOME/.local/bin/infynitae-automount" "$HOME/infynitae/live/infynitae-automount"; do
-            if [ -x "$s" ]; then
-                "$s" >/dev/null 2>&1 &
-                started=1
-                break
-            fi
-        done
-        if [ "$started" -eq 0 ] && command -v udiskie >/dev/null 2>&1; then
-            udiskie --no-tray --notify >/dev/null 2>&1 &
-        fi
-        ;;
-esac
+if infy_on "${AUTOMOUNT:-true}"; then
+    AUTOMOUNT_BIN=$(infy_bin infynitae-automount || true)
+    if [ -n "$AUTOMOUNT_BIN" ]; then
+        "$AUTOMOUNT_BIN" >/dev/null 2>&1 &
+    elif command -v udiskie >/dev/null 2>&1; then
+        udiskie --no-tray --notify >/dev/null 2>&1 &
+    fi
+fi
 
 # 6d2. KDE apps' list of apps (Open With), from the menu file settings.sh provides
 for b in kbuildsycoca6 kbuildsycoca5; do
@@ -242,7 +224,7 @@ for b in kbuildsycoca6 kbuildsycoca5; do
 done
 
 # 6e. ~/Documents, ~/Downloads, ~/Pictures … exist and apps know them (xdg-user-dirs)
-if command -v xdg-user-dirs-update >/dev/null 2>&1; then
+if [ ! -f "$HOME/.config/user-dirs.dirs" ] && command -v xdg-user-dirs-update >/dev/null 2>&1; then
     xdg-user-dirs-update >/dev/null 2>&1 || true
 fi
 
@@ -266,17 +248,12 @@ case "${BATTERY_LIMIT:-off}" in
 esac
 
 # 6e2. The screen locks before the machine sleeps (the lid, the power button): it wakes locked (SLEEP_LOCK)
-case "${SLEEP_LOCK:-true}" in
-    0|false|no|off|FALSE|False) ;;
-    *)
-        for s in "$HOME/.local/bin/infynitae-sleep-lock" "$HOME/infynitae/live/infynitae-sleep-lock"; do
-            if [ -x "$s" ]; then
-                "$s" >/dev/null 2>&1 &
-                break
-            fi
-        done
-        ;;
-esac
+if infy_on "${SLEEP_LOCK:-true}"; then
+    SLEEP_LOCK_BIN=$(infy_bin infynitae-sleep-lock || true)
+    if [ -n "$SLEEP_LOCK_BIN" ]; then
+        "$SLEEP_LOCK_BIN" >/dev/null 2>&1 &
+    fi
+fi
 
 # 6f. Screen auto-rotation on convertible laptops (AUTO_ROTATE; needs iio-sensor-proxy)
 case "${AUTO_ROTATE:-auto}" in
@@ -311,42 +288,30 @@ fi
 [ -f "$HOME/infynitae/live/xdg-autostart" ] && sh "$HOME/infynitae/live/xdg-autostart"
 
 # 7b. Session restore & watcher
-RESTORE_BIN=""
-if [ -x "$HOME/.local/bin/infynitae-restore" ]; then
-    RESTORE_BIN="$HOME/.local/bin/infynitae-restore"
-elif [ -x "$HOME/infynitae/live/infynitae-restore" ]; then
-    RESTORE_BIN="$HOME/infynitae/live/infynitae-restore"
-elif [ -x "$(dirname "$0")/infynitae-restore" ]; then
-    RESTORE_BIN="$(dirname "$0")/infynitae-restore"
-elif command -v infynitae-restore >/dev/null 2>&1; then
-    RESTORE_BIN="infynitae-restore"
-fi
-
+RESTORE_BIN=$(infy_bin infynitae-restore || true)
 RESTORE_SESSION=false
-case "${SESSION_RESTORE:-true}" in
-    1|true|yes|on|TRUE|True)
-        if [ -n "$RESTORE_BIN" ]; then
-            # check: a saved window whose app can be launched (else the terminal below starts).
-            # The watcher starts once the restore is done: a snapshot taken while windows are
-            # still coming back would overwrite session.json with half the session.
-            if "$RESTORE_BIN" check >/dev/null 2>&1; then
-                RESTORE_SESSION=true
-                { "$RESTORE_BIN" restore; exec "$RESTORE_BIN" watch; } >/dev/null 2>&1 &
-            else
-                "$RESTORE_BIN" watch >/dev/null 2>&1 &
-            fi
+if infy_on "${SESSION_RESTORE:-true}"; then
+    if [ -n "$RESTORE_BIN" ]; then
+        # check: a saved window whose app can be launched (else the terminal below starts).
+        # The watcher starts once the restore is done: a snapshot taken while windows are
+        # still coming back would overwrite session.json with half the session.
+        if "$RESTORE_BIN" check >/dev/null 2>&1; then
+            RESTORE_SESSION=true
+            { "$RESTORE_BIN" restore; exec "$RESTORE_BIN" watch; } >/dev/null 2>&1 &
+        else
+            "$RESTORE_BIN" watch >/dev/null 2>&1 &
         fi
-        ;;
-esac
+    fi
+fi
 
 # 8. Launch default terminal on the infinite canvas, unless the session came back or
 # START_TERMINAL is off
 if [ "$RESTORE_SESSION" = "true" ]; then
     exit 0
 fi
-case "${START_TERMINAL:-true}" in
-    0|false|no|off|FALSE|False) exit 0 ;;
-esac
+if ! infy_on "${START_TERMINAL:-true}"; then
+    exit 0
+fi
 
 resolve_terminal() {
     if [ -n "$TERMINAL" ] && [ "$TERMINAL" != "auto" ]; then
