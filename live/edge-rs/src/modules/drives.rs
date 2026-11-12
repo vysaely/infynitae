@@ -20,7 +20,7 @@ use std::sync::Mutex;
 use std::time::Instant;
 
 pub const HEADER_H: f64 = 28.0;
-pub const ROW_H: f64 = 46.0;
+pub const ROW_H: f64 = 54.0;
 pub const LOADING: &str = "Loading";
 pub const CMDS: &[(&str, &str)] = &[("drives", "__proc_drives__")];
 
@@ -513,7 +513,7 @@ pub fn fetch_string() -> String {
 }
 
 fn fetch_live_drives_string() -> String {
-    let user = std::env::var("USER").unwrap_or_else(|_| "vysaely".into());
+    let user = std::env::var("USER").unwrap_or_default();
     let mountinfo = std::fs::read_to_string("/proc/self/mountinfo").unwrap_or_default();
     let fstab = std::fs::read_to_string("/etc/fstab").unwrap_or_default();
     let labels = read_disk_by_label();
@@ -727,7 +727,7 @@ pub fn draw(cr: &Context, th: &Theme, world: &World, rect: Rect) {
             },
         );
 
-        let bar_y = line1_y + 18.0;
+        let bar_y = line1_y + 23.0;
         let bar_w = (content_end - content_x).max(10.0);
         let used_bytes = drive.total_bytes.saturating_sub(drive.available_bytes);
         let part = if drive.total_bytes > 0 {
@@ -737,7 +737,7 @@ pub fn draw(cr: &Context, th: &Theme, world: &World, rect: Rect) {
         };
         draw::bar(cr, th, content_x, bar_y, bar_w, part, th.accent);
 
-        let line2_y = bar_y + 7.0;
+        let line2_y = bar_y + 8.0;
         let second_line_text = match drive.status {
             DriveStatus::Normal => format_used_of_total(used_bytes, drive.total_bytes),
             DriveStatus::Ejecting => "Ejecting".to_string(),
