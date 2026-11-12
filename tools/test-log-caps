@@ -1,0 +1,213 @@
+#!/bin/sh
+# tools/test-log-caps: test log rotation caps (2 MB default, 5 MB for session.log),
+# .old replacement, and autorotate stale state cleanup.
+set -eu
+
+REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
+TMP=$(mktemp -d "/tmp/infynitae-test-log-caps.XXXXXX")
+trap 'rm -rf "$TMP"' EXIT INT TERM
+
+MOCK_BIN="$TMP/bin"
+mkdir -p "$MOCK_BIN"
+export PATH="$MOCK_BIN:$PATH"
+
+fails=0
+check() {
+    if [ "$2" = "$3" ]; then
+        echo "ok   $1"
+    else
+        echo "FAIL $1: got [$2], want [$3]"
+        fails=$((fails + 1))
+    fi
+}
+
+# ----------------------------------------------------------------------
+# 1. log-rotate.sh: 3 MB rotated, 1 MB not rotated, .old replaced
+# ----------------------------------------------------------------------
+TEST_LOG="$TMP/rotate_unit.log"
+
+# (a) 3 MB log rotated to .old
+truncate -s 3M "$TEST_LOG"
+sh "$REPO_DIR/live/log-rotate.sh" "$TEST_LOG"
+check "3 MB log rotated: current file gone" "$([ ! -f "$TEST_LOG" ] && echo yes || echo no)" "yes"
+check "3 MB log rotated: .old file created with size 3145728" "$(wc -c < "$TEST_LOG.old" 2>/dev/null || echo 0)" "3145728"
+
+# (b) 1 MB log not rotated
+truncate -s 1M "$TEST_LOG"
+rm -f "$TEST_LOG.old"
+sh "$REPO_DIR/live/log-rotate.sh" "$TEST_LOG"
+check "1 MB log not rotated: current file kept" "$([ -f "$TEST_LOG" ] && echo yes || echo no)" "yes"
+check "1 MB log not rotated: .old file not created" "$([ ! -f "$TEST_LOG.old" ] && echo yes || echo no)" "yes"
+
+# (c) .old replaced on subsequent rotation
+printf 'OLD_CONTENT' > "$TEST_LOG.old"
+truncate -s 3M "$TEST_LOG"
+sh "$REPO_DIR/live/log-rotate.sh" "$TEST_LOG"
+check "3 MB log rotated: replaces existing .old" "$(wc -c < "$TEST_LOG.old" 2>/dev/null || echo 0)" "3145728"
+rm -f "$TEST_LOG" "$TEST_LOG.old"
+
+# (d) custom cap (5 MB = 5242880 bytes)
+truncate -s 4M "$TEST_LOG"
+sh "$REPO_DIR/live/log-rotate.sh" "$TEST_LOG" 5242880
+check "4 MB log under 5 MB cap not rotated" "$([ -f "$TEST_LOG" ] && [ ! -f "$TEST_LOG.old" ] && echo yes || echo no)" "yes"
+
+truncate -s 6M "$TEST_LOG"
+sh "$REPO_DIR/live/log-rotate.sh" "$TEST_LOG" 5242880
+check "6 MB log over 5 MB cap rotated" "$([ ! -f "$TEST_LOG" ] && [ -f "$TEST_LOG.old" ] && echo yes || echo no)" "yes"
+rm -f "$TEST_LOG" "$TEST_LOG.old"
+
+# ----------------------------------------------------------------------
+# 2. infynitae-session: session.log capped at 5 MB (not 20 MB)
+# ----------------------------------------------------------------------
+SESS_HOME="$TMP/sess_home"
+SESS_STATE="$SESS_HOME/.local/state/infynitae"
+mkdir -p "$SESS_STATE" "$SESS_HOME/.local/bin"
+
+# Mock compositor binary that stops the session launcher immediately
+cat > "$SESS_HOME/.local/bin/infynitae" <<'EOF'
+#!/bin/sh
+touch "$HOME/.local/state/infynitae/stop"
+exit 0
+EOF
+chmod +x "$SESS_HOME/.local/bin/infynitae"
+
+# 6 MB session.log must rotate under 5 MB cap
+truncate -s 6M "$SESS_STATE/session.log"
+rm -f "$SESS_STATE/session.log.old"
+HOME="$SESS_HOME" sh "$REPO_DIR/live/infynitae-session" >/dev/null 2>&1 || true
+check "session.log 6 MB rotated to .old at 5 MB cap" "$([ -f "$SESS_STATE/session.log.old" ] && echo yes || echo no)" "yes"
+check "session.log.old size is 6291456" "$(wc -c < "$SESS_STATE/session.log.old" 2>/dev/null || echo 0)" "6291456"
+
+# 4 MB session.log must NOT rotate under 5 MB cap
+truncate -s 4M "$SESS_STATE/session.log"
+rm -f "$SESS_STATE/session.log.old"
+HOME="$SESS_HOME" sh "$REPO_DIR/live/infynitae-session" >/dev/null 2>&1 || true
+check "session.log 4 MB not rotated under 5 MB cap" "$([ ! -f "$SESS_STATE/session.log.old" ] && echo yes || echo no)" "yes"
+
+# ----------------------------------------------------------------------
+# 3. infynitae-automount: automount.log rotates at 2 MB
+# ----------------------------------------------------------------------
+AUTO_STATE="$TMP/auto_state/infynitae"
+AUTO_RUN="$TMP/auto_run/infynitae"
+mkdir -p "$AUTO_STATE" "$AUTO_RUN"
+
+# Mock udisksctl
+cat > "$MOCK_BIN/udisksctl" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+chmod +x "$MOCK_BIN/udisksctl"
+
+truncate -s 3M "$AUTO_STATE/automount.log"
+rm -f "$AUTO_STATE/automount.log.old"
+XDG_STATE_HOME="$TMP/auto_state" XDG_RUNTIME_DIR="$TMP/auto_run" \
+INFYNITAE_AUTOMOUNT_MONITOR="exit 0" \
+sh "$REPO_DIR/live/infynitae-automount" >/dev/null 2>&1 || true
+check "automount.log 3 MB rotated to .old" "$([ -f "$AUTO_STATE/automount.log.old" ] && echo yes || echo no)" "yes"
+
+truncate -s 1M "$AUTO_STATE/automount.log"
+rm -f "$AUTO_STATE/automount.log.old"
+XDG_STATE_HOME="$TMP/auto_state" XDG_RUNTIME_DIR="$TMP/auto_run" \
+INFYNITAE_AUTOMOUNT_MONITOR="exit 0" \
+sh "$REPO_DIR/live/infynitae-automount" >/dev/null 2>&1 || true
+check "automount.log 1 MB not rotated" "$([ ! -f "$AUTO_STATE/automount.log.old" ] && echo yes || echo no)" "yes"
+
+# ----------------------------------------------------------------------
+# 4. infynitae-sleep-lock: sleep-lock.log rotates at 2 MB
+# ----------------------------------------------------------------------
+SLEEP_STATE="$TMP/sleep_state/infynitae"
+SLEEP_RUN="$TMP/sleep_run/infynitae"
+mkdir -p "$SLEEP_STATE" "$SLEEP_RUN"
+
+cat > "$MOCK_BIN/systemd-inhibit" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+chmod +x "$MOCK_BIN/systemd-inhibit"
+
+truncate -s 3M "$SLEEP_STATE/sleep-lock.log"
+rm -f "$SLEEP_STATE/sleep-lock.log.old"
+XDG_STATE_HOME="$TMP/sleep_state" XDG_RUNTIME_DIR="$TMP/sleep_run" \
+INFYNITAE_SLEEP_MONITOR="exit 0" \
+sh "$REPO_DIR/live/infynitae-sleep-lock" >/dev/null 2>&1 || true
+check "sleep-lock.log 3 MB rotated to .old" "$([ -f "$SLEEP_STATE/sleep-lock.log.old" ] && echo yes || echo no)" "yes"
+
+truncate -s 1M "$SLEEP_STATE/sleep-lock.log"
+rm -f "$SLEEP_STATE/sleep-lock.log.old"
+XDG_STATE_HOME="$TMP/sleep_state" XDG_RUNTIME_DIR="$TMP/sleep_run" \
+INFYNITAE_SLEEP_MONITOR="exit 0" \
+sh "$REPO_DIR/live/infynitae-sleep-lock" >/dev/null 2>&1 || true
+check "sleep-lock.log 1 MB not rotated" "$([ ! -f "$SLEEP_STATE/sleep-lock.log.old" ] && echo yes || echo no)" "yes"
+
+# ----------------------------------------------------------------------
+# 5. infynitae-reload: helpers.log rotates at 2 MB
+# ----------------------------------------------------------------------
+RELOAD_HOME="$TMP/reload_home"
+RELOAD_STATE="$RELOAD_HOME/.local/state/infynitae"
+mkdir -p "$RELOAD_STATE"
+
+cat > "$MOCK_BIN/pgrep" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+chmod +x "$MOCK_BIN/pgrep"
+
+truncate -s 3M "$RELOAD_STATE/helpers.log"
+rm -f "$RELOAD_STATE/helpers.log.old"
+HOME="$RELOAD_HOME" WAYLAND_DISPLAY="wayland-test" \
+sh "$REPO_DIR/live/infynitae-reload" status >/dev/null 2>&1 || true
+check "helpers.log 3 MB rotated to .old on reload start" "$([ -f "$RELOAD_STATE/helpers.log.old" ] && echo yes || echo no)" "yes"
+
+truncate -s 1M "$RELOAD_STATE/helpers.log"
+rm -f "$RELOAD_STATE/helpers.log.old"
+HOME="$RELOAD_HOME" WAYLAND_DISPLAY="wayland-test" \
+sh "$REPO_DIR/live/infynitae-reload" status >/dev/null 2>&1 || true
+check "helpers.log 1 MB not rotated on reload start" "$([ ! -f "$RELOAD_STATE/helpers.log.old" ] && echo yes || echo no)" "yes"
+
+# ----------------------------------------------------------------------
+# 6. autorotate: autorotate.log rotates at 2 MB, removes stale -<pid> state files
+# ----------------------------------------------------------------------
+ROT_STATE="$TMP/rot_state/infynitae"
+mkdir -p "$ROT_STATE"
+
+cat > "$MOCK_BIN/monitor-sensor" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+chmod +x "$MOCK_BIN/monitor-sensor"
+
+cat > "$MOCK_BIN/wlr-randr" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+chmod +x "$MOCK_BIN/wlr-randr"
+
+# Create stale -<pid> state files
+touch "$ROT_STATE/autorotate-status-12345"
+touch "$ROT_STATE/autorotate-current-orientation-12345"
+touch "$ROT_STATE/autorotate-nosensor-12345"
+
+truncate -s 3M "$ROT_STATE/autorotate.log"
+rm -f "$ROT_STATE/autorotate.log.old"
+
+XDG_STATE_HOME="$TMP/rot_state" AUTO_ROTATE_OUTPUT="eDP-1" AUTO_ROTATE_ONCE="true" \
+sh "$REPO_DIR/live/autorotate" >/dev/null 2>&1 || true
+
+check "autorotate.log 3 MB rotated to .old" "$([ -f "$ROT_STATE/autorotate.log.old" ] && echo yes || echo no)" "yes"
+check "stale autorotate-status-12345 removed at start" "$([ ! -f "$ROT_STATE/autorotate-status-12345" ] && echo yes || echo no)" "yes"
+check "stale autorotate-current-orientation-12345 removed at start" "$([ ! -f "$ROT_STATE/autorotate-current-orientation-12345" ] && echo yes || echo no)" "yes"
+check "stale autorotate-nosensor-12345 removed at start" "$([ ! -f "$ROT_STATE/autorotate-nosensor-12345" ] && echo yes || echo no)" "yes"
+
+truncate -s 1M "$ROT_STATE/autorotate.log"
+rm -f "$ROT_STATE/autorotate.log.old"
+XDG_STATE_HOME="$TMP/rot_state" AUTO_ROTATE_OUTPUT="eDP-1" AUTO_ROTATE_ONCE="true" \
+sh "$REPO_DIR/live/autorotate" >/dev/null 2>&1 || true
+check "autorotate.log 1 MB not rotated" "$([ ! -f "$ROT_STATE/autorotate.log.old" ] && echo yes || echo no)" "yes"
+
+if [ "$fails" -eq 0 ]; then
+    echo "test-log-caps: all tests passed"
+    exit 0
+else
+    echo "test-log-caps: $fails failed"
+    exit 1
+fi

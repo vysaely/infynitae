@@ -11,6 +11,10 @@ LOG="$STATE_DIR/helpers.log"
 BIN_DIR="$HOME/.local/bin"
 LIVE="$HOME/infynitae/live"
 mkdir -p "$STATE_DIR"
+for _r in "$(dirname "$0")/log-rotate.sh" "$LIVE/log-rotate.sh" "$HOME/infynitae/live/log-rotate.sh"; do
+    [ -f "$_r" ] && { . "$_r"; break; }
+done
+unset _r
 
 [ -f "$LIVE/env.sh" ] && . "$LIVE/env.sh" >/dev/null 2>&1
 [ -f "$LIVE/config.sh" ] && . "$LIVE/config.sh"
@@ -25,6 +29,8 @@ if [ -z "$WAYLAND_DISPLAY" ] || ! pgrep -u "$(id -u)" -x infynitae >/dev/null 2>
     echo "infynitae-reload: no running Infynitae session found" >&2
     exit 1
 fi
+
+rotate_log "$LOG"
 
 # The first existing path, or nothing.
 first() {

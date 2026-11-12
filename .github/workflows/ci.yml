@@ -64,6 +64,7 @@ jobs:
       - run: sh tools/test-env
       - run: sh tools/test-session
       - run: sh tools/test-install-lib
+      - run: sh tools/test-log-caps
 
   # The edge in Rust (docs/EDGE_RUST.md): its own crate in live/edge-rs, built, tested, and compared
   # with the C edge.

@@ -11,6 +11,10 @@ STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/infynitae"
 LOCK_LOG="$STATE_DIR/lock.log"
 LOG="$STATE_DIR/sleep-lock.log"
 mkdir -p "$STATE_DIR"
+for _r in "$(dirname "$0")/log-rotate.sh" "$HOME/infynitae/live/log-rotate.sh"; do
+    [ -f "$_r" ] && { . "$_r"; break; }
+done
+unset _r
 log() {
     printf '%s %s\n' "$(date '+%F %T.%3N')" "$*" >> "$LOG" 2>/dev/null || true
 }
@@ -23,6 +27,8 @@ exec 9> "$RUN_DIR/sleep-lock.lock"
 if command -v flock >/dev/null 2>&1 && ! flock -n 9; then
     exit 0
 fi
+
+rotate_log "$LOG"
 
 INH=""
 take() {
