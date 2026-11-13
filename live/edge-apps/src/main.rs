@@ -14,6 +14,7 @@ mod card;
 mod cards;
 mod config;
 mod draw;
+mod edit;
 mod icons;
 mod notify;
 mod notify_server;
@@ -84,6 +85,26 @@ fn render(name: &str, size: &str, out: &str) -> Result<(), String> {
             let (a, b) = v.split_once(',')?;
             Some((a.trim().parse().ok()?, b.trim().parse().ok()?))
         });
+    let edit_env = std::env::var("INFYNITAE_EDGE_RENDER_EDIT").ok();
+    let add_env = std::env::var("INFYNITAE_EDGE_RENDER_ADD").ok();
+    let is_adding = add_env
+        .as_deref()
+        .is_some_and(|v| !v.is_empty() && v != "0");
+    let is_editing = edit_env
+        .as_deref()
+        .is_some_and(|v| !v.is_empty() && v != "0")
+        || is_adding;
+    if is_editing {
+        sh.enter_edit(w as f64, h as f64);
+        if let Some(n) = edit_env
+            .as_deref()
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|&n| n > 0 && n <= sh.panels[idx].cards.len())
+        {
+            sh.edit.hover_card = Some(n - 1);
+        }
+        sh.edit.adding = is_adding;
+    }
     paint(&sh, w, h, out)
 }
 
@@ -100,6 +121,7 @@ fn paint(sh: &shell::Shell, w: i32, h: i32, out: &str) -> Result<(), String> {
     );
     let _ = cr.paint();
     sh.draw(&cr, w as f64, h as f64);
+    crate::boxes::dump(sh, w as f64, h as f64);
     drop(cr);
     surface.flush();
     let mut f = std::fs::File::create(out).map_err(|e| format!("{out}: {e}"))?;

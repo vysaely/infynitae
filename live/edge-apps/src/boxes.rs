@@ -28,20 +28,26 @@ pub fn text(shell: &Shell, w: f64, h: f64) -> String {
         return "closed\n".into();
     };
     let ps = &shell.panels[idx];
-    let ((ox, oy, pw, ph), rects) = shell.layout(idx, w, h);
+    let editing = shell.editing();
+    let (pbox, local_rects, content_h) = shell.layout_local(idx, w, h);
+    let (ox, oy, pw, ph) = pbox;
+    let scroll = shell.panel_scroll.clamp(0.0, (content_h - ph).max(0.0));
     let mut out = format!(
-        "panel {} {ox:.0} {oy:.0} {pw:.0} {ph:.0} locked {}\n",
+        "panel {} {ox:.0} {oy:.0} {pw:.0} {ph:.0} {} {}\n",
         ps.panel.name,
+        if editing { "editing" } else { "locked" },
         ps.panel.side.word()
     );
-    for (ci, r) in &rects {
-        let pc = &ps.cards[*ci];
+    for &(ci, r) in &local_rects {
+        let pc = &ps.cards[ci];
+        let sx = ox + r.0;
+        let sy = oy + r.1 - scroll;
         if let Some(old) = &pc.word.old {
-            out += &format!("module {old} {:.0} {:.0} {:.0} {:.0}\n", r.0, r.1, r.2, r.3);
+            out += &format!("module {old} {sx:.0} {sy:.0} {:.0} {:.0}\n", r.2, r.3);
         }
         out += &format!(
-            "card {}/{} {:.0} {:.0} {:.0} {:.0}\n",
-            pc.word.owner, pc.word.kind, r.0, r.1, r.2, r.3
+            "card {}/{} {sx:.0} {sy:.0} {:.0} {:.0}\n",
+            pc.word.owner, pc.word.kind, r.2, r.3
         );
     }
     for (ci, _, hits) in shell.frame.borrow().iter() {
@@ -51,6 +57,72 @@ pub fn text(shell: &Shell, w: f64, h: f64) -> String {
                 "hit {}/{} {id} {:.0} {:.0} {:.0} {:.0}\n",
                 pc.word.owner, pc.word.kind, r.0, r.1, r.2, r.3
             );
+        }
+    }
+    if editing {
+        let (bar, add) = shell.edit_rects(idx, w, h);
+        out += &format!("bar {:.0} {:.0} {:.0} {:.0}\n", bar.0, bar.1, bar.2, bar.3);
+        for (k, r) in crate::edit::bar_buttons(bar) {
+            out += &format!(
+                "barbutton {k:?} {:.0} {:.0} {:.0} {:.0}\n",
+                r.0, r.1, r.2, r.3
+            );
+        }
+        let cards = shell.edit_cards(idx);
+        for &(ci, r) in &local_rects {
+            let Some(pc) = ps.cards.get(ci) else {
+                continue;
+            };
+            for (k, br) in crate::edit::card_buttons(&cards, &shell.apps, ci, r, pw).1 {
+                out += &format!(
+                    "cardbutton {}/{} {k:?} {:.0} {:.0} {:.0} {:.0}\n",
+                    pc.word.owner,
+                    pc.word.kind,
+                    ox + br.0,
+                    oy + br.1 - scroll,
+                    br.2,
+                    br.3
+                );
+            }
+        }
+        if shell.edit.adding {
+            out += &format!("add {:.0} {:.0} {:.0} {:.0}\n", add.0, add.1, add.2, add.3);
+            let entries = crate::edit::add_entries(&cards, &shell.apps);
+            let view = crate::edit::add_viewport(add);
+            let (items, _, _) = crate::edit::build_add_items(
+                add,
+                &entries,
+                shell.edit.expanded_add.as_deref(),
+                shell.edit.add_scroll,
+            );
+            for item in items {
+                match item {
+                    crate::edit::AddItem::Entry { owner, rect, .. } => {
+                        let cy = rect.1 + rect.3 * 0.5;
+                        if cy >= view.1 && cy <= view.1 + view.3 {
+                            out += &format!(
+                                "addrow {owner} {:.0} {:.0} {:.0} {:.0}\n",
+                                rect.0, rect.1, rect.2, rect.3
+                            );
+                        }
+                    }
+                    crate::edit::AddItem::Kind {
+                        owner,
+                        kind,
+                        button,
+                        ..
+                    } => {
+                        let cy = button.1 + button.3 * 0.5;
+                        if cy >= view.1 && cy <= view.1 + view.3 {
+                            out += &format!(
+                                "addrow {owner}/{} {:.0} {:.0} {:.0} {:.0}\n",
+                                kind.id, button.0, button.1, button.2, button.3
+                            );
+                        }
+                    }
+                    crate::edit::AddItem::Group { .. } => {}
+                }
+            }
         }
     }
     out
