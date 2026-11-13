@@ -2,8 +2,8 @@
 # infynitae-automount: USB drives and SD cards mount when plugged in, through udisks2. At start,
 # it mounts drives already plugged in and unmounted; it then watches udisks2 for added filesystem
 # interfaces on removable media, mounts them with udisksctl, and posts a notification with Open and
-# Eject. An encrypted drive asks for its passphrase (fuzzel) and mounts once unlocked. Started by
-# session.sh; ends with the session.
+# Eject. An encrypted drive asks for its passphrase (the edge's question card, else fuzzel) and
+# mounts once unlocked. Started by session.sh; ends with the session.
 #   infynitae-automount eject [DEVICE]: unmounts DEVICE (else every drive mounted under
 #   /run/media), locks it if encrypted and powers the drive off, so it is safe to pull
 #   INFYNITAE_AUTOMOUNT_MONITOR: a command printing udisks2 signals instead of gdbus (tests)
@@ -165,13 +165,42 @@ mount_device() {
     fi
 }
 
-# the passphrase for an encrypted drive, from fuzzel (empty: cancelled)
+edge_bin() {
+    if command -v infynitae-edge >/dev/null 2>&1; then
+        command -v infynitae-edge
+    elif [ -x "$HOME/.local/bin/infynitae-edge" ]; then
+        printf '%s\n' "$HOME/.local/bin/infynitae-edge"
+    else
+        return 1
+    fi
+}
+
+# only an edge that says it supports ask is asked: an older one takes "ask" as a reason to restart
+edge_can_ask() {
+    [ -n "${XDG_RUNTIME_DIR:-}" ] && cat "$XDG_RUNTIME_DIR/infynitae-edge.features" \
+        "$XDG_RUNTIME_DIR/infynitae-edge-rs.features" 2>/dev/null | grep -qx ask \
+        && edge_bin >/dev/null
+}
+
+# the passphrase for an encrypted drive, from the edge's question card or fuzzel (empty: cancelled;
+# exit 3: no prompt could be shown)
 ask_passphrase() {
     if [ -n "${INFYNITAE_AUTOMOUNT_ASK:-}" ]; then
         sh -c "$INFYNITAE_AUTOMOUNT_ASK"
-    elif command -v fuzzel >/dev/null 2>&1 && [ -n "${WAYLAND_DISPLAY:-}" ]; then
-        fuzzel --dmenu --password --lines 0 --prompt-only "$1 " </dev/null 2>/dev/null
+        return $?
     fi
+    if edge_can_ask && edge=$(edge_bin); then
+        rc=0
+        "$edge" ask --text --secret "$1" </dev/null 2>/dev/null || rc=$?
+        [ "$rc" = 3 ] || return "$rc"
+    fi
+    if command -v fuzzel >/dev/null 2>&1 && [ -n "${WAYLAND_DISPLAY:-}" ]; then
+        rc=0
+        fuzzel --dmenu --password --lines 0 --prompt-only "$1: " </dev/null 2>/dev/null || rc=$?
+        [ "$rc" = 3 ] && rc=1
+        return "$rc"
+    fi
+    return 3
 }
 
 # an encrypted partition on a removable drive: its passphrase asked (three tries), the cleartext
@@ -184,9 +213,10 @@ unlock_device() {
         tries=0
         while [ "$tries" -lt 3 ]; do
             tries=$((tries + 1))
-            pass=$(ask_passphrase "Passphrase for $label:")
+            ask_rc=0
+            pass=$(ask_passphrase "Passphrase for $label") || ask_rc=$?
             if [ -z "$pass" ]; then
-                if [ "$tries" -eq 1 ] && [ -z "${WAYLAND_DISPLAY:-}${INFYNITAE_AUTOMOUNT_ASK:-}" ]; then
+                if [ "$tries" -eq 1 ] && [ "$ask_rc" = 3 ]; then
                     notify "$label is encrypted" "Unlock it with: udisksctl unlock -b $dev"
                 fi
                 log "unlock of $dev cancelled"

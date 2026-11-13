@@ -259,7 +259,7 @@ GM_ARGS
 
         # 5. Notify user if notification service is present
         if command -v notify-send >/dev/null 2>&1; then
-            notify-send -a Infynitae -u low "Infynitae Reloaded" "Configuration re-applied from ~/.config/infynitae/config" 2>/dev/null || true
+            notify-send -a Infynitae -u low "Settings reloaded" 2>/dev/null || true
         fi
         ;;
     screenshot)
@@ -273,7 +273,7 @@ GM_ARGS
         elif [ -x "$SHOT_BIN" ]; then
             if "$SHOT_BIN" screen "$SHOT_FILE" >/dev/null && [ -f "$SHOT_FILE" ]; then
                 if command -v notify-send >/dev/null 2>&1; then
-                    notify-send -a Infynitae "Screenshot Saved" "$SHOT_FILE"
+                    notify-send -a Infynitae "Screenshot saved" "$SHOT_FILE"
                 fi
             fi
         elif command -v grim >/dev/null 2>&1; then
@@ -282,7 +282,7 @@ GM_ARGS
                 wl-copy < "$SHOT_FILE"
             fi
             if [ -f "$SHOT_FILE" ] && command -v notify-send >/dev/null 2>&1; then
-                notify-send -a Infynitae "Screenshot Saved" "$SHOT_FILE"
+                notify-send -a Infynitae "Screenshot saved" "$SHOT_FILE"
             fi
         elif command -v spectacle >/dev/null 2>&1; then
             spectacle -b -n -o "$SHOT_FILE" 2>/dev/null || true
@@ -310,7 +310,7 @@ GM_ARGS
             fi
             if "$SHOT_BIN" region $LIVE_FLAG "$SHOT_FILE" >/dev/null && [ -f "$SHOT_FILE" ]; then
                 if command -v notify-send >/dev/null 2>&1; then
-                    notify-send -a Infynitae "Region Screenshot Saved" "$SHOT_FILE"
+                    notify-send -a Infynitae "Screenshot saved" "$SHOT_FILE"
                 fi
             fi
         elif command -v slurp >/dev/null 2>&1 && command -v grim >/dev/null 2>&1; then
@@ -346,7 +346,7 @@ GM_ARGS
                     wl-copy < "$SHOT_FILE"
                 fi
                 if [ -f "$SHOT_FILE" ] && command -v notify-send >/dev/null 2>&1; then
-                    notify-send -a Infynitae "Region Screenshot Saved" "$SHOT_FILE"
+                    notify-send -a Infynitae "Screenshot saved" "$SHOT_FILE"
                 fi
             fi
         elif command -v spectacle >/dev/null 2>&1; then
@@ -624,13 +624,13 @@ GM_ARGS
     notify-privacy-on)
         # OSD Toast: Privacy Mode Enabled
         if command -v notify-send >/dev/null 2>&1; then
-            notify-send -a "Infynitae" -i security-high -h string:x-canonical-private-synchronous:privacy -t 1500 "Privacy Mode: ON" "Window hidden from screen share & capture" 2>/dev/null || true
+            notify-send -a "Infynitae" -i security-high -h string:x-canonical-private-synchronous:privacy -t 1500 "This window is hidden from captures" 2>/dev/null || true
         fi
         ;;
     notify-privacy-off)
         # OSD Toast: Privacy Mode Disabled
         if command -v notify-send >/dev/null 2>&1; then
-            notify-send -a "Infynitae" -i security-low -h string:x-canonical-private-synchronous:privacy -t 1500 "Privacy Mode: OFF" "Window visible to screen capture" 2>/dev/null || true
+            notify-send -a "Infynitae" -i security-low -h string:x-canonical-private-synchronous:privacy -t 1500 "This window shows in captures again" 2>/dev/null || true
         fi
         ;;
     notify-capture-hidden)
@@ -642,24 +642,24 @@ GM_ARGS
     notify-tearing-on)
         # Super+Shift+O (Super+Shift+T too): the focused window tears while fullscreen
         if command -v notify-send >/dev/null 2>&1; then
-            notify-send -a "Infynitae" -i video-display -h string:x-canonical-private-synchronous:tearing -t 1500 "Tearing: ON" "Fullscreen frames show at once: lowest latency" 2>/dev/null || true
+            notify-send -a "Infynitae" -i video-display -h string:x-canonical-private-synchronous:tearing -t 1500 "Tearing is on for this window" "Fullscreen frames show at once: lowest latency" 2>/dev/null || true
         fi
         ;;
     notify-tearing-off)
         if command -v notify-send >/dev/null 2>&1; then
-            notify-send -a "Infynitae" -i video-display -h string:x-canonical-private-synchronous:tearing -t 1500 "Tearing: OFF" "Frames wait for the screen's refresh" 2>/dev/null || true
+            notify-send -a "Infynitae" -i video-display -h string:x-canonical-private-synchronous:tearing -t 1500 "Tearing is off for this window" "Frames wait for the screen's refresh" 2>/dev/null || true
         fi
         ;;
     notify-idle-inhibit-on)
         # OSD Toast: Idle Sleep Inhibited
         if command -v notify-send >/dev/null 2>&1; then
-            notify-send -a "Infynitae" -i display -h string:x-canonical-private-synchronous:idle -t 1500 "Idle Inhibit: ON" "Stay Awake enabled (display sleep suppressed)" 2>/dev/null || true
+            notify-send -a "Infynitae" -i display -h string:x-canonical-private-synchronous:idle -t 1500 "Stay awake is on" "The screens stay on until you turn it off" 2>/dev/null || true
         fi
         ;;
     notify-idle-inhibit-off)
         # OSD Toast: Idle Sleep Normal
         if command -v notify-send >/dev/null 2>&1; then
-            notify-send -a "Infynitae" -i display -h string:x-canonical-private-synchronous:idle -t 1500 "Idle Inhibit: OFF" "Display sleep restored (normal timeout)" 2>/dev/null || true
+            notify-send -a "Infynitae" -i display -h string:x-canonical-private-synchronous:idle -t 1500 "Stay awake is off" "The screens turn off after the usual time" 2>/dev/null || true
         fi
         ;;
     toggle-idle-inhibit|inhibit-idle)
