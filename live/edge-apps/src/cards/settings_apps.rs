@@ -134,6 +134,8 @@ pub const TABLE: &[Setting] = &[
     },
 ];
 
+pub const KEYS: &[&str] = &[FOUND[0].key, FOUND[1].key, FOUND[2].key, FOUND[3].key];
+
 // Hit IDs outside TableCard's range (ROW 100.., LIST 5000.., MORE 9000).
 const FOUND_LIST: u32 = 20_000;
 

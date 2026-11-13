@@ -169,6 +169,54 @@ const MORE: u32 = 9000;
 const WORDS_H: f64 = 34.0;
 const SLIDE_H: f64 = 22.0;
 
+/// Config keys in `config/config` with no Settings card control today; edited through "In the file".
+pub const FILE_ONLY: &[&str] = &[
+    "KEEP_ON_TOP",
+    "BORDER_IGNORE_CSD",
+    "SQUARE_CORNERS",
+    "SWITCH_LOOK",
+    "CLIP_TO_GEOMETRY",
+    "WINE_TRANSPARENCY",
+    "FORCE_TRANSPARENT_APPS",
+    "LATENCY_STATS",
+    "FRAME_GUARD",
+    "OVERLAY_PLANES",
+    "ZOOM_SHARPEN",
+    "VIRTUAL_SCREEN",
+    "OSK",
+    "AUTO_ROTATE",
+    "OUTPUT_LAYOUT",
+    "LAUNCHER",
+    "POLKIT_AGENT",
+    "SCREENSHOT_CMD",
+    "CLIPBOARD_PICKER",
+    "MENU_PICKER",
+    "CONTROL_MENU",
+    "TRAY_CARD",
+    "NOTIFICATIONS",
+    "ENABLE_EDGE",
+    "EDGE_IMPL",
+    "EDGE_POSITION",
+    "EDGE_CONTROL_SIDE",
+    "FAVORITES",
+    "PANELS_SNAP",
+    "PANELS_OVERLAP",
+    "SCREEN_LOCKER",
+    "PRIVACY_TITLES",
+    "ALLOW_CAPTURE",
+    "ALLOW_CLIPBOARD",
+    "ALLOW_INPUT",
+    "ALLOW_INPUT_METHOD",
+    "ALLOW_WINDOWS",
+    "ALLOW_DISPLAY",
+    "ALLOW_LAYERS",
+    "ALLOW_LOCK",
+    "ENABLE_REPLAY_BUFFER",
+    "REPLAY_DIR",
+    "UPDATE_SIGNING_KEY",
+    "GLOBAL_SHORTCUTS",
+];
+
 /// One card of Settings drawn from its table.
 pub struct TableCard {
     pub table: &'static [Setting],
@@ -944,5 +992,79 @@ pub(crate) mod tests {
         c.draw(&cr, &cx, (0.0, 0.0, 360.0, 400.0), &mut hits);
         let bottom = hits.list.iter().map(|(_, r)| r.1 + r.3).fold(0.0, f64::max);
         assert!((bottom - c.height(&cx, 360.0)).abs() < 0.5, "{bottom}");
+    }
+
+    #[test]
+    fn every_key_in_config_config_is_on_a_card_or_in_file_only() {
+        use crate::cards::{
+            settings_apps, settings_display, settings_games, settings_input, settings_lock,
+            settings_look, settings_privacy, settings_recording, settings_windows,
+        };
+        use std::collections::HashSet;
+
+        assert_eq!(
+            settings_look::KEYS.len(),
+            settings_look::TABLE_APPEARANCE.len()
+                + settings_look::TABLE_WALLPAPER.len()
+                + settings_look::TABLE_FONTS.len()
+        );
+        assert_eq!(settings_apps::KEYS.len(), settings_apps::FOUND.len());
+        assert_eq!(
+            settings_recording::KEYS.len(),
+            settings_recording::FOLDERS.len()
+        );
+
+        let mut on_cards: HashSet<&'static str> = HashSet::new();
+        for t in [
+            settings_display::TABLE,
+            settings_input::TABLE,
+            settings_windows::TABLE,
+            settings_apps::TABLE,
+            settings_games::TABLE,
+            settings_lock::TABLE,
+            settings_privacy::TABLE,
+            settings_recording::TABLE,
+        ] {
+            for s in t {
+                assert!(on_cards.insert(s.key), "duplicate card key {}", s.key);
+            }
+        }
+        for ks in [
+            settings_look::KEYS,
+            settings_display::KEYS,
+            settings_apps::KEYS,
+            settings_privacy::KEYS,
+            settings_recording::KEYS,
+        ] {
+            for &k in ks {
+                assert!(on_cards.insert(k), "duplicate extra card key {k}");
+            }
+        }
+
+        let mut file_only: HashSet<&'static str> = HashSet::new();
+        for &k in FILE_ONLY {
+            assert!(
+                !on_cards.contains(k),
+                "{k} is on a Settings card and must not be in FILE_ONLY"
+            );
+            assert!(file_only.insert(k), "duplicate FILE_ONLY key {k}");
+        }
+
+        let text =
+            std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../config/config"))
+                .unwrap();
+        let def = parse_config(&text);
+        for k in def.keys() {
+            assert!(
+                on_cards.contains(k.as_str()) || file_only.contains(k.as_str()),
+                "config/config key {k} is neither on any Settings card nor in FILE_ONLY"
+            );
+        }
+        for &k in FILE_ONLY {
+            assert!(
+                def.contains_key(k),
+                "stale FILE_ONLY key {k} not found in config/config"
+            );
+        }
     }
 }
