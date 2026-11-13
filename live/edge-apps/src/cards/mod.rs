@@ -18,6 +18,7 @@ pub mod settings_look;
 pub mod settings_input;
 pub mod settings_recording;
 pub mod settings_privacy;
+pub mod settings_lock;
 pub mod settings_rows;
 pub mod simple;
 pub mod sound;
