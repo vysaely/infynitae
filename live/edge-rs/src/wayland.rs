@@ -764,7 +764,6 @@ struct App {
     fetch_tx: Sender<Vec<(String, String)>>,
     /// a card's list, loaded on a helper thread (nmcli, bluetoothctl, pactl)
     child_tx: Sender<(modules::child::ChildKind, Vec<modules::child::ChildItem>)>,
-    ask_tx: Sender<()>,
     fetch_busy: Arc<AtomicBool>,
     last_fetch: Option<Instant>,
     prev_open: Option<usize>,
@@ -917,61 +916,6 @@ impl ToplevelSyncState {
 }
 
 impl App {
-    fn watch_current_ask(&mut self) {
-        if !self.shell.world.ask.on {
-            return;
-        }
-        let Some(fd) = self.shell.world.ask.conn_fd else {
-            return;
-        };
-        let dup_fd = unsafe { libc::dup(fd) };
-        if dup_fd < 0 {
-            return;
-        }
-        let pid = self.shell.world.ask.pid;
-        let tx = self.ask_tx.clone();
-        std::thread::spawn(move || {
-            loop {
-                let mut pfd = libc::pollfd {
-                    fd: dup_fd,
-                    events: libc::POLLIN | libc::POLLERR | libc::POLLHUP,
-                    revents: 0,
-                };
-                let r = unsafe { libc::poll(&mut pfd, 1, 100) };
-                if r > 0 {
-                    if (pfd.revents & (libc::POLLERR | libc::POLLHUP)) != 0 {
-                        let _ = tx.send(());
-                        break;
-                    }
-                    if (pfd.revents & libc::POLLIN) != 0 {
-                        let mut b = [0u8; 1];
-                        let k = unsafe {
-                            libc::recv(
-                                dup_fd,
-                                b.as_mut_ptr().cast(),
-                                1,
-                                libc::MSG_PEEK | libc::MSG_DONTWAIT,
-                            )
-                        };
-                        if k == 0 {
-                            let _ = tx.send(());
-                            break;
-                        }
-                    }
-                }
-                if let Some(p) = pid {
-                    if p > 0 && unsafe { libc::kill(p, 0) } != 0 {
-                        let err = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
-                        if err == libc::ESRCH {
-                            let _ = tx.send(());
-                            break;
-                        }
-                    }
-                }
-            }
-            unsafe { libc::close(dup_fd) };
-        });
-    }
     fn sync_toplevels_to_world(&mut self) {
         let items: Vec<modules::windows::WindowItem> = self
             .toplevels
@@ -1268,7 +1212,6 @@ impl App {
             }
             b'K' => {
                 if self.shell.ask_load() {
-                    self.watch_current_ask();
                     true
                 } else {
                     if let Some(idx) = self.shell.open {
@@ -2085,7 +2028,6 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
     let (fetch_tx, fetch_rx) = channel::channel::<Vec<(String, String)>>();
     let (child_tx, child_rx) =
         channel::channel::<(modules::child::ChildKind, Vec<modules::child::ChildItem>)>();
-    let (ask_tx, ask_rx) = channel::channel::<()>();
     let (notify_tx, notify_rx) = channel::channel::<modules::notify::Incoming>();
     let fetch_busy = Arc::new(AtomicBool::new(false));
 
@@ -2117,7 +2059,6 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
         last_widgets_fetch: None,
         fetch_tx,
         child_tx,
-        ask_tx,
         fetch_busy,
         last_fetch: None,
         prev_open: None,
@@ -2204,17 +2145,6 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
 
     loop_handle
-        .insert_source(ask_rx, |evt, _, app| {
-            if let channel::Event::Msg(()) = evt {
-                if modules::ask::check_asker_gone(&mut app.shell.world) {
-                    app.sync_all();
-                    app.watch_current_ask();
-                }
-            }
-        })
-        .map_err(|e| e.to_string())?;
-
-    loop_handle
         .insert_source(notify_rx, |evt, _, app| {
             if let channel::Event::Msg(m) = evt {
                 let n = &mut app.shell.world.notify;
@@ -2275,10 +2205,12 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
         } else {
             None
         };
+        // an asker that went away (its pipe closed, or it exited): checked every 100 ms while it
+        // asks. No watcher thread: one holding a copy of the reply pipe kept the asker waiting
+        // after the answer (it reads the pipe to its end), until the edge exited.
         if app.shell.world.ask.on {
             if modules::ask::check_asker_gone(&mut app.shell.world) {
                 app.sync_all();
-                app.watch_current_ask();
             }
             timeout = Some(timeout.map_or(Duration::from_millis(100), |t| {
                 t.min(Duration::from_millis(100))
