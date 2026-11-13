@@ -800,7 +800,7 @@ impl WaylandState {
             latency_stats: false,
             gpu_relief: true,
             border_active: smithay::backend::renderer::Color32F::new(0.48, 0.64, 0.97, 1.0),
-            border_inactive: smithay::backend::renderer::Color32F::new(0.20, 0.23, 0.33, 0.8),
+            border_inactive: smithay::backend::renderer::Color32F::new(0.20, 0.23, 0.33, 1.0),
             window_corners: 8.0,
             corners_drawn: false,
             border_shapes: std::collections::HashMap::new(),
@@ -1143,9 +1143,8 @@ impl WaylandState {
                 let mut fit_is_fullscreen = true;
                 let mut latency_mode = crate::frame_schedule::LatencyMode::Direct;
                 // without a DIRECT_SCANOUT line: the environment's, as at start (main.rs), else on
-                let mut direct_scanout = std::env::var("DIRECT_SCANOUT").map_or(true, |v| {
-                    !matches!(v.to_lowercase().as_str(), "0" | "false" | "off" | "no")
-                });
+                let mut direct_scanout = std::env::var("DIRECT_SCANOUT")
+                    .map_or(true, |v| parse_bool(&v).unwrap_or(true));
                 let mut hardware_cursor = true;
                 let mut overlay_planes = false;
                 let mut wine_transparency = true;
@@ -1212,37 +1211,24 @@ impl WaylandState {
                                     .set_pan_mode(infynitae_core::navigation::PanMode::Grab),
                             },
                             "SCREENCOPY_CURSOR" => {
-                                let hide = matches!(
-                                    val.to_lowercase().as_str(),
-                                    "0" | "false" | "off" | "no"
-                                );
+                                let hide = !parse_bool(val).unwrap_or(true);
                                 self.screencopy.set_hide_cursor(hide);
                             }
                             "MAX_APP_SCALE" => {
                                 max_app_scale = val.parse::<f64>().ok();
                             }
                             "GPU_RELIEF" => {
-                                gpu_relief = !matches!(
-                                    val.to_lowercase().as_str(),
-                                    "0" | "false" | "off" | "no"
-                                );
+                                gpu_relief = parse_bool(val).unwrap_or(true);
                             }
                             "BACKGROUND_PRIORITY" => {
-                                background_priority = !matches!(
-                                    val.to_lowercase().as_str(),
-                                    "0" | "false" | "off" | "no"
-                                );
+                                background_priority = parse_bool(val).unwrap_or(true);
                             }
                             "TEARING" => {
-                                let v = val.to_lowercase();
-                                tearing = !matches!(v.as_str(), "0" | "false" | "off" | "no");
-                                tearing_always = v == "always";
+                                tearing = parse_bool(val).unwrap_or(true);
+                                tearing_always = val.trim().eq_ignore_ascii_case("always");
                             }
                             "FIT_IS_FULLSCREEN" => {
-                                fit_is_fullscreen = !matches!(
-                                    val.to_lowercase().as_str(),
-                                    "0" | "false" | "off" | "no"
-                                );
+                                fit_is_fullscreen = parse_bool(val).unwrap_or(true);
                             }
                             "FRAME_GUARD" => {
                                 frame_guard = val
@@ -1250,51 +1236,38 @@ impl WaylandState {
                                     .map_or(DEFAULT_FRAME_GUARD, |p| p.min(90));
                             }
                             "GAME_MODE" => {
-                                game_mode = !matches!(
-                                    val.to_lowercase().as_str(),
-                                    "0" | "false" | "off" | "no"
-                                );
+                                game_mode = parse_bool(val).unwrap_or(true);
                             }
                             "CAPTURE_INDICATOR" => {
                                 self.capture_indicator.mode =
                                     crate::capture_indicator::CaptureMode::parse(val);
                             }
-                            "FOCUS_FOLLOWS_MOUSE" => match val.to_lowercase().as_str() {
-                                "strict" => {
-                                    self.core.set_focus_follows_mouse(true);
-                                    self.core.set_focus_follows_mouse_strict(true);
-                                }
-                                "0" | "false" | "off" | "no" | "click" => {
-                                    self.core.set_focus_follows_mouse(false);
-                                    self.core.set_focus_follows_mouse_strict(false);
-                                }
-                                _ => {
-                                    self.core.set_focus_follows_mouse(true);
-                                    self.core.set_focus_follows_mouse_strict(false);
-                                }
-                            },
+                            "FOCUS_FOLLOWS_MOUSE" => {
+                                let v = val.trim();
+                                let (ffm, strict) = if v.eq_ignore_ascii_case("strict") {
+                                    (true, true)
+                                } else if v.eq_ignore_ascii_case("click")
+                                    || parse_bool(v) == Some(false)
+                                {
+                                    (false, false)
+                                } else {
+                                    (true, false)
+                                };
+                                self.core.set_focus_follows_mouse(ffm);
+                                self.core.set_focus_follows_mouse_strict(strict);
+                            }
                             "FOCUS_CYCLE_NAVIGATE" => {
-                                let enabled = !matches!(
-                                    val.to_lowercase().as_str(),
-                                    "0" | "false" | "off" | "no"
-                                );
-                                self.core.set_focus_cycle_navigate(enabled);
+                                self.core
+                                    .set_focus_cycle_navigate(parse_bool(val).unwrap_or(true));
                             }
                             "FOCUS_ON_OPEN" => {
-                                let enabled = !matches!(
-                                    val.to_lowercase().as_str(),
-                                    "0" | "false" | "off" | "no"
-                                );
-                                self.core.set_focus_on_open(enabled);
+                                self.core.set_focus_on_open(parse_bool(val).unwrap_or(true));
                                 self.focus_open_user_only = val.eq_ignore_ascii_case("user");
                                 self.focus_open_priority = val.eq_ignore_ascii_case("priority");
                             }
                             "TELEPORT_ON_OPEN" => {
-                                let enabled = !matches!(
-                                    val.to_lowercase().as_str(),
-                                    "0" | "false" | "off" | "no"
-                                );
-                                self.core.set_teleport_on_open(enabled);
+                                self.core
+                                    .set_teleport_on_open(parse_bool(val).unwrap_or(true));
                                 self.teleport_open_user_only = val.eq_ignore_ascii_case("user");
                             }
                             "SUPER_ENTER_ACTION" => {
@@ -1317,10 +1290,8 @@ impl WaylandState {
                                 }
                             }
                             "FULLSCREEN_PAN" => {
-                                let enabled = !matches!(
-                                    val.to_lowercase().as_str(),
-                                    "0" | "false" | "off" | "no" | "exclusive"
-                                );
+                                let enabled = !val.trim().eq_ignore_ascii_case("exclusive")
+                                    && parse_bool(val).unwrap_or(true);
                                 self.core.set_fullscreen_pan(enabled);
                             }
                             "KEEP_ON_TOP" => {
@@ -1367,28 +1338,16 @@ impl WaylandState {
                                 latency_mode = crate::frame_schedule::LatencyMode::parse(val);
                             }
                             "LATENCY_STATS" => {
-                                self.latency_stats = matches!(
-                                    val.to_lowercase().as_str(),
-                                    "1" | "true" | "on" | "yes"
-                                );
+                                self.latency_stats = parse_bool(val).unwrap_or(false);
                             }
                             "SQUARE_CORNERS" => {
-                                self.square_corners = !matches!(
-                                    val.to_lowercase().as_str(),
-                                    "0" | "false" | "off" | "no"
-                                );
+                                self.square_corners = parse_bool(val).unwrap_or(true);
                             }
                             "CLIP_TO_GEOMETRY" => {
-                                self.clip_to_geometry = !matches!(
-                                    val.to_lowercase().as_str(),
-                                    "0" | "false" | "off" | "no"
-                                );
+                                self.clip_to_geometry = parse_bool(val).unwrap_or(true);
                             }
                             "BORDER_IGNORE_CSD" => {
-                                self.border_ignore_csd = !matches!(
-                                    val.to_lowercase().as_str(),
-                                    "0" | "false" | "off" | "no"
-                                );
+                                self.border_ignore_csd = parse_bool(val).unwrap_or(true);
                             }
                             "BORDER_ACTIVE" => {
                                 if let Some(c) = crate::parse_color_hex(val) {
@@ -1409,55 +1368,41 @@ impl WaylandState {
                                 }
                             }
                             "TOUCHPAD_TAP" => {
-                                self.input_config.touchpad_tap = Some(matches!(
-                                    val.to_lowercase().as_str(),
-                                    "1" | "true" | "yes" | "on"
-                                ));
+                                self.input_config.touchpad_tap =
+                                    Some(parse_bool(val).unwrap_or(false));
                             }
                             "TOUCHPAD_NATURAL_SCROLL" => {
-                                self.input_config.touchpad_natural_scroll = Some(matches!(
-                                    val.to_lowercase().as_str(),
-                                    "1" | "true" | "yes" | "on"
-                                ));
+                                self.input_config.touchpad_natural_scroll =
+                                    Some(parse_bool(val).unwrap_or(false));
                             }
                             "XWAYLAND_KEYS" => x11_keys_mode = x11_keys::Mode::parse(val),
                             "ZOOM_SHARPEN" => {
                                 zoom_sharpen_after = !val.eq_ignore_ascii_case("live")
                             }
                             "DIRECT_SCANOUT" => {
-                                direct_scanout = !matches!(
-                                    val.to_lowercase().as_str(),
-                                    "0" | "false" | "off" | "no"
-                                );
+                                direct_scanout = parse_bool(val).unwrap_or(true);
                             }
                             "FOCUS_ON_ACTIVATE" => {
                                 use infynitae_core::input::focus::ActivationPolicy;
-                                let v = val.to_lowercase();
-                                self.activate_user_only = v == "user";
-                                self.core.set_activation_policy(match v.as_str() {
-                                    "never" | "0" | "false" | "off" => {
-                                        ActivationPolicy::AttentionOnly
-                                    }
-                                    _ => ActivationPolicy::Strict,
-                                });
+                                let v = val.trim();
+                                self.activate_user_only = v.eq_ignore_ascii_case("user");
+                                let policy = if v.eq_ignore_ascii_case("never")
+                                    || parse_bool(v) == Some(false)
+                                {
+                                    ActivationPolicy::AttentionOnly
+                                } else {
+                                    ActivationPolicy::Strict
+                                };
+                                self.core.set_activation_policy(policy);
                             }
                             "SUPER_FREES_CURSOR" => {
-                                free_cursor_on_super = !matches!(
-                                    val.to_lowercase().as_str(),
-                                    "0" | "false" | "off" | "no"
-                                );
+                                free_cursor_on_super = parse_bool(val).unwrap_or(true);
                             }
                             "HARDWARE_CURSOR" => {
-                                hardware_cursor = !matches!(
-                                    val.to_lowercase().as_str(),
-                                    "0" | "false" | "off" | "no"
-                                );
+                                hardware_cursor = parse_bool(val).unwrap_or(true);
                             }
                             "OVERLAY_PLANES" => {
-                                overlay_planes = matches!(
-                                    val.to_lowercase().as_str(),
-                                    "1" | "true" | "yes" | "on"
-                                );
+                                overlay_planes = parse_bool(val).unwrap_or(false);
                             }
                             "WALLPAPER" => {
                                 let trimmed = val.trim();
@@ -1500,10 +1445,7 @@ impl WaylandState {
                                 self.privacy_titles = parse_titles(val);
                             }
                             "WINE_TRANSPARENCY" => {
-                                wine_transparency = !matches!(
-                                    val.to_lowercase().as_str(),
-                                    "0" | "false" | "off" | "no"
-                                );
+                                wine_transparency = parse_bool(val).unwrap_or(true);
                             }
                             "FORCE_TRANSPARENT_APPS" => {
                                 self.force_transparent_apps = parse_titles(val);
@@ -2029,6 +1971,26 @@ pub fn config_line(line: &str) -> Option<(String, String)> {
     Some((key.trim().to_string(), out.trim().to_string()))
 }
 
+/// Reads a yes/no config value (`1`/`true`/`yes`/`on` vs `0`/`false`/`off`/`no`).
+pub fn parse_bool(val: &str) -> Option<bool> {
+    let v = val.trim();
+    if v.eq_ignore_ascii_case("1")
+        || v.eq_ignore_ascii_case("true")
+        || v.eq_ignore_ascii_case("yes")
+        || v.eq_ignore_ascii_case("on")
+    {
+        Some(true)
+    } else if v.eq_ignore_ascii_case("0")
+        || v.eq_ignore_ascii_case("false")
+        || v.eq_ignore_ascii_case("off")
+        || v.eq_ignore_ascii_case("no")
+    {
+        Some(false)
+    } else {
+        None
+    }
+}
+
 /// A list of window titles (or names that may be titles) from config: comma separated only, since a title can
 /// hold spaces ("Private Browsing"); lowercased and trimmed.
 pub fn parse_titles(val: &str) -> Vec<String> {
@@ -2433,6 +2395,35 @@ mod key_binding_config_tests {
             parse_titles("Private Browsing, KeePassXC"),
             vec!["private browsing".to_string(), "keepassxc".to_string()]
         );
+    }
+
+    #[test]
+    fn parse_bool_handles_yes_no_spellings_and_unknowns() {
+        use super::parse_bool;
+        for token in ["1", "true", "TRUE", "True", "yes", "Yes", "on", " ON "] {
+            assert_eq!(parse_bool(token), Some(true), "{token:?}");
+        }
+        for token in ["0", "false", "False", "FALSE", "off", "Off", "no", " NO "] {
+            assert_eq!(parse_bool(token), Some(false), "{token:?}");
+        }
+        for token in [
+            "", "   ", "always", "user", "never", "priority", "click", "2",
+        ] {
+            assert_eq!(parse_bool(token), None, "{token:?}");
+        }
+    }
+
+    #[test]
+    fn default_border_inactive_is_opaque() {
+        use smithay::backend::renderer::Color32F;
+        use smithay::reexports::wayland_server::Display;
+        let (core, _, _, _) =
+            infynitae_core::Core::new(infynitae_core::navigation::PersistedCameras::default());
+        let display: Display<super::WaylandState> = Display::new().unwrap();
+        let state = super::WaylandState::new(&display.handle(), core);
+        assert_eq!(state.border_inactive, Color32F::new(0.20, 0.23, 0.33, 1.0));
+        assert_eq!(state.border_inactive.a(), state.border_active.a());
+        assert_eq!(state.window_corners, 8.0);
     }
 }
 
