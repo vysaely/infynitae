@@ -62,6 +62,17 @@ check("each change is logged", all(k in log for k in WATCH), log[-300:])
 chord("esc"); wait(0.8); panel(); wait(1.0); shot("set-3-about")
 check("About offers Undo", press("settings/about", 3), str(sorted(h for (c, h) in hits() if c == "settings/about")))
 check("Undo puts the last change back", get("SUPER_ENTER_ACTION") == before["SUPER_ENTER_ACTION"], get("SUPER_ENTER_ACTION"))
+# 5. the Settings index (Super+I): a card opens in place under its row and works there
+chord("esc"); wait(0.6); run_bg(f"{EDGE} settings"); wait(2.0); shot("set-4-index")
+rows = sorted(h for (c, h) in hits() if c == "settings/all" and h < 1000)
+check("the index lists the Settings cards", len(rows) >= 9, str(rows))
+# row 1 + i for CHILD_KINDS[i] (settings_all.rs); Games is i = 7, its own hits 8000 + id
+press("settings/all", 8); shot("set-5-games")
+inside = sorted(h for (c, h) in hits() if c == "settings/all" and h >= 1000)
+check("a row opens its card in place", len(inside) >= 3, str(inside[:10]))
+gm = get("GAME_MODE")
+press("settings/all", 8101)
+check("a switch inside the index writes its key", get("GAME_MODE") != gm, f"{gm} -> {get('GAME_MODE')}")
 check("the edge is still running", sh(f"pgrep -f '^{EDGE}$' | head -1") != "")
 
 for k, v in before.items():
