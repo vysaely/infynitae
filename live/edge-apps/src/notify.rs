@@ -1,4 +1,4 @@
-//! The edge's own notifications (owner 2026-11-13, in place of mako): what the D-Bus server
+//! The edge's own notifications (in place of mako): what the D-Bus server
 //! (`crate::notify_server`) received, the pop-ups at the top right and the history the
 //! Notifications card lists. Pure state, layout and drawing; the server thread and the pop-up
 //! surface live in `notify_server.rs` and `wayland.rs`.

@@ -110,8 +110,7 @@ pub fn text_center(cr: &Context, cx: f64, y: f64, t: &Text) {
     text(cr, cx - w / 2.0, y, t);
 }
 
-/// A thin bar (3 px): its track and the filled part, `part` 0..1 (sound, system, memory: stage 2).
-#[allow(dead_code)]
+/// A thin bar (3 px): its track and the filled part, `part` 0..1.
 pub fn bar(cr: &Context, th: &Theme, x: f64, y: f64, w: f64, part: f64, fill: Rgba) {
     round_rect(cr, x, y, w, 3.0, 1.5);
     set(cr, th.track);

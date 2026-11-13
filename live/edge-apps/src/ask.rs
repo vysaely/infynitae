@@ -1,8 +1,8 @@
-//! The `ask` prompt (`infynitae-edge-rs ask [--title-stdin] [--text] [--secret] [--default TEXT] [TITLE]`):
+//! The `ask` prompt (`infynitae-edge-apps ask [--title-stdin] [--text] [--secret] [--default TEXT] [TITLE]`):
 //! a centred card that scripts use to ask the user a choice or a line of text.
 //!
-//! Copied from live/edge-rs/src/modules/ask.rs, which was ported from `ask_client`, `ask_load`, `draw_ask`, `ask_key` and `ask_answer` in
-//! `live/edge/infynitae-edge.c`, drawn in the new module card style.
+//! Ported from `live/edge/infynitae-edge.c` (`ask_client`, `ask_load`, `draw_ask`, `ask_key`,
+//! `ask_answer`) into the shared card style.
 
 use crate::card::Rect;
 
@@ -74,7 +74,7 @@ pub fn ask_copy(src: &str, max_bytes: usize) -> String {
     out
 }
 
-/// Parsed command-line arguments for `infynitae-edge-rs ask`.
+/// Parsed command-line arguments for `infynitae-edge-apps ask`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AskCliArgs {
     pub text: bool,
@@ -208,7 +208,7 @@ pub fn tell_edge_cancel(edge_pid: i32, my_pid: u32, fifo_str: &str) {
     }
 }
 
-/// Runs `infynitae-edge-rs ask ...`: sends the question to the running edge via a FIFO in
+/// Runs `infynitae-edge-apps ask ...`: sends the question to the running edge via a FIFO in
 /// `$XDG_RUNTIME_DIR` and `SIGRTMIN+3`, prints the answer, and returns the exit code
 /// (`0` answered, `1` cancelled, `2` bad question, `3` no edge running).
 pub fn run_client<S: AsRef<str>>(args: &[S]) -> u8 {

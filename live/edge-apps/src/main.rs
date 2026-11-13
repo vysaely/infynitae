@@ -1,10 +1,6 @@
-//! The edge from apps (docs/EDGE_APPS.md): every card in a panel comes from an app. Stage 1, part 1:
-//! the model (apps, providers, cards, panels), the shared parts, the system cards, and the command
-//! line's `--print-panels`, `--print-theme` and `--render` (pictures from fixed data, for tests).
-//! The Wayland side comes next; until then `infynitae-edge-rs` stays the running edge.
+//! Infynitae's panels, where each card comes from an app (`docs/EDGE_APPS.md`). Runs the Wayland
+//! edge or one-shot subcommands (`ask`, `stop`, `--print-panels`, `--print-theme`, `--render`).
 
-// Input, actions and the timers have no caller until the Wayland side (stage 1, part 2) lands;
-// this goes with it.
 #![allow(dead_code)]
 
 mod app;

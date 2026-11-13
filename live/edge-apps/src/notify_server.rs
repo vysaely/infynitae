@@ -1,5 +1,5 @@
-//! The edge as the session's notification server (org.freedesktop.Notifications, the Desktop
-//! Notifications Specification 1.2), in place of mako (owner 2026-11-13). zbus runs the object on
+//! The edge as the session's notification server (org.freedesktop.Notifications, Desktop
+//! Notifications Specification 1.2), in place of mako. zbus runs the object on its own executor
 //! its own executor thread; each Notify / CloseNotification is handed to the edge's loop through a
 //! calloop channel (`Incoming`), and the edge's answers (`Outgoing`) go back as the spec's signals.
 //!

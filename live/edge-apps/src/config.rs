@@ -221,12 +221,11 @@ impl Panel {
         (!p.items.is_empty()).then_some(p)
     }
 
-    /// The panel as the edge lays it out and edits it (2026-11-10): modules in order, as wide
-    /// as the panel or half of it, as tall as what they show. A line placed by hand (the C edge's
-    /// `module@x,y,wxh`, edit mode before) keeps its modules from top to bottom, left to right;
-    /// two that sat side by side become halves; the places and the panel's height are dropped.
-    /// The line itself changes only when the panel is edited and saved. The desktop's widgets
-    /// keep their places.
+    /// The panel as the edge lays it out and edits it: modules in order, as wide as the panel or
+    /// half of it, as tall as what they show. A line placed by hand (`module@x,y,wxh`) keeps its
+    /// modules from top to bottom, left to right; two that sat side by side become halves; the
+    /// places and the panel's height are dropped. The line itself changes only when the panel is
+    /// edited and saved. The desktop's widgets keep their places.
     pub fn flowed(&self) -> Panel {
         let mut p = self.clone();
         if p.desktop || !p.placed {
@@ -612,8 +611,7 @@ pub struct Config {
     pub text: [u8; 3],
     pub accent: [u8; 3],
     pub hair: Option<[u8; 3]>,
-    /// CORNERS, else WINDOW_CORNERS, else 8: one corner for windows and everything Infynitae draws
-    /// (owner 2026-11-13: "all the ui elements should use the setting ... for the windows");
+    /// CORNERS, else WINDOW_CORNERS, else 8: shared corner radius for windows and panels;
     /// SQUARE_CORNERS only squares apps
     pub corners: f64,
     /// CORNERS was given (WINDOW_CORNERS then does not change the interface's corners)
@@ -623,8 +621,8 @@ pub struct Config {
     /// NOTIFICATIONS: "auto" or "edge" make the edge the notification server (another daemon
     /// named there, or "none", and it is not)
     pub notifications: String,
-    /// TRAY_CARD: what a right click on a tray app shows: "menu" (only its menu; the default,
-    /// the owner's choice), "menu-first" (its menu, then its card), "card-first"
+    /// TRAY_CARD: what a right click on a tray app shows: "menu" (default, only its menu),
+    /// "menu-first" (its menu, then its card), "card-first"
     pub tray_card: String,
     /// CARD_OPACITY, 0..1
     pub opacity: f64,

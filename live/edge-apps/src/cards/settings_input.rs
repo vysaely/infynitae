@@ -1,6 +1,6 @@
-//! Settings: Keyboard and mouse (docs/EDGE_SETTINGS.md, `settings/input`): the "Keyboard & mouse"
-//! keys of config/config (plus XWAYLAND_KEYS). Layouts stays a text prompt in this stage; a list
-//! of evdev.lst names is a later step.
+//! Settings: Keyboard and mouse (`docs/EDGE_SETTINGS.md`, `settings/input`): the "Keyboard &
+//! mouse" keys of config/config (plus `XWAYLAND_KEYS`). Layouts uses the `ask` text prompt rather
+//! than an `evdev.lst` picker.
 
 use super::settings::sq;
 use super::settings_rows::{change_command, After, ConfigData, Control, Setting};

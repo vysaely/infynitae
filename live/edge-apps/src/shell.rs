@@ -138,8 +138,8 @@ pub struct Shell {
     /// the panel ShowCards put in the open one's place (a tray app's menu and card), removed when
     /// it closes
     pub transient: Option<usize>,
-    /// a right click on a free spot: the small menu with "Edit panel" at that point (owner,
-    /// 2026-11-13: a right click alone started editing too easily)
+    /// a right click on a free spot: small menu with "Edit panel" at that point (a right click
+    /// alone opened edit mode too easily)
     pub edit_menu: Option<(f64, f64)>,
     /// the config file's time when it was last read (None: not looked at yet)
     pub config_mtime: Option<std::time::SystemTime>,

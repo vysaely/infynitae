@@ -1,7 +1,7 @@
-//! A tray app's own menu as a card (`apps/menu=<tray id>`, owner 2026-11-13: "the modules can be at
-//! the same time the tray menu"): the entries the app gives over `com.canonical.dbusmenu` (Steam's
-//! Library, Store, Friends...), shown with that app's own card when its tray icon is right-clicked
-//! (`cards/apps.rs`, the Background card). A left click on the icon stays the app's own action.
+//! A tray app's own menu as a card (`apps/menu=<tray id>`): the entries the app gives over
+//! `com.canonical.dbusmenu` (Steam's Library, Store, Friends...), shown with that app's own card
+//! when its tray icon is right-clicked (`cards/apps.rs`, the Background card). A left click on the
+//! icon stays the app's own action.
 
 use crate::card::{run_sh, Action, Button, Card, Cx, Data, Event, Hits, Rect, Source, Status};
 use crate::draw::{self, Text};

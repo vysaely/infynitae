@@ -222,9 +222,8 @@ fn rsvg_fns() -> Option<&'static RsvgFns> {
     .as_ref()
 }
 
-/// Loads a PNG or SVG icon file into a `size x size` `cairo::ImageSurface`.
-/// gdk-pixbuf, loaded when first needed like librsvg (it is what librsvg reads images with, so a
-/// system that shows SVG icons has it): JPEG covers and any other image it has a loader for.
+/// Function pointers loaded from `gdk-pixbuf` (when first needed, like librsvg) to decode JPEG
+/// covers and any other image format it has a loader for.
 struct PixbufFns {
     get_file_info:
         Option<unsafe extern "C" fn(*const c_char, *mut c_int, *mut c_int) -> *mut c_void>,
@@ -530,6 +529,7 @@ fn load_pixbuf_surface(path: &Path, size: i32) -> Option<cairo::ImageSurface> {
     image_surface_from_decoded(&img)
 }
 
+/// Loads a PNG, SVG, or `gdk-pixbuf`-supported image file into a `size x size` `cairo::ImageSurface`.
 pub fn load_icon_surface(path: &Path, size: i32) -> Option<cairo::ImageSurface> {
     let ext = path
         .extension()

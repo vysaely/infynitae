@@ -1,10 +1,7 @@
-//! The Wayland client of the edge from apps (docs/EDGE_APPS.md section 5): one layer surface per
-//! output on the Top layer, two shm buffers each, drawn on frame callbacks, nothing drawn while
-//! closed, the window list from the compositor, the signals and request files the compositor's keys
-//! use, the sources fetched on worker threads, and the actions the cards ask for. The surface code
-//! follows live/edge-rs/src/wayland.rs, where its damage, pacing and fullscreen rules were measured
-//! and fixed; what the new edge does not have yet (edit mode, desktop widgets, the ask card, the
-//! notification server) is left out here and comes in the next parts of stage 1.
+//! The Wayland client of `infynitae-edge-apps` (`docs/EDGE_APPS.md` section 5): one layer
+//! surface per output on the Top layer, two shm buffers each, drawn on frame callbacks, nothing
+//! drawn while closed, toplevel list from the compositor, signals and request files, worker
+//! threads for sources, detached actions, and the `org.freedesktop.Notifications` strip.
 
 use crate::card::{Action, Button, Data, Source, Window};
 use crate::shell::{Shell, ARRIVE_LIFT};
@@ -1550,10 +1547,10 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
     Ok(())
 }
 
-/// The notification pop-ups' surface (owner 2026-11-13: the edge's own, in place of mako): a strip
-/// down the right of the first screen on the Top layer, taking the pointer only on the cards, and
-/// unmapped (no buffer) while there is nothing to show, so it costs nothing and is never one more
-/// surface over a full-screen window.
+/// The notification pop-ups' surface (in place of mako): a strip down the right of the first
+/// screen on the Top layer, taking the pointer only on the cards, and unmapped (no buffer) while
+/// there is nothing to show, so it costs nothing and is never one more surface over a full-screen
+/// window.
 struct PopupLayer {
     output: wl_output::WlOutput,
     layer: LayerSurface,
