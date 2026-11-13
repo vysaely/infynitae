@@ -6,8 +6,7 @@
 //!   `Steamworks Common Redistributables`); a tool with another name appears as a game.
 //! - Running state is not marked yet (window `app_id` matching between native and Proton games
 //!   is not verified in real use).
-//! - Game covers at M/L are not drawn: `app-cards.html` lays out the card with plain rows, and
-//!   `ui.rs` / `app.rs` do not expose JPEG image loading yet.
+//! - Game covers at M/L are not drawn: `app-cards.html` lays out the card with plain rows.
 
 use crate::card::{Action, Button, Card, Cx, Data, Event, Hits, Rect, Source, Status};
 use crate::draw::{self, Text};
@@ -108,7 +107,7 @@ enum Tok {
 }
 
 /// Tokenizes Valve's KeyValues (VDF/ACF) text: quoted strings with backslash escapes, `{`, `}`, and
-/// `//` line comments. Incomplete trailing quotes stop parsing cleanly instead of producing junk.
+/// `//` line comments. Incomplete trailing quotes stop parsing without producing junk.
 fn vdf_tokens(text: &str) -> Vec<Tok> {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let mut out = Vec::new();

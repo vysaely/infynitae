@@ -1,8 +1,8 @@
-//! The shared parts every card draws with (docs/EDGE_APPS.md section 3.5), in the look of version 1 of
-//! `docs/design/apps-edge/system-cards.html` ("rows and switches"): 40 px rows with a 16 px icon, the
-//! name and its state; a 30 x 16 switch; More at a row's right while it is pointed at (Less while its
-//! list is open); lists that open in place, under the row or over it in a panel at the bottom. Every
-//! part registers its own hit, so hover and clicks come with it. Colours only from the theme.
+//! The shared parts every card draws with (`docs/EDGE_APPS.md` section 3.5), in the style of
+//! `docs/design/apps-edge/system-cards.html`: 40 px rows with a 16 px icon, the name and its
+//! state; a 30 x 16 switch; More at a row's right while pointed at (Less while its list is open);
+//! lists that open in place, under the row or over it in a panel at the bottom. Every part
+//! registers its own hit, so hover and clicks come with it. Colours only from the theme.
 //!
 //! Rectangles are in the surface's pixels, the same as the card's `body`.
 
@@ -347,19 +347,16 @@ pub fn button(cr: &Context, cx: &Cx, hits: &mut Hits, id: u32, x: f64, y: f64, w
     w
 }
 
-/// The value of a row that opens a list (owner's choice, 2026-11-13): a small copy of the list's
-/// chosen option, a soft accent block with the word in the accent and a small chevron, so pressing
-/// it reads as that option growing into the list. While the list is open the value is in it, so
-/// only the word (quiet) and the chevron, turned up, are drawn. `lit` (pointed at) deepens the
+/// The value of a row that opens a list: a small copy of the list's chosen option, shown in a
+/// soft accent block with a chevron, so pressing it reads as that option opening into the list.
+/// While the list is open only the muted word and upward chevron are drawn. `lit` deepens the
 /// block. Returns the block's width, to keep the row's name clear of it.
-#[allow(clippy::too_many_arguments)]
 pub fn value_box(
     cr: &Context,
     cx: &Cx,
     row: Rect,
     x_right: f64,
     word: &str,
-    _changed: bool,
     lit: bool,
     open: bool,
 ) -> f64 {
@@ -482,7 +479,7 @@ pub fn slider_part(r: Rect, at: (f64, f64)) -> f64 {
     ((at.0 - r.0) / r.2).clamp(0.0, 1.0)
 }
 
-/// Eased out (cubic): fast at first, settling softly.
+/// Cubic ease-out: rises steeply at first, settling smoothly.
 pub fn ease(t: f64) -> f64 {
     let t = t.clamp(0.0, 1.0);
     1.0 - (1.0 - t).powi(3)

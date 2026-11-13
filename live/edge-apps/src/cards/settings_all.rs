@@ -459,7 +459,6 @@ impl SettingsAllCard {
                 } else {
                     custom
                 };
-                let _ = cx;
                 apps
             }
             "games" => {
@@ -1259,8 +1258,6 @@ pub(crate) fn parse_user_lines(user_text: &str) -> HashMap<String, usize> {
     map
 }
 
-/// Builds the terminal editor shell command, jumping to `+N` for editors that accept it and quoting
-/// every value with `settings::sq`.
 /// The word a card shows for a value (its Pick or Words label), so a summary says what the card says.
 fn shown_word(key: &str, value: &str) -> Option<&'static str> {
     use super::settings_rows::Control;
@@ -1286,6 +1283,8 @@ fn shown_word(key: &str, value: &str) -> Option<&'static str> {
         })
 }
 
+/// Builds the terminal editor shell command, jumping to `+N` for editors that accept it and quoting
+/// every value with `settings::sq`.
 pub(crate) fn open_file_command(editor: Option<&str>, path: &Path, line: Option<usize>) -> String {
     let ed = editor
         .map(str::trim)
@@ -1865,7 +1864,7 @@ mod tests {
         let lines: Vec<&str> = logged.lines().collect();
         assert_eq!(lines, vec!["nvim", "+77", &evil_file.to_string_lossy()]);
 
-        // Appearance open -> right-click returns false, slider Press+Drag+Release forwards cleanly
+        // Appearance open -> right-click returns false, slider Press+Drag+Release forwards to child
         let th = Theme::from_config(&Config::from_text(""));
         let cx = test_cx(&th);
         let cfg = full_config_data();
@@ -2018,7 +2017,7 @@ mod tests {
             &mut out
         ));
 
-        // Click second Wallpaper thumbnail (child 1 -> 200_000 + 1001) sets WALLPAPER cleanly.
+        // Click second Wallpaper thumbnail (child 1 -> 200_000 + 1001) sets WALLPAPER.
         out.clear();
         assert!(card.event(
             &Event::Press {

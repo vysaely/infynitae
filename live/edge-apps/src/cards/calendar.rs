@@ -1,6 +1,6 @@
 //! Calendar, Infynitae's own (no desktop entry): Clock and Month (docs/EDGE_APPS.md section 6),
 //! ported from `live/edge-rs/src/modules/clock.rs` and `calendar.rs`. Both read `cx.now`; Month
-//! events have no data source yet, so L draws the month only until one exists.
+//! has no event source, so size L draws the month grid only.
 
 use crate::card::{Action, Button, Card, Cx, Event, Hits, Rect, Source, Status};
 use crate::draw::{self, Text};

@@ -1,8 +1,8 @@
-//! The `ask` prompt (`infynitae-edge-rs ask [--title-stdin] [--text] [--secret] [--default TEXT] [TITLE]`):
+//! The `ask` prompt (`infynitae-edge-apps ask [--title-stdin] [--text] [--secret] [--default TEXT] [TITLE]`):
 //! a centred card that scripts use to ask the user a choice or a line of text.
 //!
-//! Copied from live/edge-rs/src/modules/ask.rs, which was ported from `ask_client`, `ask_load`, `draw_ask`, `ask_key` and `ask_answer` in
-//! `live/edge/infynitae-edge.c`, drawn in the new module card style.
+//! Ported from `live/edge/infynitae-edge.c` (`ask_client`, `ask_load`, `draw_ask`, `ask_key`,
+//! `ask_answer`) into the shared card style.
 
 use crate::card::Rect;
 
@@ -14,6 +14,7 @@ pub struct World {
     pub actions: Vec<String>,
 }
 
+#[cfg(test)]
 impl World {
     pub fn now() -> World {
         World::default()
@@ -74,7 +75,7 @@ pub fn ask_copy(src: &str, max_bytes: usize) -> String {
     out
 }
 
-/// Parsed command-line arguments for `infynitae-edge-rs ask`.
+/// Parsed command-line arguments for `infynitae-edge-apps ask`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AskCliArgs {
     pub text: bool,
@@ -110,7 +111,7 @@ pub fn parse_cli_args<S: AsRef<str>>(args: &[S]) -> Result<AskCliArgs, String> {
     }
     if !title_stdin && title.is_none() {
         return Err(
-            "usage: infynitae-edge-rs ask [--title-stdin] [--text] [--secret] [--default TEXT] TITLE < choices"
+            "usage: infynitae-edge-apps ask [--title-stdin] [--text] [--secret] [--default TEXT] TITLE < choices"
                 .to_string(),
         );
     }
@@ -208,7 +209,13 @@ pub fn tell_edge_cancel(edge_pid: i32, my_pid: u32, fifo_str: &str) {
     }
 }
 
-/// Runs `infynitae-edge-rs ask ...`: sends the question to the running edge via a FIFO in
+fn read_all_stdin_from(reader: &mut dyn Read) -> std::io::Result<String> {
+    let mut raw = String::new();
+    reader.read_to_string(&mut raw)?;
+    Ok(raw)
+}
+
+/// Runs `infynitae-edge-apps ask ...`: sends the question to the running edge via a FIFO in
 /// `$XDG_RUNTIME_DIR` and `SIGRTMIN+3`, prints the answer, and returns the exit code
 /// (`0` answered, `1` cancelled, `2` bad question, `3` no edge running).
 pub fn run_client<S: AsRef<str>>(args: &[S]) -> u8 {
@@ -223,23 +230,28 @@ pub fn run_client<S: AsRef<str>>(args: &[S]) -> u8 {
         return 3;
     };
     let mut items = Vec::new();
-    if cli.title_stdin {
-        let mut raw = String::new();
-        let _ = std::io::stdin().read_to_string(&mut raw);
-        let Some((title, parsed_items)) = parse_title_stdin(&raw, cli.text) else {
-            return 1;
+    if cli.title_stdin || !cli.text {
+        let raw = match read_all_stdin_from(&mut std::io::stdin()) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("infynitae-edge-apps: ask: read stdin: {e}");
+                return if cli.title_stdin { 1 } else { 2 };
+            }
         };
-        cli.title = title;
-        items = parsed_items;
-        if !cli.text && items.is_empty() {
-            return 2;
-        }
-    } else if !cli.text {
-        let mut raw = String::new();
-        let _ = std::io::stdin().read_to_string(&mut raw);
-        items = parse_choices(&raw);
-        if items.is_empty() {
-            return 2;
+        if cli.title_stdin {
+            let Some((title, parsed_items)) = parse_title_stdin(&raw, cli.text) else {
+                return 1;
+            };
+            cli.title = title;
+            items = parsed_items;
+            if !cli.text && items.is_empty() {
+                return 2;
+            }
+        } else {
+            items = parse_choices(&raw);
+            if items.is_empty() {
+                return 2;
+            }
         }
     }
 
@@ -743,18 +755,6 @@ impl AskState {
     }
 }
 
-pub fn apply(ask: &mut AskState, key: &str, out: &str) -> bool {
-    if key != "ask" {
-        return false;
-    }
-    let trimmed = out.trim();
-    if trimmed.is_empty() {
-        return false;
-    }
-    *ask = AskState::from_render_spec(trimmed, None, None);
-    true
-}
-
 /// Sends `ans` (`None` when cancelled) through `world.ask.reply` or `world.ask.conn_fd`, records the
 /// outcome in `world.actions`, and advances to the next queued card if any.
 pub fn answer(world: &mut World, ans: Option<&str>) {
@@ -1223,8 +1223,9 @@ mod tests {
         assert!(cli_default.title_stdin);
         assert_eq!(cli_default.default, "hint");
 
-        // Missing title and no --title-stdin fails
-        assert!(parse_cli_args(&["--secret"]).is_err());
+        // Missing title and no --title-stdin fails with usage
+        let err = parse_cli_args(&["--secret"]).unwrap_err();
+        assert!(err.starts_with("usage: infynitae-edge-apps ask"));
         assert!(parse_cli_args::<&str>(&[]).is_err());
     }
 
@@ -1581,6 +1582,23 @@ mod tests {
         assert_eq!(got, "1\nA2\n");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn read_all_stdin_from_reports_ok_and_error() {
+        struct FailReader;
+        impl Read for FailReader {
+            fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("broken pipe"))
+            }
+        }
+
+        let mut ok = std::io::Cursor::new(b"first\nsecond\n");
+        assert_eq!(read_all_stdin_from(&mut ok).unwrap(), "first\nsecond\n");
+
+        let mut fail = FailReader;
+        let err = read_all_stdin_from(&mut fail).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::Other);
     }
 
     #[test]

@@ -1590,7 +1590,7 @@ mod tests {
         assert_eq!(rows["BIND_TERMINAL"].primary_chord(), "SUPER+L");
         assert_eq!(rows["BIND_WINDOWS"].primary_chord(), "SUPER+Q");
 
-        // Swap involving quoted EXEC_* preserves both single and double quotes cleanly with sq().
+        // Swap involving quoted EXEC_* preserves both single and double quotes via sq().
         let mut quoted_cfg = ConfigData::default();
         quoted_cfg
             .now

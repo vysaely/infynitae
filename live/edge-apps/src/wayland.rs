@@ -1,10 +1,7 @@
-//! The Wayland client of the edge from apps (docs/EDGE_APPS.md section 5): one layer surface per
-//! output on the Top layer, two shm buffers each, drawn on frame callbacks, nothing drawn while
-//! closed, the window list from the compositor, the signals and request files the compositor's keys
-//! use, the sources fetched on worker threads, and the actions the cards ask for. The surface code
-//! follows live/edge-rs/src/wayland.rs, where its damage, pacing and fullscreen rules were measured
-//! and fixed; what the new edge does not have yet (edit mode, desktop widgets, the ask card, the
-//! notification server) is left out here and comes in the next parts of stage 1.
+//! The Wayland client of `infynitae-edge-apps` (`docs/EDGE_APPS.md` section 5): one layer
+//! surface per output on the Top layer, two shm buffers each, drawn on frame callbacks, nothing
+//! drawn while closed, toplevel list from the compositor, signals and request files, worker
+//! threads for sources, detached actions, and the `org.freedesktop.Notifications` strip.
 
 use crate::card::{Action, Button, Data, Source, Window};
 use crate::shell::{Shell, ARRIVE_LIFT};
@@ -693,13 +690,16 @@ impl App {
                     std::thread::spawn(move || {
                         let mut cmd = cmd;
                         loop {
-                            let _ = Command::new("sh")
+                            if let Err(e) = Command::new("sh")
                                 .arg("-c")
                                 .arg(&cmd)
                                 .stdin(Stdio::null())
                                 .stdout(Stdio::null())
                                 .stderr(Stdio::null())
-                                .status();
+                                .status()
+                            {
+                                eprintln!("infynitae-edge-apps: run {cmd}: {e}");
+                            }
                             let mut q = queued.lock().unwrap_or_else(|p| p.into_inner());
                             match q.get_mut(&card).and_then(Option::take) {
                                 Some(next) => cmd = next,
@@ -817,7 +817,8 @@ impl App {
 }
 
 fn spawn_detached(cmd: &str) {
-    let _ = Command::new("setsid")
+    let label = cmd.to_string();
+    match Command::new("setsid")
         .arg("-f")
         .arg("sh")
         .arg("-c")
@@ -826,7 +827,26 @@ fn spawn_detached(cmd: &str) {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .map(|mut c| std::thread::spawn(move || c.wait()));
+    {
+        Ok(mut c) => {
+            std::thread::spawn(move || {
+                if let Err(e) = c.wait() {
+                    eprintln!("infynitae-edge-apps: wait detached {label}: {e}");
+                }
+            });
+        }
+        Err(e) => eprintln!("infynitae-edge-apps: spawn {cmd}: {e}"),
+    }
+}
+
+fn write_runtime_file(path: &std::path::Path, text: &str) -> bool {
+    match std::fs::write(path, text) {
+        Ok(()) => true,
+        Err(e) => {
+            eprintln!("infynitae-edge-apps: write {}: {e}", path.display());
+            false
+        }
+    }
 }
 
 impl CompositorHandler for App {
@@ -1350,12 +1370,14 @@ fn setup_signal_pipe() -> Result<OwnedFd, String> {
         (rt + 3, b'K'),
     ];
     for &(sig, byte) in pairs {
-        let _ = unsafe {
+        unsafe {
             signal_hook_registry::register(sig, move || {
                 let buf = [byte];
+                // Ignore self-pipe write errors here: signal handlers cannot allocate or lock stderr.
                 let _ = libc::write(wr, buf.as_ptr().cast(), 1);
             })
-        };
+        }
+        .map_err(|e| format!("signal {sig}: {e}"))?;
     }
     Ok(rd)
 }
@@ -1365,7 +1387,7 @@ pub fn run(initial_panel: Option<&str>) -> Result<(), String> {
         std::thread::sleep(Duration::from_millis(50));
     }
     let pid_file = runtime_path(PID_FILE);
-    let _ = std::fs::write(&pid_file, format!("{}\n", std::process::id()));
+    write_runtime_file(&pid_file, &format!("{}\n", std::process::id()));
     let res = run_loop(initial_panel);
     if std::fs::read_to_string(&pid_file).is_ok_and(|t| t.trim() == std::process::id().to_string())
     {
@@ -1425,7 +1447,7 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
                 app.notify_conn = Some(conn);
                 app.shell.notify.serving = true;
             }
-            Err(e) => eprintln!("[infynitae-edge] notifications: not serving: {e}"),
+            Err(e) => eprintln!("infynitae-edge-apps: notifications: not serving: {e}"),
         }
     }
     for output in existing {
@@ -1501,7 +1523,7 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
 
     // callers read this to know the running edge can ask (live/infynitae-format-drive)
     let features_file = runtime_path(crate::ask::FEATURES_FILE);
-    let _ = std::fs::write(&features_file, "ask\n");
+    write_runtime_file(&features_file, "ask\n");
     // a question sent before the edge started
     if app.shell.ask_load() {
         app.sync_all();
@@ -1550,10 +1572,10 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
     Ok(())
 }
 
-/// The notification pop-ups' surface (owner 2026-11-13: the edge's own, in place of mako): a strip
-/// down the right of the first screen on the Top layer, taking the pointer only on the cards, and
-/// unmapped (no buffer) while there is nothing to show, so it costs nothing and is never one more
-/// surface over a full-screen window.
+/// The notification pop-ups' surface (in place of mako): a strip down the right of the first
+/// screen on the Top layer, taking the pointer only on the cards, and unmapped (no buffer) while
+/// there is nothing to show, so it costs nothing and is never one more surface over a full-screen
+/// window.
 struct PopupLayer {
     output: wl_output::WlOutput,
     layer: LayerSurface,
@@ -1732,6 +1754,25 @@ mod tests {
             fetched.push(id);
         }
         fetched
+    }
+
+    #[test]
+    fn write_runtime_file_writes_and_reports_missing_parent() {
+        let dir = std::env::temp_dir().join(format!(
+            "infynitae-edge-apps-runtime-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let ok_path = dir.join("pid");
+        assert!(write_runtime_file(&ok_path, "42\n"));
+        assert_eq!(std::fs::read_to_string(&ok_path).unwrap(), "42\n");
+
+        let bad_path = dir.join("missing").join("pid");
+        assert!(!write_runtime_file(&bad_path, "42\n"));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

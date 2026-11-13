@@ -1,6 +1,6 @@
-//! Settings, Infynitae's own (no desktop entry): the Network, Bluetooth and Power mode cards (stage 1 of
-//! docs/EDGE_APPS.md), in version 1 of `docs/design/apps-edge/system-cards.html`. The data comes from
-//! the same commands as today's edge (`nmcli`, `bluetoothctl`, `powerprofilesctl`).
+//! Settings, Infynitae's own (no desktop entry): the Network, Bluetooth and Power mode cards
+//! (`docs/EDGE_APPS.md`, `docs/design/apps-edge/system-cards.html`). The data comes from `nmcli`,
+//! `bluetoothctl` and `powerprofilesctl`.
 
 use crate::card::{run_sh, Action, Button, Card, Cx, Data, Event, Hits, Rect, Source, Status};
 use crate::provider::{CardKind, Claim, Listed, Provider, Size};
@@ -211,8 +211,8 @@ impl NetworkData {
             Icon::WifiOff
         }
     }
-    /// What the row says (version 1 of the design): the state in words, a detail under it, and
-    /// whether it is on. A cable first, then the joined network.
+    /// What the row says: the state in words, a detail under it, and whether it is on. A cable
+    /// first, then the joined network.
     pub fn state(&self) -> (String, String, bool) {
         if self.wired {
             ("Wired".into(), "Cable connected".into(), true)

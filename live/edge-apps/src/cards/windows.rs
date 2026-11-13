@@ -502,7 +502,7 @@ mod tests {
             assert!(r.1 >= 0.0 && r.1 + r.3 <= hl);
         }
 
-        // Fewer windows than max_rows shrinks to fit cleanly.
+        // Fewer windows than max_rows shrinks to fit.
         let cx_few = make_cx(Size::M, &[], &windows[..2], &th);
         let (hf, hits_f) = draw_card(&c, &cx_few, None);
         assert_eq!(hf, 2.0 * ROW_H);

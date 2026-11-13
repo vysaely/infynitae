@@ -8,7 +8,6 @@ use std::path::{Path, PathBuf};
 
 use crate::card::{Action, Button, Card, Cx, Data, Event, Hits, Rect, Source, Status};
 use crate::cards::settings_rows::{change_command, After, ConfigData, Control, Setting};
-use crate::draw::{self, Text};
 use crate::provider::{CardKind, Size};
 use crate::ui::{self, LIST_ROW_H, ROW_H};
 
@@ -197,14 +196,6 @@ impl RecordingCard {
         self.config.as_ref().map_or("", |cfg| cfg.value(key))
     }
 
-    fn is_default(&self, idx: usize) -> bool {
-        let Some(cfg) = self.config.as_ref() else {
-            return true;
-        };
-        let key = TABLE[idx].key;
-        self.value(idx) == cfg.default.get(key).map(String::as_str).unwrap_or("")
-    }
-
     fn visible_rows(&self, cx: &Cx) -> (Vec<usize>, bool) {
         let searching = !self.query.trim().is_empty();
         let all = cx.size != Size::S || self.more || searching;
@@ -358,7 +349,6 @@ impl Card for RecordingCard {
             let id = ROW + 10 * idx as u32;
             let r = (body.0, y, body.2, ROW_H);
             let cur = self.value(idx);
-            let changed = !self.is_default(idx);
 
             match s.control {
                 Control::Switch { on, .. } => {
@@ -396,7 +386,7 @@ impl Card for RecordingCard {
                         },
                     );
                     let open = self.pick == Some(idx) && self.list.shown();
-                    ui::value_box(cr, cx, r, right, word, changed, lit, open);
+                    ui::value_box(cr, cx, r, right, word, lit, open);
                     if self.pick == Some(idx) && self.list.shown() {
                         let opts = self.pick_options(idx);
                         let lh = self.list.height(opts.len());
@@ -571,20 +561,6 @@ fn draw_folder_buttons(cr: &cairo::Context, cx: &Cx, hits: &mut Hits, r: Rect, i
         let w = ui::button(cr, cx, hits, FOLDER + i as u32, x, y, FOLDERS[i].0);
         x += w + BUTTON_GAP;
     }
-}
-
-fn value_at_right(cr: &cairo::Context, cx: &Cx, r: Rect, x_right: f64, text: &str, changed: bool) {
-    let t = Text {
-        size: 12.0,
-        bold: false,
-        color: if changed {
-            cx.theme.accent_text
-        } else {
-            cx.theme.muted
-        },
-        text,
-    };
-    draw::text_right(cr, x_right, r.1 + (r.3 - 15.0) / 2.0, &t);
 }
 
 fn pick_label<'a>(opts: &[(&'static str, &'static str)], value: &'a str) -> &'a str {

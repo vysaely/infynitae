@@ -1,6 +1,6 @@
-//! Settings: Keyboard and mouse (docs/EDGE_SETTINGS.md, `settings/input`): the "Keyboard & mouse"
-//! keys of config/config (plus XWAYLAND_KEYS). Layouts stays a text prompt in this stage; a list
-//! of evdev.lst names is a later step.
+//! Settings: Keyboard and mouse (`docs/EDGE_SETTINGS.md`, `settings/input`): the "Keyboard &
+//! mouse" keys of config/config (plus `XWAYLAND_KEYS`). Layouts uses the `ask` text prompt rather
+//! than an `evdev.lst` picker.
 
 use super::settings::sq;
 use super::settings_rows::{change_command, After, ConfigData, Control, Setting};
@@ -548,7 +548,7 @@ impl Card for InputCard {
                         value_at_right(cr, cx, r, right, &word, changed);
                     } else {
                         let open = self.pick == Some(i) && self.list.shown();
-                        ui::value_box(cr, cx, r, right, &word, changed, lit, open);
+                        ui::value_box(cr, cx, r, right, &word, lit, open);
                     }
                     if !locked && self.pick == Some(i) && self.list.shown() {
                         let lh = self.list.height(opts.len());

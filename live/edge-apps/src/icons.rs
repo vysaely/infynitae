@@ -222,9 +222,8 @@ fn rsvg_fns() -> Option<&'static RsvgFns> {
     .as_ref()
 }
 
-/// Loads a PNG or SVG icon file into a `size x size` `cairo::ImageSurface`.
-/// gdk-pixbuf, loaded when first needed like librsvg (it is what librsvg reads images with, so a
-/// system that shows SVG icons has it): JPEG covers and any other image it has a loader for.
+/// Function pointers loaded from `gdk-pixbuf` (when first needed, like librsvg) to decode JPEG
+/// covers and any other image format it has a loader for.
 struct PixbufFns {
     get_file_info:
         Option<unsafe extern "C" fn(*const c_char, *mut c_int, *mut c_int) -> *mut c_void>,
@@ -522,14 +521,15 @@ pub fn image_surface_from_decoded(img: &DecodedImage) -> Option<cairo::ImageSurf
     Some(surf)
 }
 
-/// An image file at `size` x `size` through gdk-pixbuf (a cover is filled, not letterboxed),
-/// as a cairo surface (premultiplied ARGB).
-fn load_pixbuf_surface(path: &Path, size: i32) -> Option<cairo::ImageSurface> {
+/// Loads an image file scaled to at most `size` x `size` through `gdk-pixbuf` into an ARGB32
+/// Cairo surface.
+pub fn load_pixbuf_surface(path: &Path, size: i32) -> Option<cairo::ImageSurface> {
     let fns = pixbuf_fns()?;
     let img = decode_pixbuf_image(fns, path, size, size, false)?;
     image_surface_from_decoded(&img)
 }
 
+/// Loads a PNG, SVG, or `gdk-pixbuf`-supported image file into a `size x size` `cairo::ImageSurface`.
 pub fn load_icon_surface(path: &Path, size: i32) -> Option<cairo::ImageSurface> {
     let ext = path
         .extension()
@@ -724,14 +724,14 @@ mod tests {
         assert!(!Arc::ptr_eq(&t1a, &t1m));
         assert_eq!(cache.decode_count(), 2);
 
-        // Tall 1:2 image still fills 16:9 target cleanly via cover crop without aspect stretch failure.
+        // Tall 1:2 image still fills 16:9 target via cover crop without aspect stretch.
         let t2 = cache.get_or_decode(&p2, 192, 108).unwrap();
         assert_eq!((t2.width, t2.height), (192, 108));
         let surf2 = image_surface_from_decoded(&t2).unwrap();
         assert_eq!((surf2.width(), surf2.height()), (192, 108));
         assert_eq!(cache.decode_count(), 3);
 
-        // Broken file returns None cleanly and is cached until replaced.
+        // Broken file returns None and is cached until replaced.
         assert!(cache.get_or_decode(&broken, 192, 108).is_none());
         assert_eq!(cache.decode_count(), 4);
         assert!(cache.get_or_decode(&broken, 192, 108).is_none());

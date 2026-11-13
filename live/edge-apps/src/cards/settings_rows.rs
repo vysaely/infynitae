@@ -24,6 +24,7 @@ pub enum Control {
     /// (value, word): the word at the row's right, the list opening in place
     Pick(&'static [(&'static str, &'static str)]),
     /// (value, word), at most 3: all shown under the name
+    #[allow(dead_code)] // Control variant kept until word-button settings rows are unified.
     Words(&'static [(&'static str, &'static str)]),
     /// a number on a slider, written when let go
     Slide {
@@ -33,6 +34,8 @@ pub enum Control {
         unit: &'static str,
     },
     /// a whole number with minus and plus
+    #[allow(dead_code)]
+    // Control variant kept until numeric stepper rows move to settings_rows.
     Step { min: i64, max: i64 },
     /// a line of text, asked with the edge's own question
     Text,
@@ -169,6 +172,7 @@ const MORE: u32 = 9000;
 const WORDS_H: f64 = 34.0;
 const SLIDE_H: f64 = 22.0;
 
+#[cfg(test)]
 /// Config keys in `config/config` with no Settings card control today; edited through "In the file".
 pub const FILE_ONLY: &[&str] = &[
     "KEEP_ON_TOP",
@@ -255,8 +259,7 @@ impl TableCard {
 
     fn value(&self, i: usize) -> String {
         let s = &self.table[i];
-        if let Some((row, v)) = self.sliding.filter(|(r, _)| *r == i) {
-            let _ = row;
+        if let Some((_, v)) = self.sliding.filter(|(r, _)| *r == i) {
             return fmt_number(v);
         }
         if let Some(v) = self.pending.get(s.key) {
@@ -470,7 +473,7 @@ impl Card for TableCard {
                         },
                     );
                     let open = self.pick == Some(i) && self.list.shown();
-                    ui::value_box(cr, cx, r, right, &word, changed, lit, open);
+                    ui::value_box(cr, cx, r, right, &word, lit, open);
                     if self.pick == Some(i) && self.list.shown() {
                         let lh = self.list.height(opts.len());
                         let lr = (body.0, y + ui::ROW_H, body.2, lh);
@@ -580,8 +583,7 @@ impl Card for TableCard {
                         },
                     );
                     let v = self.value(i);
-                    let bw = ui::button(cr, cx, hits, id + 2, right - 26.0, y + 7.0, "+");
-                    let _ = bw;
+                    ui::button(cr, cx, hits, id + 2, right - 26.0, y + 7.0, "+");
                     value_at_right(cr, cx, r, right - 32.0, &v, changed);
                     ui::button(cr, cx, hits, id + 1, right - 90.0, y + 7.0, "−");
                 }

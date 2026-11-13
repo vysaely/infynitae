@@ -145,7 +145,7 @@ impl Provider for Apps {
 // ---------------------------------------------------------------------------------------------
 // Shared drawing and matching helpers
 
-/// Fallback icon tile matching `cards/simple.rs::draw_app_tile` until `app::draw_icon` exists.
+/// Fallback icon tile when an app has no icon or its tile uses the accent.
 fn draw_tile(
     cr: &Context,
     th: &Theme,
@@ -175,10 +175,6 @@ fn draw_tile(
     };
     let (_, th_h) = draw::measure(cr, &t);
     draw::text_center(cr, x + size / 2.0, y + (size - th_h) / 2.0, &t);
-}
-
-fn draw_app_tile(cr: &Context, th: &Theme, app: &App, x: f64, y: f64, size: f64) {
-    draw_tile(cr, th, &app.name, &app.id, (x, y, size), false);
 }
 
 fn draw_subhead(cr: &Context, th: &Theme, body: Rect, y: f64, label: &str) {
@@ -1368,7 +1364,7 @@ pub fn tray_items() -> (Vec<TrayItem>, bool) {
     fetch_dbus_tray()
 }
 
-/// The cards a right click on a tray app shows (owner 2026-11-13): its own menu, then its card (its
+/// The cards a right click on a tray app shows: its own menu, then its card (its
 /// provider's first kind; the simple card for an app nobody knows). The shell orders them by
 /// TRAY_CARD.
 pub fn tray_words(item: &TrayItem, apps: &[App]) -> Vec<String> {

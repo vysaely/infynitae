@@ -1,4 +1,4 @@
-//! The edge's own notifications (owner 2026-11-13, in place of mako): what the D-Bus server
+//! The edge's own notifications (in place of mako): what the D-Bus server
 //! (`crate::notify_server`) received, the pop-ups at the top right and the history the
 //! Notifications card lists. Pure state, layout and drawing; the server thread and the pop-up
 //! surface live in `notify_server.rs` and `wayland.rs`.
@@ -61,9 +61,6 @@ pub struct Note {
 }
 
 impl Note {
-    pub fn has_default(&self) -> bool {
-        self.actions.iter().any(|(k, _)| k == "default")
-    }
     /// The action buttons (everything but "default").
     pub fn buttons(&self) -> impl Iterator<Item = &(String, String)> {
         self.actions.iter().filter(|(k, _)| k != "default")
@@ -346,6 +343,7 @@ impl Notify {
         true
     }
 
+    #[cfg(test)]
     /// Clear all (the card): every one dismissed.
     pub fn clear_all(&mut self) -> bool {
         let ids: Vec<u32> = self
@@ -495,7 +493,7 @@ pub fn draw(
             cr.push_group();
             cr.translate((1.0 - t) * 24.0, 0.0);
         }
-        draw_one(cr, th, &pop.note, r, inside(r), pointer, &inside);
+        draw_one(cr, th, &pop.note, r, inside(r), &inside);
         if lifted {
             let _ = cr.pop_group_to_source();
             let _ = cr.paint_with_alpha(t);
@@ -509,7 +507,6 @@ fn draw_one(
     note: &Note,
     r: Rect,
     pointed: bool,
-    pointer: Option<(f64, f64)>,
     inside: &dyn Fn(Rect) -> bool,
 ) {
     let (x, y, w, h) = r;
@@ -618,7 +615,6 @@ fn draw_one(
             },
         );
     }
-    let _ = pointer;
 }
 
 /// The body in up to `lines` lines, wrapped, the last cut with an ellipsis.
