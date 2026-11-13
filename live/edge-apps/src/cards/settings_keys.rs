@@ -1313,7 +1313,9 @@ mod tests {
             30,
             "every built-in ACTION_NAMES entry has a row"
         );
-        assert!(rows.iter().any(|r| r.key == "BIND_BACK" && r.chords.is_empty()));
+        assert!(rows
+            .iter()
+            .any(|r| r.key == "BIND_BACK" && r.chords.is_empty()));
 
         let by_key: HashMap<_, _> = rows.iter().map(|r| (r.key.as_str(), r)).collect();
         assert_eq!(by_key["BIND_TERMINAL"].name, "Open a terminal");

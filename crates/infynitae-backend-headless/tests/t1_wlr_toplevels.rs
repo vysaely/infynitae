@@ -297,7 +297,14 @@ fn picking_a_window_from_the_bar_moves_the_camera_and_records_history() {
     let o = s.ls.output();
     let w1 = s.e[1];
     let a1 = s.ls.state.core().stage().anchor(w1).expect("w1 anchor");
-    let size1 = s.ls.state.core().stage().tree(w1).expect("w1 tree").geometry.size;
+    let size1 =
+        s.ls.state
+            .core()
+            .stage()
+            .tree(w1)
+            .expect("w1 tree")
+            .geometry
+            .size;
     let expected_w1_center = CanvasPos {
         x: a1.x * Q16_ONE + i64::from(size1.w) * (Q16_ONE / 2),
         y: a1.y * Q16_ONE + i64::from(size1.h) * (Q16_ONE / 2),
@@ -305,35 +312,46 @@ fn picking_a_window_from_the_bar_moves_the_camera_and_records_history() {
 
     // Navigate elsewhere first (incrementally so history starts empty), then make sure an
     // unvalidated client moves neither focus nor camera.
-    let fx = s
-        .ls
-        .state
-        .core_mut()
-        .shell_command(
-            &mut s.ls.shell,
-            ShellCommand::Navigate {
-                output: o,
-                to: NavigateTo::Delta(-2400.0, 1200.0),
-                zoom: None,
-                stream: ShellStream::Atomic,
-            },
-        )
-        .unwrap();
+    let fx =
+        s.ls.state
+            .core_mut()
+            .shell_command(
+                &mut s.ls.shell,
+                ShellCommand::Navigate {
+                    output: o,
+                    to: NavigateTo::Delta(-2400.0, 1200.0),
+                    zoom: None,
+                    stream: ShellStream::Atomic,
+                },
+            )
+            .unwrap();
     s.ls.state.apply(&fx);
     let away = s.ls.state.core().cameras().center(0).unwrap();
     assert_ne!(away, expected_w1_center);
-    assert_eq!(s.ls.state.core().cameras().history(0).map(|h| h.len()), Some(0));
+    assert_eq!(
+        s.ls.state.core().cameras().history(0).map(|h| h.len()),
+        Some(0)
+    );
 
     s.t += 1000;
-    pointer_motion(&mut s.ls.state, &mut s.ls.input, (900.0, 500.0), (900.0, 500.0), s.t)
-        .expect("motion");
+    pointer_motion(
+        &mut s.ls.state,
+        &mut s.ls.input,
+        (900.0, 500.0),
+        (900.0, 500.0),
+        s.t,
+    )
+    .expect("motion");
     s.pump();
     s.focus(None);
     s.ls.probe.wlr_handles[1].activate(s.ls.probe.seat.as_ref().unwrap());
     s.pump();
     assert_eq!(s.ls.state.core().cameras().center(0), Some(away));
     assert_eq!(s.ls.state.core().focus().target(), None);
-    assert_eq!(s.ls.state.core().cameras().history(0).map(|h| h.len()), Some(0));
+    assert_eq!(
+        s.ls.state.core().cameras().history(0).map(|h| h.len()),
+        Some(0)
+    );
 
     // A layer-shell panel with exclusive keyboard focus (the Windows card) activates the picked
     // window and closes in the same flush: focus, camera jump, and history entry all land.
@@ -372,5 +390,8 @@ fn picking_a_window_from_the_bar_moves_the_camera_and_records_history() {
         .shell_command(&mut s.ls.shell, ShellCommand::ViewportRestore { output: o })
         .unwrap();
     assert_eq!(s.ls.state.core().cameras().center(0), Some(away));
-    assert_eq!(s.ls.state.core().cameras().history(0).map(|h| h.len()), Some(0));
+    assert_eq!(
+        s.ls.state.core().cameras().history(0).map(|h| h.len()),
+        Some(0)
+    );
 }
