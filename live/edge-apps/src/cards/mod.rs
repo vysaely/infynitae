@@ -13,6 +13,7 @@ pub mod quick;
 pub mod session;
 pub mod settings;
 pub mod settings_display;
+pub mod settings_apps;
 pub mod settings_games;
 pub mod settings_look;
 pub mod settings_input;
