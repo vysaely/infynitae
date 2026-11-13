@@ -19,11 +19,15 @@ pub const LIST_MS: f64 = 220.0;
 const ICON: f64 = 16.0;
 const SWITCH_W: f64 = 30.0;
 const SWITCH_H: f64 = 16.0;
+pub const LIGHT_ALPHA: f64 = 0.08;
+pub const CHOSEN_ALPHA: f64 = 0.16;
+pub const CHOSEN_HOVER_ALPHA: f64 = 0.22;
+pub const BOX_ALPHA: f64 = 0.04;
 
 /// The soft light under something pointed at (or the keyboard's selection).
 pub fn light(cr: &Context, cx: &Cx, r: Rect) {
     draw::round_rect(cr, r.0, r.1, r.2, r.3, cx.theme.small_radius());
-    draw::set(cr, cx.theme.text.alpha(0.08));
+    draw::set(cr, cx.theme.text.alpha(LIGHT_ALPHA));
     let _ = cr.fill();
 }
 
@@ -236,7 +240,7 @@ pub fn row(cr: &Context, cx: &Cx, hits: &mut Hits, id: u32, r: Rect, row: &Row) 
         ty,
         w,
         &Text {
-            size: 13.0,
+            size: draw::SIZE_BODY,
             bold: false,
             color: th.text,
             text: row.name,
@@ -249,7 +253,7 @@ pub fn row(cr: &Context, cx: &Cx, hits: &mut Hits, id: u32, r: Rect, row: &Row) 
             ty + 17.0,
             w,
             &Text {
-                size: 11.0,
+                size: draw::SIZE_NOTE,
                 bold: false,
                 color: if row.on { th.accent_text } else { th.muted },
                 text: row.state,
@@ -274,7 +278,7 @@ pub fn switch(cr: &Context, cx: &Cx, hits: &mut Hits, id: u32, row: Rect, x_righ
             r.3,
             (r.3 / 2.0).min(th.small_radius() + 4.0),
         );
-        draw::set(cr, th.text.alpha(0.08));
+        draw::set(cr, th.text.alpha(LIGHT_ALPHA));
         let _ = cr.fill();
     }
     draw::round_rect(cr, x, y, SWITCH_W, SWITCH_H, SWITCH_H / 2.0);
@@ -317,7 +321,7 @@ pub fn more(
         r.0 + r.2 / 2.0,
         r.1 + 4.0,
         &Text {
-            size: 12.0,
+            size: draw::SIZE_SMALL,
             bold: false,
             color: if lit || open { th.text } else { th.muted },
             text: if open { "Less" } else { "More" },
@@ -325,24 +329,24 @@ pub fn more(
     );
 }
 
-/// A text button with an outline ("Search again", "Remove"). Returns its width.
+/// A text button on a soft fill ("Search again", "Remove"). Returns its width.
 pub fn button(cr: &Context, cx: &Cx, hits: &mut Hits, id: u32, x: f64, y: f64, word: &str) -> f64 {
     let th = cx.theme;
     let t = Text {
-        size: 12.0,
+        size: draw::SIZE_SMALL,
         bold: false,
         color: th.text,
         text: word,
     };
     let w = draw::measure(cr, &t).0 + 18.0;
     let r = (x, y, w, 26.0);
-    if hits.add(id, r) || hits.selected(id) {
-        light(cr, cx, r);
-    }
-    draw::round_rect(cr, x + 0.5, y + 0.5, w - 1.0, 25.0, th.small_radius());
-    draw::set(cr, th.edge);
-    cr.set_line_width(1.0);
-    let _ = cr.stroke();
+    let lit = hits.add(id, r) || hits.selected(id);
+    draw::round_rect(cr, x, y, w, 26.0, th.small_radius());
+    draw::set(
+        cr,
+        th.text.alpha(if lit { CHOSEN_ALPHA } else { LIGHT_ALPHA }),
+    );
+    let _ = cr.fill();
     draw::text_center(cr, x + w / 2.0, y + 5.0, &t);
     w
 }
@@ -362,7 +366,7 @@ pub fn value_box(
 ) -> f64 {
     let th = cx.theme;
     let t = Text {
-        size: 12.0,
+        size: draw::SIZE_SMALL,
         bold: false,
         color: if open { th.muted } else { th.accent_text },
         text: word,
@@ -373,7 +377,14 @@ pub fn value_box(
     let (x, y) = (x_right - w, row.1 + (row.3 - h) / 2.0);
     if !open {
         draw::round_rect(cr, x, y, w, h, th.small_radius());
-        draw::set(cr, th.accent.alpha(if lit { 0.22 } else { 0.16 }));
+        draw::set(
+            cr,
+            th.accent.alpha(if lit {
+                CHOSEN_HOVER_ALPHA
+            } else {
+                CHOSEN_ALPHA
+            }),
+        );
         let _ = cr.fill();
     }
     draw::text_max(
@@ -395,9 +406,47 @@ pub fn value_box(
     w
 }
 
-/// A choice of a few words in one line (power mode); each word is hit `first_id + i`, the chosen
-/// one in the accent.
-#[allow(clippy::too_many_arguments)]
+/// One option pill in a horizontal choice strip, drawn without an outline stroke.
+pub fn choice_button(
+    cr: &Context,
+    cx: &Cx,
+    hits: &mut Hits,
+    id: u32,
+    r: Rect,
+    word: &str,
+    on: bool,
+) {
+    let th = cx.theme;
+    let lit = hits.add(id, r) || hits.selected(id);
+    draw::round_rect(cr, r.0, r.1, r.2, r.3, th.small_radius());
+    draw::set(
+        cr,
+        if on {
+            th.accent.alpha(if lit {
+                CHOSEN_HOVER_ALPHA
+            } else {
+                CHOSEN_ALPHA
+            })
+        } else {
+            th.text.alpha(if lit { CHOSEN_ALPHA } else { LIGHT_ALPHA })
+        },
+    );
+    let _ = cr.fill();
+    draw::text_center(
+        cr,
+        r.0 + r.2 / 2.0,
+        r.1 + (r.3 - 15.0) / 2.0,
+        &Text {
+            size: draw::SIZE_SMALL,
+            bold: on,
+            color: if on { th.accent_text } else { th.text },
+            text: word,
+        },
+    );
+}
+
+/// A choice of a few words in one line (power mode, picker tabs); each word is hit `first_id + i`,
+/// the chosen one in the accent.
 pub fn choice(
     cr: &Context,
     cx: &Cx,
@@ -407,7 +456,6 @@ pub fn choice(
     words: &[&str],
     chosen: usize,
 ) {
-    let th = cx.theme;
     if words.is_empty() {
         return;
     }
@@ -415,38 +463,7 @@ pub fn choice(
     let w = (r.2 - gap * (words.len() as f64 - 1.0)) / words.len() as f64;
     for (i, word) in words.iter().enumerate() {
         let b = (r.0 + i as f64 * (w + gap), r.1, w, r.3);
-        let id = first_id + i as u32;
-        let lit = hits.add(id, b) || hits.selected(id);
-        let on = i == chosen;
-        draw::round_rect(
-            cr,
-            b.0 + 0.5,
-            b.1 + 0.5,
-            b.2 - 1.0,
-            b.3 - 1.0,
-            th.small_radius(),
-        );
-        if on {
-            draw::set(cr, th.accent.alpha(0.18));
-            let _ = cr.fill_preserve();
-        } else if lit {
-            draw::set(cr, th.text.alpha(0.08));
-            let _ = cr.fill_preserve();
-        }
-        draw::set(cr, if on { th.accent } else { th.edge });
-        cr.set_line_width(1.0);
-        let _ = cr.stroke();
-        draw::text_center(
-            cr,
-            b.0 + b.2 / 2.0,
-            b.1 + (b.3 - 16.0) / 2.0,
-            &Text {
-                size: 12.0,
-                bold: on,
-                color: if on { th.accent_text } else { th.text },
-                text: word,
-            },
-        );
+        choice_button(cr, cx, hits, first_id + i as u32, b, word, i == chosen);
     }
 }
 
@@ -552,7 +569,7 @@ pub fn list_box(cr: &Context, cx: &Cx, r: Rect) {
         return;
     }
     draw::round_rect(cr, r.0, r.1 + 2.0, r.2, r.3 - 4.0, cx.theme.small_radius());
-    draw::set(cr, cx.theme.text.alpha(0.04));
+    draw::set(cr, cx.theme.text.alpha(BOX_ALPHA));
     let _ = cr.fill();
 }
 
@@ -574,7 +591,7 @@ pub fn list_row(
     let lit = hits.add(id, r) || hits.selected(id);
     if active {
         draw::round_rect(cr, r.0, r.1, r.2, r.3, th.small_radius());
-        draw::set(cr, th.accent.alpha(0.16));
+        draw::set(cr, th.accent.alpha(CHOSEN_ALPHA));
         let _ = cr.fill();
     } else if lit {
         light(cr, cx, r);
@@ -587,7 +604,7 @@ pub fn list_row(
             r.0 + r.2 - 10.0,
             r.1 + (r.3 - 15.0) / 2.0,
             &Text {
-                size: 11.5,
+                size: draw::SIZE_NOTE,
                 bold: false,
                 color: th.muted,
                 text: note,
@@ -612,7 +629,7 @@ pub fn list_row(
         r.1 + (r.3 - 17.0) / 2.0,
         (r.2 - 20.0 - note_w - icon_w).max(20.0),
         &Text {
-            size: 13.0,
+            size: draw::SIZE_BODY,
             bold: active,
             color: if active { th.accent_text } else { th.text },
             text,
@@ -654,5 +671,176 @@ mod tests {
         assert_eq!(slider_part(r, (200.0, 5.0)), 0.5);
         assert_eq!(slider_part(r, (50.0, 5.0)), 0.0);
         assert_eq!(slider_part(r, (999.0, 5.0)), 1.0);
+    }
+
+    fn test_cx(theme: &crate::theme::Theme) -> Cx<'_> {
+        Cx {
+            theme,
+            now: chrono::NaiveDateTime::default(),
+            size: crate::provider::Size::M,
+            app: None,
+            apps: &[],
+            windows: &[],
+            notes: &[],
+            list_above: false,
+            editing: false,
+        }
+    }
+
+    fn render_pixel<F>(w: i32, h: i32, draw_fn: F, px: (usize, usize)) -> [u8; 4]
+    where
+        F: FnOnce(&Context),
+    {
+        let mut surf = cairo::ImageSurface::create(cairo::Format::ARgb32, w, h).unwrap();
+        {
+            let cr = Context::new(&surf).unwrap();
+            draw_fn(&cr);
+        }
+        surf.flush();
+        let stride = surf.stride() as usize;
+        let data = surf.data().unwrap();
+        let off = px.1 * stride + px.0 * 4;
+        [data[off], data[off + 1], data[off + 2], data[off + 3]]
+    }
+
+    #[test]
+    fn button_uses_soft_fill_without_outline_and_deepens_on_hover() {
+        let th = crate::theme::Theme::from_config(&crate::config::Config::from_text(""));
+        let cx = test_cx(&th);
+        let rest_edge = render_pixel(
+            180,
+            60,
+            |cr| {
+                let mut hits = Hits::new(None, None);
+                button(cr, &cx, &mut hits, 1, 10.0, 10.0, "Remove");
+            },
+            (24, 10),
+        );
+        let rest_inside = render_pixel(
+            180,
+            60,
+            |cr| {
+                let mut hits = Hits::new(None, None);
+                button(cr, &cx, &mut hits, 1, 10.0, 10.0, "Remove");
+            },
+            (24, 12),
+        );
+        assert!(rest_inside[3] > 0, "button should have a visible rest fill");
+        assert_eq!(
+            rest_edge, rest_inside,
+            "button edge should match interior (no 1 px outline)"
+        );
+
+        let hovered_inside = render_pixel(
+            180,
+            60,
+            |cr| {
+                let mut hits = Hits::new(None, Some(1));
+                button(cr, &cx, &mut hits, 1, 10.0, 10.0, "Remove");
+            },
+            (24, 12),
+        );
+        assert!(
+            hovered_inside[3] > rest_inside[3],
+            "hovered/selected button fill should deepen"
+        );
+    }
+
+    #[test]
+    fn value_box_fills_when_closed_and_hides_block_when_open() {
+        let th = crate::theme::Theme::from_config(&crate::config::Config::from_text(""));
+        let cx = test_cx(&th);
+        let row = (0.0, 10.0, 300.0, ROW_H);
+        let mut closed_w = 0.0;
+        let closed_bg = render_pixel(
+            320,
+            60,
+            |cr| {
+                closed_w = value_box(cr, &cx, row, 290.0, "Open window", false, false);
+            },
+            (286, 18),
+        );
+        let hovered_bg = render_pixel(
+            320,
+            60,
+            |cr| {
+                value_box(cr, &cx, row, 290.0, "Open window", true, false);
+            },
+            (286, 18),
+        );
+        let open_bg = render_pixel(
+            320,
+            60,
+            |cr| {
+                value_box(cr, &cx, row, 290.0, "Open window", false, true);
+            },
+            (286, 18),
+        );
+        assert!(closed_w > 40.0);
+        assert!(closed_bg[3] > 0, "closed value_box draws soft accent block");
+        assert!(hovered_bg[3] > closed_bg[3], "hovered value_box deepens");
+        assert_eq!(
+            open_bg[3], 0,
+            "open value_box hides background block behind label and chevron"
+        );
+    }
+
+    #[test]
+    fn choice_uses_soft_fills_without_outline_and_highlights_chosen() {
+        let th = crate::theme::Theme::from_config(&crate::config::Config::from_text(""));
+        let cx = test_cx(&th);
+        let r = (10.0, 10.0, 290.0, 34.0);
+        // With 3 items across 290 px, item 0 is at x=10..102.6, item 1 is at x=108.6..201.3.
+        let unchosen_edge = render_pixel(
+            320,
+            60,
+            |cr| {
+                let mut hits = Hits::new(None, None);
+                choice(cr, &cx, &mut hits, 0, r, &["Low", "Balanced", "High"], 1);
+            },
+            (24, 10),
+        );
+        let unchosen_in = render_pixel(
+            320,
+            60,
+            |cr| {
+                let mut hits = Hits::new(None, None);
+                choice(cr, &cx, &mut hits, 0, r, &["Low", "Balanced", "High"], 1);
+            },
+            (24, 12),
+        );
+        let chosen_edge = render_pixel(
+            320,
+            60,
+            |cr| {
+                let mut hits = Hits::new(None, None);
+                choice(cr, &cx, &mut hits, 0, r, &["Low", "Balanced", "High"], 1);
+            },
+            (122, 10),
+        );
+        let chosen_in = render_pixel(
+            320,
+            60,
+            |cr| {
+                let mut hits = Hits::new(None, None);
+                choice(cr, &cx, &mut hits, 0, r, &["Low", "Balanced", "High"], 1);
+            },
+            (122, 12),
+        );
+        assert!(unchosen_in[3] > 0);
+        assert_eq!(unchosen_edge, unchosen_in);
+        assert_eq!(chosen_edge, chosen_in);
+        assert_ne!(chosen_in, unchosen_in);
+
+        let hovered_unchosen = render_pixel(
+            320,
+            60,
+            |cr| {
+                let mut hits = Hits::new(None, Some(0));
+                choice(cr, &cx, &mut hits, 0, r, &["Low", "Balanced", "High"], 1);
+            },
+            (24, 12),
+        );
+        assert!(hovered_unchosen[3] > unchosen_in[3]);
     }
 }
