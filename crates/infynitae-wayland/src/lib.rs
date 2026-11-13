@@ -1516,11 +1516,9 @@ impl WaylandState {
                                 self.live_dir.join("infynitae-reload")
                             }
                         };
-                        let _ = std::process::Command::new(reload)
-                            .arg("wallpaper")
-                            .stdout(std::process::Stdio::null())
-                            .spawn();
-                        self.spawned_children = true;
+                        let mut cmd = std::process::Command::new(reload);
+                        cmd.arg("wallpaper").stdout(std::process::Stdio::null());
+                        let _ = self.spawn_command("infynitae-reload wallpaper", &mut cmd, false);
                     }
                 }
             }

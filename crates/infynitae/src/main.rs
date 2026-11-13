@@ -320,7 +320,7 @@ fn run() -> ExitCode {
     }
 
     if let Ok(xw) = std::env::var("XWAYLAND")
-        && matches!(xw.to_lowercase().as_str(), "0" | "false" | "off" | "no")
+        && infynitae_wayland::parse_bool(&xw) == Some(false)
     {
         no_xwayland = true;
         xwayland_satellite = None;
@@ -351,10 +351,10 @@ fn run() -> ExitCode {
     let mut vrr: Option<bool> = None;
 
     if let Ok(fp) = std::env::var("FULLSCREEN_PAN") {
-        core.set_fullscreen_pan(!matches!(
-            fp.to_lowercase().as_str(),
-            "0" | "false" | "off" | "no" | "exclusive"
-        ));
+        core.set_fullscreen_pan(
+            infynitae_wayland::parse_bool(&fp) != Some(false)
+                && !fp.eq_ignore_ascii_case("exclusive"),
+        );
     }
 
     if let Ok(sea) = std::env::var("SUPER_ENTER_ACTION") {
@@ -371,22 +371,13 @@ fn run() -> ExitCode {
         core.set_focus_follows_mouse_strict(strict);
     }
     if let Ok(fcn) = std::env::var("FOCUS_CYCLE_NAVIGATE") {
-        core.set_focus_cycle_navigate(!matches!(
-            fcn.to_lowercase().as_str(),
-            "0" | "false" | "off" | "no"
-        ));
+        core.set_focus_cycle_navigate(infynitae_wayland::parse_bool(&fcn) != Some(false));
     }
     if let Ok(val) = std::env::var("FOCUS_ON_OPEN") {
-        core.set_focus_on_open(!matches!(
-            val.to_lowercase().as_str(),
-            "0" | "false" | "off" | "no"
-        ));
+        core.set_focus_on_open(infynitae_wayland::parse_bool(&val) != Some(false));
     }
     if let Ok(too) = std::env::var("TELEPORT_ON_OPEN") {
-        core.set_teleport_on_open(!matches!(
-            too.to_lowercase().as_str(),
-            "0" | "false" | "off" | "no"
-        ));
+        core.set_teleport_on_open(infynitae_wayland::parse_bool(&too) != Some(false));
     }
     if let Ok(home) = std::env::var("HOME") {
         let config_path = format!("{home}/.config/infynitae/config");
@@ -396,7 +387,7 @@ fn run() -> ExitCode {
                 let val = val.trim();
                 match key {
                     "XWAYLAND" => {
-                        if matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no") {
+                        if infynitae_wayland::parse_bool(val) == Some(false) {
                             xwayland_satellite = None;
                         } else if !cli_no_xwayland && xwayland_satellite.is_none() {
                             xwayland_satellite = find_xwayland_satellite();
@@ -409,19 +400,17 @@ fn run() -> ExitCode {
                         core.set_focus_follows_mouse_strict(strict);
                     }
                     "FOCUS_CYCLE_NAVIGATE" => {
-                        let enabled =
-                            !matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no");
-                        core.set_focus_cycle_navigate(enabled);
+                        core.set_focus_cycle_navigate(
+                            infynitae_wayland::parse_bool(val) != Some(false),
+                        );
                     }
                     "FOCUS_ON_OPEN" => {
-                        let enabled =
-                            !matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no");
-                        core.set_focus_on_open(enabled);
+                        core.set_focus_on_open(infynitae_wayland::parse_bool(val) != Some(false));
                     }
                     "TELEPORT_ON_OPEN" => {
-                        let enabled =
-                            !matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no");
-                        core.set_teleport_on_open(enabled);
+                        core.set_teleport_on_open(
+                            infynitae_wayland::parse_bool(val) != Some(false),
+                        );
                     }
                     "KEEP_ON_TOP" => {
                         core.set_keep_on_top(&val.split(',').collect::<Vec<_>>());
@@ -443,11 +432,10 @@ fn run() -> ExitCode {
                         }
                     }
                     "FULLSCREEN_PAN" => {
-                        let enabled = !matches!(
-                            val.to_lowercase().as_str(),
-                            "0" | "false" | "off" | "no" | "exclusive"
+                        core.set_fullscreen_pan(
+                            infynitae_wayland::parse_bool(val) != Some(false)
+                                && !val.eq_ignore_ascii_case("exclusive"),
                         );
-                        core.set_fullscreen_pan(enabled);
                     }
                     "OUTPUT_SCALE" => {
                         if scale_120.is_none()
@@ -464,22 +452,17 @@ fn run() -> ExitCode {
                     }
                     "DIRECT_SCANOUT" => {
                         if direct_scanout.is_none() {
-                            direct_scanout = Some(!matches!(
-                                val.to_lowercase().as_str(),
-                                "0" | "false" | "off" | "no"
-                            ));
+                            direct_scanout =
+                                Some(infynitae_wayland::parse_bool(val) != Some(false));
                         }
                     }
                     "VIRTUAL_SCREEN" => {
-                        virtual_screen =
-                            !matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no");
+                        virtual_screen = infynitae_wayland::parse_bool(val) != Some(false);
                     }
                     "VRR_ENABLED" | "VRR" | "ADAPTIVE_SYNC" if vrr.is_none() => {
-                        match val.to_lowercase().as_str() {
-                            // auto (None): only while a window is fullscreen
-                            "on" | "true" | "1" | "yes" => vrr = Some(true),
-                            "off" | "false" | "0" | "no" => vrr = Some(false),
-                            _ => {}
+                        // auto (None): only while a window is fullscreen
+                        if let Some(enabled) = infynitae_wayland::parse_bool(val) {
+                            vrr = Some(enabled);
                         }
                     }
                     _ => {}
@@ -490,21 +473,15 @@ fn run() -> ExitCode {
     if direct_scanout.is_none()
         && let Ok(val) = std::env::var("DIRECT_SCANOUT")
     {
-        direct_scanout = Some(!matches!(
-            val.to_lowercase().as_str(),
-            "0" | "false" | "off" | "no"
-        ));
+        direct_scanout = Some(infynitae_wayland::parse_bool(&val) != Some(false));
     }
     if vrr.is_none()
         && let Ok(val) = std::env::var("VRR_ENABLED")
             .or_else(|_| std::env::var("VRR"))
             .or_else(|_| std::env::var("ADAPTIVE_SYNC"))
+        && let Some(enabled) = infynitae_wayland::parse_bool(&val)
     {
-        match val.to_lowercase().as_str() {
-            "on" | "true" | "1" | "yes" => vrr = Some(true),
-            "off" | "false" | "0" | "no" => vrr = Some(false),
-            _ => {}
-        }
+        vrr = Some(enabled);
     }
     if scale_120.is_none()
         && let Ok(val) = std::env::var("OUTPUT_SCALE")
@@ -629,10 +606,13 @@ fn parse_pan_mode(val: &str) -> infynitae_core::navigation::PanMode {
 }
 
 fn parse_focus_follows_mouse(val: &str) -> (bool, bool) {
-    match val.to_lowercase().as_str() {
-        "strict" => (true, true),
-        "0" | "false" | "off" | "no" | "click" => (false, false),
-        _ => (true, false),
+    if val.eq_ignore_ascii_case("strict") {
+        (true, true)
+    } else if infynitae_wayland::parse_bool(val) == Some(false) || val.eq_ignore_ascii_case("click")
+    {
+        (false, false)
+    } else {
+        (true, false)
     }
 }
 
@@ -719,5 +699,6 @@ mod tests {
         assert_eq!(parse_focus_follows_mouse("1"), (true, false));
         assert_eq!(parse_focus_follows_mouse("click"), (false, false));
         assert_eq!(parse_focus_follows_mouse("off"), (false, false));
+        assert_eq!(parse_focus_follows_mouse("NO"), (false, false));
     }
 }

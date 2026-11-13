@@ -29,11 +29,17 @@ pub enum LatencyMode {
 impl LatencyMode {
     /// From the config value; unknown values are `Balanced`.
     pub fn parse(v: &str) -> LatencyMode {
-        match v.to_ascii_lowercase().as_str() {
-            "off" | "false" | "0" | "no" => LatencyMode::Off,
-            "lowest" | "low" | "min" => LatencyMode::Lowest,
-            "direct" => LatencyMode::Direct,
-            _ => LatencyMode::Balanced,
+        if crate::parse_bool(v) == Some(false) {
+            LatencyMode::Off
+        } else if v.eq_ignore_ascii_case("lowest")
+            || v.eq_ignore_ascii_case("low")
+            || v.eq_ignore_ascii_case("min")
+        {
+            LatencyMode::Lowest
+        } else if v.eq_ignore_ascii_case("direct") {
+            LatencyMode::Direct
+        } else {
+            LatencyMode::Balanced
         }
     }
 

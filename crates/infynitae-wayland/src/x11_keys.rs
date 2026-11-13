@@ -36,11 +36,14 @@ pub enum Mode {
 impl Mode {
     /// XWAYLAND_KEYS's value; anything else is the default.
     pub fn parse(val: &str) -> Mode {
-        match val.to_lowercase().as_str() {
-            "off" | "none" | "false" | "0" | "no" => Mode::Off,
-            "shortcuts" => Mode::Shortcuts,
-            "all" => Mode::All,
-            _ => Mode::Modifiers,
+        if crate::parse_bool(val) == Some(false) || val.eq_ignore_ascii_case("none") {
+            Mode::Off
+        } else if val.eq_ignore_ascii_case("shortcuts") {
+            Mode::Shortcuts
+        } else if val.eq_ignore_ascii_case("all") {
+            Mode::All
+        } else {
+            Mode::Modifiers
         }
     }
 

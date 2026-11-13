@@ -363,11 +363,37 @@ impl WaylandState {
         });
     }
 
+    /// Spawns `cmd` (via `Launches` when `track_launch` is set), logs any failure, and marks
+    /// `spawned_children` only when a process actually started.
+    pub(crate) fn spawn_command(
+        &mut self,
+        what: &str,
+        cmd: &mut std::process::Command,
+        track_launch: bool,
+    ) -> std::io::Result<()> {
+        let res = if track_launch {
+            self.launches.spawn(cmd)
+        } else {
+            cmd.spawn().map(|_| ())
+        };
+        match res {
+            Ok(()) => {
+                // their exits (and their orphans') are reaped from now on (`Session::dispatch`)
+                self.spawned_children = true;
+                Ok(())
+            }
+            Err(e) => {
+                crate::log_line!("[infynitae] {what} could not start: {e}");
+                Err(e)
+            }
+        }
+    }
+
     /// [`spawn_action`](Self::spawn_action) with any number of arguments, each passed as is.
     pub(crate) fn spawn_action_args(&mut self, action: &str, args: &[&str]) {
         let mut cmd = action_command(&self.live_dir, action, args, self.client_env.as_ref());
         // the shortcuts that open apps are launches (`launch`): their windows are the user's
-        if matches!(
+        let track_launch = matches!(
             action,
             "terminal"
                 | "apps"
@@ -378,13 +404,8 @@ impl WaylandState {
                 | "overview"
                 | "clipboard-history"
                 | "control-menu"
-        ) {
-            let _ = self.launches.spawn(&mut cmd);
-        } else {
-            let _ = cmd.spawn();
-        }
-        // their exits (and their orphans') are reaped from now on (`Session::dispatch`)
-        self.spawned_children = true;
+        );
+        let _ = self.spawn_command(&format!("action {action}"), &mut cmd, track_launch);
     }
 
     /// The room a window has (xdg_toplevel.configure_bounds): the first screen's usable area at
@@ -808,5 +829,27 @@ mod action_env_tests {
         );
         assert_eq!(env_of(&cmd, "DISPLAY"), Some(None));
         assert_eq!(env_of(&cmd, "XAUTHORITY"), Some(None));
+    }
+
+    #[test]
+    fn failed_spawn_returns_err_and_leaves_spawned_children_false() {
+        use smithay::reexports::wayland_server::Display;
+
+        let (core, _, _, _) =
+            infynitae_core::Core::new(infynitae_core::navigation::PersistedCameras::default());
+        let display: Display<crate::WaylandState> = Display::new().unwrap();
+        let mut state = crate::WaylandState::new(&display.handle(), core);
+        assert!(!state.spawned_children);
+
+        let mut missing = std::process::Command::new("/nonexistent/infynitae-missing-bin");
+        assert!(state.spawn_command("missing", &mut missing, false).is_err());
+        assert!(!state.spawned_children);
+
+        assert!(
+            state
+                .spawn_command("missing-launch", &mut missing, true)
+                .is_err()
+        );
+        assert!(!state.spawned_children);
     }
 }
