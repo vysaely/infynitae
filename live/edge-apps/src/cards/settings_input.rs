@@ -527,23 +527,29 @@ impl Card for InputCard {
                 }
                 Control::Pick(opts) => {
                     let word = self.word(i);
-                    let vw = 12.0 + word.chars().count() as f64 * 7.0;
+                    let vw = 40.0 + word.chars().count() as f64 * 7.0;
                     let locked = self.is_custom_xkb_options(i);
                     let row_spec = Row {
                         icon: None,
                         name: s.name,
                         state: &state,
                         on: self.restart.contains(s.key),
-                        right: vw.min(body.2 / 2.0),
+                        right: vw.min(body.2 * 0.6),
                     };
-                    if locked {
+                    let lit = if locked {
                         // Other XKB options set in the file must not be overwritten from here.
                         let mut dummy = Hits::default();
                         ui::row(cr, cx, &mut dummy, id, r, &row_spec);
+                        false
                     } else {
-                        ui::row(cr, cx, hits, id, r, &row_spec);
+                        ui::row(cr, cx, hits, id, r, &row_spec)
+                    };
+                    if locked {
+                        value_at_right(cr, cx, r, right, &word, changed);
+                    } else {
+                        let open = self.pick == Some(i) && self.list.shown();
+                        ui::value_box(cr, cx, r, right, &word, changed, lit, open);
                     }
-                    value_at_right(cr, cx, r, right, &word, changed);
                     if !locked && self.pick == Some(i) && self.list.shown() {
                         let lh = self.list.height(opts.len());
                         let lr = (body.0, y + ui::ROW_H, body.2, lh);

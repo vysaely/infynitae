@@ -380,8 +380,8 @@ impl Card for RecordingCard {
                 }
                 Control::Pick(all_opts) => {
                     let word = pick_label(all_opts, cur);
-                    let vw = 12.0 + word.chars().count() as f64 * 7.0;
-                    ui::row(
+                    let vw = 40.0 + word.chars().count() as f64 * 7.0;
+                    let lit = ui::row(
                         cr,
                         cx,
                         hits,
@@ -391,11 +391,12 @@ impl Card for RecordingCard {
                             icon: None,
                             name: s.name,
                             state: s.says,
-                            on: self.pick == Some(idx) && self.list.open,
-                            right: vw.min(body.2 / 2.0),
+                            on: false,
+                            right: vw.min(body.2 * 0.6),
                         },
                     );
-                    value_at_right(cr, cx, r, right, word, changed);
+                    let open = self.pick == Some(idx) && self.list.shown();
+                    ui::value_box(cr, cx, r, right, word, changed, lit, open);
                     if self.pick == Some(idx) && self.list.shown() {
                         let opts = self.pick_options(idx);
                         let lh = self.list.height(opts.len());

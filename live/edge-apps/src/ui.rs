@@ -347,6 +347,65 @@ pub fn button(cr: &Context, cx: &Cx, hits: &mut Hits, id: u32, x: f64, y: f64, w
     w
 }
 
+/// The value of a row that opens a list (owner's choice, 2026-11-13: today's quiet value inside
+/// the thin box of a drop-down): the word at the right in a faint outline with a small chevron.
+/// `lit` (the row pointed at) brightens the outline; `open` (its list shown) draws it in the accent
+/// with the chevron turned up; `changed` (not the default) puts the word in the accent. Returns the
+/// box's width, to keep the row's name clear of it.
+#[allow(clippy::too_many_arguments)]
+pub fn value_box(
+    cr: &Context,
+    cx: &Cx,
+    row: Rect,
+    x_right: f64,
+    word: &str,
+    changed: bool,
+    lit: bool,
+    open: bool,
+) -> f64 {
+    let th = cx.theme;
+    let t = Text {
+        size: 12.0,
+        bold: false,
+        color: if changed { th.accent_text } else { th.muted },
+        text: word,
+    };
+    let tw = draw::measure(cr, &t).0;
+    let (h, pad, chev) = (24.0, 8.0, 10.0);
+    let w = (tw + pad * 2.0 + chev + 4.0).min(row.2 * 0.6);
+    let (x, y) = (x_right - w, row.1 + (row.3 - h) / 2.0);
+    draw::round_rect(cr, x + 0.5, y + 0.5, w - 1.0, h - 1.0, th.small_radius());
+    draw::set(
+        cr,
+        if open {
+            th.accent
+        } else if lit {
+            th.text.alpha(0.28)
+        } else {
+            th.text.alpha(0.12)
+        },
+    );
+    cr.set_line_width(1.0);
+    let _ = cr.stroke();
+    draw::text_max(
+        cr,
+        x + pad,
+        y + (h - 15.0) / 2.0,
+        w - pad * 2.0 - chev - 4.0,
+        &t,
+    );
+    // the chevron: down while closed, up while open
+    let (cxp, cyp) = (x + w - pad - chev / 2.0, y + h / 2.0);
+    let d = if open { -1.0 } else { 1.0 };
+    cr.move_to(cxp - 3.5, cyp - 1.75 * d);
+    cr.line_to(cxp, cyp + 1.75 * d);
+    cr.line_to(cxp + 3.5, cyp - 1.75 * d);
+    draw::set(cr, if open { th.accent } else { th.muted });
+    cr.set_line_width(1.4);
+    let _ = cr.stroke();
+    w
+}
+
 /// A choice of a few words in one line (power mode); each word is hit `first_id + i`, the chosen
 /// one in the accent.
 #[allow(clippy::too_many_arguments)]

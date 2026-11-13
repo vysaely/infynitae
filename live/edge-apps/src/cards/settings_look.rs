@@ -1829,8 +1829,8 @@ impl Card for LookCard {
                     )
                     .0
                     .min(max_val_w)
-                        + 14.0;
-                    ui::row(
+                        + 40.0;
+                    let lit = ui::row(
                         cr,
                         cx,
                         hits,
@@ -1844,7 +1844,8 @@ impl Card for LookCard {
                             right: vw,
                         },
                     );
-                    value_at_right_capped(cr, cx, row_r, right, max_val_w, &word, changed);
+                    let open = self.pick == Some(i) && self.list.shown();
+                    ui::value_box(cr, cx, row_r, right, &word, changed, lit, open);
                     if self.pick == Some(i) && self.list.shown() {
                         self.draw_list(cr, cx, hits, list_r, &entries);
                     }

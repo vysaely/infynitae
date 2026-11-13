@@ -361,7 +361,7 @@ impl Card for DefaultsCard {
             };
             let max_w = (body.2 / 2.0).max(20.0);
             let tw = draw::measure(cr, &t).0.min(max_w);
-            ui::row(
+            let lit = ui::row(
                 cr,
                 cx,
                 hits,
@@ -372,10 +372,19 @@ impl Card for DefaultsCard {
                     name: f.name,
                     state: f.says,
                     on: false,
-                    right: tw + 12.0,
+                    right: tw + 40.0,
                 },
             );
-            draw::text_max(cr, right - tw, r.1 + (r.3 - 15.0) / 2.0, max_w, &t);
+            ui::value_box(
+                cr,
+                cx,
+                r,
+                right,
+                &label,
+                !self.found_is_default(i),
+                lit,
+                open == Some(i),
+            );
 
             if open == Some(i) {
                 let apps = self.matching_apps(i, cx);

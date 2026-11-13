@@ -1563,24 +1563,8 @@ impl Card for DisplayCard {
 
             match &row.action {
                 RowAction::List(opts) => {
-                    let value_color = if row.changed {
-                        th.accent_text
-                    } else {
-                        th.muted
-                    };
-                    let val_t = Text {
-                        size: 12.5,
-                        bold: row.changed,
-                        color: value_color,
-                        text: &row.value_text,
-                    };
-                    let vw = if row.value_text.is_empty() {
-                        0.0
-                    } else {
-                        draw::measure(cr, &val_t).0
-                    };
-                    let right_pad = (vw + 16.0).max(24.0);
-                    let _lit = ui::row(
+                    let vw = 40.0 + row.value_text.chars().count() as f64 * 7.0;
+                    let lit = ui::row(
                         cr,
                         cx,
                         hits,
@@ -1590,16 +1574,20 @@ impl Card for DisplayCard {
                             icon: None,
                             name: row.name,
                             state: state_text,
-                            on: row.changed,
-                            right: right_pad,
+                            on: false,
+                            right: vw.min(body.2 * 0.6),
                         },
                     );
                     if !row.value_text.is_empty() {
-                        draw::text_right(
+                        ui::value_box(
                             cr,
+                            cx,
+                            row_r,
                             row_r.0 + row_r.2 - 8.0,
-                            row_r.1 + (row_r.3 - 15.0) / 2.0,
-                            &val_t,
+                            &row.value_text,
+                            row.changed,
+                            lit,
+                            self.open.as_ref() == Some(&row.id) && self.list.shown(),
                         );
                     }
                     y += rh;

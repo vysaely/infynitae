@@ -454,8 +454,8 @@ impl Card for TableCard {
                 }
                 Control::Pick(opts) => {
                     let word = self.word(i);
-                    let vw = 12.0 + word.chars().count() as f64 * 7.0;
-                    ui::row(
+                    let vw = 40.0 + word.chars().count() as f64 * 7.0;
+                    let lit = ui::row(
                         cr,
                         cx,
                         hits,
@@ -466,10 +466,11 @@ impl Card for TableCard {
                             name: s.name,
                             state: &state,
                             on: self.restart.contains(s.key),
-                            right: vw.min(body.2 / 2.0),
+                            right: vw.min(body.2 * 0.6),
                         },
                     );
-                    value_at_right(cr, cx, r, right, &word, changed);
+                    let open = self.pick == Some(i) && self.list.shown();
+                    ui::value_box(cr, cx, r, right, &word, changed, lit, open);
                     if self.pick == Some(i) && self.list.shown() {
                         let lh = self.list.height(opts.len());
                         let lr = (body.0, y + ui::ROW_H, body.2, lh);
