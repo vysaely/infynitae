@@ -212,7 +212,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("{} not in config/config", s.key));
             match s.control {
                 Control::Switch { on, off } => assert!(v == on || v == off, "{} = {v}", s.key),
-                Control::Pick(o) | Control::Words(o) => {
+                Control::Pick(o) => {
                     assert!(o.iter().any(|(x, _)| x == v), "{} = {v}", s.key)
                 }
                 _ => {}
@@ -266,7 +266,7 @@ mod tests {
         let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 440, 900).unwrap();
         let cr = cairo::Context::new(&surf).unwrap();
         card.draw(&cr, &cx_s, (0.0, 0.0, 404.0, 900.0), &mut hits);
-        // Hit ids: rows 0..4 => 100, 110, 120, 130 (plus 131, 132 for Words), More => 9000
+        // Hit ids: rows 0..4 => 100, 110, 120, 130, More => 9000
         assert!(hits.list.iter().any(|(id, _)| *id == 9000));
         assert!(!hits.list.iter().any(|(id, _)| *id == 140));
 

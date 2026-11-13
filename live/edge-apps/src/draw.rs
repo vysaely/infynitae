@@ -8,6 +8,10 @@ pub const PAD_X: f64 = 18.0;
 pub const PAD_Y: f64 = 16.0;
 pub const GAP: f64 = 12.0;
 pub const FONT: &str = "sans-serif";
+pub const SIZE_NOTE: f64 = 11.0;
+pub const SIZE_SMALL: f64 = 12.0;
+pub const SIZE_BODY: f64 = 13.0;
+pub const SIZE_TITLE: f64 = 15.0;
 
 pub fn set(cr: &Context, c: Rgba) {
     cr.set_source_rgba(c.0, c.1, c.2, c.3);
@@ -129,7 +133,7 @@ pub fn title(cr: &Context, th: &Theme, x: f64, y: f64, s: &str) -> f64 {
         x,
         y,
         &Text {
-            size: 15.0,
+            size: SIZE_TITLE,
             bold: true,
             color: th.text,
             text: s,
@@ -156,7 +160,7 @@ pub fn title_hint(
     let (tw, _) = measure(
         cr,
         &Text {
-            size: 15.0,
+            size: SIZE_TITLE,
             bold: true,
             color: th.text,
             text: title,
@@ -165,7 +169,7 @@ pub fn title_hint(
     let (hw, _) = measure(
         cr,
         &Text {
-            size: 12.0,
+            size: SIZE_SMALL,
             bold: false,
             color: th.muted,
             text: hint,
@@ -181,7 +185,7 @@ pub fn title_hint(
         x + w - PAD_X,
         y + PAD_Y + 2.0,
         &Text {
-            size: 12.0,
+            size: SIZE_SMALL,
             bold: false,
             color: th.muted,
             text: hint,
@@ -213,5 +217,10 @@ mod hint_tests {
             0.0
         );
         assert_eq!(title_hint(&cr, &th, 0.0, 0.0, 380.0, "Apps", ""), 0.0);
+        assert_eq!(title(&cr, &th, 0.0, 0.0, "Apps"), 20.0);
+        assert_eq!(
+            [SIZE_NOTE, SIZE_SMALL, SIZE_BODY, SIZE_TITLE],
+            [11.0, 12.0, 13.0, 15.0]
+        );
     }
 }

@@ -961,7 +961,7 @@ impl Card for PowerCard {
             body.1 + 34.0 + 8.0,
             body.2 - 16.0,
             &crate::draw::Text {
-                size: 11.0,
+                size: crate::draw::SIZE_NOTE,
                 bold: false,
                 color: cx.theme.muted,
                 text: mode_says(&d.active),

@@ -1258,7 +1258,7 @@ pub(crate) fn parse_user_lines(user_text: &str) -> HashMap<String, usize> {
     map
 }
 
-/// The word a card shows for a value (its Pick or Words label), so a summary says what the card says.
+/// The word a card shows for a value (its Pick label), so a summary says what the card says.
 fn shown_word(key: &str, value: &str) -> Option<&'static str> {
     use super::settings_rows::Control;
     let tables: [&[super::settings_rows::Setting]; 8] = [
@@ -1276,9 +1276,7 @@ fn shown_word(key: &str, value: &str) -> Option<&'static str> {
         .flat_map(|t| t.iter())
         .find(|s| s.key == key)
         .and_then(|s| match s.control {
-            Control::Pick(o) | Control::Words(o) => {
-                o.iter().find(|(v, _)| *v == value).map(|(_, w)| *w)
-            }
+            Control::Pick(o) => o.iter().find(|(v, _)| *v == value).map(|(_, w)| *w),
             _ => None,
         })
 }

@@ -1205,7 +1205,7 @@ fn draw_small(cr: &Context, cx: &Cx, body: Rect, hits: &mut Hits, p: &PlayerInfo
             ty,
             max_w,
             &Text {
-                size: 13.5,
+                size: draw::SIZE_BODY,
                 bold: true,
                 color: th.text,
                 text: title_str,
@@ -1218,7 +1218,7 @@ fn draw_small(cr: &Context, cx: &Cx, body: Rect, hits: &mut Hits, p: &PlayerInfo
                 ty + 19.0,
                 max_w,
                 &Text {
-                    size: 11.5,
+                    size: draw::SIZE_NOTE,
                     bold: false,
                     color: th.muted,
                     text: sub_str,
@@ -1322,7 +1322,7 @@ fn draw_medium(
                 y,
                 cw,
                 &Text {
-                    size: 11.5,
+                    size: draw::SIZE_SMALL,
                     bold: false,
                     color: th.muted,
                     text: &p.lyrics.next,
@@ -1350,7 +1350,7 @@ fn draw_medium(
             cx_right,
             y,
             &Text {
-                size: 11.5,
+                size: draw::SIZE_NOTE,
                 bold: false,
                 color: th.muted,
                 text: &q_str,
@@ -1368,7 +1368,7 @@ fn draw_medium(
                 y,
                 (cw - q_w - 10.0).max(20.0),
                 &Text {
-                    size: 11.5,
+                    size: draw::SIZE_NOTE,
                     bold: false,
                     color: th.muted,
                     text: &next_str,
@@ -1403,7 +1403,7 @@ fn draw_large(
         &p.title
     };
     let compact = cw < 220.0;
-    let title_sz = if compact { 15.0 } else { 20.0 };
+    let title_sz = if compact { draw::SIZE_TITLE } else { 20.0 };
     let (title_dy, sub_dy, sub_sz, detail_dy) = if compact {
         (0.0, 21.0, 12.0, 38.0)
     } else {
@@ -1489,7 +1489,7 @@ fn draw_large(
                 y,
                 cw,
                 &Text {
-                    size: 14.0,
+                    size: draw::SIZE_TITLE,
                     bold: true,
                     color: th.accent_text,
                     text: &p.lyrics.current,
@@ -1533,7 +1533,7 @@ fn draw_large(
             cx_left,
             y,
             &Text {
-                size: 13.5,
+                size: draw::SIZE_BODY,
                 bold: true,
                 color: th.text,
                 text: "Up next",
@@ -1544,7 +1544,7 @@ fn draw_large(
             cx_right,
             y + 1.0,
             &Text {
-                size: 11.5,
+                size: draw::SIZE_NOTE,
                 bold: false,
                 color: th.muted,
                 text: &summary,
@@ -1591,7 +1591,7 @@ fn draw_large(
                 y + 4.0,
                 s_max_w,
                 &Text {
-                    size: 12.5,
+                    size: draw::SIZE_BODY,
                     bold: false,
                     color: th.text,
                     text: &song.title,
@@ -1751,24 +1751,24 @@ fn draw_icon_button(
 fn draw_play_button(cr: &Context, cx: &Cx, hits: &mut Hits, r: Rect, playing: bool) {
     let th = cx.theme;
     let lit = hits.add(H_PLAY, r) || hits.selected(H_PLAY);
-    draw::round_rect(
+    draw::round_rect(cr, r.0, r.1, r.2, r.3, th.small_radius());
+    draw::set(
         cr,
-        r.0 + 0.5,
-        r.1 + 0.5,
-        r.2 - 1.0,
-        r.3 - 1.0,
-        th.small_radius(),
+        if playing {
+            th.accent.alpha(if lit {
+                ui::CHOSEN_HOVER_ALPHA
+            } else {
+                ui::CHOSEN_ALPHA
+            })
+        } else {
+            th.text.alpha(if lit {
+                ui::CHOSEN_ALPHA
+            } else {
+                ui::LIGHT_ALPHA
+            })
+        },
     );
-    if playing {
-        draw::set(cr, th.accent.alpha(if lit { 0.26 } else { 0.16 }));
-        let _ = cr.fill_preserve();
-    } else if lit {
-        draw::set(cr, th.text.alpha(0.08));
-        let _ = cr.fill_preserve();
-    }
-    draw::set(cr, th.accent);
-    cr.set_line_width(1.0);
-    let _ = cr.stroke();
+    let _ = cr.fill();
     let ix = r.0 + (r.2 - 18.0) / 2.0;
     let iy = r.1 + (r.3 - 18.0) / 2.0;
     if playing {
@@ -2532,5 +2532,34 @@ mod tests {
         let cached = cover_surface(&path, 60).expect("cached png cover");
         assert_eq!((cached.width(), cached.height()), (60, 60));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn play_button_uses_soft_fill_without_outline_stroke() {
+        let th = Theme::from_config(&crate::config::Config::from_text(""));
+        let cx = test_cx(&th, Size::S, None);
+        for playing in [false, true] {
+            let mut surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 60, 60).unwrap();
+            {
+                let cr = Context::new(&surf).unwrap();
+                let mut hits = Hits::new(None, None);
+                draw_play_button(&cr, &cx, &mut hits, (10.0, 10.0, 36.0, 32.0), playing);
+            }
+            surf.flush();
+            let stride = surf.stride() as usize;
+            let data = surf.data().unwrap();
+            let px = |x: usize, y: usize| -> [u8; 4] {
+                let off = y * stride + x * 4;
+                [data[off], data[off + 1], data[off + 2], data[off + 3]]
+            };
+            // Top horizontal edge vs 2 px lower (still clear of the centered 18x18 icon at y=17).
+            let edge = px(28, 10);
+            let inside = px(28, 12);
+            assert!(inside[3] > 0);
+            assert_eq!(
+                edge, inside,
+                "playing={playing}: button edge must match fill"
+            );
+        }
     }
 }

@@ -305,7 +305,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("{} not in config/config", s.key));
             match s.control {
                 Control::Switch { on, off } => assert!(v == on || v == off, "{} = {v}", s.key),
-                Control::Pick(o) | Control::Words(o) => {
+                Control::Pick(o) => {
                     assert!(o.iter().any(|(x, _)| x == v), "{} = {v}", s.key)
                 }
                 _ => {}

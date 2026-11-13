@@ -1527,7 +1527,7 @@ impl Card for DisplayCard {
                         y + 6.0,
                         max_w,
                         &Text {
-                            size: 12.5,
+                            size: draw::SIZE_BODY,
                             bold: true,
                             color: th.text,
                             text: title,
@@ -1541,7 +1541,7 @@ impl Card for DisplayCard {
                         y + 22.0,
                         max_w,
                         &Text {
-                            size: 11.5,
+                            size: draw::SIZE_NOTE,
                             bold: false,
                             color: th.muted,
                             text: sub,

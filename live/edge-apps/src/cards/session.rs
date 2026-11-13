@@ -222,7 +222,14 @@ impl Card for SessionCard {
 
 fn draw_pill(cr: &Context, cx: &Cx, r: Rect, armed: bool, lit: bool) {
     if armed {
-        draw::set(cr, cx.theme.accent.alpha(if lit { 0.24 } else { 0.16 }));
+        draw::set(
+            cr,
+            cx.theme.accent.alpha(if lit {
+                ui::CHOSEN_HOVER_ALPHA
+            } else {
+                ui::CHOSEN_ALPHA
+            }),
+        );
         draw::round_rect(cr, r.0, r.1, r.2, r.3, cx.theme.small_radius());
         let _ = cr.fill();
     } else if lit {

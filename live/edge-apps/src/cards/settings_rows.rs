@@ -23,9 +23,6 @@ pub enum Control {
     Switch { on: &'static str, off: &'static str },
     /// (value, word): the word at the row's right, the list opening in place
     Pick(&'static [(&'static str, &'static str)]),
-    /// (value, word), at most 3: all shown under the name
-    #[allow(dead_code)] // Control variant kept until word-button settings rows are unified.
-    Words(&'static [(&'static str, &'static str)]),
     /// a number on a slider, written when let go
     Slide {
         min: f64,
@@ -164,12 +161,11 @@ pub fn change_command(key: &str, old: Option<&str>, new: &str, after: After) -> 
     cmd
 }
 
-// hits: a row is ROW + 10 * i, its control ROW + 10 * i + 1.. (words up to +4, minus +1 and
-// plus +2 for a step); the open list's items LIST + j; More MORE.
+// hits: a row is ROW + 10 * i, its control ROW + 10 * i + 1.. (minus +1 and plus +2 for a
+// step); the open list's items LIST + j; More MORE.
 const ROW: u32 = 100;
 const LIST: u32 = 5000;
 const MORE: u32 = 9000;
-const WORDS_H: f64 = 34.0;
 const SLIDE_H: f64 = 22.0;
 
 #[cfg(test)]
@@ -303,7 +299,6 @@ impl TableCard {
     fn row_h(&self, i: usize) -> f64 {
         ui::ROW_H
             + match self.table[i].control {
-                Control::Words(_) => WORDS_H,
                 Control::Slide { .. } => SLIDE_H,
                 _ => 0.0,
             }
@@ -321,7 +316,7 @@ impl TableCard {
     fn word(&self, i: usize) -> String {
         let v = self.value(i);
         let opts: &[(&str, &str)] = match self.table[i].control {
-            Control::Pick(o) | Control::Words(o) => o,
+            Control::Pick(o) => o,
             _ => &[],
         };
         opts.iter()
@@ -503,37 +498,6 @@ impl Card for TableCard {
                         }
                     }
                 }
-                Control::Words(opts) => {
-                    ui::row(
-                        cr,
-                        cx,
-                        hits,
-                        id,
-                        r,
-                        &Row {
-                            icon: None,
-                            name: s.name,
-                            state: &state,
-                            on: self.restart.contains(s.key),
-                            right: 0.0,
-                        },
-                    );
-                    let cur = self.value(i);
-                    let words: Vec<&str> = opts.iter().map(|(_, w)| *w).collect();
-                    let chosen = opts
-                        .iter()
-                        .position(|(v, _)| v.eq_ignore_ascii_case(&cur))
-                        .unwrap_or(usize::MAX);
-                    ui::choice(
-                        cr,
-                        cx,
-                        hits,
-                        id + 1,
-                        (body.0 + 8.0, y + ui::ROW_H, body.2 - 16.0, WORDS_H - 4.0),
-                        &words,
-                        chosen,
-                    );
-                }
                 Control::Slide { min, max, unit, .. } => {
                     let v: f64 = self.value(i).parse().unwrap_or(min);
                     ui::row(
@@ -699,15 +663,6 @@ impl Card for TableCard {
                             self.list.toggle();
                         }
                         true
-                    }
-                    Control::Words(opts) => {
-                        let Some(j) = part.checked_sub(1) else {
-                            return false;
-                        };
-                        let Some((val, _)) = opts.get(j as usize) else {
-                            return false;
-                        };
-                        self.set(i, val.to_string(), out)
                     }
                     Control::Slide { min, max, step, .. } if part == 1 => {
                         let r = self.slide_rects.borrow().get(&i).copied();

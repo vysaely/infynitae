@@ -1244,7 +1244,7 @@ impl Card for FoldersCard {
                 let nw = draw::measure(
                     cr,
                     &Text {
-                        size: 11.5,
+                        size: draw::SIZE_NOTE,
                         bold: false,
                         color: th.muted,
                         text: &note,
@@ -1280,7 +1280,11 @@ impl Card for FoldersCard {
                     row_r.0 + row_r.2 - 8.0,
                     row_r.1 + (row_r.3 - 15.0) / 2.0,
                     &Text {
-                        size: if lit { 12.0 } else { 11.5 },
+                        size: if lit {
+                            draw::SIZE_SMALL
+                        } else {
+                            draw::SIZE_NOTE
+                        },
                         bold: false,
                         color: th.muted,
                         text: right_text,

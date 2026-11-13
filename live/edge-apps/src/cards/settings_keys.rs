@@ -1175,7 +1175,7 @@ fn cap_widths(cr: &Context, cx: &Cx, caps: &[&str]) -> Vec<f64> {
             let tw = draw::measure(
                 cr,
                 &Text {
-                    size: 11.5,
+                    size: draw::SIZE_NOTE,
                     bold: false,
                     color: cx.theme.text,
                     text: label,
@@ -1224,7 +1224,7 @@ fn draw_key_caps(
     let cy = row_rect.1 + (row_rect.3 - CAP_H) / 2.0;
     let r = th.small_radius().min(5.0);
     let fill_color = if accented {
-        th.accent.alpha(0.18)
+        th.accent.alpha(ui::CHOSEN_ALPHA)
     } else {
         th.track
     };
@@ -1253,7 +1253,7 @@ fn draw_key_caps(
             x + cw / 2.0,
             cy + (CAP_H - 14.0) / 2.0,
             &Text {
-                size: 11.5,
+                size: draw::SIZE_NOTE,
                 bold: false,
                 color: th.text,
                 text: label,

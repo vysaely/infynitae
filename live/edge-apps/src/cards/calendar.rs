@@ -339,7 +339,11 @@ impl Card for MonthCard {
         let (first, days) = month_grid(today, self.month_offset);
         let grid_y = week_y + WEEK_H;
         let box_size = (DAY_ROW_H - 4.0).min(col - 2.0).max(16.0);
-        let day_font = if col < 24.0 { 11.5 } else { 13.0 };
+        let day_font = if col < 24.0 {
+            draw::SIZE_NOTE
+        } else {
+            draw::SIZE_BODY
+        };
 
         for (i, &day) in days.iter().enumerate() {
             let cx_day = (x + col * ((i % 7) as f64 + 0.5)).round();

@@ -749,7 +749,7 @@ impl Card for FavoritesCard {
 
             let lbl = Text {
                 text: &app.name,
-                size: 10.5,
+                size: draw::SIZE_NOTE,
                 bold: false,
                 color: if hot || sel {
                     cx.theme.text
@@ -1045,7 +1045,7 @@ impl Card for SearchCard {
             }
             let ct = Text {
                 text: "Clear",
-                size: 11.5,
+                size: draw::SIZE_SMALL,
                 bold: false,
                 color: if clear_hot || clear_sel {
                     th.text
