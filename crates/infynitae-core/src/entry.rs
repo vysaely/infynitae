@@ -274,6 +274,10 @@ impl Core {
                 self.touch_resize_settle(out);
                 Ok(())
             }
+            PhysicalEvent::JumpToWindow { element } => {
+                self.jump_to_window(element, Some(authority::Authorized::mint()), out);
+                Ok(())
+            }
         }
     }
 

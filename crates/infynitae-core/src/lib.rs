@@ -151,6 +151,8 @@ pub enum PhysicalEvent {
     TouchFrame,
     /// The touchscreen gave up the touches (a gesture taken by the hardware, a palm).
     TouchCancel,
+    /// Focus, raise and jump the camera to a mapped window chosen by the user in a bar or list.
+    JumpToWindow { element: stage::ElementId },
 }
 
 /// A semantic command from the trusted shell (C7.2, INV-SHELL-1): a value Core validates and then
