@@ -105,6 +105,12 @@ pub struct FrameSchedule {
     settling: u32,
     misses: u64,
     frames: u64,
+    /// Frames whose target came after a quiet gap (`>= 4 * period`): counted apart from runs and
+    /// never used to widen the margin or feed GPU relief.
+    pause_misses: u64,
+    pause_frames: u64,
+    /// Whether the frame currently in flight was submitted after a quiet gap.
+    in_flight_after_pause: bool,
     /// Refreshes left drawn at once (PAUSE_REFRESHES).
     paused: u32,
     pauses: u64,
@@ -153,6 +159,9 @@ impl FrameSchedule {
             settling: 0,
             misses: 0,
             frames: 0,
+            pause_misses: 0,
+            pause_frames: 0,
+            in_flight_after_pause: false,
             paused: 0,
             pauses: 0,
             guard_percent: 0,
@@ -172,6 +181,10 @@ impl FrameSchedule {
 
     pub fn set_period(&mut self, period: Duration) {
         self.period = period;
+    }
+
+    pub fn period(&self) -> Duration {
+        self.period
     }
 
     pub fn set_guard_percent(&mut self, percent: u32) {
@@ -262,9 +275,13 @@ impl FrameSchedule {
         self.filled = (self.filled + 1).min(SAMPLES);
         self.submitted = Some(submitted);
         // a frame long after the last refresh is a screen that was quiet, not a late frame
+        let in_run = self
+            .last_vblank
+            .is_some_and(|last| submitted.saturating_sub(last) < self.period * 4);
+        self.in_flight_after_pause = !in_run;
         if let Some(last) = self.last_vblank
             && self.to_submit.len() < TIMINGS_KEPT
-            && submitted.saturating_sub(last) < self.period * 4
+            && in_run
         {
             self.to_submit.push(submitted.saturating_sub(last));
         }
@@ -290,32 +307,40 @@ impl FrameSchedule {
         {
             self.to_flip.push(time.saturating_sub(submitted));
         }
+        let after_pause = std::mem::take(&mut self.in_flight_after_pause);
         if let Some(target) = self.target.take() {
-            self.frames += 1;
             let missed = time > target + self.period / 2;
-            if missed {
-                self.misses += 1;
-                self.made_in_a_row = 0;
-            }
-            let late_scheduled = !paused && self.mode != LatencyMode::Off;
-            let settling = self.settling > 0;
-            self.settling = self.settling.saturating_sub(1);
-            if late_scheduled && missed && settling {
-                // the switch's own frames: counted as missed, the margin left alone
-            } else if late_scheduled && missed {
-                if self.margin >= MARGIN_MAX {
-                    self.paused = PAUSE_REFRESHES;
-                    self.pauses += 1;
-                    self.margin = self.mode.margins().0;
-                } else {
-                    self.margin = (self.margin + MISS_STEP).min(MARGIN_MAX);
+            if after_pause {
+                self.pause_frames += 1;
+                if missed {
+                    self.pause_misses += 1;
                 }
-            } else if late_scheduled {
-                self.made_in_a_row += 1;
-                if self.made_in_a_row >= SHRINK_AFTER {
+            } else {
+                self.frames += 1;
+                if missed {
+                    self.misses += 1;
                     self.made_in_a_row = 0;
-                    let floor = self.mode.margins().1;
-                    self.margin = self.margin.saturating_sub(MISS_STEP).max(floor);
+                }
+                let late_scheduled = !paused && self.mode != LatencyMode::Off;
+                let settling = self.settling > 0;
+                self.settling = self.settling.saturating_sub(1);
+                if late_scheduled && missed && settling {
+                    // the switch's own frames: counted as missed, the margin left alone
+                } else if late_scheduled && missed {
+                    if self.margin >= MARGIN_MAX {
+                        self.paused = PAUSE_REFRESHES;
+                        self.pauses += 1;
+                        self.margin = self.mode.margins().0;
+                    } else {
+                        self.margin = (self.margin + MISS_STEP).min(MARGIN_MAX);
+                    }
+                } else if late_scheduled {
+                    self.made_in_a_row += 1;
+                    if self.made_in_a_row >= SHRINK_AFTER {
+                        self.made_in_a_row = 0;
+                        let floor = self.mode.margins().1;
+                        self.margin = self.margin.saturating_sub(MISS_STEP).max(floor);
+                    }
                 }
             }
         }
@@ -333,9 +358,14 @@ impl FrameSchedule {
         )
     }
 
-    /// Frames shown, and how many missed the refresh they were drawn for.
+    /// In-run frames shown, and how many missed the refresh they were drawn for.
     pub fn counts(&self) -> (u64, u64) {
         (self.frames, self.misses)
+    }
+
+    /// Frames drawn after a quiet pause (`>= 4 * period`), and how many missed their guessed target.
+    pub fn pause_counts(&self) -> (u64, u64) {
+        (self.pause_frames, self.pause_misses)
     }
 
     pub fn margin(&self) -> Duration {
@@ -425,6 +455,11 @@ impl LatencyStats {
         if self.in_flight.is_none() {
             self.in_flight = self.pending.take();
         }
+    }
+
+    /// A turn after the input found nothing to draw: drop it so it is not charged to a later frame.
+    pub fn drop_pending(&mut self) {
+        self.pending = None;
     }
 
     /// The refresh at `time` showed that frame.
@@ -754,5 +789,50 @@ mod tests {
         s.vblank(t);
         s.rendered(t + P * 100, t + P * 100);
         assert_eq!(s.take_timings().0, None);
+    }
+
+    #[test]
+    fn misses_after_a_pause_do_not_widen_the_margin_or_count_as_in_run() {
+        let mut s = warmed(LatencyMode::Balanced, 1.0);
+        let t = Duration::from_secs(10);
+        s.vblank(t);
+        let m0 = s.margin();
+
+        // First frame after a quiet gap (> 4 * P) whose guessed target misses: recorded as after-pause
+        // without changing counts() or widening the margin.
+        let wake = t + P * 20;
+        s.rendered(wake, wake + ms(1.0));
+        s.vblank(wake + P * 2);
+        assert_eq!(s.counts(), (0, 0));
+        assert_eq!(s.pause_counts(), (1, 1));
+        assert_eq!(s.margin(), m0);
+
+        // Next frame is in a run (< 4 * P) and misses: counts in-run and widens margin.
+        let run = wake + P * 2 + ms(1.0);
+        s.rendered(run, run + ms(1.0));
+        s.vblank(wake + P * 4);
+        assert_eq!(s.counts(), (1, 1));
+        assert_eq!(s.pause_counts(), (1, 1));
+        assert_eq!(s.margin(), m0 + MISS_STEP);
+    }
+
+    #[test]
+    fn dropped_pending_input_is_not_charged_to_a_later_frame() {
+        let mut l = LatencyStats::default();
+        // Frame already in flight is kept while an idle input after it is dropped.
+        l.input(ms(10.0));
+        l.drawn();
+        l.input(ms(11.0));
+        l.drop_pending();
+        l.shown(ms(15.0));
+
+        // Later frame without another dropped input starts fresh from its own input.
+        l.input(ms(1000.0));
+        l.drawn();
+        l.shown(ms(1003.0));
+
+        let (_, _, max, n) = l.take_summary().unwrap();
+        assert_eq!(n, 2);
+        assert_eq!(max, ms(5.0));
     }
 }

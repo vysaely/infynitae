@@ -21,7 +21,7 @@ mod edid;
 mod scanout_log;
 mod smooth;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::error::Error;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -537,8 +537,13 @@ struct LoopData {
     loop_busy_max: Duration,
     /// The last LATENCY_STATS summary.
     latency_logged: Option<std::time::Instant>,
-    /// When the last slow turn was reported (rate bounded to at most one per second).
-    slow_turn_logged: Option<std::time::Instant>,
+    /// Slowest turn of each 1 s window, flushed when the second ends.
+    slow_turn: SlowTurnLog,
+    /// Capture streams and one-shot clients already logged with their path (`dmabuf` vs `shm`).
+    capture_log: CaptureSeen<(
+        Option<smithay::reexports::wayland_server::backend::ClientId>,
+        Option<infynitae_wayland::screencopy::Consumer>,
+    )>,
     dpms_active: bool,
     idle_sleep_timeout_min: u32,
     idle_auto_lock: bool,
@@ -1052,7 +1057,7 @@ fn connect_screen(
         empty_since_refresh: false,
         schedule: infynitae_wayland::frame_schedule::FrameSchedule::new(
             infynitae_wayland::frame_schedule::LatencyMode::Balanced,
-            std::time::Duration::from_nanos(16_666_667),
+            std::time::Duration::from_nanos(1_000_000_000_000 / u64::from(refresh.max(1))),
         ),
         deferred: None,
         relief: Default::default(),
@@ -1588,7 +1593,8 @@ pub fn run_console_with(
         last_config_mtime: initial_mtime,
         last_user_activity: std::time::Instant::now(),
         latency_logged: None,
-        slow_turn_logged: None,
+        slow_turn: SlowTurnLog::default(),
+        capture_log: CaptureSeen::default(),
         dpms_active: false,
         idle_sleep_timeout_min: idle_timeout_min,
         idle_auto_lock,
@@ -1676,10 +1682,16 @@ pub fn run_console_with(
         // time spent in the loop's own turn, every wait left out: a stall of this process alone,
         // where "refresh to submit" also counts a quiet screen
         if let Some(started) = turn_started {
-            let busy = started.elapsed();
+            let now = std::time::Instant::now();
+            let busy = now.saturating_duration_since(started);
             data.loop_busy_max = data.loop_busy_max.max(busy);
-            turn.report_if_slow(busy, &mut data.slow_turn_logged);
+            let threshold = slow_turn_threshold(&data.screens);
+            if let Some(line) = data.slow_turn.record_at(&turn, busy, threshold, now) {
+                log_line!("{line}");
+            }
         }
+        let slow_flush = data.slow_turn.remaining(std::time::Instant::now());
+        let timeout = [timeout, slow_flush].into_iter().flatten().min();
         event_loop.dispatch(timeout, &mut data)?;
         turn_started = data.state.latency_stats.then(std::time::Instant::now);
         turn = turn_started.map_or_else(TurnClock::off, TurnClock::new);
@@ -2025,6 +2037,7 @@ pub fn run_console_with(
             // what this turn's input made goes to the clients first: a game reads its mouse motion
             // now, not after the compositor's own drawing (review 2026-11-12)
             data.session.flush();
+            turn.mark("flush");
             render(&mut data, &mut turn);
         }
         let now = infynitae_wayland::presentation_clock_now();
@@ -2036,14 +2049,20 @@ pub fn run_console_with(
         let now = infynitae_wayland::presentation_clock_now();
         let deadline = data.state.frame_fallback(now);
         data.session.set_fallback_deadline(deadline, now);
+        turn.mark("frame fallback");
         let idle_deadline = data.state.idle_notify_check(now);
         data.session.set_idle_deadline(idle_deadline, now);
+        turn.mark("idle notify");
         let anim_due = data.state.cursor_animation_due(now);
         data.session.set_cursor_animation_due(anim_due);
+        turn.mark("cursor animation");
         data.session.flush();
         turn.mark("flush");
     }
 
+    if let Some(line) = data.slow_turn.flush() {
+        log_line!("{line}");
+    }
     log_line!("[infynitae] Shutting down compositor...");
     data.state.background_restore_all();
     drop(xwayland);
@@ -2168,6 +2187,8 @@ fn render(data: &mut LoopData, turn: &mut TurnClock) {
             &mut data.renderer,
             &mut data.screens[i].screencopy_texture,
             &mut data.capture_copies,
+            &mut data.capture_log,
+            turn,
             data.zoom_programs.as_ref(),
             &mut data.zoom_cache,
             data.scaling_filter,
@@ -2175,8 +2196,6 @@ fn render(data: &mut LoopData, turn: &mut TurnClock) {
             size,
             clear,
         );
-        // screen copies (the replay recorder, screen sharing) drawn and read back on this thread
-        turn.mark("captures");
 
         if data.screens[i].pending {
             continue;
@@ -2188,6 +2207,7 @@ fn render(data: &mut LoopData, turn: &mut TurnClock) {
             data.state.set_fitted_window(id, None);
             let s = &mut data.screens[i];
             s.shows_locked = true;
+            s.latency.drop_pending();
             // a frame held back for its start time is not waited for either
             s.deferred = None;
             let now = infynitae_wayland::presentation_clock_now();
@@ -2563,6 +2583,8 @@ fn render(data: &mut LoopData, turn: &mut TurnClock) {
                 data.session.frame_rests(wait);
             }
             s.empty_since_refresh = true;
+            // an input that needed no frame must not be charged to the next unrelated redraw
+            s.latency.drop_pending();
             data.state.frame_tick(id, now);
         }
         turn.mark("queue");
@@ -2573,6 +2595,8 @@ fn render(data: &mut LoopData, turn: &mut TurnClock) {
             &mut data.renderer,
             &mut v.screencopy_texture,
             &mut data.capture_copies,
+            &mut data.capture_log,
+            turn,
             data.zoom_programs.as_ref(),
             &mut data.zoom_cache,
             data.scaling_filter,
@@ -2582,8 +2606,7 @@ fn render(data: &mut LoopData, turn: &mut TurnClock) {
         );
         let now = infynitae_wayland::presentation_clock_now();
         data.state.frame_tick(v.id, now);
-        // was counted as "flush", the next mark (review 2026-11-12: 374 slow "flush" turns)
-        turn.mark("virtual screen captures");
+        turn.mark("virtual screen");
     }
     data.zoom_cache.gc();
     confirm_lock(data);
@@ -2591,9 +2614,12 @@ fn render(data: &mut LoopData, turn: &mut TurnClock) {
     if !data.capture_copies.is_empty() {
         data.session.request_frame();
     }
+    turn.mark("post render");
     data.session.flush();
+    turn.mark("flush");
     if renderer_lost(&mut data.renderer) {
         recover_renderer(data);
+        turn.mark("renderer recover");
     }
 }
 
@@ -2613,6 +2639,11 @@ fn serve_captures(
     renderer: &mut GlesRenderer,
     screencopy_texture: &mut Option<GlesTexture>,
     copies: &mut Vec<PendingCopy>,
+    capture_log: &mut CaptureSeen<(
+        Option<smithay::reexports::wayland_server::backend::ClientId>,
+        Option<infynitae_wayland::screencopy::Consumer>,
+    )>,
+    turn: &mut TurnClock,
     zoom_programs: Option<&std::sync::Arc<smooth::ZoomPrograms>>,
     zoom_cache: &mut smooth::ZoomCache,
     scaling_filter: infynitae_wayland::ZoomFilter,
@@ -2634,12 +2665,15 @@ fn serve_captures(
         let Some(window) = req.window else { continue };
         match convert::window_capture_elements(state, renderer, window) {
             Ok(Some((elements, k, size))) => {
+                turn.mark("capture elements");
                 // a window's own transparency is kept
                 let mut texture = None;
                 handle_screencopy(
                     renderer,
                     &mut texture,
                     copies,
+                    capture_log,
+                    turn,
                     vec![req],
                     &elements,
                     size,
@@ -2650,7 +2684,10 @@ fn serve_captures(
                 let now = infynitae_wayland::presentation_clock_now();
                 state.window_captured(window, output_id, now);
             }
-            _ => req.fail(),
+            _ => {
+                turn.mark("capture elements");
+                req.fail();
+            }
         }
     }
     if pending.is_empty() {
@@ -2673,6 +2710,7 @@ fn serve_captures(
     let (elements, k) = match frame {
         Ok(res) => res,
         Err(e) => {
+            turn.mark("capture elements");
             log_line!("[screencopy] Failed to get elements: {e}");
             for p in pending {
                 p.fail();
@@ -2714,6 +2752,7 @@ fn serve_captures(
     }
     let pending = serve;
     state.screencopy.defer(waiting);
+    turn.mark("capture elements");
     if pending.is_empty() {
         return;
     }
@@ -2721,6 +2760,8 @@ fn serve_captures(
         renderer,
         screencopy_texture,
         copies,
+        capture_log,
+        turn,
         pending,
         &elements,
         size,
@@ -2729,21 +2770,79 @@ fn serve_captures(
     );
 }
 
-/// Says once each which way captures come: a GPU buffer, drawn into, or memory, copied out on this
-/// thread (each frame waits for the GPU then, so it may cost milliseconds).
-fn note_capture_path(gpu: bool) {
-    use std::sync::atomic::{AtomicBool, Ordering};
-    static SAID: [AtomicBool; 2] = [AtomicBool::new(false), AtomicBool::new(false)];
-    if !SAID[usize::from(gpu)].swap(true, Ordering::Relaxed) {
-        log_line!(
-            "[infynitae] A capture into {}",
-            if gpu {
-                "a GPU buffer (dmabuf)"
-            } else {
-                "memory (shm), copied on the main thread"
-            }
-        );
+const CAPTURE_SEEN_MAX: usize = 128;
+
+/// Tracks active/recent `(client, buffer path)` pairs so each new capture logs once without
+/// repeating on subsequent frames of a stream.
+struct CaptureSeen<K> {
+    seen: VecDeque<(K, bool)>,
+}
+
+impl<K> Default for CaptureSeen<K> {
+    fn default() -> Self {
+        Self {
+            seen: VecDeque::new(),
+        }
     }
+}
+
+impl<K: PartialEq> CaptureSeen<K> {
+    fn note(&mut self, key: K, gpu: bool) -> bool {
+        if self.seen.iter().any(|(k, g)| *k == key && *g == gpu) {
+            return false;
+        }
+        if self.seen.len() >= CAPTURE_SEEN_MAX {
+            self.seen.pop_front();
+        }
+        self.seen.push_back((key, gpu));
+        true
+    }
+}
+
+fn format_capture_log(program: Option<&str>, path: Option<&str>, gpu: bool) -> String {
+    let who = match (program, path) {
+        (Some(prog), Some(p)) if p.starts_with(prog) => p.to_string(),
+        (Some(prog), Some(p)) => format!("{prog} ({p})"),
+        (Some(prog), None) => prog.to_string(),
+        (None, Some(p)) => p.to_string(),
+        (None, None) => "unknown client".to_string(),
+    };
+    let via = if gpu {
+        "a GPU buffer (dmabuf)"
+    } else {
+        "memory (shm), copied on the main thread"
+    };
+    format!("[infynitae] Capture started by {who}: into {via}")
+}
+
+/// Logs once per capture client/session which program captures, its path (or sandbox id), and
+/// whether it takes dmabuf or shm.
+fn note_capture_start(
+    capture_log: &mut CaptureSeen<(
+        Option<smithay::reexports::wayland_server::backend::ClientId>,
+        Option<infynitae_wayland::screencopy::Consumer>,
+    )>,
+    req: &infynitae_wayland::screencopy::PendingFrame,
+    gpu: bool,
+) {
+    use smithay::reexports::wayland_server::Resource;
+    let client = req.buffer.client();
+    let client_id = client
+        .as_ref()
+        .map(smithay::reexports::wayland_server::Client::id);
+    if !capture_log.note((client_id, req.consumer.clone()), gpu) {
+        return;
+    }
+    let identity = client
+        .as_ref()
+        .and_then(|c| c.get_data::<infynitae_wayland::ClientState>())
+        .and_then(|s| s.identity());
+    let program = identity.map(|id| id.app_name());
+    let path = identity.map(|id| id.describe());
+    log_line!(
+        "{}",
+        format_capture_log(program.as_deref(), path.as_deref(), gpu)
+    );
 }
 
 /// Renders `elements` (`size` px at `k`) into each waiting capture's buffer: a dmabuf on the GPU,
@@ -2753,6 +2852,11 @@ fn handle_screencopy<E>(
     renderer: &mut GlesRenderer,
     screencopy_texture: &mut Option<GlesTexture>,
     copies: &mut Vec<PendingCopy>,
+    capture_log: &mut CaptureSeen<(
+        Option<smithay::reexports::wayland_server::backend::ClientId>,
+        Option<infynitae_wayland::screencopy::Consumer>,
+    )>,
+    turn: &mut TurnClock,
     pending: Vec<infynitae_wayland::screencopy::PendingFrame>,
     elements: &[E],
     size: (i32, i32),
@@ -2772,10 +2876,13 @@ fn handle_screencopy<E>(
 
     // Direct DMA-BUF GPU render (PipeWire, OBS, gpu-screen-recorder) before the CPU/shm fallback.
     let mut remaining = Vec::new();
+    let mut drew_dmabuf = false;
 
     for req in pending {
-        note_capture_path(smithay::wayland::dmabuf::get_dmabuf(&req.buffer).is_ok());
+        let gpu = smithay::wayland::dmabuf::get_dmabuf(&req.buffer).is_ok();
+        note_capture_start(capture_log, &req, gpu);
         if let Ok(dmabuf) = smithay::wayland::dmabuf::get_dmabuf(&req.buffer) {
+            drew_dmabuf = true;
             use smithay::backend::renderer::ImportDma;
             let mut dmabuf_rendered = false;
             if let Ok(mut dmabuf_tex) = renderer.import_dmabuf(dmabuf, None)
@@ -2818,6 +2925,9 @@ fn handle_screencopy<E>(
             remaining.push(req);
         }
     }
+    if drew_dmabuf {
+        turn.mark("capture draw");
+    }
 
     if remaining.is_empty() {
         return;
@@ -2854,7 +2964,9 @@ fn handle_screencopy<E>(
 
     let mut damage_tracker =
         OutputDamageTracker::new(size, smithay::utils::Scale::from(k), draw_transform);
-    if let Err(e) = damage_tracker.render_output(renderer, &mut framebuffer, 0, elements, clear) {
+    let render_res = damage_tracker.render_output(renderer, &mut framebuffer, 0, elements, clear);
+    turn.mark("capture draw");
+    if let Err(e) = render_res {
         log_line!("[screencopy] Failed to render output: {e:?}");
         for p in remaining {
             p.fail();
@@ -2862,12 +2974,14 @@ fn handle_screencopy<E>(
         return;
     }
 
-    let mapping = match ExportMem::copy_framebuffer(
+    let mapping = ExportMem::copy_framebuffer(
         renderer,
         &framebuffer,
         Rectangle::from_size(size.into()),
         Fourcc::Argb8888,
-    ) {
+    );
+    turn.mark("capture readback");
+    let mapping = match mapping {
         Ok(m) => m,
         Err(e) => {
             log_line!("[screencopy] Failed to copy framebuffer: {e:?}");
@@ -3057,15 +3171,24 @@ fn core_presentation_format(
 }
 
 /// Where a turn of the loop spent its time, for a turn long enough to be felt as a stutter
-/// ([`SLOW_TURN`]): the session log names its slowest parts. "Loop busy" said only how long
-/// (553 ms on the owner's PC, 2026-11-06), not where.
+/// ([`slow_turn_threshold`]): the session log names its slowest parts. "Loop busy" said only how
+/// long (553 ms on the owner's PC, 2026-11-06), not where.
 struct TurnClock {
     last: Option<std::time::Instant>,
     phases: Vec<(&'static str, Duration)>,
 }
 
-/// A turn this long is reported with its parts (about 8 refreshes at 165 Hz).
-const SLOW_TURN: Duration = Duration::from_millis(8);
+/// Fallback slow-turn threshold when no physical screen is connected.
+const SLOW_TURN_FALLBACK: Duration = Duration::from_millis(8);
+
+/// One refresh of the fastest connected screen, or [`SLOW_TURN_FALLBACK`] when none is attached.
+fn slow_turn_threshold(screens: &[Screen]) -> Duration {
+    screens
+        .iter()
+        .map(|s| s.schedule.period())
+        .min()
+        .unwrap_or(SLOW_TURN_FALLBACK)
+}
 
 impl TurnClock {
     fn new(start: std::time::Instant) -> Self {
@@ -3097,10 +3220,10 @@ impl TurnClock {
         self.last = Some(now);
     }
 
-    /// The parts of a turn of `busy`, slowest first, those of 1 ms or more; the rest is time
-    /// before the first mark or between marks this turn did not reach.
-    fn slow_parts(&self, busy: Duration) -> Option<String> {
-        if self.last.is_none() || busy < SLOW_TURN {
+    /// The parts of a turn of `busy` at least `threshold`, slowest first, those of 1 ms or more;
+    /// the rest is time before the first mark or between marks this turn did not reach.
+    fn slow_parts(&self, busy: Duration, threshold: Duration) -> Option<String> {
+        if self.last.is_none() || busy < threshold {
             return None;
         }
         let mut phase_totals: HashMap<&'static str, Duration> = HashMap::new();
@@ -3127,19 +3250,58 @@ impl TurnClock {
             out.join(", ")
         ))
     }
+}
 
-    fn report_if_slow(&self, busy: Duration, last_logged: &mut Option<std::time::Instant>) {
-        if self.last.is_none() || busy < SLOW_TURN {
-            return;
+/// Holds the slowest turn of each 1 s window so a 7 ms hiccup earlier in the second never hides a
+/// 40 ms stall later in the same second.
+#[derive(Debug, Default)]
+struct SlowTurnLog {
+    window_started: Option<std::time::Instant>,
+    worst: Option<(Duration, String)>,
+}
+
+impl SlowTurnLog {
+    fn record_at(
+        &mut self,
+        clock: &TurnClock,
+        busy: Duration,
+        threshold: Duration,
+        now: std::time::Instant,
+    ) -> Option<String> {
+        let flushed = self.take_due_at(now);
+        if let Some(line) = clock.slow_parts(busy, threshold) {
+            match self.window_started {
+                Some(_) => {
+                    if self.worst.as_ref().is_none_or(|(prev, _)| busy > *prev) {
+                        self.worst = Some((busy, line));
+                    }
+                }
+                None => {
+                    self.window_started = Some(now);
+                    self.worst = Some((busy, line));
+                }
+            }
         }
-        let now = std::time::Instant::now();
-        if last_logged.is_some_and(|t| now.duration_since(t) < Duration::from_secs(1)) {
-            return;
+        flushed
+    }
+
+    fn take_due_at(&mut self, now: std::time::Instant) -> Option<String> {
+        let ws = self.window_started?;
+        if now.duration_since(ws) < Duration::from_secs(1) {
+            return None;
         }
-        if let Some(line) = self.slow_parts(busy) {
-            *last_logged = Some(now);
-            log_line!("{line}");
-        }
+        self.window_started = None;
+        self.worst.take().map(|(_, line)| line)
+    }
+
+    fn flush(&mut self) -> Option<String> {
+        self.window_started = None;
+        self.worst.take().map(|(_, line)| line)
+    }
+
+    fn remaining(&self, now: std::time::Instant) -> Option<Duration> {
+        self.window_started
+            .map(|ws| Duration::from_secs(1).saturating_sub(now.saturating_duration_since(ws)))
     }
 }
 
@@ -3166,11 +3328,12 @@ fn latency_summary(data: &mut LoopData) {
     }
     for s in &mut data.screens {
         let (frames, misses) = s.schedule.counts();
+        let (pause_frames, pause_misses) = s.schedule.pause_counts();
         let (pauses, paused) = s.schedule.pauses();
         if let Some((p50, p95, max, n)) = s.latency.take_summary() {
             let ms = |d: std::time::Duration| d.as_secs_f64() * 1000.0;
             log_line!(
-                "[infynitae] Latency {:?}: input to screen p50 {:.2} ms, p95 {:.2} ms, max {:.2} ms ({n} frames); budget {:.2} ms, margin {:.2} ms, {misses} of {frames} frames missed their refresh; paused {pauses} times{}",
+                "[infynitae] Latency {:?}: input to screen p50 {:.2} ms, p95 {:.2} ms, max {:.2} ms ({n} frames); budget {:.2} ms, margin {:.2} ms, {misses} of {frames} frames in a run missed their refresh ({pause_misses} of {pause_frames} after pause); paused {pauses} times{}",
                 s.id,
                 ms(p50),
                 ms(p95),
@@ -3736,16 +3899,20 @@ mod tests {
     #[test]
     fn turn_clock_marks_only_when_enabled() {
         use std::time::{Duration, Instant};
+        let threshold = super::SLOW_TURN_FALLBACK;
         let mut off = super::TurnClock::off();
         assert!(!off.is_enabled());
         off.mark("config reload");
         off.mark("cursor");
         assert!(off.phases.is_empty());
         assert_eq!(off.phases.capacity(), 0);
-        assert_eq!(off.slow_parts(Duration::from_millis(50)), None);
-        let mut last_logged = None;
-        off.report_if_slow(Duration::from_millis(50), &mut last_logged);
-        assert_eq!(last_logged, None);
+        assert_eq!(off.slow_parts(Duration::from_millis(50), threshold), None);
+        let mut log = super::SlowTurnLog::default();
+        assert_eq!(
+            log.record_at(&off, Duration::from_millis(50), threshold, Instant::now()),
+            None
+        );
+        assert_eq!(log.flush(), None);
 
         let mut on = super::TurnClock::new(Instant::now());
         assert!(on.is_enabled());
@@ -3760,15 +3927,17 @@ mod tests {
     #[test]
     fn a_slow_turn_names_its_slowest_parts() {
         use std::time::Duration;
+        let threshold = super::SLOW_TURN_FALLBACK;
         let mut c = super::TurnClock::new(std::time::Instant::now());
         c.phases = vec![
             ("client requests", Duration::from_millis(15)),
             ("background priority", Duration::from_micros(500)),
             ("render", Duration::from_millis(40)),
         ];
-        assert_eq!(c.slow_parts(Duration::from_millis(7)), None);
+        assert_eq!(c.slow_parts(Duration::from_millis(7), threshold), None);
         assert_eq!(
-            c.slow_parts(Duration::from_micros(60_500)).as_deref(),
+            c.slow_parts(Duration::from_micros(60_500), threshold)
+                .as_deref(),
             Some(
                 "[infynitae] Slow turn 60.5 ms: render 40.0 ms, client requests 15.0 ms, other 5.0 ms"
             )
@@ -3786,7 +3955,8 @@ mod tests {
             ("render_frame", Duration::from_millis(5)),
         ];
         assert_eq!(
-            c.slow_parts(Duration::from_millis(16)).as_deref(),
+            c.slow_parts(Duration::from_millis(16), super::SLOW_TURN_FALLBACK)
+                .as_deref(),
             Some(
                 "[infynitae] Slow turn 16.0 ms: element building 7.0 ms, render_frame 5.0 ms, scanout decision 2.0 ms, other 2.0 ms"
             )
@@ -3794,30 +3964,84 @@ mod tests {
     }
 
     #[test]
-    fn slow_turn_rate_limits_to_one_per_second() {
+    fn slow_turn_reports_worst_of_each_second() {
         use std::time::{Duration, Instant};
-        let mut c = super::TurnClock::new(Instant::now());
-        c.phases = vec![("render_frame", Duration::from_millis(10))];
-        let mut last_logged = None;
-        c.report_if_slow(Duration::from_millis(10), &mut last_logged);
-        assert!(last_logged.is_some());
-        let first_logged = last_logged;
-        // Immediate second slow turn is suppressed by rate limiter
-        c.report_if_slow(Duration::from_millis(10), &mut last_logged);
-        assert_eq!(last_logged, first_logged);
-        // After 1 second passes, it logs again
-        let mut past_logged = Some(Instant::now() - Duration::from_millis(1100));
-        c.report_if_slow(Duration::from_millis(10), &mut past_logged);
-        assert!(past_logged.unwrap() > first_logged.unwrap());
+        let threshold = Duration::from_nanos(6_060_606); // 165 Hz
+        let mut log = super::SlowTurnLog::default();
+        let t0 = Instant::now();
+
+        let mut mild = super::TurnClock::new(t0);
+        mild.phases = vec![("capture readback", Duration::from_millis(7))];
+        let mut worst = super::TurnClock::new(t0);
+        worst.phases = vec![("render_frame", Duration::from_millis(40))];
+        let mut tail = super::TurnClock::new(t0);
+        tail.phases = vec![("flush", Duration::from_millis(10))];
+
+        // Earlier slow turn opens the 1 s window without immediately printing.
+        assert_eq!(
+            log.record_at(&mild, Duration::from_millis(7), threshold, t0),
+            None
+        );
+        // Slower turn within the same second replaces it; a milder one after does not.
+        assert_eq!(
+            log.record_at(
+                &worst,
+                Duration::from_millis(40),
+                threshold,
+                t0 + Duration::from_millis(100),
+            ),
+            None
+        );
+        assert_eq!(
+            log.record_at(
+                &tail,
+                Duration::from_millis(10),
+                threshold,
+                t0 + Duration::from_millis(200),
+            ),
+            None
+        );
+        // After 1 second, the slowest turn of that second is emitted.
+        let due = log.take_due_at(t0 + Duration::from_millis(1000)).unwrap();
+        assert!(due.starts_with("[infynitae] Slow turn 40.0 ms: render_frame 40.0 ms"));
+        assert_eq!(log.take_due_at(t0 + Duration::from_millis(1100)), None);
     }
 
     #[test]
-    fn slow_turn_threshold_is_8ms() {
+    fn slow_turn_threshold_matches_one_refresh() {
         use std::time::Duration;
+        let period_165hz = Duration::from_nanos(6_060_606);
         let mut c = super::TurnClock::new(std::time::Instant::now());
-        c.phases = vec![("render_frame", Duration::from_millis(5))];
-        assert_eq!(c.slow_parts(Duration::from_millis(7)), None);
-        assert!(c.slow_parts(Duration::from_millis(8)).is_some());
+        c.phases = vec![("render_frame", Duration::from_millis(6))];
+        assert_eq!(c.slow_parts(Duration::from_millis(6), period_165hz), None);
+        assert!(
+            c.slow_parts(Duration::from_micros(6_100), period_165hz)
+                .is_some()
+        );
+        assert_eq!(super::slow_turn_threshold(&[]), super::SLOW_TURN_FALLBACK);
+    }
+
+    #[test]
+    fn capture_log_reports_client_path_and_buffer_kind_once_per_capture() {
+        let mut seen = super::CaptureSeen::default();
+        assert!(seen.note((1u64, None::<u64>), true));
+        assert!(!seen.note((1u64, None::<u64>), true));
+        // Buffer path change or new session/client logs again.
+        assert!(seen.note((1u64, None::<u64>), false));
+        assert!(seen.note((2u64, None::<u64>), true));
+
+        assert_eq!(
+            super::format_capture_log(Some("obs"), Some("/usr/bin/obs"), true),
+            "[infynitae] Capture started by obs (/usr/bin/obs): into a GPU buffer (dmabuf)"
+        );
+        assert_eq!(
+            super::format_capture_log(
+                Some("org.obsproject.Studio"),
+                Some("org.obsproject.Studio (sandboxed by flatpak)"),
+                false,
+            ),
+            "[infynitae] Capture started by org.obsproject.Studio (sandboxed by flatpak): into memory (shm), copied on the main thread"
+        );
     }
 
     use super::*;
