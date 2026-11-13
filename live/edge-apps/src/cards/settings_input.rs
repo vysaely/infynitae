@@ -401,9 +401,7 @@ fn values_equal(control: Control, a: &str, b: &str) -> bool {
             (Ok(x), Ok(y)) => (x - y).abs() < 1e-9,
             _ => a == b,
         },
-        Control::Switch { .. } | Control::Pick(_) | Control::Words(_) => {
-            a.trim().eq_ignore_ascii_case(b.trim())
-        }
+        Control::Switch { .. } | Control::Pick(_) => a.trim().eq_ignore_ascii_case(b.trim()),
         _ => a == b,
     }
 }
@@ -642,7 +640,7 @@ impl Card for InputCard {
                     let tw = draw::measure(cr, &t).0.min(w);
                     draw::text_max(cr, right - tw, r.1 + (r.3 - 15.0) / 2.0, w, &t);
                 }
-                Control::Words(_) | Control::Step { .. } => {}
+                Control::Step { .. } => {}
             }
             y += h;
         }
@@ -882,7 +880,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("{} not in config/config", s.key));
             match s.control {
                 Control::Switch { on, off } => assert!(v == on || v == off, "{} = {v}", s.key),
-                Control::Pick(o) | Control::Words(o) => {
+                Control::Pick(o) => {
                     assert!(o.iter().any(|(x, _)| x == v), "{} = {v}", s.key)
                 }
                 Control::Slide { min, max, step, .. } => {

@@ -71,7 +71,6 @@ const H_CAND_SQ_BASE: u32 = PICKER + 30;
 const H_WP_MODE_OPT_BASE: u32 = PICKER + 40;
 const H_RECENT_BASE: u32 = PICKER + 50;
 const H_SCHEME_BASE: u32 = PICKER + 70;
-const WORDS_H: f64 = 34.0;
 const SLIDE_H: f64 = 22.0;
 const SWATCH: f64 = 16.0;
 const MAX_LIST_ROWS: usize = 8;
@@ -706,8 +705,6 @@ pub enum LookControl {
         off: &'static str,
     },
     Pick(&'static [(&'static str, &'static str)]),
-    #[allow(dead_code)] // Variant kept until word-button controls are added in Look.
-    Words(&'static [(&'static str, &'static str)]),
     Slide {
         min: f64,
         max: f64,
@@ -755,7 +752,6 @@ impl LookRow {
         match self.control {
             LookControl::Switch { on, off } => Some(Control::Switch { on, off }),
             LookControl::Pick(o) => Some(Control::Pick(o)),
-            LookControl::Words(o) => Some(Control::Words(o)),
             LookControl::Slide {
                 min,
                 max,
@@ -1428,7 +1424,6 @@ impl LookCard {
             _ => {
                 ui::ROW_H
                     + match self.table[i].control {
-                        LookControl::Words(_) => WORDS_H,
                         LookControl::Slide { .. } => SLIDE_H,
                         _ => 0.0,
                     }
@@ -1453,7 +1448,7 @@ impl LookCard {
     fn display_word(&self, i: usize) -> String {
         let v = self.value(i);
         match self.table[i].control {
-            LookControl::Pick(opts) | LookControl::Words(opts) => opts
+            LookControl::Pick(opts) => opts
                 .iter()
                 .find(|(val, _)| val.eq_ignore_ascii_case(&v))
                 .map_or(v, |(_, w)| (*w).to_string()),
@@ -2054,9 +2049,9 @@ impl LookCard {
             draw::set(
                 cr,
                 if lit {
-                    cx.theme.text.alpha(0.08)
+                    cx.theme.text.alpha(ui::LIGHT_ALPHA)
                 } else {
-                    cx.theme.text.alpha(0.04)
+                    cx.theme.text.alpha(ui::BOX_ALPHA)
                 },
             );
             let _ = cr.fill_preserve();
@@ -2473,7 +2468,7 @@ fn draw_style_row(
             draw::measure(
                 cr,
                 &Text {
-                    size: 12.0,
+                    size: draw::SIZE_SMALL,
                     bold: true,
                     color: cx.theme.text,
                     text: word,
@@ -2493,41 +2488,7 @@ fn draw_style_row(
         };
         let b = (x, r.1, w, r.3);
         let id = first_id + idx as u32;
-        let lit = hits.add(id, b) || hits.selected(id);
-        let on = chosen == Some(idx);
-        draw::round_rect(
-            cr,
-            b.0 + 0.5,
-            b.1 + 0.5,
-            (b.2 - 1.0).max(1.0),
-            (b.3 - 1.0).max(1.0),
-            cx.theme.small_radius(),
-        );
-        if on {
-            draw::set(cr, cx.theme.accent.alpha(0.18));
-            let _ = cr.fill_preserve();
-        } else if lit {
-            draw::set(cr, cx.theme.text.alpha(0.08));
-            let _ = cr.fill_preserve();
-        }
-        draw::set(cr, if on { cx.theme.accent } else { cx.theme.edge });
-        cr.set_line_width(1.0);
-        let _ = cr.stroke();
-        draw::text_center(
-            cr,
-            b.0 + b.2 / 2.0,
-            b.1 + (b.3 - 15.0) / 2.0,
-            &Text {
-                size: 12.0,
-                bold: on,
-                color: if on {
-                    cx.theme.accent_text
-                } else {
-                    cx.theme.text
-                },
-                text: word,
-            },
-        );
+        ui::choice_button(cr, cx, hits, id, b, word, chosen == Some(idx));
         x += w + gap;
     }
 }
@@ -2717,7 +2678,7 @@ impl LookCard {
                 let _ = cr.paint();
             }
             if lit {
-                draw::set(cr, cx.theme.text.alpha(0.08));
+                draw::set(cr, cx.theme.text.alpha(ui::LIGHT_ALPHA));
                 let _ = cr.paint();
             }
             let _ = cr.restore();
@@ -2990,37 +2951,6 @@ impl Card for LookCard {
                     if self.pick == Some(i) && self.list.shown() {
                         self.draw_list(cr, cx, hits, list_r, &entries);
                     }
-                }
-                LookControl::Words(opts) => {
-                    ui::row(
-                        cr,
-                        cx,
-                        hits,
-                        id,
-                        r,
-                        &Row {
-                            icon: None,
-                            name: s.name,
-                            state,
-                            on: state_accent,
-                            right: 0.0,
-                        },
-                    );
-                    let cur = self.value(i);
-                    let words: Vec<&str> = opts.iter().map(|(_, w)| *w).collect();
-                    let chosen = opts
-                        .iter()
-                        .position(|(v, _)| v.eq_ignore_ascii_case(&cur))
-                        .unwrap_or(usize::MAX);
-                    ui::choice(
-                        cr,
-                        cx,
-                        hits,
-                        id + 1,
-                        (body.0 + 8.0, y + ui::ROW_H, body.2 - 16.0, WORDS_H - 4.0),
-                        &words,
-                        chosen,
-                    );
                 }
                 LookControl::Slide { min, max, unit, .. } => {
                     let v: f64 = self.value(i).parse().unwrap_or(min);
@@ -3442,15 +3372,6 @@ impl Card for LookCard {
                         self.open_pick(i);
                         true
                     }
-                    LookControl::Words(opts) => {
-                        let Some(j) = part.checked_sub(1) else {
-                            return false;
-                        };
-                        let Some((val, _)) = opts.get(j as usize) else {
-                            return false;
-                        };
-                        self.set(i, (*val).to_string(), out)
-                    }
                     LookControl::Slide { min, max, step, .. } if part == 1 => {
                         let rect = self.slide_rects.borrow().get(&i).copied();
                         let Some(rect) = rect else { return false };
@@ -3760,7 +3681,7 @@ mod tests {
                         Control::Switch { on, off } => {
                             assert!(v == on || v == off, "{} = {v}", r.key)
                         }
-                        Control::Pick(o) | Control::Words(o) => {
+                        Control::Pick(o) => {
                             assert!(o.iter().any(|(x, _)| x == v), "{} = {v}", r.key)
                         }
                         Control::Slide { min, max, .. } => {
@@ -4823,5 +4744,43 @@ mod tests {
             .map(|(_, r)| r.1 + r.3)
             .fold(0.0_f64, f64::max);
         assert!((h_e - max_bottom_e).abs() < 1.0);
+    }
+
+    #[test]
+    fn style_row_uses_borderless_soft_fills_via_choice_button() {
+        let th = Theme::from_config(&crate::config::Config::from_text(""));
+        let cx = test_cx(&th);
+        let opts = [("balanced", "Balanced"), ("dark", "Dark")];
+        let mut surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 320, 60).unwrap();
+        let mut hits = Hits::new(None, None);
+        {
+            let cr = Context::new(&surf).unwrap();
+            draw_style_row(
+                &cr,
+                &cx,
+                &mut hits,
+                H_SCHEME_BASE,
+                (10.0, 10.0, 280.0, 28.0),
+                &opts,
+                Some(0),
+            );
+        }
+        surf.flush();
+        let stride = surf.stride() as usize;
+        let data = surf.data().unwrap();
+        let px = |x: usize, y: usize| -> [u8; 4] {
+            let off = y * stride + x * 4;
+            [data[off], data[off + 1], data[off + 2], data[off + 3]]
+        };
+        let b0 = hits.list[0].1;
+        let b1 = hits.list[1].1;
+        // Chosen pill top edge matches interior (no outline stroke) and differs from unchosen pill.
+        let chosen_edge = px((b0.0 + 10.0) as usize, b0.1 as usize);
+        let chosen_in = px((b0.0 + 10.0) as usize, (b0.1 + 2.0) as usize);
+        let other_in = px((b1.0 + 10.0) as usize, (b1.1 + 2.0) as usize);
+        assert!(chosen_in[3] > 0);
+        assert!(other_in[3] > 0);
+        assert_eq!(chosen_edge, chosen_in);
+        assert_ne!(chosen_in, other_in);
     }
 }
