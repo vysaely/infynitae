@@ -65,7 +65,7 @@ apply_defaults() {
     COLOR_SCHEME="${COLOR_SCHEME:-prefer-dark}"
     CANVAS_COLOR="${CANVAS_COLOR:-#0b0f14}"
     SURFACE_COLOR="${SURFACE_COLOR:-#111317}"
-    BORDER_ACTIVE="${BORDER_ACTIVE:-#7aa2f7}"
+    ACCENT="${ACCENT:-${BORDER_ACTIVE:-#7aa2f7}}"
     BORDER_INACTIVE="${BORDER_INACTIVE:-#333b54}"
     TEXT_COLOR="${TEXT_COLOR:-#eef2f8}"
     MOUSE_ACCEL_PROFILE="${MOUSE_ACCEL_PROFILE:-flat}"
@@ -101,10 +101,11 @@ look_load() {
     LOOK_CARD="${SURFACE_COLOR:-#111317}" LOOK_CARD_AA=e6
     LOOK_EDGE="${BORDER_INACTIVE:-#333b54}" LOOK_EDGE_AA=e6
     LOOK_TEXT="${TEXT_COLOR:-#eef2f8}" LOOK_TEXT_AA=ff
-    LOOK_ACCENT="${BORDER_ACTIVE:-#7aa2f7}" LOOK_ACCENT_AA=ff
+    LOOK_ACCENT="${ACCENT:-${BORDER_ACTIVE:-#7aa2f7}}" LOOK_ACCENT_AA=ff
     LOOK_MUTED="" LOOK_MUTED_AA=ff
     LOOK_ON_ACCENT="" LOOK_ON_ACCENT_AA=ff
     LOOK_ACCENT_TEXT="" LOOK_ACCENT_TEXT_AA=ff
+    LOOK_ALERT="" LOOK_ALERT_AA=ff
     LOOK_TRACK="" LOOK_TRACK_AA=1f
     LOOK_FONT="${FONT_NAME:-sans-serif}"
 
@@ -121,7 +122,7 @@ look_load() {
                     look_name=${look_line%%=*} look_val=${look_line#*=}
                     look_val=${look_val#\"} look_val=${look_val%\"}
                     case "$look_name" in
-                        LOOK_CARD|LOOK_CARD_AA|LOOK_EDGE|LOOK_EDGE_AA|LOOK_TEXT|LOOK_TEXT_AA|LOOK_MUTED|LOOK_MUTED_AA|LOOK_ACCENT|LOOK_ACCENT_AA|LOOK_ON_ACCENT|LOOK_ON_ACCENT_AA|LOOK_ACCENT_TEXT|LOOK_ACCENT_TEXT_AA|LOOK_TRACK|LOOK_TRACK_AA|LOOK_CORNERS|LOOK_SMALL_RADIUS)
+                        LOOK_CARD|LOOK_CARD_AA|LOOK_EDGE|LOOK_EDGE_AA|LOOK_TEXT|LOOK_TEXT_AA|LOOK_MUTED|LOOK_MUTED_AA|LOOK_ACCENT|LOOK_ACCENT_AA|LOOK_ON_ACCENT|LOOK_ON_ACCENT_AA|LOOK_ACCENT_TEXT|LOOK_ACCENT_TEXT_AA|LOOK_ALERT|LOOK_ALERT_AA|LOOK_TRACK|LOOK_TRACK_AA|LOOK_CORNERS|LOOK_SMALL_RADIUS)
                             case "$look_val" in
                                 *[!A-Za-z0-9_#]*) ;;
                                 ?*)
@@ -152,9 +153,11 @@ LOOK_END
         fi
     fi
 
-    if [ -z "$LOOK_MUTED" ] || [ -z "$LOOK_ON_ACCENT" ] || [ -z "$LOOK_ACCENT_TEXT" ] || [ "$look_got_card_aa" != true ]; then
-        IFS=' ' read -r look_aa look_muted look_on_acc look_acc_text << EOF
-$(LC_ALL=C awk -v card="${LOOK_CARD#\#}" -v text="${LOOK_TEXT#\#}" -v acc="${LOOK_ACCENT#\#}" -v op="${CARD_OPACITY:-90}" '
+    if [ -z "$LOOK_MUTED" ] || [ -z "$LOOK_ON_ACCENT" ] || [ -z "$LOOK_ACCENT_TEXT" ] || [ -z "$LOOK_ALERT" ] || [ "$look_got_card_aa" != true ]; then
+        IFS=' ' read -r look_aa look_muted look_on_acc look_acc_text look_alert << EOF
+$(LC_ALL=C awk -v card="${LOOK_CARD#\#}" -v text="${LOOK_TEXT#\#}" -v acc="${LOOK_ACCENT#\#}" -v op="${CARD_OPACITY:-90}" -v scheme="${COLOR_SCHEME:-prefer-dark}" '
+    function abs(v) { return (v < 0) ? -v : v }
+    function max3(a, b, c,   m) { m = (a > b) ? a : b; return (m > c) ? m : c }
     function h(s, i) { return index("0123456789abcdef", tolower(substr(s, i, 1))) - 1 }
     function c(s, i) { return h(s, i) * 16 + h(s, i + 1) }
     function mix(a, b, t) {
@@ -170,6 +173,32 @@ $(LC_ALL=C awk -v card="${LOOK_CARD#\#}" -v text="${LOOK_TEXT#\#}" -v acc="${LOO
         hi = (la > lb) ? la : lb; lo = (la < lb) ? la : lb
         return (hi + 0.05) / (lo + 0.05)
     }
+    function hsl_hex(hue, sat, lig,   ch, hp, x, m, r, g, b, sec) {
+        ch = (1.0 - abs(2.0 * lig - 1.0)) * sat
+        hue = hue % 360.0; if (hue < 0) hue += 360.0
+        hp = hue / 60.0
+        x = ch * (1.0 - abs((hp % 2.0) - 1.0))
+        sec = int(hp)
+        if (sec == 0)      { r = ch; g = x;  b = 0 }
+        else if (sec == 1) { r = x;  g = ch; b = 0 }
+        else if (sec == 2) { r = 0;  g = ch; b = x }
+        else if (sec == 3) { r = 0;  g = x;  b = ch }
+        else if (sec == 4) { r = x;  g = 0;  b = ch }
+        else               { r = ch; g = 0;  b = x }
+        m = lig - ch / 2.0
+        return sprintf("%02x%02x%02x",
+            int((r + m) * 255.0 + 0.5),
+            int((g + m) * 255.0 + 0.5),
+            int((b + m) * 255.0 + 0.5))
+    }
+    function make_alert(hue, sat, lig,   base, i, cand) {
+        base = mix(hsl_hex(hue, sat, lig), text, 0.08)
+        for (i = 0; i <= 10; i++) {
+            cand = mix(base, text, i / 10.0)
+            if (contrast(cand, card) >= 4.5) return cand
+        }
+        return text
+    }
     BEGIN {
         if (op !~ /^[0-9]+(\.[0-9]+)?$/) op = 90
         if (op < 0) op = 0
@@ -183,13 +212,23 @@ $(LC_ALL=C awk -v card="${LOOK_CARD#\#}" -v text="${LOOK_TEXT#\#}" -v acc="${LOO
             cand = mix(acc, text, i / 10.0)
             if (contrast(cand, card) >= 3.0) { acc_text = cand; break }
         }
-        printf "%s #%s #%s #%s\n", aa, muted, on_acc, acc_text
+        light_card = (scheme == "prefer-light" || lum(card) > 0.35)
+        s = light_card ? 0.74 : 0.80
+        l = light_card ? 0.42 : 0.65
+        alert_c = make_alert(358.0, s, l)
+        if (max3(abs(c(alert_c, 1) - c(acc, 1)),
+                 abs(c(alert_c, 3) - c(acc, 3)),
+                 abs(c(alert_c, 5) - c(acc, 5))) / 255.0 < 0.14) {
+            alert_c = make_alert(28.0, s, l)
+        }
+        printf "%s #%s #%s #%s #%s\n", aa, muted, on_acc, acc_text, alert_c
     }')
 EOF
         [ "$look_got_card_aa" = true ] || LOOK_CARD_AA="$look_aa"
         [ -n "$LOOK_MUTED" ] || LOOK_MUTED="$look_muted"
         [ -n "$LOOK_ON_ACCENT" ] || LOOK_ON_ACCENT="$look_on_acc"
         [ -n "$LOOK_ACCENT_TEXT" ] || LOOK_ACCENT_TEXT="$look_acc_text"
+        [ -n "$LOOK_ALERT" ] || LOOK_ALERT="$look_alert"
     fi
     [ -n "$LOOK_TRACK" ] || LOOK_TRACK="$LOOK_TEXT"
 }
@@ -214,6 +253,8 @@ LOOK_ON_ACCENT="${LOOK_ON_ACCENT}"
 LOOK_ON_ACCENT_AA="${LOOK_ON_ACCENT_AA}"
 LOOK_ACCENT_TEXT="${LOOK_ACCENT_TEXT}"
 LOOK_ACCENT_TEXT_AA="${LOOK_ACCENT_TEXT_AA}"
+LOOK_ALERT="${LOOK_ALERT}"
+LOOK_ALERT_AA="${LOOK_ALERT_AA}"
 LOOK_TRACK="${LOOK_TRACK}"
 LOOK_TRACK_AA="${LOOK_TRACK_AA}"
 LOOK_CORNERS="${LOOK_CORNERS}"
@@ -303,8 +344,9 @@ wallpaper_colors() {
     printf '%s\n' "$wc_out" | while IFS='=' read -r wc_key wc_val; do
         wc_val=$(printf '%s' "$wc_val" | tr -d '"')
         case "$wc_val" in \#[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]) ;; *) continue ;; esac
-        if [ "$wc_what" = accent ] && [ "$wc_key" != BORDER_ACTIVE ]; then continue; fi
-        if [ "$wc_key" = BORDER_ACTIVE ] && [ -n "$wc_pick" ]; then wc_val="$wc_pick"; fi
+        [ "$wc_key" != BORDER_ACTIVE ] || wc_key=ACCENT
+        if [ "$wc_what" = accent ] && [ "$wc_key" != ACCENT ]; then continue; fi
+        if [ "$wc_key" = ACCENT ] && [ -n "$wc_pick" ]; then wc_val="$wc_pick"; fi
         config_write "$wc_key" "$wc_val"
     done
     return 0
@@ -322,7 +364,7 @@ folder_icon_theme() {
     for d in "$HOME/.local/share/icons/$ICON_THEME" /usr/share/icons/"$ICON_THEME"; do
         [ -f "$d/index.theme" ] && { src="$d"; break; }
     done
-    hex=$(printf '%s' "${LOOK_ACCENT:-${BORDER_ACTIVE:-#7aa2f7}}" | tr -d '#' | tr 'A-F' 'a-f')
+    hex=$(printf '%s' "${LOOK_ACCENT:-${ACCENT:-${BORDER_ACTIVE:-#7aa2f7}}}" | tr -d '#' | tr 'A-F' 'a-f')
     case "$hex" in [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;; *) src="" ;; esac
     [ -n "$src" ] || { echo "$ICON_THEME"; return 0; }
     name="Infynitae-$ICON_THEME"
@@ -1099,12 +1141,13 @@ case "$1" in
                 exit 1
             fi
             wc_all=$(printf '%s\n' "$wc_all" | awk '{print $1}')
-            wc_old="-"
-            if grep -q '^BORDER_ACTIVE=' "$CONFIG_FILE" 2>/dev/null; then
-                wc_old=$(cmd_get BORDER_ACTIVE)
+            wc_old="-" wc_cur=""
+            if grep -q '^ACCENT=' "$CONFIG_FILE" 2>/dev/null; then
+                wc_old=$(cmd_get ACCENT)
                 wc_cur="$wc_old"
-            else
-                wc_cur=$(cmd_get BORDER_ACTIVE 2>/dev/null || printf '%s' "${BORDER_ACTIVE:-}")
+            fi
+            if [ -z "$wc_cur" ]; then
+                wc_cur=$(cmd_get BORDER_ACTIVE 2>/dev/null || printf '%s' "${ACCENT:-${BORDER_ACTIVE:-}}")
             fi
             wc_cur=$(printf '%s' "$wc_cur" | tr '[:upper:]' '[:lower:]')
             wc_avail=$(printf '%s\n' "$wc_all" | grep -ivFx "$wc_cur" || true)
@@ -1114,7 +1157,7 @@ case "$1" in
             fi
             wc_pick=$(printf '%s\n' "$wc_avail" | pick_random_line)
             cp -f "$CONFIG_FILE" "$CONFIG_FILE.bak-colors"
-            cmd_set BORDER_ACTIVE "$wc_pick" "$wc_old"
+            cmd_set ACCENT "$wc_pick" "$wc_old"
         else
             cp -f "$CONFIG_FILE" "$CONFIG_FILE.bak-colors"
             if ! wallpaper_colors "$wc_img" "$wc_what"; then
@@ -1126,7 +1169,7 @@ case "$1" in
             apply_settings --force
         fi
         load_config
-        grep -E '^(BORDER_ACTIVE|SURFACE_COLOR|CANVAS_COLOR|BORDER_INACTIVE)=' "$CONFIG_FILE" || true
+        grep -E '^(ACCENT|BORDER_ACTIVE|SURFACE_COLOR|CANVAS_COLOR|BORDER_INACTIVE)=' "$CONFIG_FILE" || true
         echo "==> Colours from $wc_img (before: $CONFIG_FILE.bak-colors). Panels follow at once; apps on their next start."
         ;;
     set)

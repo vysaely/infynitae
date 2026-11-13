@@ -262,8 +262,8 @@ case "${BATTERY_LIMIT:-off}" in
     *) sh "$HOME/infynitae/live/battery-limit" "$BATTERY_LIMIT" >/dev/null 2>&1 || true ;;
 esac
 
-# 6e4. The screen locks before the machine sleeps (the lid, the power button): it wakes locked (SLEEP_LOCK)
-if infy_on "${SLEEP_LOCK:-true}"; then
+# 6e4. The screen locks before the machine sleeps (the lid, the power button): it wakes locked (LOCK_WHEN_AWAY, fallback SLEEP_LOCK)
+if infy_on "${LOCK_WHEN_AWAY:-${SLEEP_LOCK:-true}}"; then
     SLEEP_LOCK_BIN=$(infy_bin infynitae-sleep-lock || true)
     if [ -n "$SLEEP_LOCK_BIN" ]; then
         "$SLEEP_LOCK_BIN" >/dev/null 2>&1 &

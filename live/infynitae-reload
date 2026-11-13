@@ -235,14 +235,14 @@ reload_restore() {
 
 reload_sleep_lock() {
     stop_helper infynitae-sleep-lock
-    if is_true "${SLEEP_LOCK:-true}"; then
+    if is_true "${LOCK_WHEN_AWAY:-${SLEEP_LOCK:-true}}"; then
         s=$(first "$BIN_DIR/infynitae-sleep-lock" "$LIVE/infynitae-sleep-lock")
         if [ -n "$s" ]; then
             spawn "$s"
             echo "sleep-lock: restarted"
         fi
     else
-        echo "sleep-lock: stopped (SLEEP_LOCK is off)"
+        echo "sleep-lock: stopped (LOCK_WHEN_AWAY is off)"
     fi
 }
 

@@ -114,6 +114,7 @@ typedef struct {
     double text_rgb[3];
     double muted_rgb[3];
     double accent_text_rgb[3];
+    double alert_rgb[3];
 } LockApp;
 
 typedef struct LockOutput {
@@ -388,7 +389,7 @@ static void parse_font_name(const char *s, char *dst, size_t dst_sz) {
  * infynitae-settings resolved it into ~/.cache/infynitae/look: card, edge, text, muted, accent,
  * accent-as-text, corners, small radius and font. Read after the config, so a colour scheme reaches
  * the lock screen too; missing keys fall back to values worked out from the resolved colours. */
-static void read_look(LockApp *app, const char *home, bool *has_muted, bool *has_accent_text, bool *has_small) {
+static void read_look(LockApp *app, const char *home, bool *has_muted, bool *has_accent_text, bool *has_alert, bool *has_small) {
     const char *cache = getenv("XDG_CACHE_HOME");
     char path[512];
     if (cache && *cache) snprintf(path, sizeof(path), "%s/infynitae/look", cache);
@@ -407,6 +408,8 @@ static void read_look(LockApp *app, const char *home, bool *has_muted, bool *has
             parse_hex_rgb(line + 12, app->border_act_rgb);
         } else if (strncmp(line, "LOOK_ACCENT_TEXT=", 17) == 0) {
             if (parse_hex_rgb(line + 17, app->accent_text_rgb)) *has_accent_text = true;
+        } else if (strncmp(line, "LOOK_ALERT=", 11) == 0) {
+            if (parse_hex_rgb(line + 11, app->alert_rgb)) *has_alert = true;
         } else if (strncmp(line, "LOOK_CORNERS=", 13) == 0) {
             parse_radius(line + 13, &app->corners);
         } else if (strncmp(line, "LOOK_SMALL_RADIUS=", 18) == 0) {
@@ -428,13 +431,15 @@ static void load_theme_config(LockApp *app) {
     app->corners = 8; /* the corners of windows and the edge: 8 unless the look file says */
     snprintf(app->font, sizeof(app->font), "sans-serif");
 
-    bool has_muted = false, has_accent_text = false, has_small = false;
+    bool has_muted = false, has_accent_text = false, has_alert = false, has_small = false;
     const char *home = getenv("HOME");
     if (home) {
         char path[512];
         snprintf(path, sizeof(path), "%s/.config/infynitae/config", home);
         FILE *f = fopen(path, "r");
         if (f) {
+            double accent_cfg[3], border_cfg[3];
+            bool has_accent_cfg = false, has_border_cfg = false;
             char line[256];
             while (fgets(line, sizeof(line), f)) {
                 char *p = line;
@@ -442,13 +447,18 @@ static void load_theme_config(LockApp *app) {
                 if (*p == '#') continue;
                 if (strncmp(p, "CANVAS_COLOR=", 13) == 0) parse_hex_rgb(p + 13, app->canvas_rgb);
                 else if (strncmp(p, "SURFACE_COLOR=", 14) == 0) parse_hex_rgb(p + 14, app->surface_rgb);
-                else if (strncmp(p, "BORDER_ACTIVE=", 14) == 0) parse_hex_rgb(p + 14, app->border_act_rgb);
-                else if (strncmp(p, "BORDER_INACTIVE=", 16) == 0) parse_hex_rgb(p + 16, app->border_inact_rgb);
+                else if (strncmp(p, "ACCENT=", 7) == 0) {
+                    if (parse_hex_rgb(p + 7, accent_cfg)) has_accent_cfg = true;
+                } else if (strncmp(p, "BORDER_ACTIVE=", 14) == 0) {
+                    if (parse_hex_rgb(p + 14, border_cfg)) has_border_cfg = true;
+                } else if (strncmp(p, "BORDER_INACTIVE=", 16) == 0) parse_hex_rgb(p + 16, app->border_inact_rgb);
                 else if (strncmp(p, "TEXT_COLOR=", 11) == 0) parse_hex_rgb(p + 11, app->text_rgb);
             }
             fclose(f);
+            if (has_accent_cfg) memcpy(app->border_act_rgb, accent_cfg, sizeof(accent_cfg));
+            else if (has_border_cfg) memcpy(app->border_act_rgb, border_cfg, sizeof(border_cfg));
         }
-        read_look(app, home, &has_muted, &has_accent_text, &has_small);
+        read_look(app, home, &has_muted, &has_accent_text, &has_alert, &has_small);
     }
     if (!has_muted) {
         for (int i = 0; i < 3; i++)
@@ -456,6 +466,9 @@ static void load_theme_config(LockApp *app) {
     }
     if (!has_accent_text) {
         memcpy(app->accent_text_rgb, app->border_act_rgb, sizeof(app->accent_text_rgb));
+    }
+    if (!has_alert) {
+        memcpy(app->alert_rgb, app->accent_text_rgb, sizeof(app->alert_rgb));
     }
     if (!has_small) {
         app->small_corners = round(app->corners * 0.55);
@@ -869,7 +882,7 @@ static void draw_scene(cairo_t *cr, LockApp *app, const LockOutput *output, int 
         cairo_arc(cr, ax, avatar_y, avatar_r + 3, app->pulse_phase, app->pulse_phase + 1.8);
         cairo_stroke(cr);
     } else if (app->auth_state == AUTH_STATE_FAILED) {
-        cairo_set_source_rgba(cr, app->accent_text_rgb[0], app->accent_text_rgb[1], app->accent_text_rgb[2], 0.95);
+        cairo_set_source_rgba(cr, app->alert_rgb[0], app->alert_rgb[1], app->alert_rgb[2], 0.95);
         cairo_set_line_width(cr, 2.0);
         cairo_new_path(cr);
         cairo_arc(cr, ax, avatar_y, avatar_r + 3, 0, 2 * M_PI);
@@ -898,7 +911,7 @@ static void draw_scene(cairo_t *cr, LockApp *app, const LockOutput *output, int 
     cairo_fill_preserve(cr);
     cairo_set_line_width(cr, 1.0);
     if (app->auth_state == AUTH_STATE_FAILED) {
-        cairo_set_source_rgba(cr, app->accent_text_rgb[0], app->accent_text_rgb[1], app->accent_text_rgb[2], 0.90);
+        cairo_set_source_rgba(cr, app->alert_rgb[0], app->alert_rgb[1], app->alert_rgb[2], 0.90);
     } else if (busy || app->password_len > 0) {
         cairo_set_source_rgba(cr, app->border_act_rgb[0], app->border_act_rgb[1], app->border_act_rgb[2], 0.90);
     } else {
@@ -935,7 +948,7 @@ static void draw_scene(cairo_t *cr, LockApp *app, const LockOutput *output, int 
     // One line under the field: the error, or caps lock
     double note_y = field_y + field_h + 22.0;
     if (app->auth_state == AUTH_STATE_FAILED && app->password_len == 0) {
-        cairo_set_source_rgba(cr, app->accent_text_rgb[0], app->accent_text_rgb[1], app->accent_text_rgb[2], 0.95);
+        cairo_set_source_rgba(cr, app->alert_rgb[0], app->alert_rgb[1], app->alert_rgb[2], 0.95);
         draw_text_centered(cr, layout, app->font, PANGO_WEIGHT_NORMAL, 11.0, "Wrong password, try again", ax, note_y, false);
     } else if (app->caps_lock) {
         cairo_set_source_rgba(cr, app->accent_text_rgb[0], app->accent_text_rgb[1], app->accent_text_rgb[2], 0.95);
@@ -1386,6 +1399,7 @@ static int print_look(const LockApp *app) {
     print_rgb_line("muted", app->muted_rgb);
     print_rgb_line("accent", app->border_act_rgb);
     print_rgb_line("accent_text", app->accent_text_rgb);
+    print_rgb_line("alert", app->alert_rgb);
     printf("corners=%.0f\n", app->corners);
     printf("small_corners=%.0f\n", app->small_corners);
     printf("font=%s\n", app->font);

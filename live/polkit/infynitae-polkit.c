@@ -301,7 +301,10 @@ static void read_font_val(const char *line, const char *key, char *dst, size_t d
 static gchar *build_css(void) {
     char surface[32] = "#111317";
     char border_act[32] = "#7aa2f7";
+    char cfg_accent[32] = "";
+    char cfg_border_act[32] = "";
     char accent_text[32] = "";
+    char alert[32] = "";
     char border_inact[32] = "#333b54";
     double edge_alpha = 0.90;
     char text_col[32] = "#eef2f8";
@@ -322,11 +325,14 @@ static gchar *build_css(void) {
                 while (*s == ' ' || *s == '\t') s++;
                 if (*s == '#') continue;
                 read_cfg_val(s, "SURFACE_COLOR", surface, sizeof(surface));
-                read_cfg_val(s, "BORDER_ACTIVE", border_act, sizeof(border_act));
+                read_cfg_val(s, "ACCENT", cfg_accent, sizeof(cfg_accent));
+                read_cfg_val(s, "BORDER_ACTIVE", cfg_border_act, sizeof(cfg_border_act));
                 read_cfg_val(s, "BORDER_INACTIVE", border_inact, sizeof(border_inact));
                 read_cfg_val(s, "TEXT_COLOR", text_col, sizeof(text_col));
             }
             fclose(f);
+            if (cfg_accent[0] != '\0') g_strlcpy(border_act, cfg_accent, sizeof(border_act));
+            else if (cfg_border_act[0] != '\0') g_strlcpy(border_act, cfg_border_act, sizeof(border_act));
         }
         g_free(cfg_path);
     }
@@ -348,6 +354,7 @@ static gchar *build_css(void) {
                 read_cfg_val(line, "LOOK_MUTED", muted, sizeof(muted));
                 read_cfg_val(line, "LOOK_ACCENT", border_act, sizeof(border_act));
                 read_cfg_val(line, "LOOK_ACCENT_TEXT", accent_text, sizeof(accent_text));
+                read_cfg_val(line, "LOOK_ALERT", alert, sizeof(alert));
                 read_radius_val(line, "LOOK_CORNERS", &radius);
                 read_radius_val(line, "LOOK_SMALL_RADIUS", &small);
                 read_font_val(line, "LOOK_FONT", font, sizeof(font));
@@ -359,6 +366,7 @@ static gchar *build_css(void) {
 
     if (small < 0) small = (radius * 55 + 50) / 100;
     if (accent_text[0] == '\0') g_strlcpy(accent_text, border_act, sizeof(accent_text));
+    if (alert[0] == '\0') g_strlcpy(alert, accent_text, sizeof(alert));
     if (muted[0] == '\0') {
         unsigned int t_rgb[3], s_rgb[3];
         if (parse_hex_bytes(text_col, t_rgb) && parse_hex_bytes(surface, s_rgb)) {
@@ -452,7 +460,7 @@ static gchar *build_css(void) {
         surface, text_col, border_inact, edge_alpha_str, radius, font_css, /* the dialog */
         text_col,                                                          /* title */
         muted,                                                             /* action and prompt */
-        accent_text,                                                       /* error */
+        alert,                                                             /* error */
         text_col, text_col, border_inact, edge_alpha_str, small,           /* the password field */
         border_act,                                                        /* the field focused */
         border_act, accent_text, small,                                    /* Allow */
