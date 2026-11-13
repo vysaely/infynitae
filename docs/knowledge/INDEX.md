@@ -78,10 +78,10 @@ work is in `docs/STATUS.md` and `docs/DECISIONS.md`, which win where they differ
 ---
 
 ## 2. Meta Documents & System Governance
-- [README.md](README.md): System architecture, schema rules, and metadata definitions.
-- [CONTRADICTIONS_AND_SUPERSEDED.md](CONTRADICTIONS_AND_SUPERSEDED.md): Traceability ledger of disputed, superseded, and corrected findings.
+- [README.md](README.md): directory layout, record schema, and verification.
+- [CONTRADICTIONS_AND_SUPERSEDED.md](CONTRADICTIONS_AND_SUPERSEDED.md): disputed, superseded, and corrected findings.
 - [PROVENANCE_INVENTORY.md](PROVENANCE_INVENTORY.md): where each original source, lab report and outside commit came from.
-- [WORKFLOW.md](WORKFLOW.md): Standard engineering development and knowledge maintenance workflow.
+- [WORKFLOW.md](WORKFLOW.md): when to add records, and how to update or supersede them.
 
 ---
 
