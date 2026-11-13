@@ -1856,7 +1856,11 @@ mod tests {
     #[test]
     fn a_tray_apps_cards_take_the_panels_place_in_the_chosen_order_and_go_on_close() {
         for (choice, want) in [
-            ("", vec!["apps/menu", "calendar/clock"]),
+            ("", vec!["apps/menu"]),
+            (
+                "TRAY_CARD=\"menu-first\"\n",
+                vec!["apps/menu", "calendar/clock"],
+            ),
             (
                 "TRAY_CARD=\"card-first\"\n",
                 vec!["calendar/clock", "apps/menu"],

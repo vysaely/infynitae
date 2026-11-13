@@ -67,7 +67,7 @@ pub const FOUND: &[FoundSetting] = &[
     FoundSetting {
         key: "BROWSER",
         name: "Browser",
-        says: "",
+        says: "Links from every app open in it",
         categories: &["WebBrowser"],
         // launch.sh queries xdg-settings at launch; not cheap to resolve from PATH alone.
         auto_order: &[],
@@ -263,21 +263,37 @@ impl DefaultsCard {
         cur
     }
 
-    fn set_found(&mut self, i: usize, new: String, out: &mut Vec<Action>) -> bool {
+    fn set_found(
+        &mut self,
+        i: usize,
+        new: String,
+        desktop: Option<&str>,
+        out: &mut Vec<Action>,
+    ) -> bool {
         let f = FOUND[i];
         if self.found_value(i) == new {
             return false;
         }
         let old_line = self.data.as_ref().and_then(|d| d.now.get(f.key).cloned());
-        out.push(Action::Run(change_command(
-            f.key,
-            old_line.as_deref(),
-            &new,
-            f.after,
-        )));
+        let mut cmd = change_command(f.key, old_line.as_deref(), &new, f.after);
+        // the browser is the system's default too (as on Windows), so links from every app follow
+        if let (true, Some(id)) = (f.key == "BROWSER", desktop) {
+            cmd += &browser_default_command(id);
+        }
+        out.push(Action::Run(cmd));
         self.pending.insert(f.key, new);
         true
     }
+}
+
+/// Makes the app the system's default browser: xdg-settings when there, else the mimeapps
+/// entries it would write. Only after the config line was written (the command it follows).
+fn browser_default_command(desktop_id: &str) -> String {
+    let d = super::settings::sq(&format!("{desktop_id}.desktop"));
+    format!(
+        " && {{ if command -v xdg-settings >/dev/null 2>&1; then xdg-settings set default-web-browser {d}; \
+else for m in x-scheme-handler/http x-scheme-handler/https text/html; do xdg-mime default {d} \"$m\"; done; fi; }} >/dev/null 2>&1"
+    )
 }
 
 impl Card for DefaultsCard {
@@ -461,18 +477,18 @@ impl Card for DefaultsCard {
                 let Some(i) = self.picked_row(&shown) else {
                     return false;
                 };
-                let new = if j == 0 {
-                    "auto".to_string()
+                let (new, desktop) = if j == 0 {
+                    ("auto".to_string(), None)
                 } else {
                     let apps = self.matching_apps(i, cx);
                     let Some(app) = apps.get(j - 1) else {
                         return false;
                     };
-                    app.exec.clone()
+                    (app.exec.clone(), Some(app.id.clone()))
                 };
                 self.list.open = false;
                 self.show_first = false;
-                let _ = self.set_found(i, new, out);
+                let _ = self.set_found(i, new, desktop.as_deref(), out);
                 true
             }
             _ => self.rest.event(ev, cx, out),
@@ -791,5 +807,15 @@ mod tests {
         c2.apply("config", &data(&[], &[], &["udisksctl"]) as &dyn Any);
         c2.show_list();
         assert_bottom_matches_height(&c2, &cx, "show_list M");
+    }
+
+    #[test]
+    fn a_chosen_browser_becomes_the_system_default_with_its_id_quoted() {
+        let c = browser_default_command("org.mozilla.firefox");
+        assert!(c.starts_with(" && "));
+        assert!(c.contains("xdg-settings set default-web-browser 'org.mozilla.firefox.desktop'"));
+        assert!(c.contains("xdg-mime default 'org.mozilla.firefox.desktop' \"$m\""));
+        let evil = browser_default_command("a'b; rm -rf ~");
+        assert!(evil.contains("'a'\\''b; rm -rf ~.desktop'"));
     }
 }

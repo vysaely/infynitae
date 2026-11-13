@@ -623,8 +623,8 @@ pub struct Config {
     /// NOTIFICATIONS: "auto" or "edge" make the edge the notification server (another daemon
     /// named there, or "none", and it is not)
     pub notifications: String,
-    /// TRAY_CARD: what a right click on a tray app shows: "menu-first" (its menu, then its card;
-    /// the default), "card-first", "menu" (only its menu)
+    /// TRAY_CARD: what a right click on a tray app shows: "menu" (only its menu; the default,
+    /// the owner's choice), "menu-first" (its menu, then its card), "card-first"
     pub tray_card: String,
     /// CARD_OPACITY, 0..1
     pub opacity: f64,
@@ -679,7 +679,7 @@ impl Config {
             corners_given: false,
             scheme: "yours".into(),
             notifications: "auto".into(),
-            tray_card: "menu-first".into(),
+            tray_card: "menu".into(),
             opacity: 0.90, // 90 % until CARD_BLUR exists: 70 % without blur reads as see-through
             switch_look: "rows".into(),
         };
