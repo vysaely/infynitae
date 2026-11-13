@@ -13,6 +13,8 @@ mod card;
 mod cards;
 mod config;
 mod draw;
+mod notify;
+mod notify_server;
 mod panel;
 mod provider;
 mod shell;
@@ -85,7 +87,7 @@ fn make_cards(p: &Panel, apps: &[app::App]) -> Vec<Placed> {
             .size
             .filter(|s| kind.sizes.contains(s))
             .unwrap_or(kind.default);
-        let from = app.map_or(prov.name().to_string(), |a| a.name.clone());
+        let from = shell::from_name(prov.name(), kind.title, app);
         out.push(Placed {
             word: w,
             card,
@@ -177,14 +179,16 @@ fn render(name: &str, size: &str, out: &str) -> Result<(), String> {
         });
     let list_above = panel.side == Side::Bottom;
     let pw = panel_width(panel, w as f64);
-    let cx_for = |s: Size| Cx {
+    let windows = card::render_windows();
+    let notes = card::render_notes();
+    let cx_for = |pl: &Placed| Cx {
         theme: &th,
         now,
-        size: s,
-        app: None,
+        size: pl.size,
+        app: provider::resolve(&pl.word.owner, &apps).and_then(|(_, a)| a),
         apps: &apps,
-        windows: &[],
-        notes: &[],
+        windows: &windows,
+        notes: &notes,
         list_above,
         editing: false,
     };
@@ -192,7 +196,7 @@ fn render(name: &str, size: &str, out: &str) -> Result<(), String> {
     let heights: Vec<f64> = placed
         .iter()
         .map(|pl| {
-            let cx = cx_for(pl.size);
+            let cx = cx_for(pl);
             match pl.card.status(&cx) {
                 Status::Hidden => 0.0,
                 Status::Ready => {
@@ -220,7 +224,7 @@ fn render(name: &str, size: &str, out: &str) -> Result<(), String> {
         if *ch <= 0.0 {
             continue;
         }
-        let cx = cx_for(pl.size);
+        let cx = cx_for(pl);
         draw::card(&cr, &th, ox, y, pw, *ch);
         let title = pl
             .card

@@ -241,6 +241,49 @@ pub fn parse_render_data(text: &str) -> HashMap<String, String> {
         .collect()
 }
 
+/// A render fixture's value for `key` (None outside renders, or not in the fixture).
+pub fn render_value(key: &str) -> Option<String> {
+    render_data()?.get(key).cloned()
+}
+
+/// The render fixture's `windows` (one per line: `id<TAB>app id<TAB>title<TAB>focused 0/1`) and
+/// `notes` (`id<TAB>app<TAB>summary<TAB>body<TAB>time`): what the Wayland side and the notification
+/// server give outside renders.
+pub fn render_windows() -> Vec<Window> {
+    render_value("windows")
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| {
+            let f: Vec<&str> = l.split('\t').collect();
+            Some(Window {
+                id: f.first()?.trim().parse().ok()?,
+                app_id: f.get(1)?.to_string(),
+                title: f.get(2).unwrap_or(&"").to_string(),
+                focused: f.get(3).is_some_and(|v| v.trim() == "1"),
+            })
+        })
+        .collect()
+}
+
+pub fn render_notes() -> Vec<Note> {
+    render_value("notes")
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| {
+            let f: Vec<&str> = l.split('\t').collect();
+            Some(Note {
+                id: f.first()?.trim().parse().ok()?,
+                app: f.get(1)?.to_string(),
+                summary: f.get(2).unwrap_or(&"").to_string(),
+                body: f.get(3).unwrap_or(&"").to_string(),
+                actions: vec![],
+                urgency: 1,
+                time: f.get(4).unwrap_or(&"").to_string(),
+            })
+        })
+        .collect()
+}
+
 /// Runs `cmd` with sh and gives its output; with a render fixture set, the fixture's value for `key`
 /// instead (nothing runs).
 pub fn run_sh(key: &str, cmd: &str) -> String {

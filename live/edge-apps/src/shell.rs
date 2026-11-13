@@ -61,7 +61,7 @@ pub fn place(p: &Panel, apps: &[App]) -> Vec<Placed> {
             .filter(|s| kind.sizes.contains(s))
             .unwrap_or(kind.default);
         out.push(Placed {
-            from: app.map_or(prov.name().to_string(), |a| a.name.clone()),
+            from: from_name(prov.name(), kind.title, app),
             app_id: app.map(|a| a.id.clone()),
             word: w,
             provider: prov,
@@ -73,12 +73,25 @@ pub fn place(p: &Panel, apps: &[App]) -> Vec<Placed> {
     out
 }
 
+/// The name at the right of a card's header: the app it comes from, else its provider, and nothing
+/// where that only repeats the title ("Notifications" from Notifications).
+pub fn from_name(provider: &str, title: &str, app: Option<&App>) -> String {
+    let name = app.map_or(provider, |a| a.name.as_str());
+    if name.eq_ignore_ascii_case(title) {
+        String::new()
+    } else {
+        name.to_string()
+    }
+}
+
 pub struct Shell {
     pub cfg: Config,
     pub theme: Theme,
     pub apps: Vec<App>,
     pub windows: Vec<Window>,
     pub notes: Vec<Note>,
+    /// the edge's own notifications: pop-ups and history (`notes` is the history as cards read it)
+    pub notify: crate::notify::Notify,
     pub panels: Vec<PanelState>,
     pub open: Option<usize>,
     pub opened_by_hover: bool,
@@ -116,6 +129,7 @@ impl Shell {
             apps,
             windows: Vec::new(),
             notes: Vec::new(),
+            notify: Default::default(),
             panels,
             open: None,
             opened_by_hover: false,
