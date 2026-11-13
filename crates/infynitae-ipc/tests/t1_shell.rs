@@ -859,3 +859,170 @@ fn lock_asks_the_adapter_to_lock() {
     assert_eq!(reply.get("id").and_then(Value::as_u64), Some(9));
     assert_eq!(reply.get("ok"), Some(&Value::Bool(true)));
 }
+
+fn setup_capture() -> (Core, infynitae_core::InputPort, ShellServer) {
+    let (core, input, shell, _token) = Core::new(PersistedCameras::default());
+    let server = ShellServer::new(shell, std::sync::Arc::new(|| {}));
+    (core, input, server)
+}
+
+fn wait_until(
+    server: &mut ShellServer,
+    core: &mut Core,
+    cond: impl Fn(&mut ShellServer, &Core) -> bool,
+) {
+    let end = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < end {
+        server.service(core);
+        if cond(server, core) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    panic!("condition not met within 2s");
+}
+
+#[test]
+fn capture_chord_delivers_pressed_chord_and_rejects_second_client() {
+    use infynitae_core::PhysicalEvent;
+    use infynitae_core::input::bindings::Modifiers;
+    use infynitae_core::input::keys::KEY_Q;
+    use infynitae_core::protocol::EffectBuf;
+
+    let (mut core, mut input, mut server) = setup_capture();
+    let mut c1 = connect(&mut server);
+    c1.send(r#"{"id":1,"cmd":"capture-chord"}"#);
+    wait_until(&mut server, &mut core, |_, c| c.is_capturing_key());
+    assert!(server.wake_at().is_some(), "timeout wake is scheduled");
+
+    let mut c2 = connect(&mut server);
+    c2.send(r#"{"id":2,"cmd":"capture_chord"}"#);
+    let busy = c2
+        .read_until(&mut server, &mut core, |got| !got.is_empty())
+        .pop()
+        .unwrap();
+    assert_eq!(busy.get("id").and_then(Value::as_u64), Some(2));
+    assert_eq!(busy.get("ok"), Some(&Value::Bool(false)));
+    assert_eq!(busy.get("error").and_then(Value::as_str), Some("busy"));
+    assert!(core.is_capturing_key());
+
+    let mut fx = EffectBuf::default();
+    let logo_shift = Modifiers {
+        logo: true,
+        shift: true,
+        ..Modifiers::default()
+    };
+    core.physical_input(
+        &mut input,
+        PhysicalEvent::KeyboardKey {
+            key: KEY_Q,
+            pressed: true,
+            modifiers: logo_shift,
+            mods_changed: false,
+            time_us: 100,
+        },
+        &mut fx,
+    )
+    .unwrap();
+    core.physical_input(
+        &mut input,
+        PhysicalEvent::KeyboardKey {
+            key: KEY_Q,
+            pressed: false,
+            modifiers: logo_shift,
+            mods_changed: false,
+            time_us: 110,
+        },
+        &mut fx,
+    )
+    .unwrap();
+
+    let reply = c1
+        .read_until(&mut server, &mut core, |got| !got.is_empty())
+        .pop()
+        .unwrap();
+    assert_eq!(reply.get("id").and_then(Value::as_u64), Some(1));
+    assert_eq!(reply.get("ok"), Some(&Value::Bool(true)));
+    assert_eq!(
+        reply.get("chord").and_then(Value::as_str),
+        Some("SUPER+SHIFT+Q")
+    );
+    assert!(!core.is_capturing_key());
+    assert!(server.wake_at().is_none());
+}
+
+#[test]
+fn capture_chord_escape_cancels_with_cancelled_error() {
+    use infynitae_core::PhysicalEvent;
+    use infynitae_core::input::bindings::Modifiers;
+    use infynitae_core::input::keys::KEY_ESC;
+    use infynitae_core::protocol::EffectBuf;
+
+    let (mut core, mut input, mut server) = setup_capture();
+    let mut client = connect(&mut server);
+    client.send(r#"{"id":3,"cmd":"capture-chord"}"#);
+    wait_until(&mut server, &mut core, |_, c| c.is_capturing_key());
+
+    let mut fx = EffectBuf::default();
+    core.physical_input(
+        &mut input,
+        PhysicalEvent::KeyboardKey {
+            key: KEY_ESC,
+            pressed: true,
+            modifiers: Modifiers::default(),
+            mods_changed: false,
+            time_us: 200,
+        },
+        &mut fx,
+    )
+    .unwrap();
+
+    let reply = client
+        .read_until(&mut server, &mut core, |got| !got.is_empty())
+        .pop()
+        .unwrap();
+    assert_eq!(reply.get("id").and_then(Value::as_u64), Some(3));
+    assert_eq!(reply.get("ok"), Some(&Value::Bool(false)));
+    assert_eq!(
+        reply.get("error").and_then(Value::as_str),
+        Some("cancelled")
+    );
+    assert!(!core.is_capturing_key());
+    assert!(server.wake_at().is_none());
+}
+
+#[test]
+fn capture_chord_disconnect_cancels_core_capture() {
+    let (mut core, _input, mut server) = setup_capture();
+    let mut client = connect(&mut server);
+    client.send(r#"{"id":4,"cmd":"capture-chord"}"#);
+    wait_until(&mut server, &mut core, |_, c| c.is_capturing_key());
+
+    drop(client);
+    wait_until(&mut server, &mut core, |_, c| !c.is_capturing_key());
+    assert!(server.wake_at().is_none());
+
+    let mut next = connect(&mut server);
+    next.send(r#"{"id":5,"cmd":"capture-chord"}"#);
+    wait_until(&mut server, &mut core, |_, c| c.is_capturing_key());
+}
+
+#[test]
+fn capture_chord_times_out_and_clears_wake() {
+    let (mut core, _input, mut server) = setup_capture();
+    server.set_capture_timeout(Duration::from_millis(30));
+    let mut client = connect(&mut server);
+    client.send(r#"{"id":6,"cmd":"capture-chord"}"#);
+    wait_until(&mut server, &mut core, |_, c| c.is_capturing_key());
+    assert!(server.wake_at().is_some());
+
+    let reply = client
+        .read_until(&mut server, &mut core, |got| !got.is_empty())
+        .pop()
+        .unwrap();
+    assert_eq!(reply.get("id").and_then(Value::as_u64), Some(6));
+    assert_eq!(reply.get("ok"), Some(&Value::Bool(false)));
+    assert_eq!(reply.get("error").and_then(Value::as_str), Some("timeout"));
+    assert!(!core.is_capturing_key());
+    assert!(server.wake_at().is_none());
+}
