@@ -7,10 +7,12 @@ use wayland_client::globals::{registry_queue_init, GlobalListContents};
 use wayland_client::protocol::{wl_registry, wl_seat};
 use wayland_client::{Connection, Dispatch, QueueHandle};
 use wayland_protocols::ext::data_control::v1::client::{
-    ext_data_control_device_v1, ext_data_control_manager_v1, ext_data_control_source_v1,
+    ext_data_control_device_v1, ext_data_control_manager_v1, ext_data_control_offer_v1,
+    ext_data_control_source_v1,
 };
 use wayland_protocols_wlr::data_control::v1::client::{
-    zwlr_data_control_device_v1, zwlr_data_control_manager_v1, zwlr_data_control_source_v1,
+    zwlr_data_control_device_v1, zwlr_data_control_manager_v1, zwlr_data_control_offer_v1,
+    zwlr_data_control_source_v1,
 };
 
 struct ClipboardState {
@@ -86,10 +88,33 @@ impl Dispatch<ext_data_control_device_v1::ExtDataControlDeviceV1, ()> for Clipbo
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        if matches!(event, ext_data_control_device_v1::Event::Finished) {
-            device.destroy();
-            state.done = true;
+        match event {
+            // what the clipboard holds (our own PNG, or another program's): not read here
+            ext_data_control_device_v1::Event::DataOffer { id } => id.destroy(),
+            ext_data_control_device_v1::Event::Finished => {
+                device.destroy();
+                state.done = true;
+            }
+            _ => {}
         }
+    }
+
+    // the device announces each clipboard's contents as a new offer object (opcode 0): without
+    // this, wayland-client panics on the first one (found in the VM, 2026-11-13)
+    wayland_client::event_created_child!(ClipboardState, ext_data_control_device_v1::ExtDataControlDeviceV1, [
+        ext_data_control_device_v1::EVT_DATA_OFFER_OPCODE => (ext_data_control_offer_v1::ExtDataControlOfferV1, ())
+    ]);
+}
+
+impl Dispatch<ext_data_control_offer_v1::ExtDataControlOfferV1, ()> for ClipboardState {
+    fn event(
+        _: &mut Self,
+        _: &ext_data_control_offer_v1::ExtDataControlOfferV1,
+        _: ext_data_control_offer_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
     }
 }
 
@@ -136,10 +161,30 @@ impl Dispatch<zwlr_data_control_device_v1::ZwlrDataControlDeviceV1, ()> for Clip
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        if matches!(event, zwlr_data_control_device_v1::Event::Finished) {
-            device.destroy();
-            state.done = true;
+        match event {
+            zwlr_data_control_device_v1::Event::DataOffer { id } => id.destroy(),
+            zwlr_data_control_device_v1::Event::Finished => {
+                device.destroy();
+                state.done = true;
+            }
+            _ => {}
         }
+    }
+
+    wayland_client::event_created_child!(ClipboardState, zwlr_data_control_device_v1::ZwlrDataControlDeviceV1, [
+        zwlr_data_control_device_v1::EVT_DATA_OFFER_OPCODE => (zwlr_data_control_offer_v1::ZwlrDataControlOfferV1, ())
+    ]);
+}
+
+impl Dispatch<zwlr_data_control_offer_v1::ZwlrDataControlOfferV1, ()> for ClipboardState {
+    fn event(
+        _: &mut Self,
+        _: &zwlr_data_control_offer_v1::ZwlrDataControlOfferV1,
+        _: zwlr_data_control_offer_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
     }
 }
 
