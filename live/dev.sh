@@ -1,6 +1,5 @@
 #!/bin/sh
-# Infynitae Live Development & Diagnostic Utility
-# Makes it effortless to tweak the desktop live without crashes or lockouts.
+# dev.sh: tools for changing the desktop while it runs (see its usage below).
 set -e
 umask 077
 

@@ -1,15 +1,9 @@
 /*
- * Infynitae Native Wallpaper & Live Background Renderer
- * Part of Infynitae (FOUNDATION_ARCHITECTURE C1.1, zwlr_layer_shell_v1)
- *
- * Lightweight, zero-overhead standalone wallpaper manager written in pure C.
- * Features:
- *   - Direct Wayland layer-shell protocol (ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND)
- *   - Auto-scales across all connected monitors (fill, fit, stretch, center, tile)
- *   - Supports all standard image formats (PNG, JPG, WebP, SVG, BMP, GIF) via GdkPixbuf
- *   - Seamless video background passthrough to hardware mpvpaper
- *   - Zero extra idle memory: sleeps in event loop after surface commit
- *   - Hot swappable: clean SIGTERM instance handover for live config reloading
+ * infynitae-wallpaper: the desktop's wallpaper, one layer-shell background surface per screen
+ * (FOUNDATION_ARCHITECTURE C1.1, zwlr_layer_shell_v1). Images through GdkPixbuf, drawn fill, fit,
+ * stretch, center or tile; a video file is handed to mpvpaper. It waits in its event loop between
+ * changes; a new instance replaces the running one (SIGTERM), so a config reload swaps it.
+ * --colors and --accents print the theme colours taken from an image (theme-colors.h).
  */
 
 #define _GNU_SOURCE
