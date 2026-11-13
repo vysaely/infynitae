@@ -1,0 +1,32 @@
+#!/bin/sh
+# tools/test-edge-pick: live/edge-pick points infynitae-edge at the edge EDGE_IMPL names (rust by
+# default, c, apps), falls back to another when that one is not built, and keeps an old plain
+# infynitae-edge as the C one. Stand-in binaries in a temporary folder. Run from the repository root.
+set -eu
+REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
+TMP=$(mktemp -d "/tmp/infynitae-test-edge-pick.XXXXXX")
+trap 'rm -rf "$TMP"' EXIT INT TERM
+fails=0
+check() { if eval "$2"; then echo "ok   $1"; else echo "FAIL $1"; fails=$((fails + 1)); fi; }
+mk() { printf '#!/bin/sh\n' > "$TMP/bin/$1"; chmod 755 "$TMP/bin/$1"; }
+pick() {
+    mkdir -p "$TMP/home/.config/infynitae"
+    if [ -n "$1" ]; then echo "EDGE_IMPL=\"$1\"" > "$TMP/home/.config/infynitae/config"; else : > "$TMP/home/.config/infynitae/config"; fi
+    HOME="$TMP/home" sh "$REPO_DIR/live/edge-pick" "$TMP/bin" >/dev/null 2>&1 || true
+    readlink "$TMP/bin/infynitae-edge" 2>/dev/null || echo none
+}
+
+mkdir -p "$TMP/bin"
+mk infynitae-edge-rs; mk infynitae-edge-c; mk infynitae-edge-apps
+check "no EDGE_IMPL: the Rust edge" '[ "$(pick "")" = infynitae-edge-rs ]'
+check "EDGE_IMPL=c: the C edge" '[ "$(pick c)" = infynitae-edge-c ]'
+check "EDGE_IMPL=apps: the edge from apps" '[ "$(pick apps)" = infynitae-edge-apps ]'
+check "EDGE_IMPL=rust again: back to the Rust edge" '[ "$(pick rust)" = infynitae-edge-rs ]'
+rm -f "$TMP/bin/infynitae-edge-apps"
+check "apps not built: the Rust edge instead" '[ "$(pick apps)" = infynitae-edge-rs ]'
+
+rm -rf "$TMP/bin"; mkdir -p "$TMP/bin"; mk infynitae-edge-rs; mk infynitae-edge
+check "an old plain infynitae-edge is kept as the C one" \
+    '[ "$(pick c)" = infynitae-edge-c ] && [ -x "$TMP/bin/infynitae-edge-c" ]'
+
+[ "$fails" = 0 ] && echo "test-edge-pick: passed" || { echo "test-edge-pick: $fails failed"; exit 1; }

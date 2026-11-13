@@ -42,6 +42,7 @@ jobs:
       - run: sh tools/test-edge-child-signals
       - run: sh tools/test-edge-app-search
       - run: sh tools/test-edge-config-value
+      - run: sh tools/test-edge-pick
       - run: sh tools/test-edge-render
       - run: sh tools/test-edge-ask
       - run: sh tools/test-screenshare-chooser

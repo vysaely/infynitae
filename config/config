@@ -583,10 +583,11 @@ ENABLE_EDGE="true"
     # options: true  · false (falls back to fuzzel / control-menu)
 
 EDGE_IMPL="rust"
-    # Which edge runs: the new one in Rust (widgets, the canvas) or the C one it replaced, kept for
-    # a while in case something is missing [reload]
+    # Which edge runs: the new one in Rust (widgets, the canvas), "apps" (rebuilt so every card
+    # comes from an app; new, being tested) or the C one, kept for a while in case something is
+    # missing [reload]
     # default: rust
-    # options: rust  · c
+    # options: rust  · apps  · c
 
 EDGE_POSITION="top"
     # The edge the built-in panels open from, unless their PANEL_ line says another [reload]
