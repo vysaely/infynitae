@@ -255,12 +255,41 @@ static void apply_css(void) {
         g_free(cfg_path);
     }
 
+    /* the corners of windows and the edge (LOOK_CORNERS in the look file infynitae-settings
+     * writes): the dialog takes them, its field and buttons the smaller ones (0.55 x, as the edge) */
+    int radius = 8;
+    {
+        const char *cache = g_getenv("XDG_CACHE_HOME");
+        gchar *look = (cache && *cache) ? g_build_filename(cache, "infynitae", "look", NULL)
+                                        : g_build_filename(home ? home : "", ".cache", "infynitae", "look", NULL);
+        FILE *lf = fopen(look, "r");
+        if (lf) {
+            char line[128];
+            while (fgets(line, sizeof(line), lf)) {
+                /* the colours as everything else shows them (a colour scheme resolved), over the
+                 * config's own */
+                read_cfg_val(line, "LOOK_CARD", surface, sizeof(surface));
+                read_cfg_val(line, "LOOK_EDGE", border_inact, sizeof(border_inact));
+                read_cfg_val(line, "LOOK_TEXT", text_col, sizeof(text_col));
+                read_cfg_val(line, "LOOK_ACCENT", border_act, sizeof(border_act));
+                if (strncmp(line, "LOOK_CORNERS=", 13) == 0) {
+                    const char *v = line + 13;
+                    while (*v == '"') v++;
+                    if (*v >= '0' && *v <= '9') radius = atoi(v) > 28 ? 28 : atoi(v);
+                }
+            }
+            fclose(lf);
+        }
+        g_free(look);
+    }
+    int small = (radius * 55 + 50) / 100;
+
     GtkCssProvider *provider = gtk_css_provider_new();
     gchar *css = g_strdup_printf(
         "window.infynitae-polkit {\n"
         "    background-color: %s;\n"
         "    border: 1px solid %s;\n"
-        "    border-radius: 0px;\n"
+        "    border-radius: %dpx;\n"
         "    font-family: Sans;\n"
         "}\n"
         "label.title {\n"
@@ -269,11 +298,11 @@ static void apply_css(void) {
         "    font-weight: 600;\n"
         "}\n"
         "label.action {\n"
-        "    color: #9aa5b8;\n"
+        "    color: alpha(%s, 0.62);\n"
         "    font-size: 11px;\n"
         "}\n"
         "label.error {\n"
-        "    color: #f7768e;\n"
+        "    color: %s;\n"
         "    font-size: 11px;\n"
         "    font-weight: 600;\n"
         "}\n"
@@ -281,7 +310,7 @@ static void apply_css(void) {
         "    background-color: %s;\n"
         "    color: %s;\n"
         "    border: 1px solid %s;\n"
-        "    border-radius: 0px;\n"
+        "    border-radius: %dpx;\n"
         "    padding: 6px 10px;\n"
         "    font-size: 12px;\n"
         "}\n"
@@ -289,29 +318,37 @@ static void apply_css(void) {
         "    border: 1px solid %s;\n"
         "}\n"
         "button.btn-auth {\n"
-        "    background-color: #262b38;\n"
+        "    background-color: alpha(%s, 0.08);\n"
         "    color: %s;\n"
         "    font-weight: 600;\n"
-        "    border-radius: 0px;\n"
+        "    border-radius: %dpx;\n"
         "    padding: 6px 14px;\n"
         "    border: 1px solid %s;\n"
         "}\n"
         "button.btn-auth:hover {\n"
-        "    background-color: #303748;\n"
+        "    background-color: alpha(%s, 0.14);\n"
         "}\n"
         "button.btn-cancel {\n"
         "    background-color: %s;\n"
-        "    color: #9aa5b8;\n"
-        "    border-radius: 0px;\n"
+        "    color: alpha(%s, 0.62);\n"
+        "    border-radius: %dpx;\n"
         "    padding: 6px 14px;\n"
         "    border: 1px solid %s;\n"
         "}\n"
         "button.btn-cancel:hover {\n"
-        "    background-color: #1c2028;\n"
+        "    background-color: alpha(%s, 0.08);\n"
         "    color: %s;\n"
         "}\n",
-        surface, border_inact, text_col, canvas, text_col, border_inact,
-        border_act, text_col, border_act, surface, border_inact, text_col);
+        surface, border_inact, radius,          /* the dialog */
+        text_col,                                /* title */
+        text_col,                                /* the action's name, quieter */
+        border_act,                              /* an error, in the accent */
+        canvas, text_col, border_inact, small,   /* the password field */
+        border_act,                              /* the field focused */
+        text_col, text_col, small, border_act,   /* Authenticate */
+        text_col,                                /* Authenticate pointed at */
+        surface, text_col, small, border_inact,  /* Cancel */
+        text_col, text_col);                     /* Cancel pointed at */
 
     gtk_css_provider_load_from_data(provider, css, -1, NULL);
     g_free(css);

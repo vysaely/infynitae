@@ -54,25 +54,32 @@ build infynitae-edge-c "wayland-client cairo pangocairo xkbcommon gio-2.0" \
     "$LIVE/wallpaper/xdg-shell-protocol.c" "$LIVE/edge/wlr-foreign-toplevel-protocol.c" -- -lm
 # the edge was called the island before 2026-10-31: its old binary goes
 [ -x "$BIN/infynitae-edge" ] && rm -f "$BIN/infynitae-island"
-if command -v cargo >/dev/null 2>&1; then
-    if cargo build --release --locked --quiet --manifest-path "$LIVE/edge-rs/Cargo.toml" \
-        --target-dir "$LIVE/edge-rs/target" \
-        && cp -f "$LIVE/edge-rs/target/release/infynitae-edge-rs" "$BIN/infynitae-edge-rs.new"; then
-        chmod 755 "$BIN/infynitae-edge-rs.new"
-        mv -f "$BIN/infynitae-edge-rs.new" "$BIN/infynitae-edge-rs"
-        echo "==> Built infynitae-edge-rs"
+build_rust() {
+    _rust_name="$1"
+    _rust_dir="$2"
+    if command -v cargo >/dev/null 2>&1; then
+        if cargo build --release --locked --quiet --manifest-path "$_rust_dir/Cargo.toml" \
+            --target-dir "$_rust_dir/target" \
+            && cp -f "$_rust_dir/target/release/$_rust_name" "$BIN/$_rust_name.new"; then
+            chmod 755 "$BIN/$_rust_name.new"
+            mv -f "$BIN/$_rust_name.new" "$BIN/$_rust_name"
+            echo "==> Built $_rust_name"
+        else
+            rm -f "$BIN/$_rust_name.new"
+            echo "[build-helpers] $_rust_name: build failed (see above)" >&2
+            FAILED="$FAILED $_rust_name"
+        fi
     else
-        rm -f "$BIN/infynitae-edge-rs.new"
-        echo "[build-helpers] infynitae-edge-rs: build failed (see above)" >&2
-        FAILED="$FAILED infynitae-edge-rs"
+        echo "[build-helpers] $_rust_name: cargo is missing" >&2
+        FAILED="$FAILED $_rust_name"
     fi
-else
-    echo "[build-helpers] infynitae-edge-rs: cargo is missing" >&2
-    FAILED="$FAILED infynitae-edge-rs"
-fi
+}
+
+build_rust infynitae-edge-rs "$LIVE/edge-rs"
 sh "$LIVE/edge-pick" "$BIN" || FAILED="$FAILED infynitae-edge"
 build infynitae-record-stream "wayland-client" \
     "$LIVE/record/infynitae-record-stream.c" "$LIVE/record/wlr-screencopy-protocol.c" -- -pthread -lrt
+build_rust infynitae-shot "$LIVE/shot-rs"
 
 if [ -n "$FAILED" ]; then
     echo "[build-helpers] Not built:$FAILED" >&2

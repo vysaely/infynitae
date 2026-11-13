@@ -1,0 +1,56 @@
+#!/bin/sh
+# live/screenshare-chooser with stand-ins for the edge's card and fuzzel (a throwaway HOME and PATH):
+# what it prints for the portal in each case. Nothing here touches the running desktop.
+set -u
+cd "$(dirname "$0")/.."
+CH="$PWD/live/screenshare-chooser"
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
+mkdir -p "$TMP/home/.local/bin" "$TMP/bin" "$TMP/state"
+fail=0
+check() { if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1: got [$2] want [$3]"; fail=1; fi; }
+
+# the edge's card: answers with line $PICK as the card shows it (ask_copy: control characters as
+# spaces, at most 159 bytes), or exits with $EDGE_STATUS
+cat > "$TMP/home/.local/bin/infynitae-edge" <<'EOF'
+#!/bin/sh
+[ "$1" = ask ] || exit 9
+[ "${EDGE_STATUS:-0}" -ne 0 ] && { cat >/dev/null; exit "$EDGE_STATUS"; }
+sed -n "${PICK}p" | tr '\001-\011\013-\037\177' ' ' | LC_ALL=C cut -c1-159
+EOF
+# fuzzel: says it ran, answers with the last line
+cat > "$TMP/bin/fuzzel" <<'EOF'
+#!/bin/sh
+echo fuzzel > "$MARK"; tail -n 1
+EOF
+chmod +x "$TMP/home/.local/bin/infynitae-edge" "$TMP/bin/fuzzel"
+run() { HOME="$TMP/home" XDG_STATE_HOME="$TMP/state" MARK="$TMP/mark" PATH="$TMP/bin:/usr/bin:/bin" sh "$CH" "$@"; }
+
+long=$(printf 'Window: %0200d (firefox)' 0)
+tabbed=$(printf 'Window: a\tb \\\\n c (foot)')
+sources=$(printf 'Monitor: DP-1\n%s\n%s\nWindow: Discord (discord)' "$long" "$tabbed")
+
+rm -f "$TMP/mark"
+got=$(printf '%s\n' "$sources" | PICK=4 run ask "")
+check "the edge's card: a plain window" "$got" "Window: Discord (discord)"
+check "and fuzzel was not used" "$( [ -f "$TMP/mark" ] && echo used || echo no)" "no"
+got=$(printf '%s\n' "$sources" | PICK=2 run ask "")
+check "a title cut at 159 bytes is matched to the whole line" "$got" "$long"
+got=$(printf '%s\n' "$sources" | PICK=3 run ask "")
+check "a title with a tab and a backslash comes back as given" "$got" "$tabbed"
+got=$(printf '%s\n' "$sources" | EDGE_STATUS=1 run ask "")
+check "cancelled on the card: nothing (the share is cancelled)" "$got" ""
+rm -f "$TMP/mark"
+got=$(printf '%s\n' "$sources" | EDGE_STATUS=3 run ask "")
+check "the edge not running: fuzzel's menu" "$(cat "$TMP/mark" 2>/dev/null) $got" "fuzzel Window: Discord (discord)"
+rm -f "$TMP/mark"
+many=$(for i in $(seq 1 13); do echo "Window: w$i (app)"; done)
+got=$(printf '%s\n' "$many" | PICK=1 run ask "")
+check "more than 12 lines: fuzzel's menu" "$(cat "$TMP/mark" 2>/dev/null) $got" "fuzzel Window: w13 (app)"
+rm -f "$TMP/mark"
+got=$(printf '%s\n' "$sources" | PICK=1 run ask "fuzzel --dmenu")
+check "MENU_PICKER given: that picker" "$(cat "$TMP/mark" 2>/dev/null)" "fuzzel"
+got=$(printf '%s\n' "$sources" | PICK=4 run first "")
+check "first: a screen at once" "$got" "Monitor: DP-1"
+
+[ "$fail" -eq 0 ] && echo "test-screenshare-chooser: passed" || { echo "test-screenshare-chooser: FAILED"; exit 1; }

@@ -181,16 +181,18 @@ SQUARE_CORNERS="true"
     #    false   their own rounded look
 
 WINDOW_CORNERS="8"
-    # Windows drawn with soft rounded corners, this many px (a gentle squircle; their border
-    # follows the curve). Square where a corner touches the screen's edge, and for a window that
-    # fills the screen (fullscreen or fitted), which still goes to the screen directly [reload]
+    # The corners of the whole desktop, this many px: windows (a gentle squircle; their border
+    # follows the curve), and everything Infynitae draws with the same corner unless CORNERS
+    # says otherwise: panels, widgets, notifications, menus, the password dialog, the lock
+    # screen, GTK's widgets (three quarters of it). A window's corner stays square where it
+    # touches the screen's edge, and a window that fills the screen is not rounded [reload]
     # default: 8 (0 square)
     # options: 0 to 24 · 8 about Windows 11's
 
 #CORNERS="8"
-    # The corners of what Infynitae draws: the panels and widgets, notifications, menus, GTK's
-    # widgets (three quarters of it), the lock screen [reload]. Windows: WINDOW_CORNERS
-    # default: 8
+    # Only to give Infynitae's own parts (panels, notifications, menus, dialogs, the lock screen)
+    # other corners than the windows; unset, they follow WINDOW_CORNERS [reload]
+    # default: unset (as WINDOW_CORNERS)
     # options: 0 (square) to 28
 
 THEME_SCHEME="yours"
@@ -563,9 +565,11 @@ CONTROL_MENU="auto"
     # options: auto  · a command
 
 NOTIFICATIONS="auto"
-    # Notification daemon [reload]
+    # Who shows notifications [reload]: the edge's own pop-ups (top right, in the system's
+    # look; held back during games and Do not disturb, still listed in the Notifications card)
     # default: auto
-    #   auto    mako, swaync, dunst, fnott (first installed)  · none / false  · a command
+    #   auto    the edge, or without it mako, swaync, dunst, fnott (first installed)
+    #    edge   the edge  · none / false  · a command (e.g. "mako")
 
 AUTOMOUNT="true"
     # USB drives and SD cards mount when plugged in (udisks2) [reload]

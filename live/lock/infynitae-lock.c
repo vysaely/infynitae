@@ -102,7 +102,7 @@ typedef struct {
      * compositor confirmed the lock, so nothing before the lock depends on them; NULL: none */
     cairo_surface_t *background;
     cairo_surface_t *avatar;
-    bool square_corners;
+    double corners; /* LOOK_CORNERS: the radius of the password field, as windows and the edge (0: square) */
 
     double canvas_rgb[3];
     double surface_rgb[3];
@@ -356,7 +356,7 @@ static void read_look(LockApp *app, const char *home) {
         else if (strncmp(line, "LOOK_CORNERS=", 13) == 0) {
             const char *v = line + 13;
             while (*v == '"') v++;
-            if (*v >= '0' && *v <= '9') app->square_corners = atoi(v) == 0;
+            if (*v >= '0' && *v <= '9') app->corners = atoi(v) > 28 ? 28 : atoi(v);
         }
     }
     fclose(f);
@@ -368,7 +368,7 @@ static void load_theme_config(LockApp *app) {
     app->border_act_rgb[0] = 0.478; app->border_act_rgb[1] = 0.635; app->border_act_rgb[2] = 0.969; /* #7aa2f7 */
     app->border_inact_rgb[0] = 0.200; app->border_inact_rgb[1] = 0.231; app->border_inact_rgb[2] = 0.329; /* #333b54 */
     app->text_rgb[0] = 0.933; app->text_rgb[1] = 0.949; app->text_rgb[2] = 0.973;             /* #eef2f8 */
-    app->square_corners = false; /* CORNERS 8 unless the look file says 0 */
+    app->corners = 8; /* the corners of windows and the edge: 8 unless the look file says */
 
     const char *home = getenv("HOME");
     if (!home) return;
@@ -665,9 +665,10 @@ static const struct wl_touch_listener touch_listener = {
     .cancel = touch_cancel,
 };
 
-/* A rounded rectangle (or a square one when CORNERS is 0) as the current path. */
-static void scene_rect(cairo_t *cr, const LockApp *app, double x, double y, double w, double h, double r) {
-    if (app->square_corners || r <= 0) {
+/* A rectangle rounded by the system's corners (square at 0), at most a pill, as the current path. */
+static void scene_rect(cairo_t *cr, const LockApp *app, double x, double y, double w, double h) {
+    double r = app->corners;
+    if (r <= 0) {
         cairo_rectangle(cr, x, y, w, h);
         return;
     }
@@ -834,7 +835,7 @@ static void draw_scene(cairo_t *cr, LockApp *app, const LockOutput *output, int 
     double field_y = round(name_y + 13.0 + 16.0);
     double field_cy = field_y + field_h / 2.0;
     cairo_new_path(cr);
-    scene_rect(cr, app, field_x, field_y, field_w, field_h, field_h / 2.0);
+    scene_rect(cr, app, field_x, field_y, field_w, field_h);
     cairo_set_source_rgba(cr, app->surface_rgb[0], app->surface_rgb[1], app->surface_rgb[2], app->background ? 0.70 : 0.92);
     cairo_fill_preserve(cr);
     cairo_set_line_width(cr, 1.0);

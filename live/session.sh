@@ -175,15 +175,22 @@ if [ -f "$HOME/infynitae/live/settings.sh" ]; then
     sh "$HOME/infynitae/live/settings.sh" apply >/dev/null 2>&1 || true
 fi
 
-# Notifications: NOTIFICATIONS picks the daemon ("auto": mako, swaync, dunst, fnott, the first
-# installed; "none": none; or a command). Started here so the choice wins over D-Bus activation.
+# Notifications: NOTIFICATIONS picks the daemon ("auto": the edge when it runs (started above, it
+# serves them itself), else mako, swaync, dunst, fnott, the first installed; "edge": the edge;
+# "none": none; or a command). Started here so the choice wins over D-Bus activation.
 NOTIFY_CMD=""
+edge_notifies() {
+    infy_on "${ENABLE_EDGE:-true}" \
+        && [ "$(readlink "$HOME/.local/bin/infynitae-edge" 2>/dev/null)" = infynitae-edge-rs ]
+}
 case "${NOTIFICATIONS:-auto}" in
-    none|off|false) ;;
+    none|off|false|edge) ;;
     auto)
-        for d in mako swaync dunst fnott; do
-            if command -v "$d" >/dev/null 2>&1; then NOTIFY_CMD="$d"; break; fi
-        done
+        if ! edge_notifies; then
+            for d in mako swaync dunst fnott; do
+                if command -v "$d" >/dev/null 2>&1; then NOTIFY_CMD="$d"; break; fi
+            done
+        fi
         ;;
     *) NOTIFY_CMD="$NOTIFICATIONS" ;;
 esac
