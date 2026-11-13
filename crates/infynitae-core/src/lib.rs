@@ -490,7 +490,7 @@ pub struct Core {
     pub(crate) overview_at: Vec<(output::OutputId, CameraView)>,
     /// Whether Super+Middle pan or camera navigation moves out of fullscreen presentation.
     pub fullscreen_pan: bool,
-    /// Whether newly opened windows are automatically focused.
+    /// Whether newly opened windows receive focus on map.
     pub focus_on_open: bool,
     /// The user's key bindings (`set_key_bindings`).
     key_bindings: input::keys::UserBindings,
@@ -746,7 +746,7 @@ impl Core {
         }
     }
 
-    /// Sets whether Super+Tab focus cycling automatically moves camera to the focused window.
+    /// Sets whether Super+Tab focus cycling moves the camera to the focused window.
     pub fn set_focus_cycle_navigate(&mut self, enabled: bool) {
         self.focus_cycle_navigate = enabled;
     }
@@ -851,7 +851,7 @@ impl Core {
         self.fullscreen_pan
     }
 
-    /// Sets whether newly opened windows are automatically focused.
+    /// Sets whether newly opened windows receive focus on map.
     pub fn set_focus_on_open(&mut self, enabled: bool) {
         self.focus_on_open = enabled;
     }

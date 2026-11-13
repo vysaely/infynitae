@@ -28,7 +28,7 @@ use smithay::reexports::winit::window::Window as WinitWindow;
 /// Options for configuring the nested winit compositor.
 #[derive(Clone, Debug)]
 pub struct WinitCompositorOptions {
-    /// Wayland socket name (e.g. "wayland-1"). If None, automatically selects an available socket.
+    /// Wayland socket name (e.g. "wayland-1"). When `None`, picks an unused socket.
     pub socket_name: Option<String>,
     /// Optional command to execute on compositor startup (e.g. "weston-terminal").
     pub exec: Option<String>,
@@ -42,7 +42,7 @@ pub struct WinitCompositorOptions {
     pub refresh_mhz: u32,
     /// Optional maximum run duration (useful for automated testing / benchmarks).
     pub duration: Option<Duration>,
-    /// Optional maximum frame count before clean exit.
+    /// Optional maximum frame count before exit.
     pub max_frames: Option<u64>,
     /// Path to xwayland-satellite to supervise (M19); `None`: no X11.
     pub xwayland_satellite: Option<std::path::PathBuf>,

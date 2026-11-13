@@ -6,7 +6,7 @@ edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
-# C7.1: core only (plus a serialization crate when the protocol exists); never wayland or a backend.
+# C7.1: core only; never wayland or a backend.
 [dependencies]
 infynitae-core = { path = "../infynitae-core" }
 

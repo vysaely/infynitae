@@ -299,7 +299,7 @@ pub fn render_frame(
 /// Options for configuring headless compositor execution.
 #[derive(Clone, Debug)]
 pub struct HeadlessCompositorOptions {
-    /// Wayland socket name (e.g. "wayland-1"). If None, automatically selects an available socket.
+    /// Wayland socket name (e.g. "wayland-1"). When `None`, picks an unused socket.
     pub socket_name: Option<String>,
     /// Optional command to execute on compositor startup (e.g. "weston-terminal").
     pub exec: Option<String>,
@@ -309,9 +309,9 @@ pub struct HeadlessCompositorOptions {
     pub height: u32,
     /// Virtual output refresh in mHz.
     pub refresh_mhz: u32,
-    /// Optional maximum run duration before clean exit.
+    /// Optional maximum run duration before exit.
     pub duration: Option<Duration>,
-    /// Optional maximum frame count before clean exit.
+    /// Optional maximum frame count before exit.
     pub max_frames: Option<u64>,
     /// What the headless renderer reports as its device limit.
     pub device_limit: DeviceLimit,

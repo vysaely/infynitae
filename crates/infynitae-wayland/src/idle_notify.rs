@@ -1,5 +1,4 @@
-//! `ext-idle-notify-v1` protocol implementation.
-//! Allows external idle tools (swayidle, hypridle) to monitor user idle status.
+//! `ext-idle-notify-v1` idle monitoring for tools such as swayidle and hypridle.
 
 use std::time::Duration;
 

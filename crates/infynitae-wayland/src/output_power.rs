@@ -1,5 +1,4 @@
-//! `zwlr_output_power_management_v1` protocol implementation for screen on/off.
-//! Allows tools like wlopm and idle daemons to power down and wake screens.
+//! `zwlr_output_power_management_v1` output power control for tools such as wlopm and idle daemons.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};

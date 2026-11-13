@@ -1,5 +1,4 @@
-//! `zwlr_screencopy_v1` protocol implementation for screen capture.
-//! Allows xdg-desktop-portal-wlr to capture output frames for Discord, OBS, WebRTC.
+//! `zwlr_screencopy_v1` frame capture for portals and recording clients such as xdg-desktop-portal-wlr.
 //!
 //! A capture that may wait for a change (`copy_with_damage`, and every ext-image-copy frame) is
 //! served only once the screen differs from that consumer's last capture, with what changed as

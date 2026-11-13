@@ -1,5 +1,4 @@
-//! `zwlr_gamma_control_v1` protocol implementation for night light.
-//! Allows tools like wlsunset and gammastep to adjust output gamma ramps.
+//! `zwlr_gamma_control_v1` night-light protocol for tools such as wlsunset and gammastep.
 
 use std::collections::HashMap;
 use std::os::fd::OwnedFd;
