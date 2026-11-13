@@ -2167,30 +2167,50 @@ fn recover_renderer(data: &mut LoopData) {
     data.session.request_frame();
 }
 
-fn sync_scaling_filter(data: &mut LoopData) {
-    let next = data.state.scaling_filter;
-    if next == data.scaling_filter {
-        return;
+fn apply_scaling_filter<K>(
+    current: &mut infynitae_wayland::ZoomFilter,
+    next: infynitae_wayland::ZoomFilter,
+    renderer: &mut GlesRenderer,
+    zoom_cache: &mut smooth::ZoomCache,
+    screencopy_damage: &Mutex<infynitae_wayland::screencopy::CaptureDamage<K>>,
+) -> bool {
+    if next == *current {
+        return false;
     }
-    data.scaling_filter = next;
+    *current = next;
     let tex_filter = if next.uses_nearest_upscale() {
         TextureFilter::Nearest
     } else {
         TextureFilter::Linear
     };
-    if let Err(e) = data.renderer.upscale_filter(tex_filter) {
+    if let Err(e) = renderer.upscale_filter(tex_filter) {
         log_line!("[infynitae] Warning: failed to update upscale filter: {e:?}");
     }
     if !next.averages_zoom_out() {
-        data.zoom_cache.clear_mips();
+        zoom_cache.clear_mips();
     }
     if !next.is_fsr() {
-        data.zoom_cache.clear_fsr();
+        zoom_cache.clear_fsr();
+    }
+    *screencopy_damage.lock().unwrap() = Default::default();
+    true
+}
+
+fn sync_scaling_filter(data: &mut LoopData) {
+    if !apply_scaling_filter(
+        &mut data.scaling_filter,
+        data.state.scaling_filter,
+        &mut data.renderer,
+        &mut data.zoom_cache,
+        &data.state.screencopy.damage,
+    ) {
+        return;
     }
     for s in &mut data.screens {
-        let _ = s.compositor.reset_state();
+        // Redraw with the new filter without resetting DRM surface state (which forces a blocking
+        // mode set on the next flip).
+        s.compositor.reset_buffers();
     }
-    *data.state.screencopy.damage.lock().unwrap() = Default::default();
 }
 
 /// Async page flips refused in a row before a screen stops trying (until its window stops
@@ -4833,5 +4853,157 @@ mod tests {
         deliver_copies(&mut renderer, &mut copies, &mut woken);
         assert!(copies.is_empty());
         assert_eq!(woken, [id1]);
+    }
+
+    #[test]
+    fn scaling_filter_change_resets_buffers_and_forces_full_redraw() {
+        use infynitae_wayland::ZoomFilter;
+        use smithay::backend::allocator::dmabuf::AsDmabuf;
+        use smithay::backend::allocator::gbm::{GbmAllocator, GbmBufferFlags, GbmDevice};
+        use smithay::backend::allocator::{Fourcc, Modifier, Swapchain};
+        use smithay::backend::renderer::Bind;
+        use smithay::backend::renderer::damage::OutputDamageTracker;
+        use smithay::backend::renderer::element::solid::SolidColorRenderElement;
+        use smithay::backend::renderer::element::{Id, Kind};
+        use smithay::utils::{DeviceFd, Transform};
+
+        let Some(gbm) = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open("/dev/dri/renderD128")
+            .ok()
+            .and_then(|f| {
+                GbmDevice::new(DrmDeviceFd::new(DeviceFd::from(
+                    std::os::fd::OwnedFd::from(f),
+                )))
+                .ok()
+            })
+        else {
+            eprintln!("no GPU render node: skipped");
+            return;
+        };
+        let Ok(mut renderer) = gles_renderer(&gbm) else {
+            eprintln!("no GLES renderer: skipped");
+            return;
+        };
+
+        let mut current = ZoomFilter::Sharp;
+        let mut zoom_cache = smooth::ZoomCache::default();
+        let damage = Mutex::new(infynitae_wayland::screencopy::CaptureDamage::default());
+        let elem = SolidColorRenderElement::new(
+            Id::new(),
+            Rectangle::from_size((16, 16).into()),
+            0,
+            [0.3, 0.5, 0.7, 1.0],
+            Kind::Unspecified,
+        );
+        let elements = [elem];
+        let now = std::time::Instant::now();
+        assert!(
+            damage
+                .lock()
+                .unwrap()
+                .damage(&"c", (16, 16), 1.0, Transform::Normal, &elements, now)
+                .is_some()
+        );
+        assert!(
+            damage
+                .lock()
+                .unwrap()
+                .damage(&"c", (16, 16), 1.0, Transform::Normal, &elements, now)
+                .is_none()
+        );
+
+        // Unchanged filter is a no-op and preserves screencopy damage state.
+        assert!(!apply_scaling_filter(
+            &mut current,
+            ZoomFilter::Sharp,
+            &mut renderer,
+            &mut zoom_cache,
+            &damage,
+        ));
+        assert!(
+            damage
+                .lock()
+                .unwrap()
+                .damage(&"c", (16, 16), 1.0, Transform::Normal, &elements, now)
+                .is_none()
+        );
+
+        // Changed filter updates state and clears screencopy damage so captures redraw too.
+        assert!(apply_scaling_filter(
+            &mut current,
+            ZoomFilter::Smooth,
+            &mut renderer,
+            &mut zoom_cache,
+            &damage,
+        ));
+        assert_eq!(current, ZoomFilter::Smooth);
+        assert!(
+            damage
+                .lock()
+                .unwrap()
+                .damage(&"c", (16, 16), 1.0, Transform::Normal, &elements, now)
+                .is_some()
+        );
+
+        // Resetting swapchain buffers forces age=0 and a full redraw on identical elements.
+        let allocator = GbmAllocator::new(gbm, GbmBufferFlags::RENDERING);
+        let mut swapchain = Swapchain::new(
+            allocator,
+            16,
+            16,
+            Fourcc::Argb8888,
+            vec![Modifier::Linear, Modifier::Invalid],
+        );
+        let mut tracker = OutputDamageTracker::new((16, 16), 1.0, Transform::Normal);
+
+        // Seed 4 slots so the next acquire returns a buffer with age > 0 and zero damage.
+        for _ in 0..4 {
+            let slot = swapchain.acquire().expect("acquire").expect("slot");
+            let age = usize::from(slot.age());
+            let mut dmabuf = slot.export().expect("dmabuf");
+            let mut fb = renderer.bind(&mut dmabuf).expect("bind");
+            let _ = tracker
+                .render_output(&mut renderer, &mut fb, age, &elements, [0.0, 0.0, 0.0, 1.0])
+                .expect("render");
+            swapchain.submitted(&slot);
+        }
+        let steady = swapchain.acquire().expect("acquire").expect("slot");
+        assert!(steady.age() > 0);
+        let mut dmabuf = steady.export().expect("dmabuf");
+        let mut fb = renderer.bind(&mut dmabuf).expect("bind");
+        let steady_res = tracker
+            .render_output(
+                &mut renderer,
+                &mut fb,
+                usize::from(steady.age()),
+                &elements,
+                [0.0, 0.0, 0.0, 1.0],
+            )
+            .expect("render");
+        assert!(steady_res.damage.is_none(), "steady frame has no damage");
+        drop(fb);
+        swapchain.submitted(&steady);
+        drop(steady);
+
+        swapchain.reset_buffers();
+        let redrawn = swapchain.acquire().expect("acquire").expect("slot");
+        assert_eq!(redrawn.age(), 0);
+        let mut dmabuf = redrawn.export().expect("dmabuf");
+        let mut fb = renderer.bind(&mut dmabuf).expect("bind");
+        let redrawn_res = tracker
+            .render_output(
+                &mut renderer,
+                &mut fb,
+                usize::from(redrawn.age()),
+                &elements,
+                [0.0, 0.0, 0.0, 1.0],
+            )
+            .expect("render");
+        assert!(
+            redrawn_res.damage.is_some(),
+            "reset_buffers forces a full redraw even when elements are unchanged"
+        );
     }
 }
