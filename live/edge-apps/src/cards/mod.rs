@@ -18,6 +18,7 @@ pub mod settings_apps;
 pub mod settings_display;
 pub mod settings_games;
 pub mod settings_input;
+pub mod settings_keys;
 pub mod settings_lock;
 pub mod settings_look;
 pub mod settings_privacy;

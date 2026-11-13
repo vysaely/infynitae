@@ -4,10 +4,9 @@
 //! cards one by one plus `"In the file"` (`config/config` keys not on any card) while searching.
 //!
 //! Hit ID scheme:
-//! - `1..50` (`HIT_GROUP_BASE + group_idx`): group rows (`1` Personalization, `2` Display,
-//!   `3` Mouse, keyboard & touchpad, `4` Windows & shortcuts, `5` Apps & hardware,
-//!   `6` Games & performance, `7` Screen, lock & battery, `8` Privacy & sharing,
-//!   `9` Screen recording).
+//! - `1..50` (`HIT_GROUP_BASE + group_idx`): group rows in GROUPS' order (`1` Personalization,
+//!   then one row per other card: Display, Keyboard and mouse, Windows, Keys, Apps, Games, Lock
+//!   and sleep, Privacy, Recording).
 //! - `50` (`HIT_OPEN_CONFIG`): `"Open the config file"` row.
 //! - `100..CHILD_STRIDE` (`HIT_FILE_BASE + idx`): `"In the file"` search rows.
 //! - `CHILD_STRIDE * (child_idx + 1) + child_hit` (`CHILD_STRIDE = 100_000`): child hits routed to
@@ -16,8 +15,9 @@
 
 use crate::card::{Action, Button, Card, Cx, Event, Hits, Rect, Status};
 use crate::cards::{
-    settings, settings_apps, settings_display, settings_games, settings_input, settings_lock,
-    settings_look, settings_privacy, settings_recording, settings_rows, settings_windows,
+    settings, settings_apps, settings_display, settings_games, settings_input, settings_keys,
+    settings_lock, settings_look, settings_privacy, settings_recording, settings_rows,
+    settings_windows,
 };
 use crate::draw::{self, Text};
 use crate::provider::{CardKind, Size};
@@ -53,7 +53,7 @@ struct Group {
     children: &'static [usize],
 }
 
-const GROUPS: [Group; 9] = [
+const GROUPS: [Group; 10] = [
     Group {
         title: "Personalization",
         children: &[0, 1, 2],
@@ -71,24 +71,28 @@ const GROUPS: [Group; 9] = [
         children: &[5],
     },
     Group {
-        title: settings_apps::KIND.title,
+        title: settings_keys::KIND.title,
         children: &[6],
     },
     Group {
-        title: settings_games::KIND.title,
+        title: settings_apps::KIND.title,
         children: &[7],
     },
     Group {
-        title: settings_lock::KIND.title,
+        title: settings_games::KIND.title,
         children: &[8],
     },
     Group {
-        title: settings_privacy::KIND.title,
+        title: settings_lock::KIND.title,
         children: &[9],
     },
     Group {
-        title: settings_recording::KIND.title,
+        title: settings_privacy::KIND.title,
         children: &[10],
+    },
+    Group {
+        title: settings_recording::KIND.title,
+        children: &[11],
     },
 ];
 
@@ -112,17 +116,19 @@ pub const KIND: CardKind = CardKind {
         "battery_limit",
         "shares",
         "recording",
+        "key_capture",
     ],
 };
 
 /// Child cards owned by `settings/all`, in section 1's order.
-pub const CHILD_KINDS: [CardKind; 11] = [
+pub const CHILD_KINDS: [CardKind; 12] = [
     settings_look::KIND_APPEARANCE,
     settings_look::KIND_WALLPAPER,
     settings_look::KIND_FONTS,
     settings_display::KIND,
     settings_input::KIND,
     settings_windows::KIND,
+    settings_keys::KIND,
     settings_apps::KIND,
     settings_games::KIND,
     settings_lock::KIND,
@@ -138,6 +144,7 @@ fn make_children() -> Vec<Box<dyn Card>> {
         Box::new(settings_display::DisplayCard::new()),
         Box::new(settings_input::InputCard::default()),
         Box::new(settings_rows::TableCard::new(settings_windows::TABLE)),
+        Box::new(settings_keys::KeysCard::new()),
         Box::new(settings_apps::DefaultsCard::new()),
         Box::new(settings_rows::TableCard::new(settings_games::TABLE)),
         Box::new(settings_lock::LockCard::default()),
@@ -406,6 +413,20 @@ impl SettingsAllCard {
                         .unwrap_or_default()
                 };
                 vec![focus, open]
+            }
+            "keys" => {
+                let n = cfg
+                    .now
+                    .keys()
+                    .filter(|k| settings_keys::KeysCard::owns_config_key(k))
+                    .count();
+                if n == 0 {
+                    vec!["Defaults".to_string()]
+                } else if n == 1 {
+                    vec!["1 custom".to_string()]
+                } else {
+                    vec![format!("{n} custom")]
+                }
             }
             "defaults" => {
                 let custom: Vec<String> = ["TERMINAL", "BROWSER", "FILE_MANAGER"]
@@ -1168,6 +1189,7 @@ pub(crate) fn on_any_card(key: &str) -> bool {
         ]
         .into_iter()
         .any(|ks| ks.contains(&key))
+        || settings_keys::KeysCard::owns_config_key(key)
 }
 
 fn parse_key_value(line: &str) -> Option<(&str, String)> {
@@ -1441,6 +1463,7 @@ mod tests {
             "display",
             "input",
             "windows",
+            "keys",
             "defaults",
             "games",
             "lock",
@@ -1516,9 +1539,9 @@ mod tests {
         let mut card = SettingsAllCard::with_paths(def_file, cfg_file);
         assert_eq!(card.status(&cx), Status::Loading);
 
-        // First with all 9 groups visible: 9 groups + Open the config file = 10 rows
+        // First with all 10 groups visible: 10 groups + Open the config file = 11 rows
         apply_all_sources(&mut card, &dir, &cfg);
-        assert_eq!(draw_card(&card, &cx, 404.0).0, 10.0 * ui::ROW_H);
+        assert_eq!(draw_card(&card, &cx, 404.0).0, 11.0 * ui::ROW_H);
 
         // Omit local_recorder -> recording returns Status::Hidden and its row disappears
         card.apply(
@@ -1531,12 +1554,12 @@ mod tests {
         assert_eq!(card.status(&cx), Status::Ready);
 
         let (h_closed, hits_closed) = draw_card(&card, &cx, 404.0);
-        // 8 visible groups + Open the config file
-        assert_eq!(h_closed, 9.0 * ui::ROW_H);
+        // 9 visible groups + Open the config file
+        assert_eq!(h_closed, 10.0 * ui::ROW_H);
         assert!(!hits_closed
             .list
             .iter()
-            .any(|(id, _)| *id == HIT_GROUP_BASE + 8));
+            .any(|(id, _)| *id == HIT_GROUP_BASE + 9));
         let bottom = hits_closed
             .list
             .iter()
@@ -1544,11 +1567,11 @@ mod tests {
             .fold(0.0, f64::max);
         assert!((bottom - h_closed).abs() < 0.5);
 
-        // Click Games (group index 5, child index 7) -> opens in place at Size::S with its More row working
+        // Click Games (group index 6, child index 8) -> opens in place at Size::S with its More row working
         let mut out = Vec::new();
         assert!(card.event(
             &Event::Press {
-                hit: HIT_GROUP_BASE + 5,
+                hit: HIT_GROUP_BASE + 6,
                 button: Button::Left,
                 at: (10.0, 10.0),
             },
@@ -1557,9 +1580,9 @@ mod tests {
         ));
         let (h_open_games, hits_games) = draw_card(&card, &cx, 404.0);
         assert!(h_open_games > h_closed);
-        // Games child index 7 -> hits are CHILD_STRIDE * (7 + 1) + child_id = 800_000 + child_id.
-        // Clicking Games More (9000) -> 809_000 expands Games in place.
-        let games_base = CHILD_STRIDE * 8;
+        // Games child index 8 -> hits are CHILD_STRIDE * (8 + 1) + child_id = 900_000 + child_id.
+        // Clicking Games More (9000) -> 909_000 expands Games in place.
+        let games_base = CHILD_STRIDE * 9;
         assert!(hits_games
             .list
             .iter()
@@ -1575,7 +1598,7 @@ mod tests {
         ));
         let (h_more_games, hits_games_more) = draw_card(&card, &cx, 404.0);
         assert!(h_more_games > h_open_games);
-        // Toggle GAME_MODE (Games row 0 -> child hit 100 -> 800_100)
+        // Toggle GAME_MODE (Games row 0 -> child hit 100 -> 900_100)
         assert!(hits_games_more
             .list
             .iter()
@@ -1751,7 +1774,7 @@ mod tests {
         assert_eq!(card.status(&cx), Status::Ready);
         let (h_child_only, hits_child) = draw_card(&card, &cx, 404.0);
         assert!(h_child_only > HEADER_H);
-        let games_base = CHILD_STRIDE * 8;
+        let games_base = CHILD_STRIDE * 9;
         assert!(hits_child
             .list
             .iter()
@@ -2033,5 +2056,74 @@ mod tests {
             .any(|(id, _)| (3 * CHILD_STRIDE..4 * CHILD_STRIDE).contains(id)));
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn keys_group_is_registered_after_windows_and_covers_bind_and_exec() {
+        assert!(on_any_card("BIND_TERMINAL"));
+        assert!(on_any_card("EXEC_CUSTOM"));
+
+        let th = Theme::from_config(&Config::from_text(""));
+        let cx = test_cx(&th);
+        let cfg = crate::cards::settings_rows::ConfigData {
+            now: parse_config(""),
+            default: HashMap::new(),
+            programs: Default::default(),
+        };
+        let mut card = SettingsAllCard::with_paths(
+            PathBuf::from("/nonexistent/d"),
+            PathBuf::from("/nonexistent/c"),
+        );
+        card.apply("config", &cfg);
+        assert_eq!(card.summary(4, &cx), "Defaults");
+
+        let cfg2 = crate::cards::settings_rows::ConfigData {
+            now: parse_config("BIND_TERMINAL=\"SUPER+T\"\n"),
+            default: HashMap::new(),
+            programs: Default::default(),
+        };
+        card.apply("config", &cfg2);
+        assert_eq!(card.summary(4, &cx), "1 custom");
+
+        // Click Keys group (group 4, child 6 -> child hits from CHILD_STRIDE * 7).
+        let mut out = Vec::new();
+        assert!(card.event(
+            &Event::Press {
+                hit: HIT_GROUP_BASE + 4,
+                button: Button::Left,
+                at: (10.0, 10.0),
+            },
+            &cx,
+            &mut out
+        ));
+        let (_, hits) = draw_card(&card, &cx, 404.0);
+        // Keys row 0 hit is HIT_ROW_BASE (10) -> CHILD_STRIDE * 7 + 10.
+        assert!(hits.list.iter().any(|(id, _)| *id == CHILD_STRIDE * 7 + 10));
+        assert!(card.event(
+            &Event::Press {
+                hit: CHILD_STRIDE * 7 + 10,
+                button: Button::Left,
+                at: (10.0, 10.0),
+            },
+            &cx,
+            &mut out
+        ));
+        assert!(out
+            .iter()
+            .any(|a| matches!(a, Action::Run(cmd) if cmd.contains("capture-chord"))));
+    }
+
+    /// Each one-card group opens the card it is named after, and every card is in one group.
+    #[test]
+    fn groups_point_at_the_cards_they_name() {
+        let mut seen = Vec::new();
+        for g in GROUPS.iter() {
+            if g.children.len() == 1 {
+                assert_eq!(g.title, CHILD_KINDS[g.children[0]].title);
+            }
+            seen.extend_from_slice(g.children);
+        }
+        seen.sort_unstable();
+        assert_eq!(seen, (0..CHILD_KINDS.len()).collect::<Vec<_>>());
     }
 }

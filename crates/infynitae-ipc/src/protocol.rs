@@ -37,6 +37,8 @@ pub enum Request {
     Subscribe,
     Unsubscribe,
     Command(ShellCommand),
+    /// Capture the next physical key chord without acting on it (`capture-chord`).
+    CaptureChord,
 }
 
 /// What the adapter does itself when a shell asks (2026-11-07): the screens' colours warmer
@@ -61,6 +63,12 @@ pub enum RequestError {
     Invalid,
     /// Core refused the command.
     Shell(ShellError),
+    /// A key chord capture is already in progress.
+    Busy,
+    /// Key chord capture was cancelled.
+    Cancelled,
+    /// Key chord capture timed out.
+    Timeout,
 }
 
 impl RequestError {
@@ -69,6 +77,9 @@ impl RequestError {
             RequestError::Parse => "parse_error",
             RequestError::UnknownCommand => "unknown_command",
             RequestError::Invalid => "invalid_request",
+            RequestError::Busy => "busy",
+            RequestError::Cancelled => "cancelled",
+            RequestError::Timeout => "timeout",
             RequestError::Shell(e) => match e {
                 ShellError::ForeignPort => "foreign_port",
                 ShellError::StaleElement => "stale_element",
@@ -144,6 +155,7 @@ fn request(v: &Value, core: &Core) -> Result<Request, RequestError> {
         "layers" => Request::Layers,
         "subscribe" => Request::Subscribe,
         "unsubscribe" => Request::Unsubscribe,
+        "capture-chord" | "capture_chord" => Request::CaptureChord,
         "navigate" => {
             let to = v.get("to").ok_or(Invalid)?;
             let to = if let Some(e) = to.get("element") {
@@ -252,6 +264,17 @@ fn point(v: Option<&Value>) -> Option<(f64, f64)> {
         [x, y] => Some((x.as_f64()?, y.as_f64()?)),
         _ => None,
     }
+}
+
+/// `{"id", "ok": true, "generation", "chord"}`.
+pub fn capture_reply(id: Value, generation: u64, chord: &str) -> String {
+    Value::obj([
+        ("id", id),
+        ("ok", true.into()),
+        ("generation", generation.into()),
+        ("chord", chord.into()),
+    ])
+    .to_json()
 }
 
 /// `{"id", "ok": true, "generation"}`, with a snapshot when given.
