@@ -863,6 +863,37 @@ impl SeatHandler for App {
     fn remove_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
 }
 
+/// What a key press means to the open panel.
+fn key_of(event: &KeyEvent, m: &Modifiers) -> Option<crate::shell::Key> {
+    use crate::shell::Key;
+    Some(match event.keysym {
+        Keysym::Escape => Key::Escape,
+        Keysym::Up => Key::Up,
+        Keysym::Down => Key::Down,
+        Keysym::Tab if m.shift => Key::BackTab,
+        Keysym::ISO_Left_Tab => Key::BackTab,
+        Keysym::Tab => Key::Tab,
+        Keysym::Return | Keysym::KP_Enter => Key::Enter,
+        Keysym::BackSpace => Key::Backspace,
+        k if m.logo => {
+            let c = k.key_char()?;
+            if !c.is_ascii_alphabetic() {
+                return None;
+            }
+            Key::Super(c)
+        }
+        _ if m.ctrl || m.alt => return None,
+        k => {
+            let c = event
+                .utf8
+                .as_deref()
+                .and_then(|s| s.chars().next())
+                .or_else(|| k.key_char())?;
+            Key::Char(c)
+        }
+    })
+}
+
 impl KeyboardHandler for App {
     fn enter(
         &mut self,
@@ -892,8 +923,10 @@ impl KeyboardHandler for App {
         _: u32,
         event: KeyEvent,
     ) {
-        if event.keysym == Keysym::Escape && self.shell.escape() {
-            self.sync_all();
+        if let Some(k) = key_of(&event, &self.modifiers) {
+            if self.shell.key(k) {
+                self.sync_all();
+            }
         }
     }
     fn repeat_key(
@@ -902,8 +935,19 @@ impl KeyboardHandler for App {
         _: &QueueHandle<Self>,
         _: &wl_keyboard::WlKeyboard,
         _: u32,
-        _: KeyEvent,
+        event: KeyEvent,
     ) {
+        // held: arrows, Backspace and characters repeat; Escape and Enter do not
+        if let Some(k) = key_of(&event, &self.modifiers).filter(|k| {
+            !matches!(
+                k,
+                crate::shell::Key::Escape | crate::shell::Key::Enter | crate::shell::Key::Super(_)
+            )
+        }) {
+            if self.shell.key(k) {
+                self.sync_all();
+            }
+        }
     }
     fn release_key(
         &mut self,

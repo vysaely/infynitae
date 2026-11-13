@@ -180,8 +180,10 @@ pub enum Event<'a> {
         hit: Option<u32>,
         dy: f64,
     },
-    /// what was typed, for a card with a search field
+    /// what was typed, for a card with a search field (the whole query so far)
     Text(&'a str),
+    /// Enter with nothing selected: the card's own default (a search's first result), if it has one
+    Enter,
 }
 
 /// What a card asks the core to do. Cards never start a process or touch a window themselves.

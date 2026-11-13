@@ -339,6 +339,19 @@ impl Card for WindowsCard {
                 }
                 true
             }
+            // typed a name, then Enter: the first window that matches
+            Event::Enter => {
+                if self.filter.is_empty() {
+                    return false;
+                }
+                let filtered = filtered_windows(cx, &self.filter);
+                let Some((win, _)) = filtered.first() else {
+                    return false;
+                };
+                out.push(Action::Focus(win.id));
+                out.push(Action::ClosePanel);
+                true
+            }
             Event::Drag { .. } | Event::Release { .. } => false,
         }
     }

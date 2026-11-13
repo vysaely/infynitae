@@ -84,6 +84,22 @@ pub fn from_name(provider: &str, title: &str, app: Option<&App>) -> String {
     }
 }
 
+/// A key the open panel handles.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Key {
+    Escape,
+    Up,
+    Down,
+    Tab,
+    BackTab,
+    Enter,
+    Backspace,
+    /// a character typed
+    Char(char),
+    /// Super with a letter: a panel's key
+    Super(char),
+}
+
 pub struct Shell {
     pub cfg: Config,
     pub theme: Theme,
@@ -105,6 +121,12 @@ pub struct Shell {
     /// what the cards asked for: the action, its card ("owner/kind": one command at a time per
     /// card), and the provider and source keys to fetch again after it ran
     pub actions: Vec<(Action, String, &'static str, &'static [&'static str])>,
+    /// what was typed while the panel is open (the cards with a search field read it)
+    pub query: String,
+    /// the keyboard's selection: a card and one of its hits; shown from the first arrow or Tab
+    /// until the pointer moves
+    pub selected: Option<(usize, u32)>,
+    pub keyboard: bool,
     pub opened_at: Option<Instant>,
     pub open_ms: f64,
     pub last_tick: Option<Instant>,
@@ -130,6 +152,9 @@ impl Shell {
             windows: Vec::new(),
             notes: Vec::new(),
             notify: Default::default(),
+            query: String::new(),
+            selected: None,
+            keyboard: false,
             panels,
             open: None,
             opened_by_hover: false,
@@ -271,6 +296,7 @@ impl Shell {
             return if by_hover { false } else { self.close() };
         }
         self.open = Some(idx);
+        self.reset_keys(idx);
         self.opened_by_hover = by_hover;
         self.opened_at = Some(now);
         self.open_ms = 0.0;
@@ -288,6 +314,9 @@ impl Shell {
 
     pub fn close(&mut self) -> bool {
         let was = self.open.take().is_some();
+        self.query.clear();
+        self.selected = None;
+        self.keyboard = false;
         self.opened_by_hover = false;
         self.hovered = None;
         self.pressed = None;
@@ -319,6 +348,8 @@ impl Shell {
     /// the hit under it; a held button drags. True when something must be drawn again.
     pub fn pointer_motion(&mut self, w: f64, h: f64, x: f64, y: f64) -> bool {
         self.last_screen = (w, h);
+        // the pointer moved: the keyboard's selection hides (the light follows the pointer)
+        let hid = std::mem::take(&mut self.keyboard);
         let Some(idx) = self.open else {
             for i in 0..self.panels.len() {
                 if self.panels[i].panel.hover {
@@ -343,7 +374,7 @@ impl Shell {
         let now = self.hit_at((x, y));
         let changed = now != self.hovered;
         self.hovered = now;
-        changed
+        changed || hid
     }
 
     pub fn pointer_leave(&mut self) -> bool {
@@ -440,7 +471,150 @@ impl Shell {
 
     /// Escape closes the open panel. True when it did.
     pub fn escape(&mut self) -> bool {
-        self.close()
+        self.key(Key::Escape)
+    }
+
+    /// A new panel's typing starts empty, and its cards hear so (a search shows everything again).
+    fn reset_keys(&mut self, idx: usize) {
+        self.query.clear();
+        self.selected = None;
+        self.keyboard = false;
+        for ci in 0..self.panels[idx].cards.len() {
+            self.card_event(idx, ci, &Event::Text(""));
+        }
+    }
+
+    /// The query to every card of the open panel; the selection starts over. True when one
+    /// changed.
+    fn send_text(&mut self, idx: usize) -> bool {
+        self.selected = None;
+        let q = self.query.clone();
+        let mut changed = false;
+        for ci in 0..self.panels[idx].cards.len() {
+            changed |= self.card_event(idx, ci, &Event::Text(&q));
+            if self.open != Some(idx) {
+                break;
+            }
+        }
+        changed
+    }
+
+    /// Every hit of the last frame in order (the cards top to bottom, each card's in the order it
+    /// added them), once each.
+    fn hit_order(&self) -> Vec<(usize, u32, Rect)> {
+        let mut out: Vec<(usize, u32, Rect)> = Vec::new();
+        for (ci, _, hits) in self.frame.borrow().iter() {
+            for (id, r) in &hits.list {
+                if !out.iter().any(|(c, i, _)| c == ci && i == id) {
+                    out.push((*ci, *id, *r));
+                }
+            }
+        }
+        out
+    }
+
+    /// A key while a panel is open. True when something must be drawn again.
+    pub fn key(&mut self, k: Key) -> bool {
+        let Some(idx) = self.open else {
+            return false;
+        };
+        match k {
+            Key::Escape => {
+                if self.query.is_empty() {
+                    self.close()
+                } else {
+                    self.query.clear();
+                    self.send_text(idx);
+                    true
+                }
+            }
+            Key::Super(c) => {
+                let c = c.to_ascii_lowercase();
+                if self.panels[idx].panel.key == Some(c) {
+                    self.close()
+                } else if let Some(other) = self.panels.iter().position(|p| p.panel.key == Some(c))
+                {
+                    self.open_panel(other, false, Instant::now())
+                } else {
+                    false
+                }
+            }
+            Key::Up | Key::Down | Key::Tab | Key::BackTab => {
+                let order = self.hit_order();
+                if order.is_empty() {
+                    return false;
+                }
+                let at = self
+                    .selected
+                    .and_then(|(c, h)| order.iter().position(|(oc, oh, _)| *oc == c && *oh == h));
+                // the first arrow while the selection is hidden shows it where it is
+                let next = match (at, self.keyboard) {
+                    (Some(i), false) => i,
+                    (None, _) => {
+                        if matches!(k, Key::Up | Key::BackTab) {
+                            order.len() - 1
+                        } else {
+                            0
+                        }
+                    }
+                    (Some(i), true) => {
+                        if matches!(k, Key::Up | Key::BackTab) {
+                            (i + order.len() - 1) % order.len()
+                        } else {
+                            (i + 1) % order.len()
+                        }
+                    }
+                };
+                self.keyboard = true;
+                self.selected = Some((order[next].0, order[next].1));
+                true
+            }
+            Key::Enter => {
+                if let (true, Some((ci, hit))) = (self.keyboard, self.selected) {
+                    let r = self
+                        .hit_order()
+                        .into_iter()
+                        .find(|(c, h, _)| *c == ci && *h == hit)
+                        .map_or((0.0, 0.0, 0.0, 0.0), |(_, _, r)| r);
+                    let ev = Event::Press {
+                        hit,
+                        button: Button::Left,
+                        at: (r.0 + r.2 / 2.0, r.1 + r.3 / 2.0),
+                    };
+                    let changed = self.card_event(idx, ci, &ev);
+                    if self.open == Some(idx) {
+                        self.card_event(idx, ci, &Event::Release { hit });
+                    }
+                    return changed;
+                }
+                // nothing selected: the first card that has a default takes it
+                for ci in 0..self.panels[idx].cards.len() {
+                    if self.card_event(idx, ci, &Event::Enter) {
+                        return true;
+                    }
+                    if self.open != Some(idx) {
+                        return true;
+                    }
+                }
+                false
+            }
+            Key::Backspace => {
+                if self.query.pop().is_some() {
+                    self.send_text(idx);
+                    true
+                } else {
+                    false
+                }
+            }
+            Key::Char(c) => {
+                if c.is_control() {
+                    return false;
+                }
+                self.query.push(c);
+                self.send_text(idx);
+                true
+            }
+        }
     }
 
     /// Moves the animations on: the cards' arrival and every shown card's own. True while one runs.
@@ -522,7 +696,11 @@ impl Shell {
                 r.2 - 2.0 * (PAD_X - 8.0),
                 r.3 - PAD_TOP - HEAD_H - PAD_BOTTOM,
             );
-            let mut hits = Hits::new(self.pointer, None);
+            let sel = self
+                .selected
+                .filter(|(c, _)| self.keyboard && c == ci)
+                .map(|(_, h)| h);
+            let mut hits = Hits::new(self.pointer, sel);
             // the bottom card arrives first (about one card per 90 px up)
             let k = ((bottom - (r.1 + r.3)) / 90.0).clamp(0.0, ARRIVE_CARDS);
             let p = if self.open_ms.is_finite() {
@@ -626,6 +804,122 @@ mod tests {
             Config::from_text(&format!("PANEL_CONTROL=\"{line}\"\n")),
             Vec::new(),
         )
+    }
+
+    fn windows_shell() -> (Shell, usize) {
+        let mut sh = shell("SUPER+A top right 380 windows/list");
+        sh.windows = vec![
+            Window {
+                id: 1,
+                title: "Firefox".into(),
+                app_id: "firefox".into(),
+                focused: true,
+            },
+            Window {
+                id: 3,
+                title: "Steam".into(),
+                app_id: "steam".into(),
+                focused: false,
+            },
+        ];
+        let idx = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "control")
+            .unwrap();
+        assert!(sh.open_panel(idx, false, Instant::now()));
+        sh.open_ms = f64::INFINITY;
+        (sh, idx)
+    }
+
+    /// Draws once, as a frame would: the hits keyboard moves go over.
+    fn frame(sh: &Shell) {
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 1280, 800).unwrap();
+        let cr = cairo::Context::new(&surf).unwrap();
+        sh.draw(&cr, 1280.0, 800.0);
+    }
+
+    #[test]
+    fn typing_filters_and_enter_takes_the_first_match() {
+        let (mut sh, _) = windows_shell();
+        frame(&sh);
+        for c in "ste".chars() {
+            assert!(sh.key(Key::Char(c)));
+        }
+        assert_eq!(sh.query, "ste");
+        assert!(sh.key(Key::Enter));
+        let acts: Vec<&Action> = sh.actions.iter().map(|(a, ..)| a).collect();
+        assert_eq!(acts, vec![&Action::Focus(3)]);
+        // the Focus closes the panel through the core, ClosePanel already did
+        assert!(sh.open.is_none());
+        assert!(sh.query.is_empty());
+    }
+
+    #[test]
+    fn escape_clears_the_query_first_then_closes() {
+        let (mut sh, _) = windows_shell();
+        sh.key(Key::Char('x'));
+        assert!(sh.key(Key::Backspace));
+        assert!(sh.query.is_empty());
+        assert!(!sh.key(Key::Backspace));
+        sh.key(Key::Char('x'));
+        assert!(sh.key(Key::Escape));
+        assert!(sh.open.is_some());
+        assert!(sh.key(Key::Escape));
+        assert!(sh.open.is_none());
+    }
+
+    #[test]
+    fn arrows_show_the_selection_then_move_it_and_enter_presses_it() {
+        let (mut sh, _) = windows_shell();
+        frame(&sh);
+        let order = sh.hit_order();
+        assert!(order.len() >= 2);
+        // the first arrow shows it on the first hit, not past it
+        assert!(sh.key(Key::Down));
+        assert!(sh.keyboard);
+        assert_eq!(sh.selected, Some((order[0].0, order[0].1)));
+        sh.key(Key::Down);
+        assert_eq!(sh.selected, Some((order[1].0, order[1].1)));
+        sh.key(Key::Up);
+        sh.key(Key::Up);
+        // wraps to the last
+        let last = order.last().unwrap();
+        assert_eq!(sh.selected, Some((last.0, last.1)));
+        // the pointer moving hides it
+        assert!(sh.pointer_motion(1280.0, 800.0, 1100.0, 60.0));
+        assert!(!sh.keyboard);
+        // first row, Enter: its window
+        sh.key(Key::Tab);
+        sh.selected = Some((order[0].0, order[0].1));
+        assert!(sh.key(Key::Enter));
+        let acts: Vec<&Action> = sh.actions.iter().map(|(a, ..)| a).collect();
+        assert_eq!(acts, vec![&Action::Focus(1)]);
+    }
+
+    #[test]
+    fn super_with_another_panels_key_switches_to_it() {
+        let mut sh = Shell::new(
+            Config::from_text(
+                "PANEL_CONTROL=\"SUPER+A top right 380 windows/list\"\nPANEL_CLIP=\"SUPER+K top center 380 clipboard/history\"\n",
+            ),
+            Vec::new(),
+        );
+        let a = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "control")
+            .unwrap();
+        let v = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "clip")
+            .unwrap();
+        sh.open_panel(a, false, Instant::now());
+        assert!(sh.key(Key::Super('K')));
+        assert_eq!(sh.open, Some(v));
+        assert!(sh.key(Key::Super('k')));
+        assert!(sh.open.is_none());
     }
 
     #[test]
