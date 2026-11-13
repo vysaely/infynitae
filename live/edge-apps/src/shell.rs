@@ -739,7 +739,15 @@ impl Shell {
         if self.editing() {
             self.cancel_edit();
         }
-        let was = self.open.take().is_some();
+        let open = self.open.take();
+        let was = open.is_some();
+        if let Some(idx) = open {
+            if let Some(panel) = self.panels.get_mut(idx) {
+                for pc in &mut panel.cards {
+                    pc.card.panel_closed();
+                }
+            }
+        }
         self.edit_menu = None;
         self.query.clear();
         self.selected = None;

@@ -119,6 +119,7 @@ impl Provider for Settings {
             "wallpapers" => Some(Box::new(
                 crate::cards::settings_look::WallpapersSource::system(),
             )),
+            "face" => Some(Box::new(crate::cards::settings_look::FaceSource::system())),
             "fonts" => Some(Box::new(crate::cards::settings_look::FontsSource::all())),
             "fonts-mono" => Some(Box::new(crate::cards::settings_look::FontsSource::mono())),
             "icons" => Some(Box::new(crate::cards::settings_look::IconsSource::system())),

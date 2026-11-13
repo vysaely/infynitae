@@ -496,6 +496,37 @@ pub fn decode_cover_image(path: &Path, width: i32, height: i32) -> Option<Decode
     decode_pixbuf_image(pixbuf_fns()?, path, width, height, true)
 }
 
+pub const FACE_SIZE: i32 = 256;
+
+/// Decodes `src` via `gdk-pixbuf` and scales/centre-crops it into a 256x256 PNG written
+/// atomically to `dst`.
+pub fn write_face_png(src: &Path, dst: &Path) -> Result<(), String> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+
+    let img = decode_cover_image(src, FACE_SIZE, FACE_SIZE)
+        .ok_or_else(|| format!("cannot decode image {}", src.display()))?;
+    let surf = image_surface_from_decoded(&img)
+        .ok_or_else(|| format!("cannot prepare image surface for {}", src.display()))?;
+    if let Some(parent) = dst.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
+    }
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    let tmp = dst.with_file_name(format!(".face.tmp.{}.{seq}", std::process::id()));
+    surf.flush();
+    let res = (|| -> Result<(), String> {
+        let mut f = File::create(&tmp).map_err(|e| format!("create {}: {e}", tmp.display()))?;
+        surf.write_to_png(&mut f)
+            .map_err(|e| format!("write {}: {e}", tmp.display()))?;
+        drop(f);
+        std::fs::rename(&tmp, dst).map_err(|e| format!("rename to {}: {e}", dst.display()))
+    })();
+    if res.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    res
+}
+
 /// Converts a pre-decoded ARGB32 bitmap into a Cairo `ImageSurface` without any image decoding or scaling.
 pub fn image_surface_from_decoded(img: &DecodedImage) -> Option<cairo::ImageSurface> {
     if img.width <= 0 || img.height <= 0 || img.stride < img.width * 4 {
@@ -653,6 +684,59 @@ pub fn draw_app_icon(cr: &Context, cx: &Cx, icon: &str, name: &str, x: f64, y: f
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn write_face_png_centre_crops_to_256_square_and_rejects_invalid_source() {
+        let dir = std::env::temp_dir().join(format!("edge-apps-face-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let src = dir.join("wide.png");
+        let (w, h) = (400, 200);
+        let mut s = cairo::ImageSurface::create(cairo::Format::ARgb32, w, h).unwrap();
+        let stride = s.stride() as usize;
+        {
+            let mut d = s.data().unwrap();
+            for y in 0..h as usize {
+                for x in 0..w as usize {
+                    let off = y * stride + x * 4;
+                    let bgra = if x < 100 {
+                        [0x00, 0x00, 0xff, 0xff] // left strip red
+                    } else if x >= 300 {
+                        [0xff, 0x00, 0x00, 0xff] // right strip blue
+                    } else {
+                        [0x00, 0xff, 0x00, 0xff] // centre 200x200 square green
+                    };
+                    d[off..off + 4].copy_from_slice(&bgra);
+                }
+            }
+        }
+        s.mark_dirty();
+        s.write_to_png(&mut File::create(&src).unwrap()).unwrap();
+
+        let dst = dir.join(".face");
+        write_face_png(&src, &dst).unwrap();
+        let mut out = cairo::ImageSurface::create_from_png(&mut File::open(&dst).unwrap()).unwrap();
+        assert_eq!((out.width(), out.height()), (FACE_SIZE, FACE_SIZE));
+        let ostr = out.stride() as usize;
+        let odata = out.data().unwrap();
+        for (px, py) in [(4, 4), (128, 128), (251, 251)] {
+            let off = py * ostr + px * 4;
+            assert!(
+                odata[off + 1] > 200 && odata[off] < 30 && odata[off + 2] < 30,
+                "expected centre green crop at ({px},{py}), got {:?}",
+                &odata[off..off + 4]
+            );
+        }
+
+        // Invalid input fails cleanly and does not overwrite existing dst.
+        let bad = dir.join("bad.png");
+        std::fs::write(&bad, b"not an image").unwrap();
+        assert!(write_face_png(&bad, &dst).is_err());
+        assert!(dst.is_file());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn finds_and_loads_a_png_and_an_svg_by_name_and_path() {

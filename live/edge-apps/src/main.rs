@@ -167,6 +167,15 @@ fn main() -> ExitCode {
                 ExitCode::from(1)
             }
         },
+        ["--crop-face", src, dst] => {
+            match icons::write_face_png(std::path::Path::new(src), std::path::Path::new(dst)) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("infynitae-edge-apps: {e}");
+                    ExitCode::from(1)
+                }
+            }
+        }
         // a question for the running edge (the keyring, the drive formatter, the share picker):
         // exit 0 answered, 1 cancelled, 2 wrong use, 3 no edge running
         ["ask", rest @ ..] => ExitCode::from(ask::run_client(rest)),
