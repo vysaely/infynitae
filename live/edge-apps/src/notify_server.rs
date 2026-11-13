@@ -272,7 +272,7 @@ fn owner_program(conn: &zbus::blocking::Connection) -> Option<String> {
 /// Sends what the edge decided as the spec's signals.
 pub fn send(conn: &zbus::blocking::Connection, out: Vec<Outgoing>) {
     for o in out {
-        let _ = match o {
+        let res = match o {
             Outgoing::Action(id, key) => conn.emit_signal(
                 None::<zbus::names::BusName>,
                 PATH,
@@ -288,6 +288,9 @@ pub fn send(conn: &zbus::blocking::Connection, out: Vec<Outgoing>) {
                 &(id, reason),
             ),
         };
+        if let Err(e) = res {
+            eprintln!("infynitae-edge-apps: notifications: signal: {e}");
+        }
     }
 }
 

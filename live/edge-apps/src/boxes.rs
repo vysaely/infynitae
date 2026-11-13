@@ -6,16 +6,29 @@
 
 use crate::shell::Shell;
 
+fn boxes_path() -> Option<std::ffi::OsString> {
+    std::env::var_os("INFYNITAE_EDGE_BOXES").filter(|p| !p.is_empty())
+}
+
+fn write_boxes_to(path: &std::path::Path, body: &str) -> bool {
+    match std::fs::write(path, body) {
+        Ok(()) => true,
+        Err(e) => {
+            eprintln!("infynitae-edge-apps: boxes: write {}: {e}", path.display());
+            false
+        }
+    }
+}
+
 pub fn dump(shell: &Shell, w: f64, h: f64) {
-    let Some(path) = std::env::var_os("INFYNITAE_EDGE_BOXES").filter(|p| !p.is_empty()) else {
-        return;
-    };
-    let _ = std::fs::write(path, text(shell, w, h));
+    if let Some(path) = boxes_path() {
+        write_boxes_to(std::path::Path::new(&path), &text(shell, w, h));
+    }
 }
 
 pub fn dump_closed() {
-    if let Some(path) = std::env::var_os("INFYNITAE_EDGE_BOXES").filter(|p| !p.is_empty()) {
-        let _ = std::fs::write(path, "closed\n");
+    if let Some(path) = boxes_path() {
+        write_boxes_to(std::path::Path::new(&path), "closed\n");
     }
 }
 
@@ -129,4 +142,26 @@ pub fn text(shell: &Shell, w: f64, h: f64) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn write_boxes_to_writes_file_and_reports_missing_parent() {
+        let dir =
+            std::env::temp_dir().join(format!("infynitae-edge-apps-boxes-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let good = dir.join("boxes.txt");
+        assert!(write_boxes_to(&good, "closed\n"));
+        assert_eq!(std::fs::read_to_string(&good).unwrap(), "closed\n");
+
+        let bad = dir.join("missing").join("boxes.txt");
+        assert!(!write_boxes_to(&bad, "closed\n"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
