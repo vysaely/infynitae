@@ -1,7 +1,7 @@
-//! Open windows card (`windows/list`). Reads live toplevels from `cx.windows` (populated by the
-//! Wayland core via `wlr-foreign-toplevel`), resolves each window's app name via `cx.apps`, marks
-//! the focused window with the theme accent, filters via `Event::Text`, and emits `Action::Focus`,
-//! `Action::ClosePanel`, and `Action::CloseWindow`.
+//! Open windows and saved places card (`windows/list`). Reads live toplevels from `cx.windows`
+//! (populated by the Wayland core via `wlr-foreign-toplevel`) and `PLACE_<NAME>` entries from the
+//! `"config"` source, filters both via `Event::Text`, and emits `Action::Focus`,
+//! `Action::CloseWindow`, `Action::Run` (for places), and `Action::ClosePanel`.
 
 use crate::app::App;
 use crate::card::{Action, Button, Card, Cx, Event, Hits, Rect, Source, Status, Window};
@@ -26,11 +26,11 @@ pub struct Windows;
 const KINDS: [CardKind; 1] = [CardKind {
     id: "list",
     title: "Windows",
-    about: "Switch or close open windows.",
+    about: "Switch windows or jump to saved places.",
     sizes: &[Size::M, Size::L],
     default: Size::M,
     half: false,
-    sources: &[],
+    sources: &["config"],
 }];
 
 impl Provider for Windows {
@@ -62,16 +62,84 @@ impl Provider for Windows {
         }
     }
 
-    fn source(&self, _key: &str) -> Option<Box<dyn Source>> {
-        None
+    fn source(&self, key: &str) -> Option<Box<dyn Source>> {
+        (key == "config").then(|| {
+            Box::new(crate::cards::settings_rows::ConfigSource::system()) as Box<dyn Source>
+        })
     }
 }
 
-/// Interactive open windows list card.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Place {
+    name: String,
+    x: String,
+    y: String,
+    zoom: String,
+    chord: Option<String>,
+}
+
+enum ListItem<'a> {
+    Window(&'a Window, &'a str),
+    Place(&'a Place),
+}
+
+/// Interactive open windows and saved places list card.
 #[derive(Default)]
 pub struct WindowsCard {
     scroll: usize,
     filter: String,
+    places: Vec<Place>,
+}
+
+fn parse_place(key: &str, val: &str) -> Option<Place> {
+    let raw_name = key.strip_prefix("PLACE_")?;
+    if raw_name.is_empty()
+        || !raw_name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_')
+    {
+        return None;
+    }
+    let mut tokens = val.split_whitespace();
+    let coords = tokens.next()?;
+    let mut parts = coords.split(',');
+    let parse_f = |s: &str| s.parse::<f64>().ok().filter(|v| v.is_finite());
+    let x = parse_f(parts.next()?)?;
+    let y = parse_f(parts.next()?)?;
+    let zoom = parse_f(parts.next()?).filter(|z| *z > 0.0)?;
+    if parts.next().is_some() {
+        return None;
+    }
+    let norm = |v: f64| (if v == 0.0 { 0.0 } else { v }).to_string();
+    let rest: Vec<&str> = tokens.collect();
+    Some(Place {
+        name: raw_name.to_ascii_lowercase(),
+        x: norm(x),
+        y: norm(y),
+        zoom: norm(zoom),
+        chord: (!rest.is_empty()).then(|| rest.join(" ")),
+    })
+}
+
+fn parse_places(cfg: &crate::cards::settings_rows::ConfigData) -> Vec<Place> {
+    let mut places: Vec<Place> = cfg
+        .now
+        .iter()
+        .filter_map(|(k, v)| parse_place(k, v))
+        .collect();
+    places.sort_by(|a, b| a.name.cmp(&b.name));
+    places
+}
+
+fn place_matches_filter(place: &Place, query: &str) -> bool {
+    let q = query.trim().to_lowercase();
+    if q.is_empty() {
+        return true;
+    }
+    let name_low = place.name.to_lowercase();
+    let chord_low = place.chord.as_deref().unwrap_or("").to_lowercase();
+    q.split_whitespace()
+        .all(|word| name_low.contains(word) || chord_low.contains(word))
 }
 
 fn max_rows(size: Size) -> usize {
@@ -120,14 +188,84 @@ fn matches_filter(win: &Window, app_name: &str, query: &str) -> bool {
         .all(|word| title_low.contains(word) || app_low.contains(word) || id_low.contains(word))
 }
 
-fn filtered_windows<'a>(cx: &'a Cx, query: &str) -> Vec<(&'a Window, &'a str)> {
-    cx.windows
+fn filtered_items<'a>(cx: &'a Cx, places: &'a [Place], query: &str) -> Vec<ListItem<'a>> {
+    let mut items: Vec<ListItem<'a>> = cx
+        .windows
         .iter()
         .filter_map(|win| {
             let app_name = resolve_app_name(cx.apps, win);
-            matches_filter(win, app_name, query).then_some((win, app_name))
+            matches_filter(win, app_name, query).then_some(ListItem::Window(win, app_name))
         })
-        .collect()
+        .collect();
+    for place in places {
+        if place_matches_filter(place, query) {
+            items.push(ListItem::Place(place));
+        }
+    }
+    items
+}
+
+fn activate_item(item: &ListItem<'_>, out: &mut Vec<Action>) {
+    match item {
+        ListItem::Window(win, _) => {
+            out.push(Action::Focus(win.id));
+            out.push(Action::ClosePanel);
+        }
+        ListItem::Place(place) => {
+            out.push(Action::Run(format!(
+                "infynitae msg navigate {} {} {} >/dev/null 2>&1",
+                place.x, place.y, place.zoom
+            )));
+            out.push(Action::ClosePanel);
+        }
+    }
+}
+
+fn draw_row_labels(
+    cr: &Context,
+    th: &crate::theme::Theme,
+    area: Rect,
+    title: &str,
+    subtitle: &str,
+    bold: bool,
+) {
+    let (tx, ry, max_w, rh) = area;
+    if !subtitle.is_empty() {
+        let ty = ry + (rh - 32.0) / 2.0;
+        draw::text_max(
+            cr,
+            tx,
+            ty,
+            max_w,
+            &Text {
+                size: 13.0,
+                bold,
+                color: th.text,
+                text: title,
+            },
+        );
+        draw::text_max(
+            cr,
+            tx,
+            ty + 17.0,
+            max_w,
+            &Text {
+                size: 11.0,
+                bold: false,
+                color: th.muted,
+                text: subtitle,
+            },
+        );
+    } else {
+        let t = Text {
+            size: 13.0,
+            bold,
+            color: th.text,
+            text: title,
+        };
+        let (_, lh) = draw::measure(cr, &t);
+        draw::text_max(cr, tx, ry + (rh - lh) / 2.0, max_w, &t);
+    }
 }
 
 fn draw_close_mark(cr: &Context, xr: Rect, color: crate::theme::Rgba) {
@@ -146,8 +284,20 @@ fn draw_close_mark(cr: &Context, xr: Rect, color: crate::theme::Rgba) {
 }
 
 impl Card for WindowsCard {
-    fn apply(&mut self, _key: &str, _data: &dyn Any) -> bool {
-        false
+    fn apply(&mut self, key: &str, data: &dyn Any) -> bool {
+        if key != "config" {
+            return false;
+        }
+        let Some(cfg) = data.downcast_ref::<crate::cards::settings_rows::ConfigData>() else {
+            return false;
+        };
+        let next = parse_places(cfg);
+        if next == self.places {
+            return false;
+        }
+        self.places = next;
+        self.scroll = 0;
+        true
     }
 
     fn status(&self, _cx: &Cx) -> Status {
@@ -155,22 +305,24 @@ impl Card for WindowsCard {
     }
 
     fn height(&self, cx: &Cx, _width: f64) -> f64 {
-        let filtered = filtered_windows(cx, &self.filter);
-        if filtered.is_empty() {
+        let count = filtered_items(cx, &self.places, &self.filter).len();
+        if count == 0 {
             EMPTY_H
         } else {
-            filtered.len().min(max_rows(cx.size)) as f64 * ROW_H
+            count.min(max_rows(cx.size)) as f64 * ROW_H
         }
     }
 
     fn draw(&self, cr: &Context, cx: &Cx, body: Rect, hits: &mut Hits) {
         let th = cx.theme;
-        let filtered = filtered_windows(cx, &self.filter);
+        let filtered = filtered_items(cx, &self.places, &self.filter);
         if filtered.is_empty() {
             let msg = if cx.windows.is_empty() || self.filter.trim().is_empty() {
                 "No open windows"
-            } else {
+            } else if self.places.is_empty() {
                 "No matching windows"
+            } else {
+                "No matching windows or places"
             };
             draw::text(
                 cr,
@@ -192,100 +344,78 @@ impl Card for WindowsCard {
         let end = (start + max_vis).min(filtered.len());
 
         for (slot, idx) in (start..end).enumerate() {
-            let (win, app_name) = filtered[idx];
             let r = (body.0, body.1 + slot as f64 * ROW_H, body.2, ROW_H);
-            let xr = (
-                r.0 + r.2 - CLOSE_SZ - 4.0,
-                r.1 + (r.3 - CLOSE_SZ) / 2.0,
-                CLOSE_SZ,
-                CLOSE_SZ,
-            );
-
-            // Register the row hit first so the close mark sits on top inside the row.
             let row_id = hit_row(idx);
-            let close_id = hit_close(idx);
-            let row_lit = hits.add(row_id, r) || hits.selected(row_id);
-            let close_lit = hits.add(close_id, xr) || hits.selected(close_id);
-            let hovered = row_lit || close_lit;
-            if hovered {
-                ui::light(cr, cx, r);
-            }
-
-            if win.focused {
-                draw::round_rect(cr, r.0 + 2.0, r.1 + 8.0, 3.0, r.3 - 16.0, 1.5);
-                draw::set(cr, th.accent);
-                let _ = cr.fill();
-            }
-
             let ix = r.0 + 9.0;
             let iy = r.1 + (r.3 - ICON_SZ) / 2.0;
-            let tile_label = if !app_name.is_empty() {
-                app_name
-            } else {
-                win.title.as_str()
-            };
-            // the app's icon; a window with no entry tries its app id as an icon name
-            let icon = cx
-                .apps
-                .iter()
-                .find(|a| crate::cards::simple::app_matches_window_id(a, &win.app_id))
-                .map_or(win.app_id.as_str(), |a| a.icon.as_str());
-            crate::icons::draw_app_icon(cr, cx, icon, tile_label, ix, iy, ICON_SZ);
-
             let tx = ix + ICON_SZ + 10.0;
-            let right_edge = if hovered { xr.0 - 4.0 } else { r.0 + r.2 - 8.0 };
-            let max_w = (right_edge - tx).max(20.0);
 
-            let title = if !win.title.is_empty() {
-                win.title.as_str()
-            } else if !app_name.is_empty() {
-                app_name
-            } else {
-                "Window"
-            };
+            match &filtered[idx] {
+                ListItem::Window(win, app_name) => {
+                    let xr = (
+                        r.0 + r.2 - CLOSE_SZ - 4.0,
+                        r.1 + (r.3 - CLOSE_SZ) / 2.0,
+                        CLOSE_SZ,
+                        CLOSE_SZ,
+                    );
+                    // Register the row hit first so the close mark sits on top inside the row.
+                    let close_id = hit_close(idx);
+                    let row_lit = hits.add(row_id, r) || hits.selected(row_id);
+                    let close_lit = hits.add(close_id, xr) || hits.selected(close_id);
+                    let hovered = row_lit || close_lit;
+                    if hovered {
+                        ui::light(cr, cx, r);
+                    }
 
-            if !app_name.is_empty() {
-                let ty = r.1 + (r.3 - 32.0) / 2.0;
-                draw::text_max(
-                    cr,
-                    tx,
-                    ty,
-                    max_w,
-                    &Text {
-                        size: 13.0,
-                        bold: win.focused,
-                        color: th.text,
-                        text: title,
-                    },
-                );
-                draw::text_max(
-                    cr,
-                    tx,
-                    ty + 17.0,
-                    max_w,
-                    &Text {
-                        size: 11.0,
-                        bold: false,
-                        color: th.muted,
-                        text: app_name,
-                    },
-                );
-            } else {
-                let t = Text {
-                    size: 13.0,
-                    bold: win.focused,
-                    color: th.text,
-                    text: title,
-                };
-                let (_, lh) = draw::measure(cr, &t);
-                draw::text_max(cr, tx, r.1 + (r.3 - lh) / 2.0, max_w, &t);
-            }
+                    if win.focused {
+                        draw::round_rect(cr, r.0 + 2.0, r.1 + 8.0, 3.0, r.3 - 16.0, 1.5);
+                        draw::set(cr, th.accent);
+                        let _ = cr.fill();
+                    }
 
-            if hovered {
-                if close_lit {
-                    ui::light(cr, cx, xr);
+                    let tile_label = if !app_name.is_empty() {
+                        app_name
+                    } else {
+                        win.title.as_str()
+                    };
+                    // the app's icon; a window with no entry tries its app id as an icon name
+                    let icon = cx
+                        .apps
+                        .iter()
+                        .find(|a| crate::cards::simple::app_matches_window_id(a, &win.app_id))
+                        .map_or(win.app_id.as_str(), |a| a.icon.as_str());
+                    crate::icons::draw_app_icon(cr, cx, icon, tile_label, ix, iy, ICON_SZ);
+
+                    let right_edge = if hovered { xr.0 - 4.0 } else { r.0 + r.2 - 8.0 };
+                    let max_w = (right_edge - tx).max(20.0);
+                    let title = if !win.title.is_empty() {
+                        win.title.as_str()
+                    } else if !app_name.is_empty() {
+                        app_name
+                    } else {
+                        "Window"
+                    };
+                    draw_row_labels(cr, th, (tx, r.1, max_w, r.3), title, app_name, win.focused);
+
+                    if hovered {
+                        if close_lit {
+                            ui::light(cr, cx, xr);
+                        }
+                        draw_close_mark(cr, xr, if close_lit { th.text } else { th.muted });
+                    }
                 }
-                draw_close_mark(cr, xr, if close_lit { th.text } else { th.muted });
+                ListItem::Place(place) => {
+                    if hits.add(row_id, r) || hits.selected(row_id) {
+                        ui::light(cr, cx, r);
+                    }
+                    crate::icons::draw_app_icon(cr, cx, "", &place.name, ix, iy, ICON_SZ);
+                    let max_w = (r.0 + r.2 - 8.0 - tx).max(20.0);
+                    let subtitle = match &place.chord {
+                        Some(chord) => format!("Place — {chord}"),
+                        None => "Place".to_string(),
+                    };
+                    draw_row_labels(cr, th, (tx, r.1, max_w, r.3), &place.name, &subtitle, false);
+                }
             }
         }
     }
@@ -301,7 +431,7 @@ impl Card for WindowsCard {
                 true
             }
             Event::Scroll { dy, .. } => {
-                let total = filtered_windows(cx, &self.filter).len();
+                let total = filtered_items(cx, &self.places, &self.filter).len();
                 let max_scroll = total.saturating_sub(max_rows(cx.size));
                 if max_scroll == 0 {
                     return false;
@@ -327,29 +457,29 @@ impl Card for WindowsCard {
                 let Some((idx, is_close)) = decode_hit(*hit) else {
                     return false;
                 };
-                let filtered = filtered_windows(cx, &self.filter);
-                let Some((win, _)) = filtered.get(idx) else {
+                let filtered = filtered_items(cx, &self.places, &self.filter);
+                let Some(item) = filtered.get(idx) else {
                     return false;
                 };
-                if is_close {
-                    out.push(Action::CloseWindow(win.id));
-                } else {
-                    out.push(Action::Focus(win.id));
-                    out.push(Action::ClosePanel);
+                match item {
+                    ListItem::Window(win, _) if is_close => {
+                        out.push(Action::CloseWindow(win.id));
+                    }
+                    ListItem::Place(_) if is_close => return false,
+                    item => activate_item(item, out),
                 }
                 true
             }
-            // typed a name, then Enter: the first window that matches
+            // typed a name, then Enter: the first window or place that matches
             Event::Enter => {
                 if self.filter.is_empty() {
                     return false;
                 }
-                let filtered = filtered_windows(cx, &self.filter);
-                let Some((win, _)) = filtered.first() else {
+                let filtered = filtered_items(cx, &self.places, &self.filter);
+                let Some(first) = filtered.first() else {
                     return false;
                 };
-                out.push(Action::Focus(win.id));
-                out.push(Action::ClosePanel);
+                activate_item(first, out);
                 true
             }
             Event::Drag { .. } | Event::Release { .. } => false,
@@ -416,6 +546,7 @@ mod tests {
         assert_eq!(p.listed(), Listed::Always);
         assert!(p.claims().is_empty());
         assert!(p.source("any").is_none());
+        assert!(p.source("config").is_some());
 
         assert_eq!(p.cards().len(), 1);
         let kind = &p.cards()[0];
@@ -423,7 +554,7 @@ mod tests {
         assert_eq!(kind.sizes, &[Size::M, Size::L]);
         assert_eq!(kind.default, Size::M);
         assert!(!kind.half);
-        assert!(kind.sources.is_empty());
+        assert_eq!(kind.sources, &["config"]);
 
         assert!(p.card("list", None).is_some());
         assert!(p.card("list", Some("arg")).is_none());
@@ -766,5 +897,83 @@ mod tests {
         assert!(sh.open.is_none(), "focusing a window closes the panel");
         let actions: Vec<Action> = sh.actions.iter().map(|(a, _, _, _)| a.clone()).collect();
         assert_eq!(actions, vec![Action::CloseWindow(12), Action::Focus(11)]);
+    }
+
+    #[test]
+    fn config_places_parse_filter_draw_click_and_enter() {
+        use crate::cards::settings_rows::{parse_config, ConfigData};
+        use std::collections::{HashMap, HashSet};
+
+        let th = test_theme();
+        let windows = [test_win(10, "Terminal", "kitty", true)];
+        let cx = make_cx(Size::M, &[], &windows, &th);
+        let mut c = WindowsCard::default();
+
+        let cfg_text = "\
+            BORDER=2\n\
+            PLACE_WORK=\"-200,150,1.25 SUPER+F1\"\n\
+            PLACE_NOTES=\"800,-40,1\"\n\
+            PLACE_BAD=\"nan,0,1\"\n\
+            PLACE_ZERO_ZOOM=\"0,0,0\"\n\
+            PLACE_=\"1,2,1\"\n";
+        let cfg = ConfigData {
+            now: parse_config(cfg_text),
+            default: HashMap::new(),
+            programs: HashSet::new(),
+        };
+        assert!(c.apply("config", &cfg as &dyn Any));
+        assert!(!c.apply("config", &cfg as &dyn Any));
+        assert_eq!(c.places.len(), 2);
+
+        // 1 window + 2 sorted places (notes, work) = 3 rows.
+        // Place rows emit only hit_row (no close button).
+        let (h, hits) = draw_card(&c, &cx, None);
+        assert_eq!(h, 3.0 * ROW_H);
+        assert_eq!(hits.list.len(), 4);
+        assert!(hits.list.iter().any(|(id, _)| *id == hit_row(0)));
+        assert!(hits.list.iter().any(|(id, _)| *id == hit_close(0)));
+        assert!(hits.list.iter().any(|(id, _)| *id == hit_row(1)));
+        assert!(hits.list.iter().any(|(id, _)| *id == hit_row(2)));
+        assert!(!hits.list.iter().any(|(id, _)| *id == hit_close(1)));
+
+        // Clicking place row 1 (notes) runs navigate + closes panel.
+        let mut out = Vec::new();
+        assert!(c.event(
+            &Event::Press {
+                hit: hit_row(1),
+                button: Button::Left,
+                at: (20.0, ROW_H + 10.0),
+            },
+            &cx,
+            &mut out
+        ));
+        assert_eq!(
+            out,
+            vec![
+                Action::Run("infynitae msg navigate 800 -40 1 >/dev/null 2>&1".into()),
+                Action::ClosePanel,
+            ]
+        );
+
+        // Filtering by place name + Enter navigates to the matching place.
+        assert!(c.event(&Event::Text("work"), &cx, &mut out));
+        assert_eq!(c.height(&cx, 360.0), ROW_H);
+        out.clear();
+        assert!(c.event(&Event::Enter, &cx, &mut out));
+        assert_eq!(
+            out,
+            vec![
+                Action::Run("infynitae msg navigate -200 150 1.25 >/dev/null 2>&1".into()),
+                Action::ClosePanel,
+            ]
+        );
+
+        // Filtering by chord text matches the place too.
+        assert!(c.event(&Event::Text("super+f1"), &cx, &mut out));
+        assert_eq!(c.height(&cx, 360.0), ROW_H);
+
+        // Unmatched filter with places still collapses cleanly.
+        assert!(c.event(&Event::Text("nonexistent"), &cx, &mut out));
+        assert_eq!(c.height(&cx, 360.0), EMPTY_H);
     }
 }
