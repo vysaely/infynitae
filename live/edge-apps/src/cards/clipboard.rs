@@ -430,7 +430,7 @@ impl Card for HistoryCard {
                 8.0
             } else {
                 let time_t = Text {
-                    size: 11.5,
+                    size: draw::SIZE_NOTE,
                     bold: false,
                     color: cx.theme.muted,
                     text: &item.time,

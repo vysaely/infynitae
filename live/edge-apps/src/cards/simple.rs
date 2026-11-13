@@ -220,7 +220,7 @@ fn draw_item_row(
             r.0 + r.2 - 8.0,
             r.1 + (r.3 - 15.0) / 2.0,
             &Text {
-                size: 11.5,
+                size: draw::SIZE_NOTE,
                 bold: false,
                 color: th.muted,
                 text: right_note,
