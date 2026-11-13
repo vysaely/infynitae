@@ -1,7 +1,8 @@
 //! INFYNITAE_EDGE_BOXES (docs/EDGE_APPS.md section 9): after each drawing, a file the VM scripts read
 //! to find what to click: `panel NAME x y w h locked SIDE`, `module WORD x y w h` for a card read from
 //! today's module word (so today's scripts pass unchanged), `card OWNER/KIND x y w h` for every card,
-//! and `hit OWNER/KIND ID x y w h` for each of its hits; `closed` while closed.
+//! and `hit OWNER/KIND ID x y w h` for each of its hits; `ask x y w h` while the question shows;
+//! `closed` while closed.
 
 use crate::shell::Shell;
 
@@ -19,6 +20,10 @@ pub fn dump_closed() {
 }
 
 pub fn text(shell: &Shell, w: f64, h: f64) -> String {
+    if shell.ask.ask.on {
+        let (x, y, aw, ah) = shell.ask.ask.geometry(w, h);
+        return format!("ask {x:.0} {y:.0} {aw:.0} {ah:.0}\n");
+    }
     let Some(idx) = shell.open else {
         return "closed\n".into();
     };

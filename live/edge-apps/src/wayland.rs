@@ -414,8 +414,6 @@ struct App {
     was_animating: bool,
     /// the notification pop-ups' strip, made with the first pop-up
     popups: Option<PopupLayer>,
-    /// the ask watcher's word that the asker went away
-    ask_tx: Sender<()>,
     /// the session bus connection serving org.freedesktop.Notifications
     notify_conn: Option<zbus::blocking::Connection>,
     exit: bool,
@@ -645,64 +643,6 @@ impl App {
         }
     }
 
-    /// Watches the asker of the question showing: when its connection closes or it exits, the
-    /// loop hears it (the question goes without an answer to give).
-    fn watch_current_ask(&mut self) {
-        if !self.shell.ask.ask.on {
-            return;
-        }
-        let Some(fd) = self.shell.ask.ask.conn_fd else {
-            return;
-        };
-        let dup_fd = unsafe { libc::dup(fd) };
-        if dup_fd < 0 {
-            return;
-        }
-        let pid = self.shell.ask.ask.pid;
-        let tx = self.ask_tx.clone();
-        std::thread::spawn(move || {
-            loop {
-                let mut pfd = libc::pollfd {
-                    fd: dup_fd,
-                    events: libc::POLLIN | libc::POLLERR | libc::POLLHUP,
-                    revents: 0,
-                };
-                let r = unsafe { libc::poll(&mut pfd, 1, 100) };
-                if r > 0 {
-                    if (pfd.revents & (libc::POLLERR | libc::POLLHUP)) != 0 {
-                        let _ = tx.send(());
-                        break;
-                    }
-                    if (pfd.revents & libc::POLLIN) != 0 {
-                        let mut b = [0u8; 1];
-                        let k = unsafe {
-                            libc::recv(
-                                dup_fd,
-                                b.as_mut_ptr().cast(),
-                                1,
-                                libc::MSG_PEEK | libc::MSG_DONTWAIT,
-                            )
-                        };
-                        if k == 0 {
-                            let _ = tx.send(());
-                            break;
-                        }
-                    }
-                }
-                if let Some(p) = pid {
-                    if p > 0 && unsafe { libc::kill(p, 0) } != 0 {
-                        let err = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
-                        if err == libc::ESRCH {
-                            let _ = tx.send(());
-                            break;
-                        }
-                    }
-                }
-            }
-            unsafe { libc::close(dup_fd) };
-        });
-    }
-
     fn sync_windows(&mut self) {
         self.shell.windows = self
             .toplevels
@@ -740,7 +680,6 @@ impl App {
                 // a question in the ask file, or a cancel; else: fetch the open panel's data again
                 // (a script changed something)
                 if self.shell.ask_load() {
-                    self.watch_current_ask();
                     true
                 } else {
                     self.fetch_due(true);
@@ -1315,7 +1254,6 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
     );
     let (fetch_tx, fetch_rx) = channel::channel::<Fetched>();
     let (notify_tx, notify_rx) = channel::channel::<crate::notify::Incoming>();
-    let (ask_tx, ask_rx) = channel::channel::<()>();
     let output_state = OutputState::new(&globals, &qh);
     let existing: Vec<_> = output_state.outputs().collect();
     let mut app = App {
@@ -1340,7 +1278,6 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
         last_fetch: None,
         was_animating: false,
         popups: None,
-        ask_tx,
         notify_conn: None,
         exit: false,
     };
@@ -1397,16 +1334,6 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
             }
         })
         .map_err(|e| e.to_string())?;
-    handle
-        .insert_source(ask_rx, |evt, _, app| {
-            if let channel::Event::Msg(()) = evt {
-                if crate::ask::check_asker_gone(&mut app.shell.ask) {
-                    app.sync_all();
-                    app.watch_current_ask();
-                }
-            }
-        })
-        .map_err(|e| e.to_string())?;
     let sig_rd = setup_signal_pipe()?;
     handle
         .insert_source(
@@ -1436,7 +1363,6 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
     let _ = std::fs::write(&features_file, "ask\n");
     // a question sent before the edge started
     if app.shell.ask_load() {
-        app.watch_current_ask();
         app.sync_all();
     }
     while !app.exit {
@@ -1446,11 +1372,12 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
             app.shell.now = chrono::Local::now().naive_local();
             app.fetch_due(false);
         }
-        // an asker that went away without the watcher seeing it (no connection to watch)
+        // an asker that went away (its pipe closed, or it exited): checked every 100 ms while it
+        // asks. No watcher thread: a thread holding a copy of the pipe kept the asker from
+        // seeing the answer's end (it reads to the end of the pipe).
         if app.shell.ask.ask.on {
             if crate::ask::check_asker_gone(&mut app.shell.ask) {
                 app.sync_all();
-                app.watch_current_ask();
             }
             timeout = Some(timeout.map_or(Duration::from_millis(100), |t| {
                 t.min(Duration::from_millis(100))

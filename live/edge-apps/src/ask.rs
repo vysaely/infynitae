@@ -571,6 +571,10 @@ pub struct AskState {
     pub title: String,
     pub items: Vec<String>,
     pub sel: usize,
+    /// where the pointer was last reported over the question (rounded): the selection follows the
+    /// pointer only when it moves. The compositor also reports a pointer that did not move, which
+    /// put the selection back under a resting mouse right after an arrow key.
+    pub hover_at: Option<(i32, i32)>,
     pub buf: String,
     pub reply: String,
     pub conn_fd: Option<i32>,
@@ -590,6 +594,7 @@ impl AskState {
         self.items.clear();
         self.buf.clear();
         self.sel = 0;
+        self.hover_at = None;
         self.pid = None;
     }
 
@@ -683,6 +688,7 @@ impl AskState {
             title,
             items,
             sel,
+            hover_at: None,
             buf,
             reply: String::new(),
             conn_fd: None,
@@ -982,6 +988,13 @@ pub fn key(world: &mut World, keysym: u32, ch: Option<char>) -> bool {
 pub fn hover(world: &mut World, w: f64, h: f64, x: f64, y: f64) -> bool {
     if !world.ask.on {
         return false;
+    }
+    let at = (x.round() as i32, y.round() as i32);
+    // the first report is where the mouse rests as the question appears, and one that did not
+    // move is no choice either: only a pointer that moves picks a row
+    match world.ask.hover_at.replace(at) {
+        Some(before) if before != at => {}
+        _ => return false,
     }
     if let Some(row) = world.ask.row_at(w, h, x, y) {
         if row != world.ask.sel {
@@ -1361,9 +1374,13 @@ mod tests {
         assert!(key(&mut world, 0xfe20, None));
         assert_eq!(world.ask.sel, 0);
 
-        // Hover over row 2 selects row 2; left-click on row 1 answers with FAT32
+        // The mouse resting where the question appeared picks nothing, nor does a report of it
+        // that did not move; moving onto row 2 selects row 2; left-click on row 1 answers FAT32
         let row2_y = gy + PAD_Y + TITLE_H + ROW_H * 2.5;
-        assert!(hover(&mut world, w, h, gx + gw / 2.0, row2_y));
+        assert!(!hover(&mut world, w, h, gx + gw / 2.0, row2_y));
+        assert!(!hover(&mut world, w, h, gx + gw / 2.0, row2_y));
+        assert_eq!(world.ask.sel, 0);
+        assert!(hover(&mut world, w, h, gx + gw / 2.0 + 4.0, row2_y));
         assert_eq!(world.ask.sel, 2);
         let row1_y = gy + PAD_Y + TITLE_H + ROW_H * 1.5;
         assert!(click(&mut world, w, h, gx + gw / 2.0, row1_y, 1));
