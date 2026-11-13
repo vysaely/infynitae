@@ -729,7 +729,7 @@ gain for risk. Batches marked "after N" touch the same files as batch N and wait
 | 17 | Uploads at commit time, changed keys only on a settings change (8.1 steps 2 and 3), after one owner session with the marks | S to M | `crates/infynitae-wayland/src/handlers.rs`, `lib.rs` (`reload_config`) | "Slow turn" lines naming windows or config reload gone from one session's log; headless tests |
 | 10 | (already listed) Late start for desktop frames, now with its own learned margin (8.2) | M | `frame_schedule.rs`, `drm` | unit tests; batch 16's client; the "Latency" log line |
 | 18 | Captures never wait for the GPU (8.1 step 1), after 10 | M | the capture functions of `drm` (`serve_captures` to `deliver_copies`) | "captures" and "capture copies" gone from slow turns; VM `pshot.py`, `pcards.py` |
-| 19 | Zoom stage 1: apps redraw at the next whole scale after a zoom, pixel budget, sharp upscale (8.7), after 11 | M | `crates/infynitae-core/src/scale.rs`, `wl/lib.rs` (the two scale setters), `crates/infynitae-backend-drm/src/smooth.rs`, `config/config` | scale unit tests in `scale.rs`; headless `t1_scale`; VM `pzoom.py` numbers before and after |
+| 19 | Zoom stage 1: GPU FSR 1 upscale (EASU + RCAS) and cached zoomed-out downsampling, live `SCALING_FILTER` config and Display Settings row (8.7), after 11 | M | `crates/infynitae-wayland/src/{lib.rs,convert.rs}`, `crates/infynitae-backend-drm/src/{smooth.rs,lib.rs}`, `crates/infynitae-backend-winit/src/lib.rs`, `crates/infynitae-backend-headless/tests/`, `config/config`, `live/{env.sh,settings.sh}`, `live/edge-apps/src/cards/{settings_display.rs,settings_about.rs}`, `docs/EDGE_SETTINGS.md` | shader compile & GPU tests in `smooth.rs`, option parsing & reload tests, 1:1 fast-path tests, `edge-apps` card tests, VM `pzoom.py` numbers |
 | 20 | Canvas: back, places, places in the window search (8.6) | M | `crates/infynitae-core/src/navigation.rs`, `entry.rs`, `input/keys.rs`, `crates/infynitae-ipc/src/protocol.rs`, `crates/infynitae/src/msg.rs`, `live/edge-apps/src/cards/windows.rs` | core unit tests; `crates/infynitae-ipc/tests/t1_shell.rs`; a VM script that jumps and comes back |
 | 21 | Game profiles (8.4 B), after 9 | S to M | `wl/background.rs`, `tearing.rs`, `live/launch.sh` (`game-mode`), `config/config`, `cards/settings_games.rs` | unit tests in `background.rs` and `tearing.rs`; `tools/test-launch-actions`; one play session |
 | 22 | Idle: fix what batch 16's counter names (8.5) | S | `crates/infynitae/src/restore.rs` and what the counter shows | `tools/wakeups` before and after, screen left alone for 60 s |
@@ -1108,89 +1108,65 @@ centre and the zoom, as the session file does (`restore.rs:4-5`).
 
 ### 8.7 Zoom quality at any distance
 
-**Where it stands.**
+**Where it stands (updated after owner review).**
 
-- Each window has a wanted scale: the largest, over the screens showing it, of screen scale
-  times camera zoom. The window is told the smallest step of a ladder that covers it,
-  through the fractional scale and buffer scale hints
-  (`crates/infynitae-core/src/scale.rs:3-13`; `wl/convert.rs:1618-1630`). During a zoom
-  nothing is sent; one hint goes out when it settles (`scale.rs:48-52`, "after"), and only
-  at whole scales (`wl/lib.rs:1098-1114`).
-- That machinery is off by default: `MAX_APP_SCALE="1"` (`config/config:412-416`;
-  `wl/lib.rs:98-101`: a terminal re-flowed its text while zooming, before "after" existed).
-  So zooming in today enlarges the pixels the app drew at 1x, with the nearest-pixel filter
-  (`drm:1190-1197`): text turns blocky.
-- Zoomed out, each screen pixel averages a 4 x 4 grid of samples over the area it covers
-  (`crates/infynitae-backend-drm/src/smooth.rs:1-9`, `53-64`), which is exact down to about
-  one eighth size. Smithay builds no smaller copies of textures (`smooth.rs:4`; no
-  `GenerateMipmap` in `vendor/…/renderer/gles`). The camera can zoom far past one eighth
-  (`crates/infynitae-core/src/geom.rs:23`).
-- The only ceiling on a window's scale is the GPU's largest texture, 16384
-  (`scale.rs:31-33`). A 2560 x 1440 window at 2x is 59 MB a buffer, at 3x 133 MB, and apps
-  keep two or three.
+- Apps are never asked to redraw at a larger scale because of zoom (`MAX_APP_SCALE="1"`,
+  `DEFAULT_MAX_APP_SCALE` in `crates/infynitae-wayland/src/lib.rs`): changing the app scale shifts
+  layout inside windows and behaves inconsistently across toolkits. Only real output scales go to
+  apps.
+- Previously, zoomed-in windows used either nearest-neighbor or bilinear filtering chosen only at
+  compositor startup, and zoomed-out windows re-ran a 4 x 4 derivative shader every frame
+  (`smooth.rs`), which lacked cached downsampled levels below 1/8 size and did not apply alongside
+  rounded corners.
 
 **How others do it (from memory, not checked today).** KDE's zoom and macOS's zoom enlarge
 the finished screen picture, so text is soft or blocky at any zoom above 1. Hyprland's zoom
 does the same. niri's overview and GNOME's draw live windows smaller with the GPU's linear
 filter, GNOME with smaller texture copies. None asks apps to redraw for the zoom.
 
-**The design: draw at the next whole scale up, average down.**
+**The design: GPU FSR 1 upscaling when zoomed in, cached downsampling when zoomed out.**
 
-1. *Zoomed in, settled.* The window is asked to redraw at the next whole scale at or above
-   what it needs (zoom 1.4 gives 2, zoom 2.3 gives 3). The compositor averages that down to
-   the exact zoom with the shader that exists. Text is drawn by the app's own font code at
-   more pixels than the screen shows and then reduced, so it is sharp at every zoom in
-   between, and the app's layout does not change because whole scales keep its logical size.
-   Default `MAX_APP_SCALE` becomes 3.
-2. *While the zoom moves.* Nothing is asked of apps; the picture they last drew is scaled.
-   The hint goes out once, 300 ms after the zoom stops (`scale.rs:29`). This is "after",
-   already built and tested (`scale.rs:1495`).
-   The sharper picture is faded in, not swapped, and a window goes back down a scale only
-   after a rest (section 8.8, causes 5 and design point 4).
-3. *A pixel budget.* A window is never asked for more pixels than four times the screen's.
-   This joins the texture limit in the same place (`scale.rs:6-8`). Only windows in view are
-   asked at all, since the wanted scale counts only screens showing the window.
-4. *Past the ceiling* (zoom above 3, or a window over budget), the enlarged picture uses a
-   sharp-edge filter: nearest inside each source pixel, blended across one screen pixel at
-   its border. About ten shader lines beside the existing ones in `smooth.rs`; it replaces
-   plain nearest, which staircases at uneven zooms.
-5. *Zoomed out to one eighth.* Unchanged: the 4 x 4 average.
-6. *Farther out* (stage 2, batch 24, only if measured to alias). Each window in view keeps
-   a quarter-size copy made with the same shader, redrawn when the window commits, at most
-   ten times a second; the screen draw samples the copy. That is clean to 1/32. A copy of
-   a 2560 x 1440 window is 0.9 MB.
+1. *Apps untouched.* Camera zoom never changes an app's logical size or scale hint; only real
+   output scale updates reach windows.
+2. *At 1:1.* When a surface's source and destination sizes match within rounding tolerance, no
+   scaling shader runs; the window draws through the normal path (with rounded corners if any)
+   and direct scanout remains available.
+3. *Zoomed in (above 1:1), user choice (`SCALING_FILTER`, live-reloaded on save):*
+   - `sharp` (today's default, alias `nearest`): nearest-neighbor magnification.
+   - `smooth` (alias `linear`): bilinear magnification.
+   - `fsr`: AMD FidelityFX Super Resolution 1 (MIT) in two GLES shader passes — EASU
+     (edge-adaptive Lanczos2 upscale into an off-screen texture) followed by RCAS (mild
+     contrast-adaptive sharpening, clipped safely for alpha).
+   - `fsr-sharp`: same EASU + RCAS pipeline with stronger RCAS sharpening.
+4. *Zoomed out (below 1:1).* Windows (except legacy `fast`) shrink with area-averaging and a
+   cached halving downsample pyramid keyed per element commit and source rectangle until content
+   changes, keeping text and 1 px lines even without shimmering past 1/8 size and working with
+   rounded corners.
+5. *Uniform zoom motion.* During a zoom animation every frame uses the same scaling path with no
+   mid-zoom mode switch or settle pop.
 
 **Why this and not the others.**
 
-- *Exact fractional scales* (ask for 1.4 at zoom 1.4) give the fewest pixels, but apps round
-  their sizes at fractional scales, so text and layout shift at each new zoom; the owner
-  already rejected that for terminals. Whole scales cost more memory and never shift.
-- *Enlarging the finished picture* (KDE, macOS, Hyprland) costs nothing and cannot be sharp:
-  the detail was never drawn.
-- *Smaller texture copies for every window, always* (the GNOME way) needs a Smithay patch,
-  does not work for buffers that come straight from a game or video decoder, and costs GPU
-  time on every commit of every window for a case, far zoom-out, that is rare. A copy only
-  for windows in view at that distance costs nothing otherwise.
+- *Asking apps to redraw at 2x/3x* moved elements and re-flowed text inconsistently across apps
+  even on whole scales; the owner rejected it.
+- *Enlarging with plain nearest or bilinear alone* either staircases diagonal curves (`nearest`) or
+  softens text stems (`linear`); EASU follows local edges and RCAS restores contrast on the GPU
+  at fixed per-window cost without touching client buffers.
+- *Un-cached 16-tap downsampling on every frame* repeats work while zooming or panning and aliases
+  past 1/8; caching 2x halving textures per commit eliminates shimmer at deeper zoom-out too.
 
-**Cost.** Stage 1: the default, about 30 lines for the budget, 10 of shader, 20 to choose
-it. GPU: a window redrawn at 2x or 3x is the app's cost, paid once per zoom; the average
-down is the shader that runs today when zoomed out. Memory is bounded by item 3: at most
-four screens' worth of pixels per window in view.
+**Cost.** GLES custom shaders (`EASU`, `RCAS`, 2x box downsample) compiled cleanly via Smithay's
+`compile_custom_texture_shader` with zero external crates. Memory at normal 1:1 zoom is zero.
+When zoomed in with `fsr`/`fsr-sharp`, each enlarged window holds one off-screen intermediate
+texture (capped to the visible output slice if oversized above 4096 px); when zoomed out, each
+shrunk window holds at most 1/3 of its buffer size in cached mip levels until dropped or changed.
 
-**Measured: `tools/vm-edge/pzoom.py`.** A test window shows black text at 10, 12 and 16 px
-and a pattern of 1 px lines. The script sets the zoom to 0.03, 0.06, 0.125, 0.25, 0.5, 0.75,
-1.5, 2, 2.7 and 4 through `navigate`, waits for it to settle, and takes a screenshot. Two
-numbers per zoom: for zoom above 1, the width in screen pixels over which a letter's edge
-goes from 10% to 90% of its contrast (sharp is under 1.5); for zoom below 1, the difference
-from a reference made by averaging the 1x picture on the CPU (the line pattern must become
-even grey, with no bands). The same window and zooms on KDE's zoom, and Windows' Magnifier
-by hand, give the comparison: their edge widths grow with the zoom, Infynitae's must not.
+**Measured: `tools/vm-edge/pzoom.py`.** Run in a VM session at zooms `0.25`, `0.5`, `1.5`, `2`,
+`3`, and `4` across `sharp`, `smooth`, `fsr`, and `fsr-sharp`: letter edge 10%-90% rise width
+above 1x and CPU-averaged luminance RMSE / stripe standard deviation below 1x.
 
-**Risk.** Medium. Apps that ignore the scale hints stay at 1x and get item 4. A terminal
-changes its buffer at the settle; with whole scales its rows and columns must stay the same,
-which is the case to test first (foot, kitty, alacritty). Memory rises for people who work
-zoomed in; the budget bounds it and `MAX_APP_SCALE="1"` remains for those who want none of
-it.
+**Risk.** Low. Missing `SCALING_FILTER` defaults to `sharp` (unchanged today's behaviour); if
+shader compilation fails on an older GPU/driver, rendering falls back to plain filtering.
 
 ### 8.8 Zoom without anything jumping
 
