@@ -1155,6 +1155,10 @@ impl WaylandState {
                 // CORNERS, else 8
                 let mut window_corners_given = false;
                 let mut corners: Option<f32> = None;
+                // the edge from apps has a Settings panel of its own: Super+I unless a
+                // PANEL_SETTINGS line says otherwise
+                let mut settings_panel_line = false;
+                let mut edge_from_apps = false;
                 for line in content.lines() {
                     if let Some((key, val)) = config_line(line) {
                         let (key, val) = (key.as_str(), val.as_str());
@@ -1169,6 +1173,7 @@ impl WaylandState {
                         // the edge's panels: a key moves a built-in panel's key or opens the
                         // user's own panel (the edge reads the rest of the line itself)
                         if let Some(name) = key.strip_prefix("PANEL_") {
+                            settings_panel_line |= name.eq_ignore_ascii_case("settings");
                             match panel_key(name, val) {
                                 Some(PanelKey::Bind(action, chord)) => {
                                     bind_lines.push((action.to_string(), chord))
@@ -1179,6 +1184,9 @@ impl WaylandState {
                                 None => {}
                             }
                             continue;
+                        }
+                        if key == "EDGE_IMPL" {
+                            edge_from_apps = val.trim().eq_ignore_ascii_case("apps");
                         }
                         match key {
                             "CURSOR_THEME" => {
@@ -1503,6 +1511,9 @@ impl WaylandState {
                             _ => {}
                         }
                     }
+                }
+                if let Some(line) = default_settings_panel(edge_from_apps, settings_panel_line) {
+                    exec_lines.push(line);
                 }
                 let (bindings, commands, problems) = user_key_bindings(&bind_lines, &exec_lines);
                 for p in problems {
@@ -2073,6 +2084,18 @@ pub fn panel_key(name: &str, value: &str) -> Option<PanelKey> {
     }
 }
 
+/// The Settings panel of the edge from apps (EDGE_IMPL="apps") is built into that edge, so no
+/// PANEL_SETTINGS line names its key: Super+I opens it unless such a line exists (then that line
+/// decides, as for any panel). Added after the user's lines, so a key they bound wins. Pure.
+pub fn default_settings_panel(edge_from_apps: bool, line_given: bool) -> Option<(String, String)> {
+    (edge_from_apps && !line_given).then(|| {
+        (
+            "PANEL_SETTINGS".to_string(),
+            "SUPER+I:\"$HOME/.local/bin/infynitae-edge\" panel settings".to_string(),
+        )
+    })
+}
+
 /// The user's key bindings from config lines: `BIND_<ACTION>="CHORD[,CHORD]"` gives an action
 /// its own chords (its built-in chord is freed), `BIND_<ACTION>="none"` frees it without a new
 /// one; `EXEC_<NAME>="CHORD:command"` runs a command. Returns the bindings, the commands (by
@@ -2245,6 +2268,20 @@ mod key_binding_config_tests {
 
     /// BIND_ moves actions (several chords allowed) or frees them with "none"; EXEC_ adds
     /// commands in order; lines that cannot be understood are reported, not applied.
+    #[test]
+    fn the_apps_edge_settings_panel_gets_super_i_unless_a_line_names_its_key() {
+        use super::default_settings_panel;
+        assert_eq!(
+            default_settings_panel(true, false),
+            Some((
+                "PANEL_SETTINGS".to_string(),
+                "SUPER+I:\"$HOME/.local/bin/infynitae-edge\" panel settings".to_string()
+            ))
+        );
+        assert_eq!(default_settings_panel(true, true), None);
+        assert_eq!(default_settings_panel(false, false), None);
+    }
+
     #[test]
     fn panel_lines_give_keys_to_panels() {
         use super::{PanelKey, panel_key};
