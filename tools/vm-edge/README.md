@@ -12,6 +12,8 @@ VM's helper scripts in ~/g (feat.py, everyday.py) and the edge installed as ~/.l
     sudo -E python3 pfluid.py     More on hover, lists in place, the keyboard's selection, nothing left
                                   after closing (20 checks; z-* shots compared on the host with z-base)
     sudo -E python3 ptime.py      key to first frame and Escape to closed, in ms
+    sudo -E python3 pask.py [EDGE] `infynitae-edge ask` end to end: a choice by keys and by click, a
+                                  text, a secret, a cancel; the asker gets the answer and ends (7)
 
 Each prints PASS or FAIL per check and a SUMMARY line. They read the edge's INFYNITAE_EDGE_BOXES
 dump (the panel's, each module's and the edit bar's boxes after every drawing).
