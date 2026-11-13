@@ -16,7 +16,7 @@ pub const TILE_CELL_H: f64 = 68.0;
 pub const CMDS: &[(&str, &str)] = &[
     (
         "wifi",
-        "nmcli radio wifi 2>/dev/null; nmcli -t -f active,ssid dev wifi 2>/dev/null; nmcli -t -f TYPE,STATE device 2>/dev/null",
+        "nmcli radio wifi 2>/dev/null; nmcli -t -f active,ssid,signal dev wifi 2>/dev/null; nmcli -t -f TYPE,STATE device 2>/dev/null",
     ),
     (
         "bluetooth",
@@ -52,6 +52,8 @@ pub struct SwitchesData {
     pub wifi_label: String,
     /// a cable is plugged in and connected (`nmcli device`: an "ethernet:connected" line)
     pub wired: bool,
+    /// the joined Wi-Fi network's signal, 0 to 100 (`nmcli dev wifi`'s SIGNAL)
+    pub wifi_signal: Option<u8>,
     pub bt_on: bool,
     pub bt_label: String,
     pub dnd_on: bool,
@@ -71,6 +73,7 @@ impl Default for SwitchesData {
             wifi_on: false,
             wifi_label: "Off".into(),
             wired: false,
+            wifi_signal: None,
             bt_on: false,
             bt_label: "Off".into(),
             dnd_on: false,
@@ -92,6 +95,7 @@ pub fn apply(d: &mut SwitchesData, key: &str, out: &str) -> bool {
             d.wifi_on = on;
             d.wifi_label = lbl;
             d.wired = parse_wired(out);
+            d.wifi_signal = parse_signal(out);
             d.ready = true;
             true
         }
@@ -163,6 +167,30 @@ pub fn network_state(d: &SwitchesData) -> (String, bool) {
     }
 }
 
+/// The joined network's line of `nmcli -t -f active,ssid,signal dev wifi` ("Home\:Net:72": colons
+/// in a name come escaped) split into the name and the signal; a line without a signal (older
+/// output) is the name alone.
+fn joined_line(rest: &str) -> (String, Option<u8>) {
+    let b = rest.as_bytes();
+    let cut = (0..b.len())
+        .rev()
+        .find(|&i| b[i] == b':' && (i == 0 || b[i - 1] != b'\\'));
+    match cut {
+        Some(i) if i + 1 < rest.len() && rest[i + 1..].bytes().all(|c| c.is_ascii_digit()) => (
+            rest[..i].to_string(),
+            rest[i + 1..].parse::<u32>().ok().map(|v| v.min(100) as u8),
+        ),
+        _ => (rest.to_string(), None),
+    }
+}
+
+/// The joined Wi-Fi network's signal.
+pub fn parse_signal(out: &str) -> Option<u8> {
+    out.lines()
+        .find_map(|l| l.trim().strip_prefix("yes:"))
+        .and_then(|rest| joined_line(rest).1)
+}
+
 pub fn parse_wifi(out: &str) -> (bool, String) {
     let mut radio_on: Option<bool> = None;
     let mut ssid: Option<String> = None;
@@ -176,7 +204,8 @@ pub fn parse_wifi(out: &str) -> (bool, String) {
         } else if line.eq_ignore_ascii_case("disabled") || line.eq_ignore_ascii_case("off") {
             radio_on = Some(false);
         } else if let Some(rest) = line.strip_prefix("yes:") {
-            let cleaned: String = rest
+            let (name, _) = joined_line(rest);
+            let cleaned: String = name
                 .replace("\\:", ":")
                 .chars()
                 .map(|c| if c.is_control() { ' ' } else { c })
@@ -740,7 +769,7 @@ pub fn draw(cr: &Context, th: &Theme, it: &Item, world: &World, rect: Rect) {
             let cx = (x + w / 2.0).round();
             let iy = (y + (h - 22.0) / 2.0).max(y).round();
             let col = if sw.on { th.accent } else { th.text };
-            draw_icon(cr, it.module, cx - 9.0, iy, col);
+            draw_switch_icon(cr, it.module, &world.switches, cx - 9.0, iy, col);
             if sw.on {
                 cr.new_sub_path();
                 cr.arc(cx, (iy + 21.0).min(y + h - 2.0), 2.0, 0.0, 2.0 * PI);
@@ -756,11 +785,18 @@ pub fn draw(cr: &Context, th: &Theme, it: &Item, world: &World, rect: Rect) {
             if sw.on {
                 draw::set(cr, th.accent);
                 let _ = cr.fill();
-                draw_icon(cr, it.module, cx - 9.0, ty + 16.0, th.on_accent);
+                draw_switch_icon(
+                    cr,
+                    it.module,
+                    &world.switches,
+                    cx - 9.0,
+                    ty + 16.0,
+                    th.on_accent,
+                );
             } else {
                 draw::set(cr, th.track);
                 let _ = cr.fill();
-                draw_icon(cr, it.module, cx - 9.0, ty + 16.0, th.text);
+                draw_switch_icon(cr, it.module, &world.switches, cx - 9.0, ty + 16.0, th.text);
             }
             draw::text_center(
                 cr,
@@ -777,7 +813,14 @@ pub fn draw(cr: &Context, th: &Theme, it: &Item, world: &World, rect: Rect) {
         _ => {
             let icon_col = if sw.on { th.accent } else { th.text };
             let state_col = if sw.on { th.accent } else { th.muted };
-            draw_icon(cr, it.module, x.round(), (y + 7.0).round(), icon_col);
+            draw_switch_icon(
+                cr,
+                it.module,
+                &world.switches,
+                x.round(),
+                (y + 7.0).round(),
+                icon_col,
+            );
             let tx = x + 26.0;
             // room for the More button when it shows
             let more = if more_shown(it, world, rect).is_some() {
@@ -813,6 +856,98 @@ pub fn draw(cr: &Context, th: &Theme, it: &Item, world: &World, rect: Rect) {
                 );
             }
         }
+    }
+}
+
+/// What the Network switch's icon shows (owner 2026-11-13: "make the icon of network depend on
+/// whats connected").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NetIcon {
+    /// a cable: a network port
+    Wired,
+    /// joined: 1 to 3 of the Wi-Fi arcs bright, by the signal
+    Wifi(u8),
+    /// Wi-Fi on, no network: the arcs faint
+    Searching,
+    /// Wi-Fi off and no cable: faint arcs crossed out
+    Off,
+}
+
+pub fn net_icon(d: &SwitchesData) -> NetIcon {
+    let (_, connected) = network_state(d);
+    if d.wired {
+        NetIcon::Wired
+    } else if connected {
+        // no signal reported (older nmcli): full
+        NetIcon::Wifi(match d.wifi_signal {
+            Some(s) if s < 34 => 1,
+            Some(s) if s < 67 => 2,
+            _ => 3,
+        })
+    } else if d.wifi_on {
+        NetIcon::Searching
+    } else {
+        NetIcon::Off
+    }
+}
+
+/// A switch's icon: the Network one from what is connected, the others fixed.
+pub fn draw_switch_icon(cr: &Context, m: Module, d: &SwitchesData, x: f64, y: f64, color: Rgba) {
+    if m == Module::Wifi {
+        draw_net_icon(cr, net_icon(d), x, y, color);
+    } else {
+        draw_icon(cr, m, x, y, color);
+    }
+}
+
+/// The Network icon `k` in an 18x18 box at `(x, y)`.
+pub fn draw_net_icon(cr: &Context, k: NetIcon, x: f64, y: f64, color: Rgba) {
+    cr.set_line_width(1.6);
+    cr.set_line_cap(cairo::LineCap::Round);
+    cr.set_line_join(cairo::LineJoin::Round);
+    let cx = x + 9.0;
+    let cy = y + 9.0;
+    let faint = color.alpha(color.3 * 0.3);
+    if k == NetIcon::Wired {
+        // a network port: the socket and its latch, two contacts inside
+        draw::set(cr, color);
+        cr.move_to(cx - 6.5, cy - 5.0);
+        cr.line_to(cx + 6.5, cy - 5.0);
+        cr.line_to(cx + 6.5, cy + 3.0);
+        cr.line_to(cx + 3.0, cy + 3.0);
+        cr.line_to(cx + 3.0, cy + 6.5);
+        cr.line_to(cx - 3.0, cy + 6.5);
+        cr.line_to(cx - 3.0, cy + 3.0);
+        cr.line_to(cx - 6.5, cy + 3.0);
+        cr.close_path();
+        let _ = cr.stroke();
+        for dx in [-3.0, 0.0, 3.0] {
+            cr.move_to(cx + dx, cy - 5.0);
+            cr.line_to(cx + dx, cy - 2.5);
+        }
+        let _ = cr.stroke();
+        return;
+    }
+    let bright = match k {
+        NetIcon::Wifi(n) => n as usize,
+        _ => 0,
+    };
+    // the arcs from the outside in: the outer one is the third bar
+    for (i, &r) in [8.0, 5.2, 2.5].iter().enumerate() {
+        draw::set(cr, if 3 - i <= bright { color } else { faint });
+        cr.new_sub_path();
+        cr.arc(cx, cy + 5.0, r, -0.78 * PI, -0.22 * PI);
+        let _ = cr.stroke();
+    }
+    draw::set(cr, if bright > 0 { color } else { faint });
+    cr.new_sub_path();
+    cr.arc(cx, cy + 5.5, 1.2, 0.0, 2.0 * PI);
+    let _ = cr.fill();
+    if k == NetIcon::Off {
+        draw::set(cr, color);
+        cr.move_to(cx - 7.0, cy - 6.0);
+        cr.line_to(cx + 7.0, cy + 7.0);
+        let _ = cr.stroke();
     }
 }
 
@@ -899,6 +1034,39 @@ pub fn draw_icon(cr: &Context, m: Module, x: f64, y: f64, color: Rgba) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_network_icon_shows_what_is_connected() {
+        let mut d = SwitchesData::default();
+        apply(
+            &mut d,
+            "wifi",
+            "enabled\nyes:Home\\:Net:72\nethernet:unavailable\n",
+        );
+        assert_eq!(d.wifi_signal, Some(72));
+        assert_eq!(
+            network_state(&d).0,
+            "Home:Net",
+            "the signal is not part of the name"
+        );
+        assert_eq!(net_icon(&d), NetIcon::Wifi(3));
+        apply(&mut d, "wifi", "enabled\nyes:Cafe:40\n");
+        assert_eq!(net_icon(&d), NetIcon::Wifi(2));
+        apply(&mut d, "wifi", "enabled\nyes:Far:12\n");
+        assert_eq!(net_icon(&d), NetIcon::Wifi(1));
+        apply(&mut d, "wifi", "enabled\nyes:Old\n");
+        assert_eq!(
+            (d.wifi_signal, net_icon(&d)),
+            (None, NetIcon::Wifi(3)),
+            "no signal: full"
+        );
+        apply(&mut d, "wifi", "enabled\nyes:Cafe:40\nethernet:connected\n");
+        assert_eq!(net_icon(&d), NetIcon::Wired, "a cable first");
+        apply(&mut d, "wifi", "enabled\n");
+        assert_eq!(net_icon(&d), NetIcon::Searching);
+        apply(&mut d, "wifi", "disabled\n");
+        assert_eq!(net_icon(&d), NetIcon::Off);
+    }
 
     #[test]
     fn the_network_switch_says_wired_first_then_the_wifi_network() {
@@ -1040,6 +1208,7 @@ Controller AC:36:1B:F9:5D:AF (public)
             wifi_on: true,
             wifi_label: "HomeNet".into(),
             wired: false,
+            wifi_signal: None,
             bt_on: false,
             bt_label: "Off".into(),
             dnd_on: false,
