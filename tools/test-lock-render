@@ -98,13 +98,13 @@ H2="$TMP/home2"
 mkdir -p "$H2/.cache/infynitae"
 got=$(HOME="$H2" XDG_CACHE_HOME= "$TMP/infynitae-lock" --print-look | tr '\n' '|')
 check "lock default look without config or look file" "$got" \
-    "card=#111317|edge=#333b54|edge_alpha=0.90|text=#eef2f8|muted=#a7abb0|accent=#7aa2f7|accent_text=#7aa2f7|corners=8|small_corners=4|font=sans-serif|"
+    "card=#111317|edge=#333b54|edge_alpha=0.90|text=#eef2f8|muted=#a7abb0|accent=#7aa2f7|accent_text=#7aa2f7|alert=#7aa2f7|corners=8|small_corners=4|font=sans-serif|"
 
 printf 'LOOK_CARD="#000000"\nLOOK_EDGE="#404040"\nLOOK_TEXT="#ffffff"\nLOOK_ACCENT="#cc70a9"\nLOOK_CORNERS="12"\n' \
     > "$H2/.cache/infynitae/look"
 got=$(HOME="$H2" XDG_CACHE_HOME= "$TMP/infynitae-lock" --print-look | tr '\n' '|')
 check "lock partial look without config computes muted, small corner and accent fallback" "$got" \
-    "card=#000000|edge=#404040|edge_alpha=0.90|text=#ffffff|muted=#adadad|accent=#cc70a9|accent_text=#cc70a9|corners=12|small_corners=7|font=sans-serif|"
+    "card=#000000|edge=#404040|edge_alpha=0.90|text=#ffffff|muted=#adadad|accent=#cc70a9|accent_text=#cc70a9|alert=#cc70a9|corners=12|small_corners=7|font=sans-serif|"
 
 cat > "$H2/.cache/infynitae/look" <<'LOOK'
 LOOK_CARD="#201010"
@@ -120,12 +120,23 @@ LOOK_FONT="DejaVu Sans"
 LOOK
 got=$(HOME="$H2" XDG_CACHE_HOME= "$TMP/infynitae-lock" --print-look | tr '\n' '|')
 check "lock full look uses muted, accent_text, small_corners, edge_alpha and font" "$got" \
-    "card=#201010|edge=#eef2f8|edge_alpha=0.10|text=#eef2f8|muted=#3377bb|accent=#cc70a9|accent_text=#22cc44|corners=24|small_corners=0|font=DejaVu Sans|"
+    "card=#201010|edge=#eef2f8|edge_alpha=0.10|text=#eef2f8|muted=#3377bb|accent=#cc70a9|accent_text=#22cc44|alert=#22cc44|corners=24|small_corners=0|font=DejaVu Sans|"
 
 printf 'LOOK_FONT="Bad; color: red"\nLOOK_CARD="not-a-color"\n' >> "$H2/.cache/infynitae/look"
 got=$(HOME="$H2" XDG_CACHE_HOME= "$TMP/infynitae-lock" --print-look | tr '\n' '|')
 check "lock ignores invalid font and colour lines" "$got" \
-    "card=#201010|edge=#eef2f8|edge_alpha=0.10|text=#eef2f8|muted=#3377bb|accent=#cc70a9|accent_text=#22cc44|corners=24|small_corners=0|font=DejaVu Sans|"
+    "card=#201010|edge=#eef2f8|edge_alpha=0.10|text=#eef2f8|muted=#3377bb|accent=#cc70a9|accent_text=#22cc44|alert=#22cc44|corners=24|small_corners=0|font=DejaVu Sans|"
+
+H_cfg="$TMP/home_cfg"
+mkdir -p "$H_cfg/.config/infynitae"
+printf 'BORDER_ACTIVE="#cc70a9"\nACCENT="#1188ee"\n' > "$H_cfg/.config/infynitae/config"
+got_cfg1=$(HOME="$H_cfg" XDG_CACHE_HOME= "$TMP/infynitae-lock" --print-look | tr '\n' '|')
+check "lock config prefers ACCENT over earlier BORDER_ACTIVE" \
+    "$(printf '%s' "$got_cfg1" | tr '|' '\n' | grep '^accent=')" "accent=#1188ee"
+printf 'ACCENT=""\nBORDER_ACTIVE="#cc70a9"\n' > "$H_cfg/.config/infynitae/config"
+got_cfg2=$(HOME="$H_cfg" XDG_CACHE_HOME= "$TMP/infynitae-lock" --print-look | tr '\n' '|')
+check "lock config empty ACCENT falls back to BORDER_ACTIVE" \
+    "$(printf '%s' "$got_cfg2" | tr '|' '\n' | grep '^accent=')" "accent=#cc70a9"
 
 # Rendered pixel checks without wallpaper
 mkdir -p "$H2/.config/infynitae"
@@ -154,7 +165,11 @@ mv "$H2/.cache/infynitae/look.2" "$H2/.cache/infynitae/look"
 render2 1280x800 idle "$OUT/t-idle-rd.png"
 render2 1280x800 osk "$OUT/t-osk-serif.png"
 
-px_check=$(python3 - "$OUT/t-idle-sq.png" "$OUT/t-idle-rd.png" "$OUT/t-failed.png" "$OUT/t-caps.png" "$OUT/t-osk-sans.png" "$OUT/t-osk-serif.png" <<'PY'
+printf 'LOOK_ALERT="#ed6a6f"\n' >> "$H2/.cache/infynitae/look"
+render2 1280x800 failed "$OUT/t-failed-alert.png"
+render2 1280x800 caps "$OUT/t-caps-alert.png"
+
+px_check=$(python3 - "$OUT/t-idle-sq.png" "$OUT/t-idle-rd.png" "$OUT/t-failed.png" "$OUT/t-caps.png" "$OUT/t-osk-sans.png" "$OUT/t-osk-serif.png" "$OUT/t-failed-alert.png" "$OUT/t-caps-alert.png" <<'PY'
 import struct, sys, zlib
 
 def decode(path):
@@ -211,6 +226,8 @@ failed = decode(sys.argv[3])
 caps = decode(sys.argv[4])
 osk_sans = decode(sys.argv[5])
 osk_serif = decode(sys.argv[6])
+failed_alert = decode(sys.argv[7])
+caps_alert = decode(sys.argv[8])
 
 res = []
 res.append("flat_bg=" + str(px(idle_sq, 10, 10) == (16, 32, 48) and px(idle_sq, 200, 350) == (16, 32, 48) and px(idle_sq, 1260, 780) == (16, 32, 48)))
@@ -224,11 +241,13 @@ res.append("osk_key=" + str(shift_px[0] > shift_px[2] and count_box(osk_sans, (4
 top_end = 400 * idle_sq[0] * idle_sq[2]
 res.append("font_idle=" + str(idle_sq[3][:top_end] != idle_rd[3][:top_end]))
 res.append("font_osk=" + str(osk_sans[3] != osk_serif[3]))
+res.append("failed_alert=" + str(count_box(failed_alert, (0xed, 0x6a, 0x6f), 25) > 50 and count_box(failed_alert, (0x22, 0xcc, 0x44), 25) == 0))
+res.append("caps_still_accent=" + str(count_box(caps_alert, (0x22, 0xcc, 0x44), 25) > 20 and count_box(caps_alert, (0xed, 0x6a, 0x6f), 25) == 0))
 print(" ".join(res))
 PY
 )
-check "rendered look: flat bg, small corner, muted, accent, OSK key and font" "$px_check" \
-    "flat_bg=True small_corner=True muted=True failed_accent=True caps_accent=True osk_key=True font_idle=True font_osk=True"
+check "rendered look: flat bg, small corner, muted, accent, alert, OSK key and font" "$px_check" \
+    "flat_bg=True small_corner=True muted=True failed_accent=True caps_accent=True osk_key=True font_idle=True font_osk=True failed_alert=True caps_still_accent=True"
 
 # Password prompt CSS (infynitae-polkit)
 if pkg-config --exists polkit-agent-1 gtk+-3.0 2>/dev/null; then
@@ -297,6 +316,28 @@ ok = all(x in s for x in [
 ]) and "Bad;" not in s and "not-a-color" not in s
 print("yes" if ok else s)
 ')" "yes"
+
+    printf 'LOOK_ALERT="#ed6a6f"\n' >> "$H3/.cache/infynitae/look"
+    css_alert=$(HOME="$H3" LC_NUMERIC=de_DE.UTF-8 XDG_CACHE_HOME= "$TMP/infynitae-polkit" --print-css)
+    check "prompt error label uses LOOK_ALERT while prompt accent stays LOOK_ACCENT_TEXT" \
+        "$(printf '%s' "$css_alert" | python3 -c '
+import sys
+s = sys.stdin.read()
+err = s.split("label.error {", 1)[1].split("}", 1)[0]
+ok = "color: #ed6a6f;" in err and "color: #993073;" in s and "color: #993073;" not in err
+print("yes" if ok else s)
+')" "yes"
+
+    H4="$TMP/home4"
+    mkdir -p "$H4/.config/infynitae"
+    printf 'BORDER_ACTIVE="#cc70a9"\nACCENT="#1188ee"\n' > "$H4/.config/infynitae/config"
+    css_cfg1=$(HOME="$H4" XDG_CACHE_HOME= "$TMP/infynitae-polkit" --print-css)
+    check "prompt config prefers ACCENT over earlier BORDER_ACTIVE" \
+        "$(printf '%s' "$css_cfg1" | grep -c 'alpha(#1188ee,' | sed 's/^[1-9][0-9]*$/yes/')" "yes"
+    printf 'ACCENT=""\nBORDER_ACTIVE="#cc70a9"\n' > "$H4/.config/infynitae/config"
+    css_cfg2=$(HOME="$H4" XDG_CACHE_HOME= "$TMP/infynitae-polkit" --print-css)
+    check "prompt config empty ACCENT falls back to BORDER_ACTIVE" \
+        "$(printf '%s' "$css_cfg2" | grep -c 'alpha(#cc70a9,' | sed 's/^[1-9][0-9]*$/yes/')" "yes"
 
     cat > "$TMP/check_css.c" <<'C'
 #include <gtk/gtk.h>

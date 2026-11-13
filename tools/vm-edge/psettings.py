@@ -46,7 +46,7 @@ press("settings/games", 101)
 check("a switch writes its key", get("GAME_MODE") == ("false" if gm == "true" else "true"), f"{gm} -> {get('GAME_MODE')}")
 
 # 2. a pick: Tearing opens its list, Never writes false
-press("settings/games", 120); shot("set-2-list")
+press("settings/games", 110); shot("set-2-list")
 listed = [h for (c, h) in hits() if c == "settings/games" and 5000 <= h < 9000]
 check("a pick opens its list", len(listed) == 3, str(listed))
 press("settings/games", 5002)

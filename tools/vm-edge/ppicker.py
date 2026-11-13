@@ -1,7 +1,7 @@
 import sys, os, time
 exec(open("/home/tester/pflow.py").read().split("sh(f\"sed -i '/^PANEL_CONTROL=/d' {CFG}; rm -f {BACKUP}\")")[0])
 # The accent picker (live/edge-apps/src/cards/settings_look.rs) with real input in the VM: a
-# wallpaper colour square sets BORDER_ACTIVE to that candidate, Shuffle sets another candidate, a
+# wallpaper colour square sets ACCENT to that candidate, Shuffle sets another candidate, a
 # drag in "Any colour" writes once on release (one log line), a style word sets THEME_SCHEME.
 # Needs ~/.local/bin/infynitae-wallpaper with --accents and ~/Pictures/Wallpapers/aurora.png.
 BIN = "/home/tester/.local/bin"
@@ -28,11 +28,11 @@ def press(hid):
     r = hits().get(("settings/appearance", hid))
     if r: click_at(*mid(r)); wait(1.0)
     return r is not None
-def log_lines(): return open(LOG).read().count("\tBORDER_ACTIVE\t") if os.path.exists(LOG) else 0
+def log_lines(): return open(LOG).read().count("\tACCENT\t") if os.path.exists(LOG) else 0
 
-before = {k: get(k) for k in ("BORDER_ACTIVE", "THEME_SCHEME", "WALLPAPER")}
+before = {k: get(k) for k in ("ACCENT", "THEME_SCHEME", "WALLPAPER")}
 cands = [l.split()[0].lower() for l in sh(f"{BIN}/infynitae-wallpaper --accents {WP}").splitlines() if l.startswith("#")]
-sh(f"{SET} set WALLPAPER '{WP}' >/dev/null 2>&1; {SET} set BORDER_ACTIVE '#cc70a9' >/dev/null 2>&1")
+sh(f"{SET} set WALLPAPER '{WP}' >/dev/null 2>&1; {SET} set ACCENT '#cc70a9' >/dev/null 2>&1")
 sh(f"sed -i '/^PANEL_CONTROL=/d' {CFG}")
 open(CFG, "a").write(f'PANEL_CONTROL="{START}"\n')
 apps_edge(); at(300, 300); wait(0.4)
@@ -44,12 +44,12 @@ check("the picker shows the wallpaper's colours", len(sq) == len(cands), f"{sq} 
 
 # 1. a square sets that colour
 press(SQ0 + 1)
-check("a colour square sets the accent", get("BORDER_ACTIVE") == (cands[1] if len(cands) > 1 else ""), get("BORDER_ACTIVE"))
+check("a colour square sets the accent", get("ACCENT") == (cands[1] if len(cands) > 1 else ""), get("ACCENT"))
 
 # 2. Shuffle: another of the wallpaper's colours
-was = get("BORDER_ACTIVE")
+was = get("ACCENT")
 press(SHUFFLE); wait(1.5)
-now = get("BORDER_ACTIVE")
+now = get("ACCENT")
 check("Shuffle picks another wallpaper colour", now != was and now in cands, f"{was} -> {now}")
 
 # 3. Any colour: one drag, one change written
@@ -59,7 +59,7 @@ n = log_lines()
 if r:
     drag(r[0] + r[2] * 0.2, r[1] + r[3] * 0.3, r[2] * 0.5, r[3] * 0.4)
     wait(1.5)
-check("a drag in the colour square changes the accent", r is not None and get("BORDER_ACTIVE") != now, get("BORDER_ACTIVE"))
+check("a drag in the colour square changes the accent", r is not None and get("ACCENT") != now, get("ACCENT"))
 check("the drag is written once", log_lines() == n + 1, f"{n} -> {log_lines()}")
 
 # 4. a style word

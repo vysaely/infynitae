@@ -165,34 +165,45 @@ mv "$TMP/wpbin.real" "$WPBIN"
 check "settings wallpaper-colors accents drops malformed lines" test "$(printf '%s\n' "$(cat "$TMP/sh_acc_filtered")" | tr '\n' '|')" = "#112233 0.125 0.875|#aabbcc 0.500 0.500|"
 
 # 6. settings.sh wallpaper-colors shuffle:
-# 6a. When BORDER_ACTIVE line does not exist in config, logs '-' before set
-sed -i '/^BORDER_ACTIVE=/d' "$CONFIG_FILE"
+# 6a. When ACCENT line does not exist in config (and legacy BORDER_ACTIVE only), logs '-' before set and avoids legacy colour
+sed -i '/^ACCENT=/d; /^BORDER_ACTIVE=/d' "$CONFIG_FILE"
 : > "$LOG"
 sh "$SH" wallpaper-colors shuffle "$TMP/wp3.png" >/dev/null
-got=$(sh "$SH" get BORDER_ACTIVE)
-check "shuffle picks candidate when BORDER_ACTIVE was unset" in_list "$got" "$TMP/hex3"
+got=$(sh "$SH" get ACCENT)
+check "shuffle picks candidate when ACCENT was unset" in_list "$got" "$TMP/hex3"
 last_log=$(tail -n 1 "$LOG")
-check "shuffle logs KEY and '-' before set" sh -c "printf '%s' '$last_log' | awk -F '\t' '\$2 == \"BORDER_ACTIVE\" && \$3 == \"-\" { ok=1 } END { exit !ok }'"
+check "shuffle logs KEY and '-' before set" sh -c "printf '%s' '$last_log' | awk -F '\t' '\$2 == \"ACCENT\" && \$3 == \"-\" { ok=1 } END { exit !ok }'"
 
 # Undo from '-' removes the line cleanly via unset
-sh "$SH" unset BORDER_ACTIVE >/dev/null
-check "undo unset restores missing BORDER_ACTIVE line" sh -c "! grep -q '^BORDER_ACTIVE=' '$CONFIG_FILE'"
+sh "$SH" unset ACCENT >/dev/null
+check "undo unset restores missing ACCENT line" sh -c "! grep -q '^ACCENT=' '$CONFIG_FILE'"
 
-# 6b. When BORDER_ACTIVE is set and other colours hold sentinels, shuffle changes only BORDER_ACTIVE
+# Legacy BORDER_ACTIVE-only config writes ACCENT different from BORDER_ACTIVE and logs '-'
+sh "$SH" set BORDER_ACTIVE "$first_accent" >/dev/null
+: > "$LOG"
+sh "$SH" wallpaper-colors shuffle "$TMP/wp3.png" >/dev/null
+got_legacy=$(sh "$SH" get ACCENT)
+check "shuffle on BORDER_ACTIVE-only config writes ACCENT" in_list "$got_legacy" "$TMP/hex3"
+check "shuffle on BORDER_ACTIVE-only config picks different colour" test "$got_legacy" != "$first_accent"
+last_log=$(tail -n 1 "$LOG")
+check "shuffle on BORDER_ACTIVE-only config logs ACCENT '-'" sh -c "printf '%s' '$last_log' | awk -F '\t' '\$2 == \"ACCENT\" && \$3 == \"-\" { ok=1 } END { exit !ok }'"
+sh "$SH" unset BORDER_ACTIVE >/dev/null
+
+# 6b. When ACCENT is set and other colours hold sentinels, shuffle changes only ACCENT
 #     to a different candidate and logs previous value
 sh "$SH" set SURFACE_COLOR '#123456' >/dev/null
 sh "$SH" set CANVAS_COLOR '#111111' >/dev/null
 sh "$SH" set BORDER_INACTIVE '#222222' >/dev/null
-sh "$SH" set BORDER_ACTIVE "$first_accent" >/dev/null
+sh "$SH" set ACCENT "$first_accent" >/dev/null
 
 prev="$first_accent"
 for i in 1 2 3 4 5; do
     sh "$SH" wallpaper-colors shuffle "$TMP/wp3.png" >/dev/null
-    cur=$(sh "$SH" get BORDER_ACTIVE)
+    cur=$(sh "$SH" get ACCENT)
     check "shuffle $i in candidate list" in_list "$cur" "$TMP/hex3"
     check "shuffle $i differs from previous" test "$cur" != "$prev"
     last_log=$(tail -n 1 "$LOG")
-    check "shuffle $i logged previous BORDER_ACTIVE" sh -c "printf '%s' '$last_log' | awk -F '\t' -v p='$prev' '\$2 == \"BORDER_ACTIVE\" && \$3 == p { ok=1 } END { exit !ok }'"
+    check "shuffle $i logged previous ACCENT" sh -c "printf '%s' '$last_log' | awk -F '\t' -v p='$prev' '\$2 == \"ACCENT\" && \$3 == p { ok=1 } END { exit !ok }'"
     prev="$cur"
 done
 check "shuffle preserves SURFACE_COLOR" test "$(sh "$SH" get SURFACE_COLOR)" = "#123456"
@@ -201,14 +212,14 @@ check "shuffle preserves BORDER_INACTIVE" test "$(sh "$SH" get BORDER_INACTIVE)"
 
 # Undo restores the logged old value via set
 undo_prev=$(tail -n 1 "$LOG" | awk -F '\t' '{ print $3 }')
-sh "$SH" set BORDER_ACTIVE "$undo_prev" >/dev/null
-check "undo via set restores previous BORDER_ACTIVE" test "$(sh "$SH" get BORDER_ACTIVE)" = "$undo_prev"
+sh "$SH" set ACCENT "$undo_prev" >/dev/null
+check "undo via set restores previous ACCENT" test "$(sh "$SH" get ACCENT)" = "$undo_prev"
 
 # 6c. Grey wallpaper when already #7aa2f7: no change and no extra log entry
-sh "$SH" set BORDER_ACTIVE '#7aa2f7' >/dev/null
+sh "$SH" set ACCENT '#7aa2f7' >/dev/null
 log_lines_before=$(wc -l < "$LOG")
 sh "$SH" wallpaper-colors shuffle "$TMP/grey.png" >/dev/null
-check "shuffle single-candidate keeps #7aa2f7" test "$(sh "$SH" get BORDER_ACTIVE)" = "#7aa2f7"
+check "shuffle single-candidate keeps #7aa2f7" test "$(sh "$SH" get ACCENT)" = "#7aa2f7"
 check "shuffle single-candidate appends no log" test "$(wc -l < "$LOG")" -eq "$log_lines_before"
 
 # 7. THEME_FROM_WALLPAPER=shuffle
@@ -217,15 +228,15 @@ check "set/get THEME_FROM_WALLPAPER shuffle" test "$(sh "$SH" get THEME_FROM_WAL
 
 # Setting wallpaper triggers wallpaper_colors shuffle on apply
 sh "$SH" apply >/dev/null
-picked=$(sh "$SH" get BORDER_ACTIVE)
+picked=$(sh "$SH" get ACCENT)
 exp_surface=$("$WPBIN" --colors "$TMP/wp3.png" | awk -F= '$1 == "SURFACE_COLOR" { gsub(/"/, "", $2); print $2 }')
 check "THEME_FROM_WALLPAPER=shuffle picks candidate accent" in_list "$picked" "$TMP/hex3"
 check "THEME_FROM_WALLPAPER=shuffle updates SURFACE_COLOR" test "$(sh "$SH" get SURFACE_COLOR)" = "$exp_surface"
 
-# Repeated login/apply with unchanged wallpaper never changes BORDER_ACTIVE
+# Repeated login/apply with unchanged wallpaper never changes ACCENT
 for i in 1 2 3; do
     sh "$SH" apply >/dev/null
-    check "THEME_FROM_WALLPAPER=shuffle stable on repeat apply $i" test "$(sh "$SH" get BORDER_ACTIVE)" = "$picked"
+    check "THEME_FROM_WALLPAPER=shuffle stable on repeat apply $i" test "$(sh "$SH" get ACCENT)" = "$picked"
 done
 
 # Multiple wallpaper switches sample multiple candidates (not locked to candidate 0)
@@ -236,7 +247,7 @@ while [ "$i" -lt 24 ]; do
     sh "$SH" apply >/dev/null
     sed -i "s|^WALLPAPER=.*|WALLPAPER='$TMP/wp3.png'|" "$CONFIG_FILE"
     sh "$SH" apply >/dev/null
-    cur=$(sh "$SH" get BORDER_ACTIVE)
+    cur=$(sh "$SH" get ACCENT)
     in_list "$cur" "$TMP/hex3" || { echo "FAIL: unexpected $cur on change $i" >&2; fail=$((fail + 1)); }
     printf '%s\n' "$cur" >> "$TMP/seen"
     i=$((i + 1))

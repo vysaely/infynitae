@@ -117,6 +117,8 @@ LOOK_ON_ACCENT="#1b1824"
 LOOK_ON_ACCENT_AA="ff"
 LOOK_ACCENT_TEXT="#d0b2fa"
 LOOK_ACCENT_TEXT_AA="ff"
+LOOK_ALERT="#ed6a6f"
+LOOK_ALERT_AA="ff"
 LOOK_TRACK="#e8e2f0"
 LOOK_TRACK_AA="1f"
 LOOK_CORNERS="12"
@@ -142,8 +144,9 @@ chmod +x "$AWK_BIN/awk"
 PATH="$AWK_BIN:$PATH" apply "$H3"
 check "apply with full --print-theme runs awk at most once" "$(wc -l < "$AWK_LOG" | tr -d ' ')" "1"
 
-check "look file saves all 19 LOOK_* lines" "$(wc -l < "$H3/.cache/infynitae/look" | tr -d ' ')" "19"
+check "look file saves all 21 LOOK_* lines" "$(wc -l < "$H3/.cache/infynitae/look" | tr -d ' ')" "21"
 check "look file saves LOOK_ACCENT_TEXT" "$(grep '^LOOK_ACCENT_TEXT=' "$H3/.cache/infynitae/look")" 'LOOK_ACCENT_TEXT="#d0b2fa"'
+check "look file saves LOOK_ALERT" "$(grep '^LOOK_ALERT=' "$H3/.cache/infynitae/look")" 'LOOK_ALERT="#ed6a6f"'
 check "look file saves LOOK_FONT" "$(grep '^LOOK_FONT=' "$H3/.cache/infynitae/look")" 'LOOK_FONT="Cantarell"'
 
 gtk3_ini="$H3/.config/gtk-3.0/settings.ini"
@@ -170,5 +173,31 @@ check "foot background uses LOOK_CARD" "$(grep '^background=' "$H3/.config/foot/
 check "kitty padding is 8" "$(grep '^window_padding_width ' "$H3/.config/kitty/infynitae-theme.conf")" "window_padding_width 8"
 check "kitty selection mixes 30% accent into surface" "$(grep '^selection_background ' "$H3/.config/kitty/infynitae-theme.conf")" "selection_background #4e4063"
 check "alacritty selection mixes 30% accent into surface" "$(grep '^background = ' "$H3/.config/alacritty/infynitae-theme.toml" | tail -1)" 'background = "#4e4063"'
+
+# 7. Old-key-only config produces the same look file and themed app outputs as ACCENT, and ACCENT wins
+H_old="$TMP/h_old" H_both="$TMP/h_both"
+for d in "$H_old" "$H_both"; do
+    mkdir -p "$d/.config/infynitae" "$d/.config/mako" "$d/.config/fuzzel" "$d/.config/foot"
+done
+printf 'SURFACE_COLOR="#171013"\nBORDER_ACTIVE="#cc70a9"\n' > "$H_old/.config/infynitae/config"
+apply "$H_old"
+mkdir -p "$TMP/old_snap"
+cp "$H_old/.cache/infynitae/look" "$TMP/old_snap/look"
+cp "$H_old/.config/gtk-3.0/gtk.css" "$TMP/old_snap/gtk.css"
+cp "$H_old/.config/mako/config" "$TMP/old_snap/mako.config"
+cp "$H_old/.config/fuzzel/fuzzel.ini" "$TMP/old_snap/fuzzel.ini"
+printf 'SURFACE_COLOR="#171013"\nACCENT="#cc70a9"\n' > "$H_old/.config/infynitae/config"
+apply "$H_old" --force
+check "old BORDER_ACTIVE gives same look file as ACCENT" "$(cmp -s "$TMP/old_snap/look" "$H_old/.cache/infynitae/look" && echo same || echo diff)" "same"
+check "old BORDER_ACTIVE gives same GTK CSS as ACCENT" "$(cmp -s "$TMP/old_snap/gtk.css" "$H_old/.config/gtk-3.0/gtk.css" && echo same || echo diff)" "same"
+check "old BORDER_ACTIVE gives same mako config as ACCENT" "$(cmp -s "$TMP/old_snap/mako.config" "$H_old/.config/mako/config" && echo same || echo diff)" "same"
+check "old BORDER_ACTIVE gives same fuzzel config as ACCENT" "$(cmp -s "$TMP/old_snap/fuzzel.ini" "$H_old/.config/fuzzel/fuzzel.ini" && echo same || echo diff)" "same"
+
+printf 'SURFACE_COLOR="#171013"\nBORDER_ACTIVE="#cc70a9"\nACCENT="#1188ee"\n' > "$H_both/.config/infynitae/config"
+apply "$H_both"
+check "ACCENT wins when both ACCENT and BORDER_ACTIVE are set" "$(grep '^LOOK_ACCENT=' "$H_both/.cache/infynitae/look")" 'LOOK_ACCENT="#1188ee"'
+printf 'SURFACE_COLOR="#171013"\nACCENT=""\nBORDER_ACTIVE="#cc70a9"\n' > "$H_both/.config/infynitae/config"
+apply "$H_both" --force
+check "empty ACCENT falls back to BORDER_ACTIVE" "$(grep '^LOOK_ACCENT=' "$H_both/.cache/infynitae/look")" 'LOOK_ACCENT="#cc70a9"'
 
 exit $fail
