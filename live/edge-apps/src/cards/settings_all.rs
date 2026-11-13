@@ -1,6 +1,18 @@
-//! Settings index (`settings/all`, docs/EDGE_SETTINGS.md section 4): one row per visible
-//! Settings card in section 1's order (expanding in place at S), or all matching rows plus
-//! `"In the file"` (`config/config` keys not on any card) while searching.
+//! Settings index (`settings/all`, docs/EDGE_SETTINGS.md section 4): one row per visible group
+//! (Personalization merges Appearance, Wallpaper and Fonts, icons, cursor into one row whose open
+//! body stacks their non-hidden bodies in place under small headings), or all matching child
+//! cards one by one plus `"In the file"` (`config/config` keys not on any card) while searching.
+//!
+//! Hit ID scheme:
+//! - `1..50` (`HIT_GROUP_BASE + group_idx`): group rows (`1` Personalization, `2` Display,
+//!   `3` Mouse, keyboard & touchpad, `4` Windows & shortcuts, `5` Apps & hardware,
+//!   `6` Games & performance, `7` Screen, lock & battery, `8` Privacy & sharing,
+//!   `9` Screen recording).
+//! - `50` (`HIT_OPEN_CONFIG`): `"Open the config file"` row.
+//! - `100..CHILD_STRIDE` (`HIT_FILE_BASE + idx`): `"In the file"` search rows.
+//! - `CHILD_STRIDE * (child_idx + 1) + child_hit` (`CHILD_STRIDE = 100_000`): child hits routed to
+//!   `CHILD_KINDS[child_idx]` so multi-child groups and search never collide even for children
+//!   emitting IDs >= 1000 (`MORE = 9000`, `LIST = 10_000`, `FOUND_LIST = 20_000`).
 
 use crate::card::{Action, Button, Card, Cx, Event, Hits, Rect, Status};
 use crate::cards::{
@@ -28,12 +40,57 @@ const PLUS_LINE_EDITORS: &[&str] = &["nano", "vim", "nvim", "vi", "micro"];
 const HIT_GROUP_BASE: u32 = 1;
 const HIT_OPEN_CONFIG: u32 = 50;
 const HIT_FILE_BASE: u32 = 100;
-const CHILD_STRIDE: u32 = 1000;
+const CHILD_STRIDE: u32 = 100_000;
 
 const HEADER_H: f64 = 24.0;
 const SECTION_GAP: f64 = 8.0;
 const INNER_X: f64 = 12.0;
 const INNER_GAP: f64 = 6.0;
+
+#[derive(Clone, Copy)]
+struct Group {
+    title: &'static str,
+    children: &'static [usize],
+}
+
+const GROUPS: [Group; 9] = [
+    Group {
+        title: "Personalization",
+        children: &[0, 1, 2],
+    },
+    Group {
+        title: settings_display::KIND.title,
+        children: &[3],
+    },
+    Group {
+        title: settings_input::KIND.title,
+        children: &[4],
+    },
+    Group {
+        title: settings_windows::KIND.title,
+        children: &[5],
+    },
+    Group {
+        title: settings_apps::KIND.title,
+        children: &[6],
+    },
+    Group {
+        title: settings_games::KIND.title,
+        children: &[7],
+    },
+    Group {
+        title: settings_lock::KIND.title,
+        children: &[8],
+    },
+    Group {
+        title: settings_privacy::KIND.title,
+        children: &[9],
+    },
+    Group {
+        title: settings_recording::KIND.title,
+        children: &[10],
+    },
+];
 
 pub const KIND: CardKind = CardKind {
     id: "all",
@@ -206,10 +263,64 @@ impl SettingsAllCard {
         }
     }
 
-    fn summary(&self, i: usize, cx: &Cx) -> String {
+    fn visible_group_children(&self, g: usize, child_cx: &Cx) -> Vec<(usize, Status)> {
+        GROUPS[g]
+            .children
+            .iter()
+            .filter_map(|&i| {
+                let st = self.children[i].status(child_cx);
+                (!matches!(st, Status::Hidden)).then_some((i, st))
+            })
+            .collect()
+    }
+
+    fn summary(&self, g: usize, cx: &Cx) -> String {
         let Some(cfg) = self.config.as_ref() else {
             return String::new();
         };
+        if GROUPS[g].children.len() > 1 {
+            let child_cx = self.child_cx(cx);
+            let look = match cfg.value("COLOR_SCHEME").trim() {
+                "prefer-light" => "Light".to_string(),
+                "prefer-dark" => "Dark".to_string(),
+                "default" | "" => "System look".to_string(),
+                other => other.to_string(),
+            };
+            let theme_mode = cfg.value("THEME_FROM_WALLPAPER").trim();
+            let accent = if theme_mode.eq_ignore_ascii_case("true")
+                || theme_mode.eq_ignore_ascii_case("accent")
+                || theme_mode.eq_ignore_ascii_case("all")
+            {
+                "from wallpaper".to_string()
+            } else {
+                non_empty(cfg.value("BORDER_ACTIVE"))
+            };
+            let wallpaper = if !matches!(self.children[1].status(&child_cx), Status::Hidden) {
+                let raw = cfg.value("WALLPAPER").trim();
+                if raw.is_empty() {
+                    String::new()
+                } else {
+                    Path::new(raw)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or(raw)
+                        .to_string()
+                }
+            } else {
+                String::new()
+            };
+            let tail = if !wallpaper.is_empty() {
+                wallpaper
+            } else {
+                join_space(cfg.value("FONT_NAME").trim(), cfg.value("FONT_SIZE").trim())
+            };
+            return [look, accent, tail]
+                .into_iter()
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>()
+                .join(" · ");
+        }
+        let i = GROUPS[g].children[0];
         let parts: Vec<String> = match CHILD_KINDS[i].id {
             "appearance" => {
                 let look = match cfg.value("COLOR_SCHEME").trim() {
@@ -462,12 +573,7 @@ impl SettingsAllCard {
         vec![scale_str, night_str]
     }
 
-    fn resolve_child_hit(
-        &self,
-        emitted: u32,
-        at: (f64, f64),
-        preferred_child: Option<usize>,
-    ) -> Option<(usize, u32)> {
+    fn resolve_child_hit(&self, emitted: u32, at: (f64, f64)) -> Option<(usize, u32)> {
         if emitted < CHILD_STRIDE {
             return None;
         }
@@ -480,10 +586,6 @@ impl SettingsAllCard {
         {
             return Some((found.child, found.child_id));
         }
-        if let Some(i) = preferred_child {
-            let base = CHILD_STRIDE * (i as u32 + 1);
-            return emitted.checked_sub(base).map(|cid| (i, cid));
-        }
         let i = ((emitted / CHILD_STRIDE).checked_sub(1))? as usize;
         (i < self.children.len()).then_some((i, emitted % CHILD_STRIDE))
     }
@@ -491,14 +593,6 @@ impl SettingsAllCard {
     fn resolve_drag_or_release(&self, emitted: u32, active: Option<usize>) -> Option<(usize, u32)> {
         if emitted < CHILD_STRIDE {
             return None;
-        }
-        if let Some(i) = active.or(if self.searching() { None } else { self.open }) {
-            let base = CHILD_STRIDE * (i as u32 + 1);
-            if let Some(cid) = emitted.checked_sub(base) {
-                if self.last_hits.borrow().is_empty() {
-                    return Some((i, cid));
-                }
-            }
         }
         if let Some(found) = self
             .last_hits
@@ -509,7 +603,9 @@ impl SettingsAllCard {
         {
             return Some((found.child, found.child_id));
         }
-        self.resolve_child_hit(emitted, (0.0, 0.0), active.or(self.open))
+        let i = ((emitted / CHILD_STRIDE).checked_sub(1))? as usize;
+        (i < self.children.len() && active.is_none_or(|a| a == i))
+            .then_some((i, emitted % CHILD_STRIDE))
     }
 }
 
@@ -608,19 +704,29 @@ impl Card for SettingsAllCard {
 
         let mut h = 0.0;
         let inner_w = (width - INNER_X).max(0.0);
-        for (i, c) in self.children.iter().enumerate() {
-            let st = c.status(&child_cx);
-            if matches!(st, Status::Hidden) {
+        for (g, group) in GROUPS.iter().enumerate() {
+            let vis = self.visible_group_children(g, &child_cx);
+            if vis.is_empty() {
                 continue;
             }
             h += ui::ROW_H;
-            if self.open == Some(i) {
-                let ch = if matches!(st, Status::Loading) {
-                    ui::ROW_H
-                } else {
-                    c.height(&child_cx, inner_w)
-                };
-                h += ch + INNER_GAP;
+            if self.open == Some(g) {
+                let multi = group.children.len() > 1;
+                for (pos, (i, st)) in vis.into_iter().enumerate() {
+                    if multi {
+                        if pos > 0 {
+                            h += SECTION_GAP;
+                        }
+                        h += HEADER_H;
+                    }
+                    let ch = if matches!(st, Status::Loading) {
+                        ui::ROW_H
+                    } else {
+                        self.children[i].height(&child_cx, inner_w)
+                    };
+                    h += ch;
+                }
+                h += INNER_GAP;
             }
         }
         h + ui::ROW_H
@@ -639,15 +745,8 @@ impl Card for SettingsAllCard {
                 .or_else(|| prev.iter().rev().find(|h| h.emitted == sel))
                 .map(|h| (h.child, h.child_id))
                 .or_else(|| {
-                    if !self.searching() {
-                        self.open.and_then(|open| {
-                            let base = CHILD_STRIDE * (open as u32 + 1);
-                            sel.checked_sub(base).map(|cid| (open, cid))
-                        })
-                    } else {
-                        let i = ((sel / CHILD_STRIDE).checked_sub(1))? as usize;
-                        (i < self.children.len()).then_some((i, sel % CHILD_STRIDE))
-                    }
+                    let i = ((sel / CHILD_STRIDE).checked_sub(1))? as usize;
+                    (i < self.children.len()).then_some((i, sel % CHILD_STRIDE))
                 })
         });
 
@@ -760,75 +859,95 @@ impl Card for SettingsAllCard {
         }
 
         let inner_w = (body.2 - INNER_X).max(0.0);
-        for (i, child) in self.children.iter().enumerate() {
-            let st = child.status(&child_cx);
-            if matches!(st, Status::Hidden) {
+        for (g, group) in GROUPS.iter().enumerate() {
+            let vis = self.visible_group_children(g, &child_cx);
+            if vis.is_empty() {
                 continue;
             }
             let r = (body.0, y, body.2, ui::ROW_H);
-            let sum = self.summary(i, cx);
+            let sum = self.summary(g, cx);
             ui::row(
                 cr,
                 cx,
                 hits,
-                HIT_GROUP_BASE + i as u32,
+                HIT_GROUP_BASE + g as u32,
                 r,
                 &Row {
                     icon: None,
-                    name: CHILD_KINDS[i].title,
+                    name: group.title,
                     state: &sum,
-                    on: self.open == Some(i),
+                    on: self.open == Some(g),
                     right: 8.0,
                 },
             );
             y += ui::ROW_H;
 
-            if self.open == Some(i) {
-                let ch = if matches!(st, Status::Loading) {
-                    draw::text_max(
-                        cr,
-                        body.0 + INNER_X + 8.0,
-                        y + (ui::ROW_H - 15.0) / 2.0,
-                        (inner_w - 16.0).max(0.0),
-                        &Text {
-                            size: 12.0,
-                            bold: false,
-                            color: cx.theme.muted,
-                            text: "Loading…",
-                        },
-                    );
-                    ui::ROW_H
-                } else {
-                    let h = child.height(&child_cx, inner_w);
-                    let child_sel = selected_target.and_then(|(c, cid)| (c == i).then_some(cid));
-                    let mut child_hits = Hits::new(hits.pointer, child_sel);
-                    child.draw(
-                        cr,
-                        &child_cx,
-                        (body.0 + INNER_X, y, inner_w, h),
-                        &mut child_hits,
-                    );
-                    let base = CHILD_STRIDE * (i as u32 + 1);
-                    for (cid, rect) in child_hits.list {
-                        let emitted = base + cid;
-                        let _ = hits.add(emitted, rect);
-                        recorded_hits.push(DrawnHit {
-                            emitted,
-                            child: i,
-                            child_id: cid,
-                            rect,
-                        });
+            if self.open == Some(g) {
+                let multi = group.children.len() > 1;
+                let content_top = y;
+                for (pos, (i, st)) in vis.into_iter().enumerate() {
+                    if multi {
+                        if pos > 0 {
+                            y += SECTION_GAP;
+                        }
+                        draw_section_header(
+                            cr,
+                            cx,
+                            (body.0 + INNER_X, y, inner_w, HEADER_H),
+                            y,
+                            CHILD_KINDS[i].title,
+                        );
+                        y += HEADER_H;
                     }
-                    h
-                };
-                if ch > 4.0 {
+                    let ch = if matches!(st, Status::Loading) {
+                        draw::text_max(
+                            cr,
+                            body.0 + INNER_X + 8.0,
+                            y + (ui::ROW_H - 15.0) / 2.0,
+                            (inner_w - 16.0).max(0.0),
+                            &Text {
+                                size: 12.0,
+                                bold: false,
+                                color: cx.theme.muted,
+                                text: "Loading…",
+                            },
+                        );
+                        ui::ROW_H
+                    } else {
+                        let h = self.children[i].height(&child_cx, inner_w);
+                        let child_sel =
+                            selected_target.and_then(|(c, cid)| (c == i).then_some(cid));
+                        let mut child_hits = Hits::new(hits.pointer, child_sel);
+                        self.children[i].draw(
+                            cr,
+                            &child_cx,
+                            (body.0 + INNER_X, y, inner_w, h),
+                            &mut child_hits,
+                        );
+                        let base = CHILD_STRIDE * (i as u32 + 1);
+                        for (cid, rect) in child_hits.list {
+                            let emitted = base + cid;
+                            let _ = hits.add(emitted, rect);
+                            recorded_hits.push(DrawnHit {
+                                emitted,
+                                child: i,
+                                child_id: cid,
+                                rect,
+                            });
+                        }
+                        h
+                    };
+                    y += ch;
+                }
+                let content_h = y - content_top;
+                if content_h > 4.0 {
                     draw::set(cr, cx.theme.edge);
                     cr.set_line_width(1.0);
-                    cr.move_to(body.0 + 4.5, y + 2.0);
-                    cr.line_to(body.0 + 4.5, y + ch - 2.0);
+                    cr.move_to(body.0 + 4.5, content_top + 2.0);
+                    cr.line_to(body.0 + 4.5, content_top + content_h - 2.0);
                     let _ = cr.stroke();
                 }
-                y += ch + INNER_GAP;
+                y += INNER_GAP;
             }
         }
 
@@ -887,11 +1006,10 @@ impl Card for SettingsAllCard {
                         return true;
                     }
                     if button == &Button::Left
-                        && (HIT_GROUP_BASE..HIT_GROUP_BASE + self.children.len() as u32)
-                            .contains(&hit)
+                        && (HIT_GROUP_BASE..HIT_GROUP_BASE + GROUPS.len() as u32).contains(&hit)
                     {
                         let idx = (hit - HIT_GROUP_BASE) as usize;
-                        if matches!(self.children[idx].status(&child_cx), Status::Hidden) {
+                        if self.visible_group_children(idx, &child_cx).is_empty() {
                             return false;
                         }
                         self.open = if self.open == Some(idx) {
@@ -903,7 +1021,7 @@ impl Card for SettingsAllCard {
                         return true;
                     }
                     if hit >= CHILD_STRIDE {
-                        if let Some((i, child_id)) = self.resolve_child_hit(hit, *at, self.open) {
+                        if let Some((i, child_id)) = self.resolve_child_hit(hit, *at) {
                             self.active_child = Some(i);
                             return self.children[i].event(
                                 &Event::Press {
@@ -937,7 +1055,7 @@ impl Card for SettingsAllCard {
                 }
 
                 if hit >= CHILD_STRIDE {
-                    if let Some((i, child_id)) = self.resolve_child_hit(hit, *at, None) {
+                    if let Some((i, child_id)) = self.resolve_child_hit(hit, *at) {
                         self.active_child = Some(i);
                         return self.children[i].event(
                             &Event::Press {
@@ -948,6 +1066,36 @@ impl Card for SettingsAllCard {
                             &child_cx,
                             out,
                         );
+                    }
+                }
+                false
+            }
+            Event::Scroll { hit, dy } => {
+                if let Some(h) = *hit {
+                    if let Some((i, child_id)) = self.resolve_child_hit(h, (0.0, 0.0)) {
+                        return self.children[i].event(
+                            &Event::Scroll {
+                                hit: Some(child_id),
+                                dy: *dy,
+                            },
+                            &child_cx,
+                            out,
+                        );
+                    }
+                }
+                if !self.searching() {
+                    if let Some(g) = self.open {
+                        for &i in GROUPS[g].children {
+                            if self.children[i].event(ev, &child_cx, out) {
+                                return true;
+                            }
+                        }
+                    }
+                    return false;
+                }
+                for child in &mut self.children {
+                    if child.event(ev, &child_cx, out) {
+                        return true;
                     }
                 }
                 false
@@ -986,13 +1134,14 @@ impl Card for SettingsAllCard {
     }
 
     fn show_list(&mut self) {
-        if let Some(i) = self.open {
-            self.children[i].show_list();
+        if let Some(g) = self.open {
+            if let Some(&i) = GROUPS[g].children.first() {
+                self.children[i].show_list();
+            }
             return;
         }
-        if !self.children.is_empty() {
+        if !GROUPS.is_empty() {
             self.open = Some(0);
-            self.children[0].show_list();
         }
     }
 }
@@ -1367,9 +1516,9 @@ mod tests {
         let mut card = SettingsAllCard::with_paths(def_file, cfg_file);
         assert_eq!(card.status(&cx), Status::Loading);
 
-        // First with all 11 visible: 11 groups + Open the config file = 12 rows
+        // First with all 9 groups visible: 9 groups + Open the config file = 10 rows
         apply_all_sources(&mut card, &dir, &cfg);
-        assert_eq!(draw_card(&card, &cx, 404.0).0, 12.0 * ui::ROW_H);
+        assert_eq!(draw_card(&card, &cx, 404.0).0, 10.0 * ui::ROW_H);
 
         // Omit local_recorder -> recording returns Status::Hidden and its row disappears
         card.apply(
@@ -1382,12 +1531,12 @@ mod tests {
         assert_eq!(card.status(&cx), Status::Ready);
 
         let (h_closed, hits_closed) = draw_card(&card, &cx, 404.0);
-        // 10 visible groups + Open the config file
-        assert_eq!(h_closed, 11.0 * ui::ROW_H);
+        // 8 visible groups + Open the config file
+        assert_eq!(h_closed, 9.0 * ui::ROW_H);
         assert!(!hits_closed
             .list
             .iter()
-            .any(|(id, _)| *id == HIT_GROUP_BASE + 10));
+            .any(|(id, _)| *id == HIT_GROUP_BASE + 8));
         let bottom = hits_closed
             .list
             .iter()
@@ -1395,11 +1544,11 @@ mod tests {
             .fold(0.0, f64::max);
         assert!((bottom - h_closed).abs() < 0.5);
 
-        // Click Games (index 7) -> opens in place at Size::S with its More row working
+        // Click Games (group index 5, child index 7) -> opens in place at Size::S with its More row working
         let mut out = Vec::new();
         assert!(card.event(
             &Event::Press {
-                hit: HIT_GROUP_BASE + 7,
+                hit: HIT_GROUP_BASE + 5,
                 button: Button::Left,
                 at: (10.0, 10.0),
             },
@@ -1408,12 +1557,16 @@ mod tests {
         ));
         let (h_open_games, hits_games) = draw_card(&card, &cx, 404.0);
         assert!(h_open_games > h_closed);
-        // Games child index 7 -> hits are 1000 * (7 + 1) + child_id = 8000 + child_id.
-        // Clicking Games More (9000) -> 8000 + 9000 = 17000 expands Games in place.
-        assert!(hits_games.list.iter().any(|(id, _)| *id == 17_000));
+        // Games child index 7 -> hits are CHILD_STRIDE * (7 + 1) + child_id = 800_000 + child_id.
+        // Clicking Games More (9000) -> 809_000 expands Games in place.
+        let games_base = CHILD_STRIDE * 8;
+        assert!(hits_games
+            .list
+            .iter()
+            .any(|(id, _)| *id == games_base + 9000));
         assert!(card.event(
             &Event::Press {
-                hit: 17_000,
+                hit: games_base + 9000,
                 button: Button::Left,
                 at: (10.0, 10.0),
             },
@@ -1422,11 +1575,14 @@ mod tests {
         ));
         let (h_more_games, hits_games_more) = draw_card(&card, &cx, 404.0);
         assert!(h_more_games > h_open_games);
-        // Toggle GAME_MODE (Games row 0 -> child hit 100 -> 8100)
-        assert!(hits_games_more.list.iter().any(|(id, _)| *id == 8100));
+        // Toggle GAME_MODE (Games row 0 -> child hit 100 -> 800_100)
+        assert!(hits_games_more
+            .list
+            .iter()
+            .any(|(id, _)| *id == games_base + 100));
         assert!(card.event(
             &Event::Press {
-                hit: 8100,
+                hit: games_base + 100,
                 button: Button::Left,
                 at: (0.0, 0.0),
             },
@@ -1437,31 +1593,32 @@ mod tests {
             .iter()
             .any(|a| matches!(a, Action::Run(cmd) if cmd.contains("set GAME_MODE 'false'"))));
 
-        // Click Windows (index 5) -> closes Games, opens Windows (one open at a time)
+        // Click Windows (group index 3, child index 5) -> closes Games, opens Windows (one open at a time)
         assert!(card.event(
             &Event::Press {
-                hit: HIT_GROUP_BASE + 5,
+                hit: HIT_GROUP_BASE + 3,
                 button: Button::Left,
                 at: (10.0, 10.0),
             },
             &cx,
             &mut out
         ));
-        assert_eq!(card.open, Some(5));
+        assert_eq!(card.open, Some(3));
+        let win_base = CHILD_STRIDE * 6;
         let (h_open_windows, hits_win) = draw_card(&card, &cx, 404.0);
         assert!(!hits_win
             .list
             .iter()
-            .any(|(id, _)| (8000..9000).contains(id)));
+            .any(|(id, _)| (games_base..games_base + CHILD_STRIDE).contains(id)));
         assert!(hits_win
             .list
             .iter()
-            .any(|(id, _)| (6000..7000).contains(id)));
+            .any(|(id, _)| (win_base..win_base + CHILD_STRIDE).contains(id)));
 
-        // Windows Pick row (6100) opens a list and tick advances its reveal
+        // Windows Pick row (win_base + 100) opens a list and tick advances its reveal
         assert!(card.event(
             &Event::Press {
-                hit: 6100,
+                hit: win_base + 100,
                 button: Button::Left,
                 at: (0.0, 0.0),
             },
@@ -1594,16 +1751,43 @@ mod tests {
         assert_eq!(card.status(&cx), Status::Ready);
         let (h_child_only, hits_child) = draw_card(&card, &cx, 404.0);
         assert!(h_child_only > HEADER_H);
+        let games_base = CHILD_STRIDE * 8;
         assert!(hits_child
             .list
             .iter()
-            .any(|(id, _)| (8000..9000).contains(id)));
+            .any(|(id, _)| (games_base..games_base + CHILD_STRIDE).contains(id)));
         let bottom_search = hits_child
             .list
             .iter()
             .map(|(_, r)| r.1 + r.3)
             .fold(0.0, f64::max);
         assert!((bottom_search - h_child_only).abs() < 0.5);
+
+        // Searching rows inside Personalization finds each child's rows individually (Appearance vs Wallpaper vs Fonts)
+        card.event(&Event::Text("corners"), &cx, &mut out);
+        let (_, hits_corners) = draw_card(&card, &cx, 404.0);
+        assert!(hits_corners
+            .list
+            .iter()
+            .any(|(id, _)| (CHILD_STRIDE..2 * CHILD_STRIDE).contains(id)));
+        assert!(!hits_corners
+            .list
+            .iter()
+            .any(|(id, _)| (2 * CHILD_STRIDE..4 * CHILD_STRIDE).contains(id)));
+
+        card.event(&Event::Text("fit"), &cx, &mut out);
+        let (_, hits_fit) = draw_card(&card, &cx, 404.0);
+        assert!(hits_fit
+            .list
+            .iter()
+            .any(|(id, _)| (2 * CHILD_STRIDE..3 * CHILD_STRIDE).contains(id)));
+
+        card.event(&Event::Text("cursor"), &cx, &mut out);
+        let (_, hits_cursor) = draw_card(&card, &cx, 404.0);
+        assert!(hits_cursor
+            .list
+            .iter()
+            .any(|(id, _)| (3 * CHILD_STRIDE..4 * CHILD_STRIDE).contains(id)));
 
         // Unmatched query hides card
         card.event(&Event::Text("zzzz-no-such-setting-xyz"), &cx, &mut out);
@@ -1684,17 +1868,18 @@ mod tests {
             &mut out
         ));
         let (_, hits) = draw_card(&card, &cx, 404.0);
-        // Appearance WINDOW_CORNERS slider: row 3 (WINDOW_CORNERS) -> 100 + 30 + 1 = 131 -> 1000 + 131 = 1131
+        // Appearance WINDOW_CORNERS slider: row 3 -> 100 + 30 + 1 = 131 -> 100_000 + 131 = 100_131
+        let slide_hit = CHILD_STRIDE + 131;
         let slide_rect = hits
             .list
             .iter()
-            .find(|(id, _)| *id == 1131)
+            .find(|(id, _)| *id == slide_hit)
             .map(|(_, r)| *r)
             .expect("corners slider hit");
         let at = (slide_rect.0 + slide_rect.2 * 0.5, slide_rect.1 + 4.0);
         assert!(card.event(
             &Event::Press {
-                hit: 1131,
+                hit: slide_hit,
                 button: Button::Left,
                 at,
             },
@@ -1703,13 +1888,149 @@ mod tests {
         ));
         let _ = card.event(
             &Event::Drag {
-                hit: 1131,
+                hit: slide_hit,
                 at: (slide_rect.0 + slide_rect.2 * 0.8, slide_rect.1 + 4.0),
             },
             &cx,
             &mut out,
         );
-        let _ = card.event(&Event::Release { hit: 1131 }, &cx, &mut out);
+        let _ = card.event(&Event::Release { hit: slide_hit }, &cx, &mut out);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn personalization_groups_three_cards_builds_summary_and_keeps_hits_disjoint() {
+        let dir = temp_home("personalization");
+        let th = Theme::from_config(&Config::from_text(""));
+        let cx = test_cx(&th);
+        let mut cfg = full_config_data();
+        cfg.now.insert("COLOR_SCHEME".into(), "prefer-dark".into());
+        cfg.now.insert("BORDER_ACTIVE".into(), "#cc70a9".into());
+        cfg.now.insert(
+            "WALLPAPER".into(),
+            "~/Pictures/Wallpapers/aurora.jpg".into(),
+        );
+
+        let mut card = SettingsAllCard::with_paths(dir.join("missing"), dir.join("missing_cfg"));
+        apply_all_sources(&mut card, &dir, &cfg);
+        card.apply(
+            "wallpapers",
+            &WallpapersData {
+                has_bin: true,
+                files: vec![
+                    crate::cards::settings_look::WallpaperFile {
+                        name: "aurora.jpg".into(),
+                        path: dir
+                            .join("Pictures/Wallpapers/aurora.jpg")
+                            .to_string_lossy()
+                            .into_owned(),
+                    },
+                    crate::cards::settings_look::WallpaperFile {
+                        name: "dusk.png".into(),
+                        path: dir
+                            .join("Pictures/Wallpapers/dusk.png")
+                            .to_string_lossy()
+                            .into_owned(),
+                    },
+                ],
+                ..WallpapersData::default()
+            } as &dyn Any,
+        );
+
+        assert_eq!(card.summary(0, &cx), "Dark · #cc70a9 · aurora.jpg");
+
+        // Open Personalization (group 0).
+        let mut out = Vec::new();
+        assert!(card.event(
+            &Event::Press {
+                hit: HIT_GROUP_BASE,
+                button: Button::Left,
+                at: (10.0, 10.0),
+            },
+            &cx,
+            &mut out
+        ));
+        let (h_open, hits) = draw_card(&card, &cx, 420.0);
+        // All three child ranges must appear, and every emitted hit ID must be unique.
+        let mut seen = HashSet::new();
+        for (id, _) in &hits.list {
+            assert!(
+                seen.insert(*id),
+                "duplicate hit id {id} when Personalization is open"
+            );
+        }
+        assert!(hits
+            .list
+            .iter()
+            .any(|(id, _)| (CHILD_STRIDE..2 * CHILD_STRIDE).contains(id)));
+        assert!(hits
+            .list
+            .iter()
+            .any(|(id, _)| (2 * CHILD_STRIDE..3 * CHILD_STRIDE).contains(id)));
+        assert!(hits
+            .list
+            .iter()
+            .any(|(id, _)| (3 * CHILD_STRIDE..4 * CHILD_STRIDE).contains(id)));
+        let bottom = hits.list.iter().map(|(_, r)| r.1 + r.3).fold(0.0, f64::max);
+        assert!((bottom - h_open).abs() < 1.0);
+
+        // Expand Fonts' More (child 2 -> 300_000 + 9000) and Appearance's More (child 0 -> 109_000) independently.
+        assert!(card.event(
+            &Event::Press {
+                hit: 3 * CHILD_STRIDE + 9000,
+                button: Button::Left,
+                at: (0.0, 0.0),
+            },
+            &cx,
+            &mut out
+        ));
+        assert!(card.event(
+            &Event::Press {
+                hit: CHILD_STRIDE + 9000,
+                button: Button::Left,
+                at: (0.0, 0.0),
+            },
+            &cx,
+            &mut out
+        ));
+
+        // Click second Wallpaper thumbnail (child 1 -> 200_000 + 1001) sets WALLPAPER cleanly.
+        out.clear();
+        assert!(card.event(
+            &Event::Press {
+                hit: 2 * CHILD_STRIDE + 1001,
+                button: Button::Left,
+                at: (0.0, 0.0),
+            },
+            &cx,
+            &mut out
+        ));
+        assert!(out
+            .iter()
+            .any(|a| matches!(a, Action::Run(cmd) if cmd.contains("set WALLPAPER") && cmd.contains("dusk.png"))));
+
+        // Without infynitae-wallpaper, Wallpaper hides while Personalization keeps Appearance + Fonts.
+        card.apply(
+            "wallpapers",
+            &WallpapersData {
+                has_bin: false,
+                ..WallpapersData::default()
+            } as &dyn Any,
+        );
+        let (_, hits_no_wp) = draw_card(&card, &cx, 420.0);
+        assert!(hits_no_wp
+            .list
+            .iter()
+            .any(|(id, _)| (CHILD_STRIDE..2 * CHILD_STRIDE).contains(id)));
+        assert!(!hits_no_wp
+            .list
+            .iter()
+            .any(|(id, _)| (2 * CHILD_STRIDE..3 * CHILD_STRIDE).contains(id)));
+        assert!(hits_no_wp
+            .list
+            .iter()
+            .any(|(id, _)| (3 * CHILD_STRIDE..4 * CHILD_STRIDE).contains(id)));
 
         let _ = std::fs::remove_dir_all(&dir);
     }

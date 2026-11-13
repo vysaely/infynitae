@@ -9,13 +9,16 @@ use crate::card::{
 };
 use crate::config::parse_hex;
 use crate::draw::{self, Text};
+use crate::icons::{self, DecodedImage};
 use crate::provider::{CardKind, Size};
 use crate::theme::Rgba;
 use crate::ui::{self, Row};
 use cairo::Context;
 use std::any::Any;
+use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 pub const KIND_APPEARANCE: CardKind = CardKind {
@@ -49,13 +52,21 @@ pub const KIND_FONTS: CardKind = CardKind {
 };
 
 const ROW: u32 = 100;
+const THUMB: u32 = 1000;
 const MORE: u32 = 9000;
 const LIST: u32 = 10_000;
 const WORDS_H: f64 = 34.0;
 const SLIDE_H: f64 = 22.0;
 const SWATCH: f64 = 16.0;
 const MAX_LIST_ROWS: usize = 8;
-const MAX_WALLPAPERS: usize = 12;
+const MAX_WALLPAPERS: usize = 24;
+const THUMB_PAD_X: f64 = 8.0;
+const THUMB_GAP: f64 = 8.0;
+const THUMB_TOP_PAD: f64 = 4.0;
+const THUMB_RADIUS: f64 = 4.0;
+const THUMB_NAME_H: f64 = 24.0;
+const THUMB_S: (i32, i32) = (192, 108);
+const THUMB_M: (i32, i32) = (129, 73);
 
 /// Extra state for `settings/appearance`: wallpaper tool presence and invalid `#rrggbb` attempts.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -64,17 +75,21 @@ pub struct LookData {
     pub bad_colors: HashSet<String>,
 }
 
-/// Discovered wallpaper files and tool presence for `settings/wallpaper`.
+/// Discovered wallpaper files, tool presence, and decoded thumbnails for `settings/wallpaper`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct WallpaperFile {
     pub name: String,
     pub path: String,
 }
 
+pub type ThumbList = Vec<Option<Arc<DecodedImage>>>;
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct WallpapersData {
     pub has_bin: bool,
     pub files: Vec<WallpaperFile>,
+    pub thumbs_s: ThumbList,
+    pub thumbs_m: ThumbList,
 }
 
 /// Names discovered for `fonts`, `fonts-mono`, `icons`, or `cursors`.
@@ -176,23 +191,45 @@ impl Source for WallpapersSource {
                     path: l.to_string(),
                 });
             }
-            files.truncate(MAX_WALLPAPERS);
-            return Box::new(WallpapersData { has_bin, files });
+            let (thumbs_s, thumbs_m) = decode_wallpaper_thumbs(&files);
+            return Box::new(WallpapersData {
+                has_bin,
+                files,
+                thumbs_s,
+                thumbs_m,
+            });
         }
         let has_bin = has_wallpaper_bin(&self.home, &self.path);
         let dirs = [
             self.home.join("Pictures/Wallpapers"),
             self.home.join(".local/share/wallpapers"),
         ];
+        let files = scan_wallpapers(&dirs);
+        let (thumbs_s, thumbs_m) = decode_wallpaper_thumbs(&files);
         Box::new(WallpapersData {
             has_bin,
-            files: scan_wallpapers(&dirs),
+            files,
+            thumbs_s,
+            thumbs_m,
         })
     }
 
     fn every(&self) -> Option<Duration> {
         None
     }
+}
+
+fn decode_wallpaper_thumbs(files: &[WallpaperFile]) -> (ThumbList, ThumbList) {
+    let shown = &files[..files.len().min(MAX_WALLPAPERS)];
+    let thumbs_s = shown
+        .iter()
+        .map(|f| icons::cached_wallpaper_thumb(Path::new(&f.path), THUMB_S.0, THUMB_S.1))
+        .collect();
+    let thumbs_m = shown
+        .iter()
+        .map(|f| icons::cached_wallpaper_thumb(Path::new(&f.path), THUMB_M.0, THUMB_M.1))
+        .collect();
+    (thumbs_s, thumbs_m)
 }
 
 /// Lists installed font families from `fc-list`.
@@ -362,7 +399,7 @@ fn is_wallpaper_ext(name: &str) -> bool {
     )
 }
 
-/// Scans wallpaper folders for `.png`, `.jpg`, `.jpeg`, `.webp` files, sorted by filename, up to 12.
+/// Scans wallpaper folders for `.png`, `.jpg`, `.jpeg`, `.webp` files, sorted by filename.
 pub fn scan_wallpapers(dirs: &[PathBuf]) -> Vec<WallpaperFile> {
     let mut entries = Vec::new();
     let mut seen = HashSet::new();
@@ -394,7 +431,6 @@ pub fn scan_wallpapers(dirs: &[PathBuf]) -> Vec<WallpaperFile> {
             .then_with(|| a.name.cmp(&b.name))
             .then_with(|| a.path.cmp(&b.path))
     });
-    entries.truncate(MAX_WALLPAPERS);
     entries
 }
 
@@ -502,6 +538,7 @@ pub enum LookControl {
         other_file: bool,
         file_name: bool,
     },
+    Wallpapers,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -543,7 +580,7 @@ impl LookRow {
             }),
             LookControl::Step { min, max } => Some(Control::Step { min, max }),
             LookControl::Color => Some(Control::Text),
-            LookControl::Found { .. } => None,
+            LookControl::Found { .. } | LookControl::Wallpapers => None,
         }
     }
 }
@@ -700,12 +737,7 @@ pub const TABLE_WALLPAPER: &[LookRow] = &[
         key: "WALLPAPER",
         name: "Picture",
         says: "",
-        control: LookControl::Found {
-            source: "wallpapers",
-            first: Some(("", "The first in Pictures/Wallpapers")),
-            other_file: true,
-            file_name: true,
-        },
+        control: LookControl::Wallpapers,
         after: After::Save,
         more: false,
         hide: HideRule::None,
@@ -1017,6 +1049,12 @@ impl LookCard {
         (rows, more_row)
     }
 
+    fn has_more_wallpapers(&self) -> bool {
+        self.wallpapers
+            .as_ref()
+            .is_some_and(|w| w.files.len() > MAX_WALLPAPERS)
+    }
+
     fn list_entries(&self, i: usize) -> Vec<ListEntry> {
         let r = &self.table[i];
         let cur = self.value(i);
@@ -1029,6 +1067,37 @@ impl LookCard {
                     active: val.eq_ignore_ascii_case(&cur),
                 })
                 .collect(),
+            LookControl::Wallpapers => {
+                let mut out = Vec::new();
+                let cur_expanded = expand_home(&cur, &self.home);
+                let mut any_file_matched = false;
+                if let Some(wp) = &self.wallpapers {
+                    for (idx, f) in wp.files.iter().enumerate() {
+                        let active = !cur.is_empty() && (cur == f.path || cur_expanded == f.path);
+                        if active {
+                            any_file_matched = true;
+                        }
+                        if idx >= MAX_WALLPAPERS {
+                            out.push(ListEntry {
+                                label: f.name.clone(),
+                                action: ListChoiceAction::Set(f.path.clone()),
+                                active,
+                            });
+                        }
+                    }
+                }
+                out.push(ListEntry {
+                    label: "The first in Pictures/Wallpapers".to_string(),
+                    action: ListChoiceAction::Set(String::new()),
+                    active: cur.is_empty(),
+                });
+                out.push(ListEntry {
+                    label: "Other file".to_string(),
+                    action: ListChoiceAction::AskOther,
+                    active: !cur.is_empty() && !any_file_matched,
+                });
+                out
+            }
             LookControl::Found {
                 source,
                 first,
@@ -1093,23 +1162,50 @@ impl LookCard {
         self.list_entries(i).len().clamp(1, MAX_LIST_ROWS)
     }
 
-    fn row_h(&self, i: usize) -> f64 {
-        ui::ROW_H
-            + match self.table[i].control {
-                LookControl::Words(_) => WORDS_H,
-                LookControl::Slide { .. } => SLIDE_H,
-                _ => 0.0,
-            }
-            + if self.pick == Some(i) {
-                match self.table[i].control {
-                    LookControl::Pick(_) | LookControl::Found { .. } => {
-                        self.list.height(self.visible_list_rows(i))
-                    }
-                    _ => 0.0,
+    fn row_h(&self, cx: &Cx, i: usize, width: f64) -> f64 {
+        match self.table[i].control {
+            LookControl::Wallpapers => {
+                let files_len = self.wallpapers.as_ref().map_or(0, |w| w.files.len());
+                let shown_len = files_len.min(MAX_WALLPAPERS);
+                if shown_len == 0 {
+                    return ui::ROW_H;
                 }
-            } else {
-                0.0
+                let (cols, _, ch) = thumb_cell_size(width, cx.size);
+                let grid_rows = shown_len.div_ceil(cols);
+                let grid_h = THUMB_TOP_PAD
+                    + grid_rows as f64 * ch
+                    + (grid_rows.saturating_sub(1)) as f64 * THUMB_GAP;
+                let more_h = if files_len > MAX_WALLPAPERS {
+                    ui::ROW_H
+                        + if self.pick == Some(i) {
+                            self.list.height(self.visible_list_rows(i))
+                        } else {
+                            0.0
+                        }
+                } else {
+                    0.0
+                };
+                grid_h + THUMB_NAME_H + more_h
             }
+            _ => {
+                ui::ROW_H
+                    + match self.table[i].control {
+                        LookControl::Words(_) => WORDS_H,
+                        LookControl::Slide { .. } => SLIDE_H,
+                        _ => 0.0,
+                    }
+                    + if self.pick == Some(i) {
+                        match self.table[i].control {
+                            LookControl::Pick(_) | LookControl::Found { .. } => {
+                                self.list.height(self.visible_list_rows(i))
+                            }
+                            _ => 0.0,
+                        }
+                    } else {
+                        0.0
+                    }
+            }
+        }
     }
 
     fn display_word(&self, i: usize) -> String {
@@ -1119,6 +1215,17 @@ impl LookCard {
                 .iter()
                 .find(|(val, _)| val.eq_ignore_ascii_case(&v))
                 .map_or(v, |(_, w)| (*w).to_string()),
+            LookControl::Wallpapers => {
+                if v.is_empty() {
+                    "The first in Pictures/Wallpapers".to_string()
+                } else {
+                    Path::new(&v)
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or(&v)
+                        .to_string()
+                }
+            }
             LookControl::Found {
                 first, file_name, ..
             } => {
@@ -1346,6 +1453,233 @@ fn value_at_right_capped(
     draw::text_max(cr, x_right - w, r.1 + (r.3 - 15.0) / 2.0, max_w, &t)
 }
 
+fn thumb_cell_size(width: f64, size: Size) -> (usize, f64, f64) {
+    let cols = if size == Size::M { 3 } else { 2 };
+    let avail = (width - 2.0 * THUMB_PAD_X - (cols - 1) as f64 * THUMB_GAP).max(cols as f64 * 16.0);
+    let cw = (avail / cols as f64).floor();
+    let ch = (cw * 9.0 / 16.0).round().max(9.0);
+    (cols, cw, ch)
+}
+
+thread_local! {
+    static THUMB_SURFACES: RefCell<HashMap<usize, (Arc<DecodedImage>, cairo::ImageSurface)>> =
+        RefCell::new(HashMap::new());
+}
+
+fn thumb_surface(img: &Arc<DecodedImage>) -> Option<cairo::ImageSurface> {
+    let key = Arc::as_ptr(img) as usize;
+    THUMB_SURFACES.with(|cache| {
+        let mut map = cache.borrow_mut();
+        if let Some((held, surf)) = map.get(&key) {
+            if Arc::ptr_eq(held, img) {
+                return Some(surf.clone());
+            }
+        }
+        let surf = icons::image_surface_from_decoded(img)?;
+        if map.len() >= 64 {
+            map.clear();
+        }
+        map.insert(key, (Arc::clone(img), surf.clone()));
+        Some(surf)
+    })
+}
+
+impl LookCard {
+    #[allow(clippy::too_many_arguments)]
+    fn draw_wallpaper_grid(
+        &self,
+        cr: &Context,
+        cx: &Cx,
+        hits: &mut Hits,
+        body: Rect,
+        y: f64,
+        i: usize,
+        id: u32,
+        changed: bool,
+    ) {
+        let files = self
+            .wallpapers
+            .as_ref()
+            .map(|w| w.files.as_slice())
+            .unwrap_or(&[]);
+        let shown_len = files.len().min(MAX_WALLPAPERS);
+        let right = body.0 + body.2 - 8.0;
+        let word = self.display_word(i);
+
+        if shown_len == 0 {
+            draw::text_max(
+                cr,
+                body.0 + 8.0,
+                y + (ui::ROW_H - 15.0) / 2.0,
+                (body.2 - 16.0).max(20.0),
+                &Text {
+                    size: 12.0,
+                    bold: false,
+                    color: cx.theme.muted,
+                    text: "No pictures in Pictures/Wallpapers",
+                },
+            );
+            if !self.value(i).is_empty() {
+                value_at_right_capped(
+                    cr,
+                    cx,
+                    (body.0, y, body.2, ui::ROW_H),
+                    right,
+                    (body.2 * 0.45).max(40.0),
+                    &word,
+                    changed,
+                );
+            }
+            return;
+        }
+
+        let (cols, cw, ch) = thumb_cell_size(body.2, cx.size);
+        let grid_rows = shown_len.div_ceil(cols);
+        let cur = self.value(i);
+        let cur_expanded = expand_home(&cur, &self.home);
+        let thumbs = self.wallpapers.as_ref().map(|w| {
+            if cx.size == Size::M {
+                &w.thumbs_m
+            } else {
+                &w.thumbs_s
+            }
+        });
+
+        for (idx, file) in files.iter().take(shown_len).enumerate() {
+            let col = idx % cols;
+            let row = idx / cols;
+            let tx = body.0 + THUMB_PAD_X + col as f64 * (cw + THUMB_GAP);
+            let ty = y + THUMB_TOP_PAD + row as f64 * (ch + THUMB_GAP);
+            let tid = THUMB + idx as u32;
+            let lit = hits.add(tid, (tx, ty, cw, ch)) || hits.selected(tid);
+            let active = !cur.is_empty() && (cur == file.path || cur_expanded == file.path);
+
+            let _ = cr.save();
+            draw::round_rect(cr, tx, ty, cw, ch, THUMB_RADIUS);
+            cr.clip();
+            if let Some(surf) = thumbs
+                .and_then(|t| t.get(idx))
+                .and_then(|o| o.as_ref())
+                .and_then(thumb_surface)
+            {
+                let sw = surf.width() as f64;
+                let sh = surf.height() as f64;
+                if (sw - cw).abs() > 1.5 || (sh - ch).abs() > 1.5 {
+                    cr.translate(tx, ty);
+                    cr.scale(cw / sw, ch / sh);
+                    let _ = cr.set_source_surface(&surf, 0.0, 0.0);
+                } else {
+                    let dx = ((cw - sw) / 2.0).round();
+                    let dy = ((ch - sh) / 2.0).round();
+                    let _ = cr.set_source_surface(&surf, tx + dx, ty + dy);
+                }
+                let _ = cr.paint();
+            } else {
+                draw::set(cr, cx.theme.track);
+                let _ = cr.paint();
+            }
+            if lit {
+                draw::set(cr, cx.theme.text.alpha(0.08));
+                let _ = cr.paint();
+            }
+            let _ = cr.restore();
+
+            if active {
+                draw::round_rect(
+                    cr,
+                    tx + 1.0,
+                    ty + 1.0,
+                    (cw - 2.0).max(1.0),
+                    (ch - 2.0).max(1.0),
+                    (THUMB_RADIUS - 0.5).max(0.0),
+                );
+                draw::set(cr, cx.theme.accent);
+                cr.set_line_width(2.0);
+                let _ = cr.stroke();
+            } else if lit {
+                draw::round_rect(
+                    cr,
+                    tx + 0.5,
+                    ty + 0.5,
+                    (cw - 1.0).max(1.0),
+                    (ch - 1.0).max(1.0),
+                    THUMB_RADIUS,
+                );
+                draw::set(cr, cx.theme.text.alpha(0.35));
+                cr.set_line_width(1.0);
+                let _ = cr.stroke();
+            }
+        }
+
+        let name_y = y
+            + THUMB_TOP_PAD
+            + grid_rows as f64 * ch
+            + (grid_rows.saturating_sub(1)) as f64 * THUMB_GAP;
+        draw::text_max(
+            cr,
+            body.0 + THUMB_PAD_X,
+            name_y + (THUMB_NAME_H - 15.0) / 2.0,
+            (body.2 - 2.0 * THUMB_PAD_X).max(20.0),
+            &Text {
+                size: 12.0,
+                bold: false,
+                color: if changed {
+                    cx.theme.accent_text
+                } else {
+                    cx.theme.muted
+                },
+                text: &word,
+            },
+        );
+
+        if files.len() > MAX_WALLPAPERS {
+            let more_y = name_y + THUMB_NAME_H;
+            let extra = format!("{} more", files.len() - MAX_WALLPAPERS);
+            let entries = if self.pick == Some(i) && self.list.shown() {
+                self.list_entries(i)
+            } else {
+                Vec::new()
+            };
+            let vis = entries.len().clamp(1, MAX_LIST_ROWS);
+            let (row_r, list_r) = if self.pick == Some(i) && self.list.shown() {
+                let lh = self.list.height(vis);
+                self.list
+                    .split((body.0, more_y, body.2, ui::ROW_H + lh), vis, cx.list_above)
+            } else {
+                ((body.0, more_y, body.2, ui::ROW_H), (0.0, 0.0, 0.0, 0.0))
+            };
+            let ew = draw::measure(
+                cr,
+                &Text {
+                    size: 12.0,
+                    bold: false,
+                    color: cx.theme.muted,
+                    text: &extra,
+                },
+            )
+            .0 + 14.0;
+            ui::row(
+                cr,
+                cx,
+                hits,
+                id,
+                row_r,
+                &Row {
+                    icon: None,
+                    name: "More",
+                    state: "",
+                    on: false,
+                    right: ew,
+                },
+            );
+            value_at_right_capped(cr, cx, row_r, right, 96.0, &extra, false);
+            if self.pick == Some(i) && self.list.shown() {
+                self.draw_list(cr, cx, hits, list_r, &entries);
+            }
+        }
+    }
+}
+
 fn draw_swatch(cr: &Context, cx: &Cx, x: f64, r: Rect, rgb: [u8; 3]) {
     let sy = r.1 + (r.3 - SWATCH) / 2.0;
     draw::round_rect(
@@ -1420,9 +1754,10 @@ impl Card for LookCard {
         }
     }
 
-    fn height(&self, cx: &Cx, _: f64) -> f64 {
+    fn height(&self, cx: &Cx, width: f64) -> f64 {
         let (rows, more) = self.shown(cx);
-        rows.iter().map(|&i| self.row_h(i)).sum::<f64>() + if more { ui::ROW_H } else { 0.0 }
+        rows.iter().map(|&i| self.row_h(cx, i, width)).sum::<f64>()
+            + if more { ui::ROW_H } else { 0.0 }
     }
 
     fn draw(&self, cr: &Context, cx: &Cx, body: Rect, hits: &mut Hits) {
@@ -1433,7 +1768,7 @@ impl Card for LookCard {
         for i in rows {
             let s = &self.table[i];
             let id = ROW + 10 * i as u32;
-            let h = self.row_h(i);
+            let h = self.row_h(cx, i, body.2);
             let r = (body.0, y, body.2, ui::ROW_H);
             let (state, state_accent) = self.state(s);
             let changed = !self.is_default(i);
@@ -1449,6 +1784,9 @@ impl Card for LookCard {
             .0;
             let max_val_w = (body.2 - name_w - 32.0).max(body.2 * 0.4);
             match s.control {
+                LookControl::Wallpapers => {
+                    self.draw_wallpaper_grid(cr, cx, hits, body, y, i, id, changed);
+                }
                 LookControl::Switch { on, .. } => {
                     let is_on = self.value(i).eq_ignore_ascii_case(on);
                     ui::row(
@@ -1742,6 +2080,30 @@ impl Card for LookCard {
                 if !(ROW..MORE).contains(&hit) {
                     return false;
                 }
+                if (THUMB..THUMB + MAX_WALLPAPERS as u32).contains(&hit) {
+                    let idx = (hit - THUMB) as usize;
+                    let Some(path) = self
+                        .wallpapers
+                        .as_ref()
+                        .and_then(|w| w.files.get(idx))
+                        .map(|f| f.path.clone())
+                    else {
+                        return false;
+                    };
+                    let Some(i) = self
+                        .table
+                        .iter()
+                        .position(|r| matches!(r.control, LookControl::Wallpapers))
+                    else {
+                        return false;
+                    };
+                    if !self.row_visible(&self.table[i]) {
+                        return false;
+                    }
+                    self.list.open = false;
+                    self.list.settle();
+                    return self.set(i, path, out);
+                }
                 let i = ((hit - ROW) / 10) as usize;
                 let part = (hit - ROW) % 10;
                 let Some(r) = self.table.get(i).copied() else {
@@ -1755,6 +2117,14 @@ impl Card for LookCard {
                         let is_on = self.value(i).eq_ignore_ascii_case(on);
                         self.set(i, if is_on { off } else { on }.to_string(), out);
                         true
+                    }
+                    LookControl::Wallpapers => {
+                        if part == 0 && self.has_more_wallpapers() {
+                            self.open_pick(i);
+                            true
+                        } else {
+                            false
+                        }
                     }
                     LookControl::Pick(_) | LookControl::Found { .. } => {
                         self.open_pick(i);
@@ -1835,7 +2205,11 @@ impl Card for LookCard {
         if let Some(i) = self.table.iter().position(|r| {
             self.row_visible(r)
                 && !self.is_locked(r.key)
-                && matches!(r.control, LookControl::Pick(_) | LookControl::Found { .. })
+                && match r.control {
+                    LookControl::Pick(_) | LookControl::Found { .. } => true,
+                    LookControl::Wallpapers => self.has_more_wallpapers(),
+                    _ => false,
+                }
         }) {
             self.pick = Some(i);
             self.list.open = true;
@@ -1968,6 +2342,7 @@ mod tests {
                         path: (*path).to_string(),
                     })
                     .collect(),
+                ..WallpapersData::default()
             },
         );
         c
@@ -2009,7 +2384,7 @@ mod tests {
                     LookControl::Color => {
                         assert!(parse_hex(v).is_some(), "{} = {v} is not #rrggbb", r.key);
                     }
-                    LookControl::Found { .. } => {
+                    LookControl::Found { .. } | LookControl::Wallpapers => {
                         if r.key == "WALLPAPER" || r.key == "TERMINAL_FONT" {
                             assert!(v.is_empty(), "{} = {v}", r.key);
                         } else {
@@ -2144,29 +2519,54 @@ mod tests {
     }
 
     #[test]
-    fn scans_wallpapers_cap_12_and_handles_empty_and_broken_dirs() {
+    fn scans_wallpapers_sorted_decodes_up_to_24_and_handles_empty_and_broken() {
         let root = TempDir::new("wallpapers");
         let w1 = root.0.join("Pictures/Wallpapers");
         let w2 = root.0.join(".local/share/wallpapers");
         fs::create_dir_all(&w1).unwrap();
         fs::create_dir_all(&w2).unwrap();
 
+        // Empty folder
+        let mut empty_src = WallpapersSource {
+            home: root.0.clone(),
+            path: String::new(),
+        };
+        let empty_data = empty_src.fetch().downcast::<WallpapersData>().unwrap();
+        assert!(empty_data.files.is_empty());
+        assert!(empty_data.thumbs_s.is_empty());
         assert!(scan_wallpapers(&[w1.clone(), root.0.join("missing")]).is_empty());
 
-        for n in 1..=14 {
-            let ext = if n % 2 == 0 { "JPG" } else { "png" };
-            fs::write(w1.join(format!("img_{n:02}.{ext}")), b"").unwrap();
+        // Write 26 valid PNGs + 1 broken image + non-image files
+        let make_png = |path: &Path| {
+            let s = ImageSurface::create(Format::ARgb32, 32, 18).unwrap();
+            s.write_to_png(&mut fs::File::create(path).unwrap())
+                .unwrap();
+        };
+        for n in 1..=25 {
+            make_png(&w1.join(format!("img_{n:02}.png")));
         }
-        fs::write(w2.join("a_top.webp"), b"").unwrap();
+        make_png(&w2.join("a_top.png"));
+        fs::write(w2.join("broken.webp"), b"not an image").unwrap();
         fs::write(w2.join("notes.txt"), b"").unwrap();
         fs::write(w2.join(".hidden.png"), b"").unwrap();
         fs::create_dir_all(w2.join("dir.png")).unwrap();
 
         let found = scan_wallpapers(&[w1, w2]);
-        assert_eq!(found.len(), 12);
-        assert_eq!(found[0].name, "a_top.webp");
-        assert_eq!(found[1].name, "img_01.png");
-        assert_eq!(found[11].name, "img_11.png");
+        assert_eq!(found.len(), 27);
+        assert_eq!(found[0].name, "a_top.png");
+        assert_eq!(found[1].name, "broken.webp");
+        assert_eq!(found[26].name, "img_25.png");
+
+        let data = empty_src.fetch().downcast::<WallpapersData>().unwrap();
+        assert_eq!(data.files.len(), 27);
+        // Only the first 24 shown items are decoded into S/M thumbnails.
+        assert_eq!(data.thumbs_s.len(), 24);
+        assert_eq!(data.thumbs_m.len(), 24);
+        assert!(data.thumbs_s[0].is_some());
+        // Broken file stays None cleanly without failing valid neighbors.
+        assert!(data.thumbs_s[1].is_none());
+        assert!(data.thumbs_m[1].is_none());
+        assert!(data.thumbs_s[2].is_some());
     }
 
     #[test]
@@ -2375,39 +2775,140 @@ mod tests {
         let c_bad = init_appearance(&[], true, &["BORDER_ACTIVE"]);
         assert_eq!(c_bad.state(&c_bad.table[1]), ("Not a colour", true));
 
-        // 7. Found: WALLPAPER list has "The first..." first, filenames showing, full path written, "Other file" last
+        // 7. Wallpapers thumbnail grid: click thumbnail sets WALLPAPER; >24 shows More row opening remaining list + "The first..." + "Other file"
         let mut wp = init_wallpaper(
             &[("WALLPAPER", "/home/u/Pictures/Wallpapers/sky.png")],
             true,
-            &[("sky.png", "/home/u/Pictures/Wallpapers/sky.png")],
+            &[
+                ("sky.png", "/home/u/Pictures/Wallpapers/sky.png"),
+                (
+                    "dawn's light.jpg",
+                    "/home/u/Pictures/Wallpapers/dawn's light.jpg",
+                ),
+            ],
         );
         assert_eq!(wp.display_word(0), "sky.png");
+        // No More row under grid when <= 24 wallpapers (pressing ROW on Picture does nothing).
         out.clear();
-        assert!(wp.event(&press(ROW), &cx_s, &mut out));
-        let entries = wp.list_entries(0);
-        assert_eq!(entries[0].label, "The first in Pictures/Wallpapers");
-        assert_eq!(entries[1].label, "sky.png");
-        assert!(entries[1].active);
-        assert_eq!(entries[2].label, "Other file");
-        // Choose first entry -> writes ""
-        assert!(wp.event(&press(LIST), &cx_s, &mut out));
+        assert!(!wp.event(&press(ROW), &cx_s, &mut out));
+        let (hits_wp_s, _) = draw_card(&wp, &cx_s, 408.0);
+        let (hits_wp_m, _) = draw_card(&wp, &cx_m, 420.0);
+        let thumbs_s: Vec<(u32, Rect)> = hits_wp_s
+            .list
+            .iter()
+            .filter(|(id, _)| (THUMB..THUMB + 24).contains(id))
+            .copied()
+            .collect();
+        let thumbs_m: Vec<(u32, Rect)> = hits_wp_m
+            .list
+            .iter()
+            .filter(|(id, _)| (THUMB..THUMB + 24).contains(id))
+            .copied()
+            .collect();
+        assert_eq!(thumbs_s.len(), 2);
+        assert_eq!(thumbs_m.len(), 2);
+        // S is 2 across (y equal), M is 3 across; 16:9 ratio.
+        assert_eq!(thumbs_s[0].1 .1, thumbs_s[1].1 .1);
+        assert!((thumbs_s[0].1 .2 / thumbs_s[0].1 .3 - 16.0 / 9.0).abs() < 0.05);
+        assert!((thumbs_m[0].1 .2 / thumbs_m[0].1 .3 - 16.0 / 9.0).abs() < 0.05);
+        // Click second thumbnail sets WALLPAPER with sq quoting.
+        assert!(wp.event(&press(THUMB + 1), &cx_s, &mut out));
+        assert_eq!(
+            out,
+            vec![Action::Run(format!(
+                "sh \"$HOME/infynitae/live/settings.sh\" log WALLPAPER '/home/u/Pictures/Wallpapers/sky.png' && \
+                 sh \"$HOME/infynitae/live/settings.sh\" set WALLPAPER {} >/dev/null 2>&1",
+                sq("/home/u/Pictures/Wallpapers/dawn's light.jpg")
+            ))]
+        );
+        assert_eq!(wp.display_word(0), "dawn's light.jpg");
+
+        // Empty folder still draws cleanly without panicking and matches card height.
+        let wp_empty = init_wallpaper(&[], true, &[]);
+        let (hits_empty, h_empty) = draw_card(&wp_empty, &cx_s, 408.0);
+        assert!(h_empty >= 2.0 * ui::ROW_H);
+        assert!(hits_empty
+            .list
+            .iter()
+            .all(|(id, _)| !(THUMB..THUMB + MAX_WALLPAPERS as u32).contains(id)));
+
+        // Grid with 26 wallpapers shows at most 24 thumbnails, then a "More" row (2 across at S -> 12 rows, 3 at M -> 8 rows).
+        let many_files: Vec<(String, String)> = (1..=26)
+            .map(|n| {
+                (
+                    format!("w{n:02}.png"),
+                    format!("/home/u/Pictures/Wallpapers/w{n:02}.png"),
+                )
+            })
+            .collect();
+        let many_refs: Vec<(&str, &str)> = many_files
+            .iter()
+            .map(|(n, p)| (n.as_str(), p.as_str()))
+            .collect();
+        let mut wp26 = init_wallpaper(
+            &[("WALLPAPER", "/home/u/Pictures/Wallpapers/w01.png")],
+            true,
+            &many_refs,
+        );
+        let (hits26_s, h26_s) = draw_card(&wp26, &cx_s, 408.0);
+        let (hits26_m, h26_m) = draw_card(&wp26, &cx_m, 420.0);
+        assert_eq!(
+            hits26_s
+                .list
+                .iter()
+                .filter(|(id, _)| (THUMB..THUMB + MAX_WALLPAPERS as u32).contains(id))
+                .count(),
+            24
+        );
+        // More row hit at ROW when > 24 exists at both S and M.
+        assert!(hits26_s.list.iter().any(|(id, _)| *id == ROW));
+        assert!(hits26_m.list.iter().any(|(id, _)| *id == ROW));
+        // Row 0 thumbnail 0 and row 1 thumbnail 2 differ in y at S (2 across) vs thumbnail 2 on same row at M (3 across).
+        let r0s = hits26_s.list.iter().find(|(id, _)| *id == THUMB).unwrap().1;
+        let r2s = hits26_s
+            .list
+            .iter()
+            .find(|(id, _)| *id == THUMB + 2)
+            .unwrap()
+            .1;
+        let r0m = hits26_m.list.iter().find(|(id, _)| *id == THUMB).unwrap().1;
+        let r2m = hits26_m
+            .list
+            .iter()
+            .find(|(id, _)| *id == THUMB + 2)
+            .unwrap()
+            .1;
+        assert!(r2s.1 > r0s.1);
+        assert_eq!(r2m.1, r0m.1);
+        assert!(h26_s > h26_m);
+
+        // Open More row -> list has w25.png, w26.png, "The first...", "Other file".
+        out.clear();
+        assert!(wp26.event(&press(ROW), &cx_m, &mut out));
+        let entries = wp26.list_entries(0);
+        assert_eq!(entries[0].label, "w25.png");
+        assert_eq!(entries[1].label, "w26.png");
+        assert_eq!(entries[2].label, "The first in Pictures/Wallpapers");
+        assert_eq!(entries[3].label, "Other file");
+        // Choose w25.png -> writes w25 path.
+        assert!(wp26.event(&press(LIST), &cx_m, &mut out));
         assert_eq!(
             out,
             vec![Action::Run(
-                "sh \"$HOME/infynitae/live/settings.sh\" log WALLPAPER '/home/u/Pictures/Wallpapers/sky.png' && \
-                 sh \"$HOME/infynitae/live/settings.sh\" set WALLPAPER '' >/dev/null 2>&1"
+                "sh \"$HOME/infynitae/live/settings.sh\" log WALLPAPER '/home/u/Pictures/Wallpapers/w01.png' && \
+                 sh \"$HOME/infynitae/live/settings.sh\" set WALLPAPER '/home/u/Pictures/Wallpapers/w25.png' >/dev/null 2>&1"
                     .to_string()
             )]
         );
-        // Re-open and pick "Other file" -> ask --text
+        // Re-open More and pick "Other file" -> ask --text with current value prefilled
         out.clear();
-        assert!(wp.event(&press(ROW), &cx_s, &mut out));
-        assert!(wp.event(&press(LIST + 2), &cx_s, &mut out));
+        assert!(wp26.event(&press(ROW), &cx_m, &mut out));
+        assert!(wp26.event(&press(LIST + 3), &cx_m, &mut out));
         assert_eq!(
             out,
             vec![Action::Run(
-                "v=$(\"$HOME/.local/bin/infynitae-edge\" ask --text --default '' 'Picture') || exit 0; \
-                 sh \"$HOME/infynitae/live/settings.sh\" log WALLPAPER '/home/u/Pictures/Wallpapers/sky.png' && \
+                "v=$(\"$HOME/.local/bin/infynitae-edge\" ask --text --default '/home/u/Pictures/Wallpapers/w25.png' 'Picture') || exit 0; \
+                 sh \"$HOME/infynitae/live/settings.sh\" log WALLPAPER '/home/u/Pictures/Wallpapers/w01.png' && \
                  sh \"$HOME/infynitae/live/settings.sh\" set WALLPAPER \"$v\" >/dev/null 2>&1"
                     .to_string()
             )]
