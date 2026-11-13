@@ -590,7 +590,7 @@ pub const TABLE_APPEARANCE: &[LookRow] = &[
         key: "COLOR_SCHEME",
         name: "Apps look",
         says: "",
-        control: LookControl::Words(&[("prefer-dark", "Dark"), ("prefer-light", "Light")]),
+        control: LookControl::Pick(&[("prefer-dark", "Dark"), ("prefer-light", "Light")]),
         after: After::Save,
         more: false,
         hide: HideRule::None,
@@ -2669,10 +2669,12 @@ mod tests {
         };
         let cx_s = test_cx(&th);
 
-        // 1. Words: COLOR_SCHEME Dark -> Light
+        // 1. A short list: COLOR_SCHEME Dark -> Light (open the row, choose the second)
         let mut c = init_appearance(&[("ICON_THEME", "Papirus-Dark")], true, &[]);
         let mut out = Vec::new();
-        assert!(c.event(&press(ROW + 2), &cx_m, &mut out));
+        assert!(c.event(&press(ROW), &cx_m, &mut out));
+        assert!(out.is_empty());
+        assert!(c.event(&press(LIST + 1), &cx_m, &mut out));
         assert_eq!(
             out,
             vec![Action::Run(

@@ -349,8 +349,8 @@ pub fn button(cr: &Context, cx: &Cx, hits: &mut Hits, id: u32, x: f64, y: f64, w
 
 /// The value of a row that opens a list (owner's choice, 2026-11-13: today's quiet value inside
 /// the thin box of a drop-down): the word at the right in a faint outline with a small chevron.
-/// `lit` (the row pointed at) brightens the outline; `open` (its list shown) draws it in the accent
-/// with the chevron turned up; `changed` (not the default) puts the word in the accent. Returns the
+/// `lit` (the row pointed at) and `open` (its list shown) brighten the outline, `open` turns the
+/// chevron up; `changed` (not the default) puts the word in the accent. Returns the
 /// box's width, to keep the row's name clear of it.
 #[allow(clippy::too_many_arguments)]
 pub fn value_box(
@@ -375,11 +375,10 @@ pub fn value_box(
     let w = (tw + pad * 2.0 + chev + 4.0).min(row.2 * 0.6);
     let (x, y) = (x_right - w, row.1 + (row.3 - h) / 2.0);
     draw::round_rect(cr, x + 0.5, y + 0.5, w - 1.0, h - 1.0, th.small_radius());
+    // open: as when pointed at (owner: the accent outline looked wrong), the chevron turned up
     draw::set(
         cr,
-        if open {
-            th.accent
-        } else if lit {
+        if open || lit {
             th.text.alpha(0.28)
         } else {
             th.text.alpha(0.12)
@@ -400,7 +399,7 @@ pub fn value_box(
     cr.move_to(cxp - 3.5, cyp - 1.75 * d);
     cr.line_to(cxp, cyp + 1.75 * d);
     cr.line_to(cxp + 3.5, cyp - 1.75 * d);
-    draw::set(cr, if open { th.accent } else { th.muted });
+    draw::set(cr, th.muted);
     cr.set_line_width(1.4);
     let _ = cr.stroke();
     w

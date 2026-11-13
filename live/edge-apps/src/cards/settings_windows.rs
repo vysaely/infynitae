@@ -59,7 +59,7 @@ pub const TABLE: &[Setting] = &[
         key: "SUPER_ENTER_ACTION",
         name: "Super+Enter",
         says: "",
-        control: Control::Words(&[("maximize", "Maximize"), ("fit", "Fit")]),
+        control: Control::Pick(&[("maximize", "Maximize"), ("fit", "Fit")]),
         after: After::Save,
         more: false,
         needs: &[],
@@ -365,9 +365,12 @@ mod tests {
             )
         );
 
-        // 2. Words (SUPER_ENTER_ACTION, row 3): click "Fit" (130 + 2), no line in now -> old is "-"
+        // 2. A short list (SUPER_ENTER_ACTION, row 3): open it (130), choose "Fit" (LIST + 1); no
+        // line in now -> old is "-"
         out.clear();
-        assert!(card.event(&press(132), &cx, &mut out));
+        assert!(card.event(&press(130), &cx, &mut out));
+        assert!(out.is_empty());
+        assert!(card.event(&press(5001), &cx, &mut out));
         assert_eq!(
             out,
             vec![Action::Run(
@@ -376,9 +379,10 @@ mod tests {
                     .into()
             )]
         );
-        // Clicking the already selected word does nothing
+        // Choosing the value already set writes nothing
         out.clear();
-        assert!(!card.event(&press(132), &cx, &mut out));
+        card.event(&press(130), &cx, &mut out);
+        card.event(&press(5001), &cx, &mut out);
         assert!(out.is_empty());
 
         // 3. Switch (FOCUS_CYCLE_NAVIGATE, row 6: "1"/"0"; FULLSCREEN_PAN, row 8: "true"/"false")
