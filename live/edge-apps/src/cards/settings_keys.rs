@@ -222,6 +222,12 @@ const ACTIONS: &[BuiltinAction] = &[
         defaults: &["SUPER+SHIFT+SPACE"],
         more: true,
     },
+    BuiltinAction {
+        action: "BACK",
+        name: "Go back in view history",
+        defaults: &[],
+        more: true,
+    },
 ];
 
 /// Data emitted by the `key_capture` source (`capture_file_path()`).
@@ -1304,9 +1310,10 @@ mod tests {
         let rows = card.rows();
         assert_eq!(
             rows.len(),
-            29,
+            30,
             "every built-in ACTION_NAMES entry has a row"
         );
+        assert!(rows.iter().any(|r| r.key == "BIND_BACK" && r.chords.is_empty()));
 
         let by_key: HashMap<_, _> = rows.iter().map(|r| (r.key.as_str(), r)).collect();
         assert_eq!(by_key["BIND_TERMINAL"].name, "Open a terminal");
@@ -1737,7 +1744,7 @@ mod tests {
         };
 
         let idle_hits = draw_once(&card);
-        assert_eq!(idle_hits.list.len(), 29);
+        assert_eq!(idle_hits.list.len(), 30);
 
         card.state = UiState::Listening {
             key: "BIND_TERMINAL".into(),
