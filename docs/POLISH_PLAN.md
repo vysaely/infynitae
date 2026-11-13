@@ -1,0 +1,715 @@
+# Polish plan: one look, plain words, less code, less waiting
+
+Written 2026-11-13 from a read of branch `feat/edge-apps` (commit `4cb8855`). A review and a
+plan; no code was changed. Nothing was built or run for it: every statement comes from reading
+the files named, and from the owner's own `~/.local/state/infynitae/session.log` (the session
+started 2026-11-12 22:37). "Not confirmed" marks what reading alone could not settle.
+
+Sizes: S is under a day for one worker, M one to three days, L more. Paths are from the
+repository root. `settings.sh` is `live/settings.sh`; `lock.c` is `live/lock/infynitae-lock.c`;
+`polkit.c` is `live/polkit/infynitae-polkit.c`; `wl/` is `crates/infynitae-wayland/src/`;
+`drm` is `crates/infynitae-backend-drm/src/lib.rs`; `edge/` is `live/edge-apps/src/`.
+
+## What the compositor draws, so the scope is clear
+
+The compositor draws windows, their borders and rounded corners, the cursor, the canvas colour
+and the capture dot (`wl/convert.rs:749-823`, `1073`). It draws no title bars, no on-screen
+display and no notifications of its own: volume and brightness are `notify-send` calls from
+`live/launch.sh:374-503`, shown by the edge's notification server or by mako
+(`docs/COMPONENTS.md:23`). The lock screen, wallpaper, password prompt and portal are separate C
+programs. So "one look" is a question of five drawing parts: the compositor (borders, corners),
+the edge, the lock screen, the password prompt, and the files `settings.sh` writes for GTK, Qt,
+Firefox, terminals, mako and fuzzel.
+
+---
+
+## 1. One look
+
+### 1.1 The shared values
+
+The edge is the largest surface and the one the owner has been choosing by eye, so its values
+are the reference. Everything else moves to them.
+
+| Value | Is | Where it is defined today |
+| :--- | :--- | :--- |
+| **card** | fill of a panel card, dialog, pop-up, lock field | `edge/theme.rs:84`, from `SURFACE_COLOR` or the scheme |
+| **edge** | the 1 px line around a card | `edge/theme.rs:86`, `133-136` |
+| **text** | main text | `edge/theme.rs:87` |
+| **muted** | secondary text: text mixed 32% toward the surface | `edge/theme.rs:142` |
+| **accent** | what is on, chosen or asks for attention | `edge/theme.rs:91`, from `BORDER_ACTIVE` |
+| **on accent** | text on an accent fill | `edge/theme.rs:144` |
+| **accent as text** | the accent where it must read on a card (3:1) | `edge/theme.rs:95-97`, `110-116` |
+| **track** | empty part of a bar or switch: text at 12% | `edge/theme.rs:146` |
+| **pointed at** | text at 8% under the pointer | `edge/ui.rs:24-28` |
+| **chosen** | accent at 16% behind the chosen list item and a list's value | `edge/ui.rs:580`, `378-379` |
+| **corner** | `CORNERS`, else `WINDOW_CORNERS`, else 8 | `edge/config.rs:737-747` |
+| **small corner** | corner x 0.55, rounded: buttons, fields, list rows | `edge/theme.rs:182-184` |
+| **pill** | half the height: switches, sliders | `edge/ui.rs:280`, `463` |
+| **spacing** | 12 between cards and parts, 18 x 16 inside a card, 24 from the screen's edge | `edge/draw.rs:7-9`, `edge/shell.rs:17-21` |
+| **type** | 15 semibold title, 13 body, 12 controls and secondary, 11 notes, in px | `edge/draw.rs:133`, `edge/ui.rs:239`, `332`, `252` |
+| **rows** | 40 px row, 32 px list row, 16 px icon, 30 x 16 switch | `edge/ui.rs:15-21` |
+| **time** | 220 ms for a list, 200 ms for a panel, 180 ms for a pop-up | `edge/ui.rs:18`, `edge/shell.rs:23`, `edge/notify.rs:37` |
+
+No alert colour exists in this set. `docs/NO_SLOP.md` names the tokens as surface, card, text,
+muted and accent, and says the accent is what asks for attention. See item 1.6.
+
+### 1.2 The look is resolved in one place but only a third of it is handed on
+
+- **Wrong.** The edge prints 16 lines of resolved look (`edge/theme.rs:155-179`: card, edge,
+  text, muted, accent, on accent, track, each with opacity, plus both corners). `settings.sh`
+  reads them (`settings.sh:30-66`) and then saves only five to `~/.cache/infynitae/look`
+  (`settings.sh:70-76`: corners, card, edge, text, accent). "Accent as text" is not printed at
+  all. The lock screen, password prompt and screenshot helper read that file
+  (`lock.c:342-361`, `polkit.c:259-281`, `live/shot-rs/src/look.rs:35-43`) and each works out
+  the missing values again: the prompt computes its own small corner (`polkit.c:285`) and its
+  own muted text as text at 62% (`polkit.c:301`), the lock uses text at 45% to 66%
+  (`lock.c:766`, `873`).
+- **Why it matters.** Secondary text is a different grey in each part, and a change to the
+  edge's rules reaches the others only by hand.
+- **Change.** `shell_lines` also prints `LOOK_ACCENT_TEXT` and `LOOK_FONT`; `look_save` writes
+  every line it read; the three readers take muted, small corner and accent-as-text from the
+  file and keep their built-in defaults only for a missing file.
+- **Size** S. **Risk** low: readers ignore lines they do not know (`lock.c:351-360`).
+
+### 1.3 A colour scheme reaches panels but not apps or windows
+
+- **Wrong.** `THEME_SCHEME` other than "yours" changes the card and accent in the edge
+  (`edge/theme.rs:124-131`), and through the look file mako, fuzzel, the lock and the prompt
+  (`settings.sh:420-422`, `433`, `475`). GTK, Qt, Firefox and the terminals are written from
+  the raw `SURFACE_COLOR`, `TEXT_COLOR` and `BORDER_ACTIVE` (`settings.sh:349-371`, `503`,
+  `524`, `604-623`, `675-691`). The compositor's borders read `BORDER_ACTIVE` and
+  `BORDER_INACTIVE` directly (`wl/lib.rs:1393-1401`). The config says so itself: the scheme is
+  "the colours of the panels, widgets, notifications and menus" (`config/config:198-199`).
+- **Why it matters.** With "tonal" or "vibrant" the panels are tinted and every app window,
+  its border and the terminal keep the untinted colours: two palettes on one screen.
+- **Change.** `settings.sh` writes GTK, Qt, Firefox and terminal files from `LOOK_CARD`,
+  `LOOK_TEXT`, `LOOK_ACCENT` and `LOOK_EDGE`. For the window border the compositor reads the
+  look file's accent and edge when the scheme is not "yours" (a file read; no new dependency,
+  so `tools/verify-architecture`'s list for the adapter, lines 80-92, is untouched).
+- **Size** M. **Risk** medium: every themed app changes colour for anyone not on "yours";
+  `tools/test-settings-sync`, `test-qt-theme`, `test-firefox-theme` and `test-mako-config`
+  hold the current output and need new expected values.
+
+### 1.4 Schemes are dark only, and "light" reaches apps only
+
+- **Wrong.** The five built schemes fix the card's lightness at 9% (`edge/theme.rs:125-129`)
+  and take `TEXT_COLOR` unchanged (`edge/theme.rs:121`, `141`). `COLOR_SCHEME="prefer-light"`
+  is read only for GTK and the portal (`settings.sh:338`, `live/portal/settings.c:98-102`).
+  Colours from the wallpaper are dark only, by its own note
+  (`live/wallpaper/theme-colors.h:12`).
+- **Why it matters.** Choosing light apps leaves panels, lock and prompt dark; a hand-made
+  light theme (dark `TEXT_COLOR`) with any built scheme gives dark text on a 9% card.
+- **Change.** The resolver takes light or dark as an input: light gives a card near 96%
+  lightness, dark text, and the same contrast checks (`edge/theme.rs:105-116`). Detail in
+  section 2, group C.
+- **Size** M. **Risk** medium: a light edge has never been looked at; needs pictures from
+  `--render` (`edge/main.rs:34`) reviewed by the owner before it is offered.
+
+### 1.5 The edge's own kit still has the parts the owner chose against
+
+The owner's choice today: a list's value is a soft accent block like the chosen option in the
+open list; no outlined boxes; no big two-button choices.
+
+| Part | File:line | State | Change |
+| :--- | :--- | :--- | :--- |
+| `ui::value_box` | `edge/ui.rs:356-402` | follows the choice | drop the unused `_changed` argument (`ui.rs:362`) |
+| `ui::list_row` | `edge/ui.rs:565-622` | follows it (accent 16%) | none |
+| `ui::choice` | `edge/ui.rs:404-454` | outlined boxes side by side, accent 18%; 4 callers: `cards/settings.rs:949`, `settings_rows.rs:524`, `settings_look.rs:1838`, `3021` | each caller becomes a row whose value opens a list; then delete `choice` |
+| `ui::button` | `edge/ui.rs:329-352` | a 1 px outline; 15 callers in 10 card files | no outline: the "pointed at" fill at rest (text 8%), deeper when pointed at; same height and text |
+| hand-drawn lines | 80 `stroke()` calls outside `ui.rs`, most in `settings_look.rs` (11), `session.rs` (9), `music.rs` (8) | not checked one by one | review each: icon strokes stay, outlines around controls go |
+| type sizes | 11.5 px 15 times, 12.5 three, 13.5 twice, 14 and 10.5 once each, beside the four in 1.1 | counts from `grep 'size: '` over `edge/` | fold into 11, 12, 13, 15 and name them as constants in `draw.rs` |
+| fills | 22 different opacities in `.alpha(...)` calls; 0.16 and 0.18 both mean "chosen" (`ui.rs:433`, `580`) | counts from grep | named constants for pointed-at, chosen, track; one value each |
+
+- **Why it matters.** The same control looks different from card to card, which is what the
+  owner sees as "not one thing".
+- **Size** M (the kit S, the callers M). **Risk** low in code, visible everywhere: the render
+  pictures (`tools/test-edge-render`) and the VM picker and settings scripts
+  (`tools/vm-edge/ppicker.py`, `psettings.py`) are the check.
+
+### 1.6 The lock screen
+
+| What | File:line | Diverges how | Change |
+| :--- | :--- | :--- | :--- |
+| wrong password, Caps Lock | `lock.c:814`, `843`, `880`, `883` | two fixed colours not from the theme | accent as text plus the words already there; or one alert role added to the theme (owner decides, see below) |
+| on-screen keyboard keys | `lock.c:535` | a fixed grey-blue | card and edge from the look file |
+| keyboard font | `lock.c:528`, `552` | "Sans 14" where the rest says "sans-serif" | the look's font |
+| type sizes | `lock.c:763-767`, `853-884` | in points (11, 10.5, 13.5), the edge in px | px: 13 field, 11 notes, 15 date; the clock stays large |
+| background without a wallpaper | `lock.c:706-712` | a radial wash of the surface colour | flat canvas colour (`NO_SLOP.md`: no gradient washes) |
+| field corner | `lock.c:105`, `356-360` | the full corner | small corner, as fields elsewhere |
+
+Owner decision needed: errors in the accent with words (what the password prompt already
+does, `polkit.c:305-308`), or one alert colour in the theme. The plan assumes the first: it
+adds nothing.
+
+- **Size** S. **Risk** low; `tools/test-lock-render` draws every state without locking.
+
+### 1.7 The password prompt
+
+- **Wrong.** A GTK 3 window with its own style sheet (`polkit.c:285-345`): font "Sans"
+  (`:293`), sizes 13/11/12 px, two outlined buttons side by side (`:320-342`), padding 6 x 10
+  and 6 x 14. It is the only part that needs GTK 3 to build
+  (`live/build-helpers.sh:45`).
+- **Change, step 1 (S).** Take muted and small corner from the look file; no outline on the
+  buttons; the confirm button is the soft accent block.
+- **Change, step 2 (M).** Ask through the edge's question card, which already takes a secret
+  (`edge/ask.rs:1`, `edge/main.rs:178`), keeping the GTK window as the fallback when no
+  edge runs; later drop it. Then the prompt is drawn by the same code as every panel.
+- **Risk** step 1 low. Step 2 medium: a password crosses a pipe to another process; the VM
+  script `tools/vm-edge/pmic.py` covers the prompt and `pask.py` the secret.
+
+### 1.8 What apps get from `settings.sh`
+
+| What | File:line | Diverges how | Change |
+| :--- | :--- | :--- | :--- |
+| GTK button and field corner | `settings.sh:327`, `387`, `394` | three quarters of the corner (8 gives 6) where the edge and prompt use 0.55 (8 gives 4) | `LOOK_SMALL_RADIUS` |
+| GTK hover | `settings.sh:389` | text at 14%, the edge 8% | 8% |
+| GTK list selection | `settings.sh:397-399` | a solid accent fill for rows and text selection alike | rows: accent 16% with normal text; text selection stays solid |
+| GTK animations | `settings.sh:339` | forced off, while the edge animates | section 2, group E |
+| mako | `settings.sh:430`, `438-441` | 10 pt font, margin 12, padding 12 x 14; the edge's own pop-ups are 360 wide with margin 24 (`edge/notify.rs:25-29`) | margin 24, padding 16 x 18, the look's font. Only seen when `NOTIFICATIONS` is not the edge (`config/config:575-580`) |
+| fuzzel | `settings.sh:466`, `479` | 11 pt; selection accent at 18% | the look's font; 16% |
+| terminal palette | `settings.sh:505-512` | seven fixed colours, only blue follows the accent (`:509`) | leave: red must stay red in a terminal. Say so in the config comment |
+| terminal selection | `settings.sh:527`, `563` | fixed `#262b38` | accent mixed 30% into the surface |
+| terminal padding | `settings.sh:499`, `529`, `546` | 8, 6, 8 | 8 |
+| fallback colours | `settings.sh:44-45` | `#1e2030`, `#e6e6e6`, opacity `f7` differ from the defaults at `:105-109` and `CARD_OPACITY` 90 | the same defaults |
+
+- **Size** S. **Risk** low; visible in every GTK app, so one before/after picture for the owner.
+
+### 1.9 The compositor's own colours
+
+- `wl/convert.rs:693` `CANVAS_CLEAR` is (0.11, 0.11, 0.13); the config's default canvas is
+  `#0b0f14` (`config/config:151`). Seen only before the config is read. Make them equal. S.
+- `wl/lib.rs:803` the default inactive border has opacity 0.8; a value read from the config has
+  1.0 (`wl/lib.rs:2239`). Pick one. S.
+- `wl/convert.rs:1073` the capture dot is a fixed red. It is a warning mark documented as red
+  (`config/config:719`); leave it, as the one fixed colour.
+- Corner limits differ: windows 0 to 24 (`wl/lib.rs:1354`, `1541`), the edge and
+  `settings.sh` 0 to 28 (`edge/config.rs:739`, `settings.sh:41`), the config says 0 to 24 and
+  0 to 28 (`config/config:190`, `196`). One limit, 24. S.
+
+### 1.10 Font
+
+`FONT_NAME` reaches GTK and Qt only (`settings.sh:336`, `719`). Everything Infynitae draws
+names "sans-serif" itself: `edge/draw.rs:10`, `lock.c:763`, `polkit.c:293`,
+`settings.sh:430`, `466`, `live/shot-rs/src/draw.rs:86`. With the default they agree; with a
+chosen font, apps change and the desktop does not. Change in section 2, group D. S.
+
+---
+
+## 2. One setting, many parts
+
+The rule for every group: the person sees one row. Old keys keep working, unchanged, as
+overrides written only in the file. A config without the new key behaves exactly as today,
+because the new key's missing value is worked out from the old ones. Keys shown on no card
+are listed in `FILE_ONLY` (`edge/cards/settings_rows.rs:173`), and a test there fails when a
+key is on neither a card nor that list (`settings_rows.rs:1046-1061`), so the split is
+enforced.
+
+The Appearance card has 13 rows today (`edge/cards/settings_look.rs:795-917`), Games 9
+(`settings_games.rs:24-105`), Lock and sleep 6 (`settings_lock.rs:26-83`).
+
+### A. Corners: already one, with loose ends
+
+- **One setting:** "Corners" (`WINDOW_CORNERS`, the row at `settings_look.rs:822-823`).
+- **Drives:** windows (`wl/lib.rs:1352-1360`, `1541-1543`), the edge
+  (`edge/config.rs:737-747`), the look file (`settings.sh:34-43`) and from it GTK
+  (`settings.sh:327`), mako (`:437`), fuzzel (`:486`), the lock (`lock.c:356-360`), the prompt
+  (`polkit.c:276-280`), the screenshot helper (`live/shot-rs/src/look.rs:41`).
+- **Overrides in the file:** `CORNERS` (other corners for Infynitae's own parts,
+  `config/config:192-196`) and `SQUARE_CORNERS` (`:176`). Both are file-only already
+  (`settings_look.rs:2`).
+- **Left to do:** one limit (item 1.9); GTK takes the small corner (item 1.8).
+- **Migration:** none.
+
+### B. Accent: one colour under a border's name
+
+- **Today:** `BORDER_ACTIVE` is "border of the focused window, and the accent colour apps
+  use" (`config/config:161-162`). The Settings row already says "Accent"
+  (`settings_look.rs:804-805`).
+- **One setting:** `ACCENT`. Drives the focused border (`wl/lib.rs:1393-1397`), the edge
+  (`edge/config.rs:735`), apps through the portal (`live/portal/settings.c:103-106`), GTK
+  (`settings.sh:353`, `371`), Qt (`:687`), Firefox (`:615-623`), folders
+  (`settings.sh:216`), terminals (`:509`, `:526`), lock and prompt through the look file.
+- **Override in the file:** `BORDER_ACTIVE`, for a focused border that differs from the accent.
+- **Migration:** no `ACCENT` line means `ACCENT` is `BORDER_ACTIVE`. Not a rename in
+  `live/config-renames`: the old key keeps its own meaning.
+- **Do it after 1.2 and 1.3:** then only the resolver, the portal and the compositor read
+  the key, not nine places in four languages.
+- **Card:** one row, as now. **Size** S once 1.3 is in. **Risk** low.
+
+### C. Colours: six rows to three
+
+- **Today:** "Apps look" (`COLOR_SCHEME`), "Panels' colours" (`THEME_SCHEME`), "Background"
+  (`SURFACE_COLOR`), "Text" (`TEXT_COLOR`), "Other windows' border" (`BORDER_INACTIVE`),
+  "Behind the windows" (`CANVAS_COLOR`), "Colours from the wallpaper"
+  (`THEME_FROM_WALLPAPER`), "Apps follow these colours" (`THEME_SYNC`):
+  `settings_look.rs:795-917`.
+- **One setting each, three rows:**
+  1. **"Dark or light"** (`COLOR_SCHEME`, kept). Drives apps as now and, new, the resolver's
+     card and text when they are not set by hand (item 1.4).
+  2. **"Colours"** (`THEME_SCHEME`, kept; the row is renamed from "Panels' colours"). Drives
+     everything after item 1.3, not panels alone. "yours" stays the value that means "use
+     the colours in the file as they are".
+  3. **"Colours from the wallpaper"** (kept).
+- **Overrides in the file:** `SURFACE_COLOR`, `TEXT_COLOR`, `BORDER_INACTIVE`,
+  `CANVAS_COLOR`. With "yours" they are used as written, as today. With a built scheme the
+  canvas and the inactive border are worked out from the card (the wallpaper helper already
+  has that rule: canvas darker than the surface, border the surface lightened toward the
+  accent, `live/wallpaper/theme-colors.h:9-11`).
+- **`THEME_SYNC`** moves to the file: it is a switch for people who keep their own GTK or
+  terminal files, and each managed file can already be kept by deleting its "managed by
+  infynitae" line (`settings.sh:342-345`).
+- **Migration:** existing configs have `THEME_SCHEME="yours"` or no line, and "yours" reads
+  the four colour keys as today (`edge/theme.rs:130-131`). Nothing changes until the person
+  picks another value.
+- **Card:** Appearance goes from 13 rows to 8: Dark or light, Accent, Colours, Colours from
+  the wallpaper, Corners, Card opacity, Window border, Folders in the accent. The colour
+  pickers for background and text stay reachable under "yours" (the any-colour tab from
+  commit `94de896`) or in the file.
+- **Size** M (with 1.3 and 1.4). **Risk** medium, as 1.3 and 1.4.
+
+### D. Font: one family; size is not one setting
+
+- **One setting:** "Font" (`FONT_NAME`, kept). Drives GTK and Qt as now
+  (`settings.sh:336`, `719`) and, new, the look file's `LOOK_FONT`, read by the edge
+  (`edge/draw.rs:10`), lock, prompt, mako, fuzzel and the screenshot helper (item 1.10).
+- **Stays separate, for a reason:** `TERMINAL_FONT` (`config/config:327-329`): a terminal
+  needs a fixed-width font and the interface does not.
+- **Not one setting:** `FONT_SIZE` is in points and scales app text (`config/config:332`).
+  The edge's layout is in fixed px (`edge/ui.rs:15-21`); scaling its text without its rows
+  would clip. The one size for everything is `OUTPUT_SCALE` (`config/config:398`), which
+  already has per-screen overrides (`:467-468`). Leave `FONT_SIZE` for apps and say so in
+  its comment.
+- **Migration:** none; the default "sans-serif" is what is hard-coded today.
+- **Card:** "Fonts, icons, cursor" keeps its rows. **Size** S. **Risk** low: a font with wide
+  letters can clip fixed-width labels; the render pictures show it.
+
+### E. Motion: no setting exists, and the parts disagree
+
+- **Today:** GTK animations are forced off (`settings.sh:339`); the edge animates lists,
+  panels and pop-ups (`edge/ui.rs:18`, `edge/shell.rs:23-26`, `edge/notify.rs:37`); the
+  wallpaper's depth settles over about a second (`config/config:388-391`). No key covers
+  them (no `MOTION` or `ANIMATION` key in `config/config`).
+- **One setting:** `MOTION="on"` or `"off"`. Drives the edge's durations (off: zero),
+  `gtk-enable-animations`, and the wallpaper's settle.
+- **Migration:** a missing `MOTION` keeps today's mix exactly (edge on, GTK off). Writing the
+  key is what makes them agree.
+- **Owner decision:** `NO_SLOP.md` says no setting nobody asked to change. If the owner
+  does not want the switch, the lean answer is a fixed choice: turn GTK's animations on to
+  match the edge, no key. The plan assumes the fixed choice. **Size** S. **Risk** low.
+
+### F. Games: nine rows to three
+
+- **Today:** `GAME_MODE`, `GAME_QUIET`, `TEARING`, `GPU_RELIEF`, `BACKGROUND_PRIORITY`,
+  `LATENCY`, `DIRECT_SCANOUT`, `FIT_IS_FULLSCREEN`, `HARDWARE_CURSOR`
+  (`settings_games.rs:24-105`).
+- **One setting:** "Game mode" (`GAME_MODE`, kept). On: the CPU governor through gamemode
+  (`config/config:272-274`), notifications held (`GAME_QUIET`, `live/launch.sh:121-125`),
+  hidden windows slowed when the GPU is full (`GPU_RELIEF`, `config/config:284-288`).
+- **Rows kept:** Game mode, Tearing in fullscreen, Lower priority for apps out of sight (it
+  also applies with no game running, `config/config:291-293`).
+- **Overrides in the file:** `GAME_QUIET` and `GPU_RELIEF` (each can still be set to false on
+  its own), and the tuning keys `LATENCY`, `DIRECT_SCANOUT`, `FIT_IS_FULLSCREEN`,
+  `HARDWARE_CURSOR`: their defaults are the measured best, and the row names needed GPU
+  words to explain them.
+- **Migration:** all keys read as today; only the card changes. **Size** S. **Risk** low.
+
+### G. Lock: two rows to one
+
+- **Today:** "Lock when the screens go off" (`IDLE_AUTO_LOCK`) and "Lock before sleep"
+  (`SLEEP_LOCK`): `settings_lock.rs:43-53`.
+- **One setting:** "Lock when away" (new key `LOCK_WHEN_AWAY`). Drives the idle lock
+  (`drm:1737-1740`, `1775`) and `live/infynitae-sleep-lock`.
+- **Overrides in the file:** the two old keys. **Migration:** a missing `LOCK_WHEN_AWAY`
+  means each old key decides for itself, as today.
+- **Stays separate:** `START_LOCKED` (the login, a different moment).
+- **Size** S. **Risk** low, but it is the lock: `tools/test-sleep-lock` and a VM round.
+
+### H. Already one setting, leave alone
+
+- **Cursor theme and size:** read by the compositor (`wl/lib.rs:1192-1201`, `1586-1601`)
+  and passed to X11, GTK and Qt by `settings.sh:299-300`, `311-318`, `334-335`. Two rows for
+  two different things.
+- **Keyboard repeat:** delay and rate, read by the compositor (`wl/lib.rs:587-612`,
+  `1480-1490`) and exported for apps (`live/env.sh:124-125`).
+- **Recording quality:** `RECORD_FPS`, `RECORD_CODEC`, `RECORD_AUDIO` already serve both the
+  replay and a recording (`config/config:817-825`).
+- **Which program does a job** (`LAUNCHER`, `CONTROL_MENU`, `MENU_PICKER`,
+  `CLIPBOARD_PICKER`, `NOTIFICATIONS`, `POLKIT_AGENT`, `SCREEN_LOCKER`): all "auto" by
+  default, all file-only already (`settings_rows.rs:189-204`), and `ENABLE_EDGE="false"`
+  already moves the "auto" ones to their fallbacks (`config/config:587-591`).
+
+### Where one value is wrong
+
+- Window corner and control corner: a 4 px button inside an 8 px card is the design.
+- Interface font and terminal font; app text size and the edge's sizes (group D).
+- Card opacity (`CARD_OPACITY`, 90) and terminal opacity (`settings.sh:502`, 97): text in a
+  terminal needs the more solid background.
+- Canvas and surface: the canvas is deliberately darker, so windows stand off it.
+- Tearing and variable refresh: different trade-offs, chosen per game.
+- No spacing setting: spacing is part of the design, fixed in 1.1.
+
+---
+
+## 3. Wording
+
+The setting names on the edge's cards are already plain ("A new window opens", "Stop
+charging at"). The worst texts are in the scripts and the password prompt.
+
+| Where | Now | Replace with |
+| :--- | :--- | :--- |
+| `live/launch.sh:656` | "Idle Inhibit: ON" / "Stay Awake enabled (display sleep suppressed)" | "Stay awake is on" / "The screens stay on until you turn it off" |
+| `live/launch.sh:662` | "Idle Inhibit: OFF" / "Display sleep restored (normal timeout)" | "Stay awake is off" / "The screens turn off after the usual time" |
+| `live/launch.sh:627`, `633` | "Privacy Mode: ON" / "Window hidden from screen share & capture"; "Privacy Mode: OFF" | "This window is hidden from captures" / "This window shows in captures again" |
+| `live/launch.sh:645`, `650` | "Tearing: ON" / "Tearing: OFF" | "Tearing is on for this window" / "Tearing is off for this window" |
+| `live/launch.sh:262` | "Infynitae Reloaded" / "Configuration re-applied from ~/.config/infynitae/config" | "Settings reloaded" |
+| `live/launch.sh:276`, `285`, `313`, `349` | "Screenshot Saved", "Region Screenshot Saved" | "Screenshot saved" for both, with the file |
+| `live/record/infynitae-recorder:340`, `388` | "Clip Saved" | "Clip saved" |
+| `live/record/infynitae-recorder:345` | "Replay Buffer Inactive" / "No replay buffer directory found." | "The replay is off" / "Turn it on in Settings, Screenshots and recording" |
+| `live/record/infynitae-recorder:358`, `373` | "Replay Buffer Empty" / "Still buffering first segment…", "Waiting for segments..." | "Nothing to save yet" / "The replay started a moment ago. Try again in a few seconds." |
+| `live/record/infynitae-recorder:423`, `436` | "Recording Started", "Recording Saved" | "Recording" / "Recording saved" |
+| `polkit.c:442`, `458` | "Authentication Required — Infynitae", "Authentication required" | "Password needed" |
+| `polkit.c:463` | "Privilege escalation requested." / "Action: org.…" | the program's own message; without one, "A program asks to change the system". The action id stays as the quiet second line, without "Action:" |
+| `polkit.c:507` | "Authenticate" | "Allow" |
+| `polkit.c:194` and `lock.c:881` | "Authentication failed. Try again." and "Wrong password, try again" | "Wrong password, try again" in both |
+| `settings.sh:853` | "==> Settings synchronized successfully across all toolkits." | "Applied." |
+| `config/config:364-366` | "Synchronize the palette above to Mako, Fuzzel, GTK 3/4, Qt…" | "Apps follow these colours (GTK, Qt with qt6ct, Firefox, terminals, mako, fuzzel)", the card's own words (`settings_look.rs:917`) |
+| `config/config:354-360` | "Primary text color across panels…" ("color") | "colour", as the rest of the file (`:198`, `:370`) |
+| `live/infynitae-automount:190` | "Unlock it with: udisksctl unlock -b /dev/…" | ask for the passphrase with the edge's question card (the script already reports "Wrong passphrase", `:206`); the command only when no edge runs |
+
+Words that mean two things:
+
+- **"fit"** is the wallpaper's mode (`settings_look.rs:940-941`), the camera's zoom to a
+  window (`config/config:133-137`) and `FIT_IS_FULLSCREEN`. Rename the wallpaper row to
+  "Placement".
+- **"control menu", "control panel", "Quick settings"** for Super+A and its content
+  (`config/config:562`, `:39`, `:844`; `edge/cards/quick.rs:15`). Use "control panel" for
+  the panel, "Quick settings" for the card, and "control menu" only for the fuzzel fallback
+  script.
+- **Capital letters:** the scripts use Title Case, the edge sentence case. `NO_SLOP.md`
+  asks for sentence case; the table above applies it.
+
+Row names that still need a hardware word, all moved to the file by section 2 group F:
+"Cursor on the GPU's layer" (`settings_games.rs:105`), "Fullscreen straight to the screen"
+(`:87`), "When frames are drawn" (`:73`). Others to rename: "Cards" for opacity
+(`settings_look.rs:845-846`) to "Card opacity"; "Apps look" (`:795-796`) to "Dark or light";
+"Recorded by" (`settings_recording.rs:96`) to "Recorder".
+
+**Size** S for the table. **Risk** low; `tools/test-launch-actions` may hold some of these
+texts (not confirmed) and would need the new ones.
+
+---
+
+## 4. Lean
+
+### 4.1 Remove now (no behaviour changes)
+
+| What | Evidence | Size |
+| :--- | :--- | :--- |
+| `live/lock/xdg-shell*` and `live/lock/wlr-layer-shell*` (six files, 5,232 lines) | the lock includes only `ext-session-lock-v1-protocol.h` (`lock.c:36`) and is built from two sources (`live/build-helpers.sh:46-47`); nothing else names these files; they are byte-for-byte copies of the wallpaper's (`cmp`) | S |
+| `live/edge-apps/src/config.rs.orig` | a tracked leftover of a patch (`git ls-files`) | S |
+| `#![allow(dead_code)]` for the whole new edge | `edge/main.rs:8`, with a comment that the Wayland side "comes next" (`:4-7`); it exists (`edge/wayland.rs`, 1,557 lines). Remove the line, then delete what the compiler names. Also `edge/draw.rs:114` and `ui.rs:362` | S to M, not known until built |
+| stale statements | `crates/infynitae-wayland/Cargo.toml` says "no [patch]" while the root has one (`Cargo.toml:27-28`); `docs/COMPONENTS.md:22` says notifications default to mako, the config says the edge (`config/config:575-580`); `docs/COMPONENTS.md:25` and `config/config:593-597` describe three edges | S |
+
+### 4.2 Remove when the new edge replaces the old ones
+
+Blocking first: the desktop widgets and the `calendar`, `memory` and `system` modules exist
+only in the Rust edge (`config/config:619`, `656-661`). The owner decides whether widgets are
+ported or dropped before `live/edge-rs` goes. Editing a panel ("Add a card") is also still
+open in the new edge (`docs/EDGE_APPS.md:3`).
+
+| Goes | Evidence |
+| :--- | :--- |
+| `live/edge` (the C edge, 6,101 lines plus headers) and `live/edge-rs` (1.1 MB of source) | both frozen (`live/edge/FROZEN`, `live/edge-rs/FROZEN`) |
+| their builds | `live/build-helpers.sh:53-55`, `79` |
+| `live/edge-pick` and `EDGE_IMPL` | `live/edge-pick:11-31`, `config/config:593-597`, `wl/lib.rs:1188-1190`, `settings.sh:47-49`, `live/infynitae-reload:206-207`, `258-259`, `live/session.sh:184-185`. Retire the key with a "-" line in `live/config-renames` |
+| CI jobs `old-edges-frozen` and `edge-rs` | `.github/workflows/ci.yml:76-103`, `107-130` |
+| tests of the old edges | `tools/test-edge-rs`, `tools/test-edge-pick`; `tools/test-edge-app-search`, `test-edge-config-value` and `test-edge-child-signals` name no edge binary and most likely compile the C edge's headers (`live/edge/*.h`): not confirmed, check before deleting |
+| old names in the new edge | its runtime files are called `infynitae-edge-rs.ask`, `.features`, `.ask-cancel` (`edge/ask.rs:36-39`), and `live/infynitae-format-drive:53-54` reads two features files |
+| installed binaries | `infynitae-edge-c` 212 KB and `infynitae-edge-rs` 3.6 MB in `~/.local/bin` (`ls`, today) |
+
+Also in `~/.local/bin`, outside the repository: `infynitae.before-frames` (11 MB) and
+`infynitae-wallpaper.before-apps`, backups from earlier trials. The owner can delete them by
+hand once the current builds are trusted.
+
+### 4.3 Config parsing: eight readers, three sets of rules
+
+| Reader | File:line | How |
+| :--- | :--- | :--- |
+| session scripts | `live/config.sh:8-21` | the file is run as shell |
+| `settings.sh` | `settings.sh:79-81` | run as shell, without `config.sh`'s check for a broken line and without the renames (`live/config.sh:24-32`) |
+| `settings.sh set` | `settings.sh:140-150`, `804-848` | awk, twice |
+| `edge-pick` | `live/edge-pick:11` | sed |
+| compositor | `wl/lib.rs:1996` `config_line`, used at `wl/lib.rs:1162`, `drm:1726`, and by `crates/infynitae/src/main.rs:392`, `restore.rs:792`, `wl/screencopy.rs:159` | Rust, line by line |
+| new edge | `edge/config.rs:590`, `640` | Rust, its own |
+| lock, prompt, portal, wallpaper | `lock.c:373-390`, `polkit.c:215-227`, `live/portal/settings.c:98`, `live/wallpaper/infynitae-wallpaper.c` | C, four copies |
+| screenshot helper | `live/shot-rs/src/look.rs:133` | Rust, a third hex parser |
+
+What goes wrong today: a switch written `"ON"` or `"True"` is on for the compositor, which
+lowers the case (`wl/lib.rs:1375-1378`), and off for the shell, which accepts six exact
+spellings (`live/config.sh:82-87`); `GAME_QUIET` is compared with the exact word `true`
+(`live/launch.sh:125`). The compositor alone has 39 copies of the yes/no match
+(`grep` over `crates/*/src`).
+
+- **Change.** Not one shared library: the compositor's crates may not gain dependencies
+  (`tools/verify-architecture:80-92`) and the helpers are in three languages. Instead:
+  1. One yes/no function in `wl/lib.rs` beside `config_line`, used by all 39 places. S.
+  2. `infy_on` lowers the case; `launch.sh` uses it. S.
+  3. One file of cases (`tools/config-cases`: a line, the key and value it must give, on or
+     off) that the compositor's test, the edge's test and a shell test all read. A new
+     spelling then fails in whichever reader disagrees. S.
+  4. After 1.2 the lock, prompt and screenshot helper read only the look file, and their
+     config parsers go. S.
+- **Risk** low. A config line with `$(...)` is still run by the shell readers and read as
+  text by the others; that difference stays and should be said in the config's header.
+
+### 4.4 Changing a setting does everything
+
+- **Wrong.** The edge changes a setting by starting `settings.sh` twice (`log`, then `set`:
+  `edge/cards/settings_rows.rs:151-157`). `set` then runs the whole apply with `--force`
+  (`settings.sh:851-852`): GTK 3 and 4, mako, fuzzel, three terminals, every Firefox
+  profile, Qt 5 and 6 with 17 awk starts for the palette (`settings.sh:670-690`), the
+  folder icons, for any key, also `TOUCHPAD_TAP`.
+- **Why it matters.** Process starts and file writes on every click in Settings, and the
+  compositor's reload that follows stalls it (item 5.4).
+- **Change.** `set` takes the old value and logs it itself (one start); the apply runs only
+  when the key is one of the look keys; the Qt palette is one awk call.
+- **Size** S to M. **Risk** medium: a key missing from the look list would not reach apps
+  until the next login; `tools/test-settings-actions` and `test-settings-sync` cover it.
+
+### 4.5 Builds and binaries
+
+- Three Rust programs outside the workspace each have their own lock file and target
+  folder and compile the same cairo, pango, zbus and Wayland client crates
+  (`live/edge-apps/Cargo.toml`, `live/edge-rs/Cargo.toml` with identical dependencies,
+  `live/shot-rs/Cargo.toml`; `live/build-helpers.sh:79-81`). After 4.2 two remain: put
+  them in one workspace under `live/` with one target folder, so an install compiles the
+  shared crates once. It is a second workspace; the root one that
+  `tools/verify-architecture` checks is untouched. S.
+- The compositor is built with full link-time optimisation but not stripped
+  (`Cargo.toml:33-35`); it is 11.3 MB installed, the edge 4.1 MB with `strip = true`
+  (`live/edge-apps/Cargo.toml`). `strip = "debuginfo"` keeps function names for crash
+  reports. The size gain is not measured. S.
+- The password prompt is the only user of GTK 3 at build time (`live/build-helpers.sh:45`);
+  item 1.7 step 2 removes it.
+- `live/control-menu` (406 lines) is the fuzzel fallback for `ENABLE_EDGE="false"`. It is
+  not dead; keep it for PCs without the edge.
+
+---
+
+## 5. Speed and resource use
+
+From `~/.local/state/infynitae/session.log`, read today, screen at 165 Hz (6.06 ms a
+refresh):
+
+- "input to screen p50 11.52 ms, p95 12.09 ms (155 frames)"; other 10 s windows show p50
+  6.0 to 11.2 ms.
+- "refresh to submit p50 0.06 ms … submit to refresh p50 5.98 ms"; "budget 0.13 ms".
+- "715 of 41069 frames missed their refresh" (1.7%).
+- 206 "Slow turn" lines: 70 name element building (8 to 10 ms each), at least 38 name
+  captures (8.4 to 8.9 ms), 10 screen rescan (about 9 ms), 9 "config and idle" (two of them
+  92 ms).
+
+Ranked by expected gain. None of the gains is measured; each item says how to measure it.
+
+### 5.1 Desktop frames are drawn 6 ms before they are shown
+
+- **Wrong.** `LATENCY="direct"` draws at once unless a game is scanned out
+  (`config/config:234-241`; `drm:2180-2181`). The log shows the result: a frame is handed
+  over 0.06 ms after a refresh and waits 5.98 ms for the next, while drawing it takes
+  0.13 ms. Whatever the mouse did in those 6 ms is not in the picture.
+- **Why it matters.** It is most of the 6 to 11.5 ms between hand and screen on the desktop.
+- **Change.** In "direct", composited frames also start late when the measured budget is
+  small (under 1 ms, say) and no refresh was missed lately. The scheduler already widens
+  its margin on a miss, narrows it again and pauses itself when misses persist
+  (`wl/frame_schedule.rs:296-314`, `65-78`). The config warns that late drawing misses more
+  while the GPU is busy (`config/config:238-240`), so it stays off while `GPU_RELIEF` is
+  acting or a game is on another screen.
+- **Expected gain:** up to about 4 ms off input to screen on the desktop (an estimate from
+  the two numbers above).
+- **Measure:** `LATENCY_STATS` lines before and after, same desktop use: input-to-screen
+  p50 and the missed count.
+- **Size** M. **Risk** medium: more missed refreshes if the guard is wrong. The pure logic
+  is unit-tested in `wl/frame_schedule.rs:590-750`; add cases there first.
+
+### 5.2 The recorder's captures run on the compositor's one thread
+
+- **Wrong.** `serve_captures` draws and reads back on the main thread before each frame
+  (`drm:2136-2151`); at least 38 slow turns of 8.4 to 8.9 ms name it. Already item 2 in
+  `docs/research/PERFORMANCE-LINUX.md:229`.
+- **Change.** As written there: the recorder takes dmabuf frames and encodes on the GPU;
+  until then, 30 frames a second while game mode is on.
+- **Size** M to L. **Risk** medium (two programs and a protocol path).
+
+### 5.3 Element building stalls for 8 to 10 ms
+
+- **Wrong.** 70 slow turns name "element building" (`drm:2231`), the step that builds each
+  frame's list (`wl/convert.rs:749-823`). The cause is not confirmed. Open since the
+  earlier review (`docs/research/PERFORMANCE-LINUX.md:234`).
+- **Change, step 1 (S).** Finer marks inside it: cursor, layers above, windows, layers
+  below, and the wrap at `drm:2218-2230`. One session then names the part.
+- **Step 2.** Fix what the marks show. Size not known.
+- **Risk** step 1 none beyond log lines (only written when a turn is slow, `drm:3077`).
+
+### 5.4 Each settings change stalls the compositor
+
+- **Wrong.** Nine slow turns name "config and idle", two at 92 ms: about 15 refreshes
+  without a frame. That step holds the config reload (`drm:1712-1746`, `wl/lib.rs:1070`
+  onward), a second read of the same file (`drm:1726-1741`) and the start of `config-check`
+  (`wl/outputs.rs:342-344`). Which of them is slow is not confirmed.
+- **Change.** A mark after each of the three; then move the slow one off the turn or skip
+  it when its keys did not change. With 4.4 there are also fewer writes.
+- **Size** S to find, S to M to fix. **Risk** low.
+
+### 5.5 The edge fetches everything every 2 s
+
+- **Wrong.** Each source says how often it wants to be read, or "once per opening"
+  (`edge/card.rs:18-24`; `None` at `cards/settings_about.rs:144`, `settings_display.rs:237`,
+  `settings_look.rs:234` and others). The loop ignores it: while a panel is open, every
+  source of every card on it is fetched every 2 s, each on a new thread
+  (`edge/wayland.rs:536-557`); `every()` has no caller outside tests. The About card's
+  source starts four programs (`cards/settings_about.rs`, four `Command::new`).
+- **Why it matters.** An open Settings panel starts programs every 2 s for data that does
+  not change. A closed edge wakes for nothing, which is right (`edge/wayland.rs:1380-1381`).
+- **Change.** Keep the last fetch time per source and honour `every()`.
+- **Size** S. **Risk** low; a unit test with a counting source, and
+  `tools/vm-edge/psettings.py`.
+
+### 5.6 Smaller, in order
+
+- The edge's theme follows a config change only while a panel is open
+  (`edge/wayland.rs:531-535`): a pop-up shown with the edge closed keeps the old colours
+  until a panel opens. Reload on the next draw as well. S.
+- Real-time priority for the compositor's thread: not in the code (no `SCHED_RR` in
+  `crates/` or `live/`), still open as item 5 of `PERFORMANCE-LINUX.md:232`. S plus one
+  `sudo` step.
+- `screen rescan` takes about 9 ms on ten turns (`drm:1686-1695`). Likely hotplug only; not
+  confirmed. Look after 5.3.
+- `live/launch.sh` loads `env.sh` and the config on each shortcut; `tools/test-launch-fast`
+  guards it in CI (`.github/workflows/ci.yml:57`). Not measured here; leave.
+- The compositor checks the config's time every 250 ms, only on turns it takes anyway
+  (`drm:1712-1716`), and the background check is deadline-driven (`wl/background.rs:132-152`).
+  Nothing to gain.
+
+Already done since the earlier review: clients are flushed before drawing (`drm:2026-2029`)
+and the margin shrinks a whole step after 240 good frames (`wl/frame_schedule.rs:65-69`).
+
+---
+
+## 6. Smithay
+
+### 6.1 What it is here
+
+Smithay 0.7.0 is vendored at `vendor/smithay-0.7.0` with four local patches (`patches/0001`
+to `0004`, 362 lines of patch text): pointer constraints on leave, tearing page flips, a lost
+GPU context, context priority. `tools/verify-architecture` pins the version, checks every
+vendored file against `enforcement/smithay-0.7.0.sha256`, and lists the patched files' hashes
+by hand (lines 32-53, 329-373). Infynitae already goes around the parts of Smithay that did
+not fit: its own placement instead of `Space`, its own hit test, its own render tree and popup
+order (`docs/foundation/FOUNDATION_BLOCKERS.md`, W-SM-1, 2, 5, 11, 12, 20). What is used is the
+protocol code and the DRM, EGL and input backends: a toolkit, as the owner says.
+
+### 6.2 Where it limits Infynitae, and the small patch for each
+
+| Limit | Evidence | Patch | Size | Upstream |
+| :--- | :--- | :--- | :--- | :--- |
+| Unused `error` imports: warnings in every build | `use tracing::{…error…}` with no `error!(` in `backend/drm/surface/gbm.rs:19`, `backend/session/libseat.rs:28`, `backend/winit/mod.rs:27`, `input/keyboard/mod.rs:15`, `wayland/seat/keyboard.rs:3` (found by grep, not by building) | remove five words | S | yes; whether upstream already has it is not confirmed |
+| Wrong error code for a buffer before configure | W-SM-18 (`FOUNDATION_BLOCKERS.md:376-380`); upstream commit `641d2ad` | backport that commit; the tests then accept only the right code | S | already upstream |
+| A constraint's lifetime is private, so the adapter guesses "persistent" and cleans up after | W-SM-21 (`:395-399`) | a three-line accessor; the workaround goes | S | yes |
+| A dead client's popup grab stays until the next pointer event | W-SM-19 (`:382-386`) | drop the grab on disconnect | M | yes |
+| Why a frame was not scanned out is only in trace events, so Infynitae carries `tracing` and a 147-line subscriber | `crates/infynitae-backend-drm/Cargo.toml` comment; `crates/infynitae-backend-drm/src/scanout_log.rs` | return the reason from `render_frame` (`vendor/…/backend/drm/compositor/mod.rs:1690`) | M | yes, as an API addition |
+| `configure_bounds(0,0)` cannot be left out | W-SM-17 (`:370-374`) | none needed: bounds are always set | - | - |
+
+Not limits of Smithay: `wp_fifo`, `wp_commit_timing` and explicit sync are in the vendored
+tree (`vendor/smithay-0.7.0/src/wayland/fifo`, `commit_timing`, `drm_syncobj`) and are not
+offered by Infynitae yet (no use in `crates/`). That is adapter work, no patch
+(`docs/research/PERFORMANCE-LINUX.md:242`, `245`).
+
+Speed: nothing read here shows Smithay as the cause of the stalls in section 5. Item 5.3's
+marks come first; a patch for speed needs a number that points into `vendor/`.
+
+### 6.3 Keeping patches small, listed and upstreamable
+
+1. One patch, one reason, one file in `patches/`, numbered. Its header says what failed,
+   the owner's decision and date, and the upstream link or "not sent, because".
+2. A list at `patches/README.md`: number, files touched, lines, reason, upstream state.
+   Today that list is spread over comments in `tools/verify-architecture:38-53` and
+   `Cargo.toml:24-28`.
+3. Each patch comes with a test in `crates/infynitae-backend-headless/tests/` that fails
+   without it, except build-only ones like the imports.
+4. Each patch updates `enforcement/smithay-0.7.0.sha256` and the hash tables in
+   `tools/verify-architecture`. A later step, M: replace the hand-kept tables with one
+   check that the vendored tree equals 0.7.0 from crates.io plus `patches/000*.patch`
+   applied in order. Then a patch is one file and one list line.
+5. Send each upstream when written. A merged one disappears at the next pin update.
+6. A limit: when the set passes about ten patches or 600 lines, move the pin to a newer
+   Smithay instead of adding more. Whether a newer release exists was not checked.
+
+### 6.4 Recommendation
+
+Yes, make your own improvements, in the form above: small numbered patches to the vendored
+copy, each tested, listed and sent upstream. Do not fork Smithay into the tree as Infynitae's
+own code, and do not replace it: the parts in use (protocol objects, DRM and EGL, libinput,
+libseat) are large, hardware-facing, and maintained by others, and nothing found argues that
+they hold Infynitae back. The first three rows of 6.2 are a good first batch: they are a few
+lines each, one is already upstream, and they remove a workaround and the warnings. This
+changes the standing rule ("no Smithay patch now", `FOUNDATION_BLOCKERS.md:397`) from "only
+when forced" to "when it removes a workaround or a defect in a few lines", which is the
+owner's decision to record in `docs/DECISIONS.md`.
+
+---
+
+## 7. Build order
+
+Owner decisions first, since they change what is built: errors in the accent or an alert
+colour (1.6); motion as a fixed choice or a switch (group E); widgets ported or dropped
+(4.2); the patch policy (6.4).
+
+Each batch is for one worker and lists the files it owns. Batches in one wave touch no file
+in common. CI means every job of `.github/workflows/ci.yml` passes; the jobs that matter are
+named. The VM scripts are in `tools/vm-edge/` and run in the test VM only, never on this PC.
+
+### Wave 1: no decision needed, lowest risk, in parallel
+
+| # | Batch | Files owned | Verify |
+| :--- | :--- | :--- | :--- |
+| 1 | Dead files and stale statements (4.1, without the dead-code flag) | `live/lock/xdg-shell*`, `live/lock/wlr-layer-shell*`, `live/edge-apps/src/config.rs.orig`, `docs/COMPONENTS.md`, the comment in `crates/infynitae-wayland/Cargo.toml` | CI `helpers` (builds the lock, `test-lock-render`), `verify-architecture` |
+| 2 | The edge honours each source's interval (5.5, 5.6 first point) | `live/edge-apps/src/wayland.rs`, `card.rs` | a unit test with a counting source; CI `edge-apps`; VM `psettings.py`, `ptime.py` |
+| 3 | Wording in scripts (section 3) | `live/launch.sh`, `live/record/infynitae-recorder`, `live/infynitae-automount`, `tools/test-launch-actions` if it holds texts | CI `helpers` |
+| 4 | Compositor: marks for 5.3 and 5.4, one yes/no function, default colours and corner limit (4.3 step 1, 1.9) | `crates/infynitae-wayland/src/lib.rs`, `convert.rs`, `crates/infynitae-backend-drm/src/lib.rs`, `crates/infynitae-backend-winit/src/lib.rs` | CI `workspace-build`, `verify-architecture`, `verify-test-efficacy`; then one owner session and the new log lines |
+| 5 | Smithay first batch (6.2 rows 1 to 3) and the list | `vendor/smithay-0.7.0/…`, `patches/0005` to `0007`, `patches/README.md`, `enforcement/smithay-0.7.0.sha256`, `tools/verify-architecture`, the two adapter spots W-SM-18 and W-SM-21 name | `tools/verify-architecture` in CI; headless tests `t1_popup_policy`, `t1_constraint_lifetime` |
+
+Batches 4 and 5 both touch the adapter: batch 5's adapter edits (the W-SM-21 workaround) wait
+for batch 4 to merge, or batch 5 ships the vendored patches first and the workaround's removal
+second.
+
+### Wave 2: the look, in parallel
+
+| # | Batch | Files owned | Verify |
+| :--- | :--- | :--- | :--- |
+| 6 | The whole look handed on; apps written from it; `set` does less (1.2, 1.3 for apps, 1.8, 4.4) | `live/edge-apps/src/theme.rs`, `live/settings.sh`, `live/config.sh`, `tools/test-settings-sync`, `test-settings-actions`, `test-mako-config`, `test-qt-theme`, `test-firefox-theme`, new `tools/config-cases` | those tests in CI `helpers`; `theme.rs` unit tests |
+| 7 | The edge's kit and its callers (1.5), then the dead-code flag (4.1) | `live/edge-apps/src/ui.rs`, `draw.rs`, `main.rs`, `cards/*.rs` | CI `edge-apps`; `tools/test-edge-render`; VM `ppicker.py`, `psettings.py`, `pfluid.py`; pictures to the owner |
+| 8 | Lock and prompt in the shared look (1.6, 1.7 step 1) | `live/lock/infynitae-lock.c`, `live/polkit/infynitae-polkit.c`, `tools/test-lock-render` | CI `helpers`; VM `pmic.py` |
+
+Batch 8 reads the new look lines when they are there and falls back when not, so it does
+not wait for batch 6. Batch 7 does not touch `theme.rs`; batch 6 does not touch `cards/`.
+
+### Wave 3: after waves 1 and 2
+
+| # | Batch | Files owned | Verify |
+| :--- | :--- | :--- | :--- |
+| 9 | One setting, many parts (section 2: B, C, D, F, G; E as decided) and light (1.4) | `config/config`, `live/edge-apps/src/config.rs`, `theme.rs`, `cards/settings_look.rs`, `settings_games.rs`, `settings_lock.rs`, `settings_rows.rs`, `live/config-check`, `live/portal/settings.c` | the two card tests at `settings_rows.rs:999` and `1046`; `tools/test-config-defaults`, `test-config-check`, `test-portal-settings`; VM `psettings.py`; a test that an old config gives the same look lines as before |
+| 10 | Late start for desktop frames (5.1) and the fix for whatever 5.3 and 5.4 named | `crates/infynitae-wayland/src/frame_schedule.rs`, `crates/infynitae-backend-drm/src/lib.rs`, `convert.rs` as needed | unit tests in `frame_schedule.rs`; a full VM round; then the owner's trial with `LATENCY_STATS`, comparing the two log lines quoted in section 5 |
+| 11 | Compositor borders from the look for built schemes (1.3, second half) | `crates/infynitae-wayland/src/lib.rs` | after batch 10, same files; headless tests; `verify-architecture` |
+| 12 | Password prompt through the edge's question (1.7 step 2) | `live/polkit/infynitae-polkit.c`, `live/build-helpers.sh` | VM `pmic.py`, `pask.py` |
+
+### Wave 4: when the owner makes the new edge the default
+
+| # | Batch | Files owned | Verify |
+| :--- | :--- | :--- | :--- |
+| 13 | Delete the old edges and what serves them (4.2); one workspace under `live/` (4.5) | `live/edge`, `live/edge-rs`, `live/edge-pick`, `live/build-helpers.sh`, `.github/workflows/ci.yml`, `tools/test-edge-*`, `live/config-renames`, the `EDGE_IMPL` lines named in 4.2, `live/edge-apps/src/ask.rs`, `live/infynitae-format-drive` | CI; every VM script against the one edge; `tools/test-config-renames` |
+| 14 | Recorder on dmabuf (5.2) | `live/record/*`, `serve_captures` in the DRM backend | VM `pcards.py` (saves a real clip); "captures" slow turns gone from the log |
+| 15 | Smithay second batch (6.2 rows 4 and 5) and the simpler vendor check (6.3 point 4) | `vendor/`, `patches/`, `tools/verify-architecture`, `crates/infynitae-backend-drm/src/scanout_log.rs` | `tools/verify-architecture` with its seeded negative controls; headless tests |
+
+The first things to do, for the most gain at the least risk: batches 1, 2 and 3 (deletions,
+one loop fix, texts), then batch 4's marks, because two of the three largest speed items
+cannot be fixed until one session's log names their cause.
