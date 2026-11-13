@@ -190,7 +190,7 @@ fn main() -> ExitCode {
             }
         }
         _ => {
-            eprintln!("usage: infynitae-edge-apps [PANEL | stop | --print-panels | --print-theme | --render PANEL WxH FILE.png]");
+            eprintln!("usage: infynitae-edge-apps [PANEL | ask ... | stop | --print-panels | --print-theme | --render PANEL WxH FILE.png]");
             ExitCode::from(2)
         }
     }

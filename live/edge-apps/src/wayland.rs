@@ -1422,7 +1422,7 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
                 app.notify_conn = Some(conn);
                 app.shell.notify.serving = true;
             }
-            Err(e) => eprintln!("[infynitae-edge] notifications: not serving: {e}"),
+            Err(e) => eprintln!("infynitae-edge-apps: notifications: not serving: {e}"),
         }
     }
     for output in existing {

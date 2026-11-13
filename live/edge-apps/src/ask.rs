@@ -110,7 +110,7 @@ pub fn parse_cli_args<S: AsRef<str>>(args: &[S]) -> Result<AskCliArgs, String> {
     }
     if !title_stdin && title.is_none() {
         return Err(
-            "usage: infynitae-edge-rs ask [--title-stdin] [--text] [--secret] [--default TEXT] TITLE < choices"
+            "usage: infynitae-edge-apps ask [--title-stdin] [--text] [--secret] [--default TEXT] TITLE < choices"
                 .to_string(),
         );
     }
@@ -1223,8 +1223,9 @@ mod tests {
         assert!(cli_default.title_stdin);
         assert_eq!(cli_default.default, "hint");
 
-        // Missing title and no --title-stdin fails
-        assert!(parse_cli_args(&["--secret"]).is_err());
+        // Missing title and no --title-stdin fails with usage
+        let err = parse_cli_args(&["--secret"]).unwrap_err();
+        assert!(err.starts_with("usage: infynitae-edge-apps ask"));
         assert!(parse_cli_args::<&str>(&[]).is_err());
     }
 
