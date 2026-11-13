@@ -73,8 +73,13 @@ pub const TABLE: &[Setting] = &[
         name: "Zoomed windows",
         says: "",
         key: "SCALING_FILTER",
-        control: Control::Pick(&[("Sharp", "nearest"), ("Smooth", "linear"), ("Fast", "fast")]),
-        after: After::Restart,
+        control: Control::Pick(&[
+            ("Sharp", "sharp"),
+            ("Smooth", "smooth"),
+            ("FSR", "fsr"),
+            ("FSR sharp", "fsr-sharp"),
+        ]),
+        after: After::Save,
         more: true,
         needs: &[],
     },
@@ -1219,19 +1224,32 @@ impl DisplayCard {
                 .map(String::as_str)
                 .unwrap_or("")
                 .trim();
+            let norm_alias = |s: &str| -> String {
+                if st.key == "SCALING_FILTER" {
+                    match s.trim().to_ascii_lowercase().as_str() {
+                        "nearest" => "sharp".to_string(),
+                        "linear" => "smooth".to_string(),
+                        other => other.to_string(),
+                    }
+                } else {
+                    s.to_string()
+                }
+            };
+            let norm_cur = norm_alias(cur);
+            let norm_def = norm_alias(def);
             let row = match st.control {
                 Control::Pick(choices) => {
                     let opts = choices
                         .iter()
                         .map(|(l, v)| OptionItem {
-                            active: v.eq_ignore_ascii_case(cur),
+                            active: v.eq_ignore_ascii_case(&norm_cur),
                             label: (*l).to_string(),
                             value: (*v).to_string(),
                         })
                         .collect::<Vec<_>>();
                     let shown = choices
                         .iter()
-                        .find(|(_, v)| v.eq_ignore_ascii_case(cur))
+                        .find(|(_, v)| v.eq_ignore_ascii_case(&norm_cur))
                         .map(|(l, _)| (*l).to_string())
                         .unwrap_or_else(|| cur.to_string());
                     DisplayRow {
@@ -1241,7 +1259,7 @@ impl DisplayCard {
                         search_extra: String::new(),
                         value_text: shown,
                         old_cfg: cur.to_string(),
-                        changed: !cur.eq_ignore_ascii_case(def),
+                        changed: !norm_cur.eq_ignore_ascii_case(&norm_def),
                         more: st.more,
                         current_mode_for_revert: String::new(),
                         active_res_prefix: String::new(),
@@ -2649,5 +2667,77 @@ mod tests {
         for (_, r) in &hits_open.list {
             assert!(r.1 >= 0.0 && r.1 + r.3 <= h_m_open + 0.5);
         }
+    }
+
+    #[test]
+    fn scaling_filter_row_offers_fsr_saves_live_and_accepts_legacy_aliases() {
+        let th = test_theme();
+        let cx_m = make_cx(Size::M, &th);
+        let mut card = DisplayCard::new();
+        card.apply("config", &sample_cfg("SCALING_FILTER='nearest'\n"));
+        card.apply("screens", &parse_screens(&snap_and_wlr_two_screens(true)));
+        card.more = true;
+        let _ = draw_card(&card, &cx_m);
+
+        let (rows, _, _) = card.build_layout(&cx_m);
+        let idx = rows
+            .iter()
+            .position(|r| r.key == "SCALING_FILTER")
+            .expect("SCALING_FILTER row");
+        assert_eq!(rows[idx].name, "Zoomed windows");
+        assert_eq!(
+            rows[idx].value_text, "Sharp",
+            "nearest alias shows as Sharp"
+        );
+        assert!(!rows[idx].changed, "nearest alias matches default sharp");
+
+        let RowAction::List(choices) = &rows[idx].action else {
+            panic!("SCALING_FILTER must be RowAction::List");
+        };
+        let keys: Vec<&str> = choices.iter().map(|c| c.value.as_str()).collect();
+        let labels: Vec<&str> = choices.iter().map(|c| c.label.as_str()).collect();
+        assert_eq!(keys, vec!["sharp", "smooth", "fsr", "fsr-sharp"]);
+        assert_eq!(labels, vec!["Sharp", "Smooth", "FSR", "FSR sharp"]);
+        assert!(choices[0].active);
+
+        let mut out = Vec::new();
+        assert!(card.event(
+            &Event::Press {
+                hit: H_ROW_BASE + idx as u32,
+                button: Button::Left,
+                at: (20.0, 200.0),
+            },
+            &cx_m,
+            &mut out
+        ));
+        assert!(card.event(
+            &Event::Press {
+                hit: H_OPT_BASE + 2, // fsr
+                button: Button::Left,
+                at: (20.0, 240.0),
+            },
+            &cx_m,
+            &mut out
+        ));
+        let Action::Run(cmd) = out.remove(0) else {
+            panic!("expected Action::Run for SCALING_FILTER pick");
+        };
+        assert_eq!(
+            cmd,
+            change_command("SCALING_FILTER", Some("nearest"), "fsr", After::Save)
+        );
+        assert!(
+            !card.restarted.contains("SCALING_FILTER"),
+            "SCALING_FILTER applies live without restart prompt"
+        );
+
+        let mut smooth_card = DisplayCard::new();
+        smooth_card.apply("config", &sample_cfg("SCALING_FILTER='linear'\n"));
+        smooth_card.apply("screens", &parse_screens(&snap_and_wlr_two_screens(true)));
+        smooth_card.more = true;
+        let (srows, _, _) = smooth_card.build_layout(&cx_m);
+        let srow = srows.iter().find(|r| r.key == "SCALING_FILTER").unwrap();
+        assert_eq!(srow.value_text, "Smooth", "linear alias shows as Smooth");
+        assert!(srow.changed);
     }
 }

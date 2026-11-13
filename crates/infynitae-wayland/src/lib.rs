@@ -99,6 +99,75 @@ pub use idle_notify::IdleNotifyState;
 /// drew; they never re-render for it (a HiDPI screen still gets its own scale). Re-rendering
 /// made a terminal re-flow its text as you zoomed.
 pub const DEFAULT_MAX_APP_SCALE: f64 = 1.0;
+
+/// Compositor-side magnification/minification filter (`SCALING_FILTER`, Display Settings
+/// "Zoomed windows").
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum ZoomFilter {
+    /// Nearest-neighbor magnification when zoomed in; cached area-averaging when zoomed out.
+    /// Default when `SCALING_FILTER` is absent or unrecognized (`nearest` is an alias).
+    #[default]
+    Sharp,
+    /// Bilinear magnification when zoomed in; cached area-averaging when zoomed out (`linear`).
+    Smooth,
+    /// AMD FidelityFX Super Resolution 1 (EASU + mild RCAS) when zoomed in; cached area-averaging
+    /// when zoomed out.
+    Fsr,
+    /// AMD FidelityFX Super Resolution 1 (EASU + stronger RCAS) when zoomed in; cached
+    /// area-averaging when zoomed out.
+    FsrSharp,
+    /// Legacy option: skip zoomed-out averaging as well (no FSR).
+    Fast,
+}
+
+impl ZoomFilter {
+    /// Parse a `SCALING_FILTER` value (trimmed, case-insensitive). Unknown or empty values fall
+    /// back to [`ZoomFilter::Sharp`], preserving today's default behaviour.
+    pub fn parse(raw: &str) -> Self {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "smooth" | "linear" => Self::Smooth,
+            "fsr" => Self::Fsr,
+            "fsr-sharp" => Self::FsrSharp,
+            "fast" => Self::Fast,
+            _ => Self::Sharp,
+        }
+    }
+
+    /// Canonical config token written for each variant.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Sharp => "sharp",
+            Self::Smooth => "smooth",
+            Self::Fsr => "fsr",
+            Self::FsrSharp => "fsr-sharp",
+            Self::Fast => "fast",
+        }
+    }
+
+    /// Whether zoomed-in enlargement runs AMD FSR 1 (`EASU` + `RCAS`).
+    pub const fn is_fsr(self) -> bool {
+        matches!(self, Self::Fsr | Self::FsrSharp)
+    }
+
+    /// Normalized RCAS sharpening strength in `[0.0, 1.0]` (`0.5` mild, `1.0` stronger).
+    pub const fn rcas_sharpness(self) -> f32 {
+        match self {
+            Self::Fsr => 0.5,
+            Self::FsrSharp => 1.0,
+            Self::Sharp | Self::Smooth | Self::Fast => 0.0,
+        }
+    }
+
+    /// Whether zoomed-out windows use area-averaging downsampling.
+    pub const fn averages_zoom_out(self) -> bool {
+        !matches!(self, Self::Fast)
+    }
+
+    /// Whether Smithay's base GLES texture filter for magnification is `Nearest`.
+    pub const fn uses_nearest_upscale(self) -> bool {
+        !matches!(self, Self::Smooth)
+    }
+}
 /// What a backend does to each client buffer as it arrives (`set_dmabuf_mark`).
 pub type DmabufMark = Box<dyn Fn(&smithay::backend::allocator::dmabuf::Dmabuf) + Send>;
 
@@ -440,6 +509,7 @@ pub struct WaylandState {
     pub border_shapes: std::collections::HashMap<infynitae_core::stage::ElementId, [f32; 4]>,
     pub rendered_elements: Vec<infynitae_core::stage::ElementId>,
     pub input_config: InputDeviceConfig,
+    pub scaling_filter: ZoomFilter,
     pub direct_scanout: Option<bool>,
     /// Client buffers may also go on overlay planes (`OVERLAY_PLANES`, off by default: amdgpu
     /// refused page flips for Electron's viewport-scaled subsurfaces there).
@@ -809,6 +879,7 @@ impl WaylandState {
             border_commits: std::collections::HashMap::new(),
             rendered_elements: Vec::new(),
             input_config: InputDeviceConfig::default(),
+            scaling_filter: ZoomFilter::default(),
             direct_scanout: Some(true),
             overlay_planes: false,
             hardware_cursor: true,
@@ -1142,6 +1213,7 @@ impl WaylandState {
                 let (mut tearing, mut tearing_always) = (true, true);
                 let mut fit_is_fullscreen = true;
                 let mut latency_mode = crate::frame_schedule::LatencyMode::Direct;
+                let mut scaling_filter = ZoomFilter::default();
                 // without a DIRECT_SCANOUT line: the environment's, as at start (main.rs), else on
                 let mut direct_scanout = std::env::var("DIRECT_SCANOUT")
                     .map_or(true, |v| parse_bool(&v).unwrap_or(true));
@@ -1222,6 +1294,9 @@ impl WaylandState {
                             }
                             "MAX_APP_SCALE" => {
                                 max_app_scale = val.parse::<f64>().ok();
+                            }
+                            "SCALING_FILTER" => {
+                                scaling_filter = ZoomFilter::parse(val);
                             }
                             "GPU_RELIEF" => {
                                 gpu_relief = parse_bool(val).unwrap_or(true);
@@ -1480,6 +1555,7 @@ impl WaylandState {
                 self.gpu_relief = gpu_relief;
                 self.fitted.enabled = fit_is_fullscreen;
                 self.latency_mode = latency_mode;
+                self.scaling_filter = scaling_filter;
                 self.direct_scanout = Some(direct_scanout);
                 self.hardware_cursor = hardware_cursor;
                 self.overlay_planes = overlay_planes;
@@ -2499,6 +2575,79 @@ mod key_binding_config_tests {
         assert_eq!(state.border_inactive, Color32F::new(0.20, 0.23, 0.33, 1.0));
         assert_eq!(state.border_inactive.a(), state.border_active.a());
         assert_eq!(state.window_corners, 8.0);
+        assert_eq!(state.scaling_filter, super::ZoomFilter::Sharp);
+    }
+
+    #[test]
+    fn zoom_filter_parse_and_properties() {
+        use super::ZoomFilter;
+        assert_eq!(ZoomFilter::default(), ZoomFilter::Sharp);
+        for (input, want) in [
+            ("sharp", ZoomFilter::Sharp),
+            ("nearest", ZoomFilter::Sharp),
+            (" NEAREST ", ZoomFilter::Sharp),
+            ("smooth", ZoomFilter::Smooth),
+            ("linear", ZoomFilter::Smooth),
+            ("Linear", ZoomFilter::Smooth),
+            ("fsr", ZoomFilter::Fsr),
+            (" FSR ", ZoomFilter::Fsr),
+            ("fsr-sharp", ZoomFilter::FsrSharp),
+            ("FSR-SHARP", ZoomFilter::FsrSharp),
+            ("fast", ZoomFilter::Fast),
+            ("", ZoomFilter::Sharp),
+            ("unknown-mode", ZoomFilter::Sharp),
+        ] {
+            assert_eq!(ZoomFilter::parse(input), want, "{input:?}");
+        }
+        assert_eq!(ZoomFilter::Sharp.as_str(), "sharp");
+        assert_eq!(ZoomFilter::Smooth.as_str(), "smooth");
+        assert_eq!(ZoomFilter::Fsr.as_str(), "fsr");
+        assert_eq!(ZoomFilter::FsrSharp.as_str(), "fsr-sharp");
+        assert_eq!(ZoomFilter::Fast.as_str(), "fast");
+
+        assert!(!ZoomFilter::Sharp.is_fsr());
+        assert!(!ZoomFilter::Smooth.is_fsr());
+        assert!(ZoomFilter::Fsr.is_fsr());
+        assert!(ZoomFilter::FsrSharp.is_fsr());
+        assert_eq!(ZoomFilter::Fsr.rcas_sharpness(), 0.5);
+        assert_eq!(ZoomFilter::FsrSharp.rcas_sharpness(), 1.0);
+        assert!(ZoomFilter::Fsr.averages_zoom_out());
+        assert!(!ZoomFilter::Fast.averages_zoom_out());
+        assert!(!ZoomFilter::Smooth.uses_nearest_upscale());
+        assert!(ZoomFilter::Sharp.uses_nearest_upscale());
+        assert!(ZoomFilter::Fsr.uses_nearest_upscale());
+    }
+
+    #[test]
+    fn reload_config_parses_and_resets_scaling_filter() {
+        use smithay::reexports::wayland_server::Display;
+        let temp = super::cursor::TestTempDir::new("wl_scaling_filter_reload");
+        let cfg_dir = temp.path().join(".config/infynitae");
+        std::fs::create_dir_all(&cfg_dir).unwrap();
+        let cfg = cfg_dir.join("config");
+
+        let (core, _, _, _) =
+            infynitae_core::Core::new(infynitae_core::navigation::PersistedCameras::default());
+        let display: Display<super::WaylandState> = Display::new().unwrap();
+        let mut state = super::WaylandState::new(&display.handle(), core);
+        state.set_config_home(temp.path().to_path_buf());
+
+        std::fs::write(&cfg, "SCALING_FILTER=\"fsr\"\n").unwrap();
+        state.reload_config();
+        assert_eq!(state.scaling_filter, super::ZoomFilter::Fsr);
+
+        std::fs::write(&cfg, "SCALING_FILTER=\"fsr-sharp\"\n").unwrap();
+        state.reload_config();
+        assert_eq!(state.scaling_filter, super::ZoomFilter::FsrSharp);
+
+        std::fs::write(&cfg, "SCALING_FILTER=\"linear\"\n").unwrap();
+        state.reload_config();
+        assert_eq!(state.scaling_filter, super::ZoomFilter::Smooth);
+
+        // Removing SCALING_FILTER falls back to Sharp (today's default behaviour).
+        std::fs::write(&cfg, "BORDER_WIDTH=\"1\"\n").unwrap();
+        state.reload_config();
+        assert_eq!(state.scaling_filter, super::ZoomFilter::Sharp);
     }
 }
 

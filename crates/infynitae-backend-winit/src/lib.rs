@@ -48,7 +48,7 @@ pub struct WinitCompositorOptions {
     pub xwayland_satellite: Option<std::path::PathBuf>,
     /// Output scale ×120 for every screen (`None`: auto/120, i.e. 1.0).
     pub scale_120: Option<u32>,
-    /// Scaling texture filter ("nearest" for sharp pixels, "linear" for smooth).
+    /// Scaling texture filter ("sharp" / "nearest", "smooth" / "linear", "fsr", "fsr-sharp", "fast").
     pub scaling_filter: Option<String>,
 }
 
@@ -98,6 +98,7 @@ struct LoopData {
     config_path: Option<PathBuf>,
     last_config_check: std::time::Instant,
     last_config_mtime: Option<std::time::SystemTime>,
+    scaling_filter: infynitae_wayland::ZoomFilter,
 }
 
 /// NB-1 (2026-10-17): a submit swaps with the EGL default swap interval, so it waits for the host
@@ -256,9 +257,13 @@ pub fn run_nested_with(
     let (mut backend, winit_event_loop) =
         winit::init_from_attributes::<GlesRenderer>(window_attributes)?;
 
-    // Scaling filter: nearest-neighbor filtering on upscaled surfaces by default
-    let use_nearest = !matches!(options.scaling_filter.as_deref(), Some("linear"));
-    if use_nearest && let Err(e) = backend.renderer().upscale_filter(TextureFilter::Nearest) {
+    // Scaling filter: nearest-neighbor for sharp/fsr/fast, linear for smooth.
+    let filter =
+        infynitae_wayland::ZoomFilter::parse(options.scaling_filter.as_deref().unwrap_or("sharp"));
+    state.scaling_filter = filter;
+    if filter.uses_nearest_upscale()
+        && let Err(e) = backend.renderer().upscale_filter(TextureFilter::Nearest)
+    {
         log_line!("[infynitae] Warning: failed to set upscale filter to Nearest: {e:?}");
     }
 
@@ -313,9 +318,19 @@ pub fn run_nested_with(
         config_path: cfg_path,
         last_config_check: std::time::Instant::now(),
         last_config_mtime: initial_mtime,
+        scaling_filter: filter,
     };
 
     data.state.reload_config();
+    if data.state.scaling_filter != data.scaling_filter {
+        data.scaling_filter = data.state.scaling_filter;
+        let tex_filter = if data.scaling_filter.uses_nearest_upscale() {
+            TextureFilter::Nearest
+        } else {
+            TextureFilter::Linear
+        };
+        let _ = data.backend.renderer().upscale_filter(tex_filter);
+    }
 
     // every host event (input, resize, redraw request) may change what is shown
     event_loop
@@ -354,6 +369,15 @@ pub fn run_nested_with(
                     );
                     data.state.reload_config();
                     data.state.config_changed();
+                    if data.state.scaling_filter != data.scaling_filter {
+                        data.scaling_filter = data.state.scaling_filter;
+                        let tex_filter = if data.scaling_filter.uses_nearest_upscale() {
+                            TextureFilter::Nearest
+                        } else {
+                            TextureFilter::Linear
+                        };
+                        let _ = data.backend.renderer().upscale_filter(tex_filter);
+                    }
                     data.session.request_frame();
                 } else if data.last_config_mtime.is_none() {
                     data.last_config_mtime = Some(mtime);

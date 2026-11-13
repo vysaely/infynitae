@@ -46,7 +46,7 @@ use smithay::backend::input::{
 };
 use smithay::backend::libinput::{LibinputInputBackend, LibinputSessionInterface};
 use smithay::backend::renderer::damage::OutputDamageTracker;
-use smithay::backend::renderer::gles::{GlesRenderer, GlesTexProgram, GlesTexture};
+use smithay::backend::renderer::gles::{GlesRenderer, GlesTexture};
 use smithay::backend::renderer::{Bind, ExportMem, Offscreen, Texture};
 use smithay::backend::renderer::{Renderer, TextureFilter};
 use smithay::backend::session::libseat::LibSeatSession;
@@ -82,7 +82,7 @@ pub struct ConsoleOptions {
     pub xwayland_satellite: Option<PathBuf>,
     /// Output scale ×120 for every screen (`None`: 120, i.e. 1.0).
     pub scale_120: Option<u32>,
-    /// Scaling texture filter ("nearest" for 0% blur, "linear" for smooth).
+    /// Scaling texture filter ("sharp" / "nearest", "smooth" / "linear", "fsr", "fsr-sharp", "fast").
     pub scaling_filter: Option<String>,
     /// Direct scanout for fullscreen apps and games.
     pub direct_scanout: Option<bool>,
@@ -520,11 +520,12 @@ struct LoopData {
     last_mapped_generation: u64,
     /// Direct scanout for primary and overlay planes.
     direct_scanout: bool,
-    /// The shader averaging windows drawn smaller than their buffer (`smooth`); `None` with
-    /// `SCALING_FILTER="fast"` or where it does not compile.
-    smooth_program: Option<GlesTexProgram>,
-    /// `SCALING_FILTER`, for a renderer made again after a GPU reset.
-    scaling_filter: String,
+    /// Compiled shaders for zoomed-out downsampling and zoomed-in FSR 1; `None` if unavailable.
+    zoom_programs: Option<std::sync::Arc<smooth::ZoomPrograms>>,
+    /// Per-window cached downsample mip pyramids and EASU offscreen textures.
+    zoom_cache: smooth::ZoomCache,
+    /// `SCALING_FILTER`, updated live on config reload and reused after a GPU reset.
+    scaling_filter: infynitae_wayland::ZoomFilter,
     /// When the renderer was last made again after a GPU reset (at most once a second: GPU
     /// memory still full makes the next one fail too).
     renderer_recovered_at: Option<std::time::Instant>,
@@ -1187,19 +1188,16 @@ pub fn run_console_with(
         state.set_dmabuf_mark(Box::new(move |dmabuf| dmabuf.set_node(node)));
     }
 
-    // SCALING_FILTER: zoomed in, nearest (crisp pixels, the default) or linear; zoomed out,
-    // averaged (`smooth`) unless "fast"
-    let filter = options.scaling_filter.as_deref().unwrap_or("nearest");
-    if filter != "linear"
+    // SCALING_FILTER: sharp (default), smooth, fsr, fsr-sharp, or fast.
+    let filter =
+        infynitae_wayland::ZoomFilter::parse(options.scaling_filter.as_deref().unwrap_or("sharp"));
+    state.scaling_filter = filter;
+    if filter.uses_nearest_upscale()
         && let Err(e) = renderer.upscale_filter(TextureFilter::Nearest)
     {
         log_line!("[infynitae] Warning: failed to set upscale filter to Nearest: {e:?}");
     }
-    let smooth_program = if filter == "fast" {
-        None
-    } else {
-        smooth::program(&mut renderer)
-    };
+    let zoom_programs = smooth::zoom_programs(&mut renderer);
     let corners_ready = smooth::init_corners(&mut renderer);
     let allocator = GbmAllocator::new(
         gbm.clone(),
@@ -1582,8 +1580,9 @@ pub fn run_console_with(
         last_mapped_generation: u64::MAX,
         loop_busy_max: Duration::ZERO,
         direct_scanout: options.direct_scanout.unwrap_or(true),
-        smooth_program,
-        scaling_filter: filter.to_string(),
+        zoom_programs,
+        zoom_cache: smooth::ZoomCache::default(),
+        scaling_filter: filter,
         renderer_recovered_at: None,
         config_path: cfg_path,
         last_config_check: std::time::Instant::now(),
@@ -1609,6 +1608,7 @@ pub fn run_console_with(
     update_virtual_screen(&mut data);
 
     data.state.reload_config();
+    sync_scaling_filter(&mut data);
     if let Some(ds) = data.state.direct_scanout {
         data.direct_scanout = ds;
     }
@@ -1746,6 +1746,7 @@ pub fn run_console_with(
                     for dev in &mut data.input_devices {
                         configure_input_device(dev, &input_cfg);
                     }
+                    sync_scaling_filter(&mut data);
                     data.session.request_frame();
                     turn.mark("config second read");
                 } else if data.last_config_mtime.is_none() {
@@ -2087,14 +2088,14 @@ fn recover_renderer(data: &mut LoopData) {
             return;
         }
     };
-    if data.scaling_filter != "linear" {
-        let _ = renderer.upscale_filter(TextureFilter::Nearest);
-    }
-    data.smooth_program = if data.scaling_filter == "fast" {
-        None
+    data.zoom_cache.clear();
+    let tex_filter = if data.scaling_filter.uses_nearest_upscale() {
+        TextureFilter::Nearest
     } else {
-        smooth::program(&mut renderer)
+        TextureFilter::Linear
     };
+    let _ = renderer.upscale_filter(tex_filter);
+    data.zoom_programs = smooth::zoom_programs(&mut renderer);
     data.state.corners_drawn = smooth::init_corners(&mut renderer);
     data.renderer = renderer;
     // copies started on the lost renderer cannot be read: their captures fail (the client asks again)
@@ -2111,6 +2112,32 @@ fn recover_renderer(data: &mut LoopData) {
         v.screencopy_texture = None;
     }
     data.session.request_frame();
+}
+
+fn sync_scaling_filter(data: &mut LoopData) {
+    let next = data.state.scaling_filter;
+    if next == data.scaling_filter {
+        return;
+    }
+    data.scaling_filter = next;
+    let tex_filter = if next.uses_nearest_upscale() {
+        TextureFilter::Nearest
+    } else {
+        TextureFilter::Linear
+    };
+    if let Err(e) = data.renderer.upscale_filter(tex_filter) {
+        log_line!("[infynitae] Warning: failed to update upscale filter: {e:?}");
+    }
+    if !next.averages_zoom_out() {
+        data.zoom_cache.clear_mips();
+    }
+    if !next.is_fsr() {
+        data.zoom_cache.clear_fsr();
+    }
+    for s in &mut data.screens {
+        let _ = s.compositor.reset_state();
+    }
+    *data.state.screencopy.damage.lock().unwrap() = Default::default();
 }
 
 /// Async page flips refused in a row before a screen stops trying (until its window stops
@@ -2144,7 +2171,9 @@ fn render(data: &mut LoopData, turn: &mut TurnClock) {
             &mut data.renderer,
             &mut data.screens[i].screencopy_texture,
             &mut data.capture_copies,
-            data.smooth_program.as_ref(),
+            data.zoom_programs.as_ref(),
+            &mut data.zoom_cache,
+            data.scaling_filter,
             id,
             size,
             clear,
@@ -2228,17 +2257,16 @@ fn render(data: &mut LoopData, turn: &mut TurnClock) {
                 continue;
             }
         };
-        let elements: Vec<_> = elements
-            .into_iter()
-            .map(|e| {
-                let round = data
-                    .state
-                    .rounding
-                    .get(smithay::backend::renderer::element::Element::id(&e))
-                    .copied();
-                smooth::Smoothed::new(e, data.smooth_program.clone()).rounded(round)
-            })
-            .collect();
+        let elements = smooth::prepare_elements(
+            &mut data.renderer,
+            &data.state.rounding,
+            data.zoom_programs.as_ref(),
+            &mut data.zoom_cache,
+            elements,
+            k,
+            data.screens[i].size,
+            data.scaling_filter,
+        );
         turn.mark("smooth wrap");
         // VRR auto: on while this screen shows a fullscreen window
         let want_vrr = data.screens[i]
@@ -2548,7 +2576,9 @@ fn render(data: &mut LoopData, turn: &mut TurnClock) {
             &mut data.renderer,
             &mut v.screencopy_texture,
             &mut data.capture_copies,
-            data.smooth_program.as_ref(),
+            data.zoom_programs.as_ref(),
+            &mut data.zoom_cache,
+            data.scaling_filter,
             v.id,
             VIRTUAL_SCREEN_SIZE,
             clear,
@@ -2558,6 +2588,7 @@ fn render(data: &mut LoopData, turn: &mut TurnClock) {
         // was counted as "flush", the next mark (review 2026-11-12: 374 slow "flush" turns)
         turn.mark("virtual screen captures");
     }
+    data.zoom_cache.gc();
     confirm_lock(data);
     // a capture copied out of the GPU this turn is handed over at the next one: make sure there is one
     if !data.capture_copies.is_empty() {
@@ -2585,7 +2616,9 @@ fn serve_captures(
     renderer: &mut GlesRenderer,
     screencopy_texture: &mut Option<GlesTexture>,
     copies: &mut Vec<PendingCopy>,
-    smooth_program: Option<&GlesTexProgram>,
+    zoom_programs: Option<&std::sync::Arc<smooth::ZoomPrograms>>,
+    zoom_cache: &mut smooth::ZoomCache,
+    scaling_filter: infynitae_wayland::ZoomFilter,
     output_id: OutputId,
     size: (i32, i32),
     clear: smithay::backend::renderer::Color32F,
@@ -2650,16 +2683,16 @@ fn serve_captures(
             return;
         }
     };
-    let elements: Vec<_> = elements
-        .into_iter()
-        .map(|e| {
-            let round = state
-                .rounding
-                .get(smithay::backend::renderer::element::Element::id(&e))
-                .copied();
-            smooth::Smoothed::new(e, smooth_program.cloned()).rounded(round)
-        })
-        .collect();
+    let elements = smooth::prepare_elements(
+        renderer,
+        &state.rounding,
+        zoom_programs,
+        zoom_cache,
+        elements,
+        k,
+        size,
+        scaling_filter,
+    );
     // a capture that may wait is served once its consumer's last capture differs, with what
     // changed as its damage (whole for a region or a turned screen); else it waits
     let now = std::time::Instant::now();
