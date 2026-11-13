@@ -133,10 +133,11 @@ fn shell_command_refuses_a_foreign_port() {
 }
 
 /// Navigate to a Canvas position: the centre is the position quantised once (exact here), the zoom
-/// is unchanged, and no history entry is made (OBJ-30 records fits).
+/// is unchanged, and a history entry is recorded so Back returns; incremental Delta does not push.
 #[test]
 fn navigate_centres_the_camera_and_keeps_its_zoom() {
     let mut f = fixture();
+    let before = f.c.cameras().center(0);
     let zoom = f.c.cameras().zoom(0);
     f.c.shell_command(&mut f.s, navigate(f.o, NavigateTo::Canvas(1000.5, -200.25)))
         .unwrap();
@@ -148,7 +149,7 @@ fn navigate_centres_the_camera_and_keeps_its_zoom() {
         })
     );
     assert_eq!(f.c.cameras().zoom(0), zoom);
-    assert_eq!(f.c.cameras().history(0).map(|h| h.len()), Some(0));
+    assert_eq!(f.c.cameras().history(0).map(|h| h.len()), Some(1));
     f.c.shell_command(&mut f.s, navigate(f.o, NavigateTo::Delta(-0.5, 0.25)))
         .unwrap();
     assert_eq!(
@@ -158,12 +159,21 @@ fn navigate_centres_the_camera_and_keeps_its_zoom() {
             y: -200 * Q
         })
     );
+    assert_eq!(f.c.cameras().history(0).map(|h| h.len()), Some(1));
+    f.c.shell_command(&mut f.s, ShellCommand::ViewportRestore { output: f.o })
+        .unwrap();
+    assert_eq!(f.c.cameras().center(0), before);
+    assert_eq!(f.c.cameras().zoom(0), zoom);
+    assert_eq!(f.c.cameras().history(0).map(|h| h.len()), Some(0));
 }
 
-/// Navigate with zoom: applies both the canvas position and the zoom level atomically.
+/// Navigate with zoom: applies both the canvas position and the zoom level atomically, recording
+/// history so Back restores both.
 #[test]
 fn navigate_with_zoom_sets_both_centre_and_zoom() {
     let mut f = fixture();
+    let before_center = f.c.cameras().center(0);
+    let before_zoom = f.c.cameras().zoom(0);
     f.c.shell_command(
         &mut f.s,
         ShellCommand::Navigate {
@@ -182,6 +192,11 @@ fn navigate_with_zoom_sets_both_centre_and_zoom() {
         })
     );
     assert_eq!(f.c.cameras().zoom(0), Some(2.5));
+    assert_eq!(f.c.cameras().history(0).map(|h| h.len()), Some(1));
+    f.c.shell_command(&mut f.s, ShellCommand::ViewportRestore { output: f.o })
+        .unwrap();
+    assert_eq!(f.c.cameras().center(0), before_center);
+    assert_eq!(f.c.cameras().zoom(0), before_zoom);
 }
 
 /// Navigate to an element: the centre of its window geometry, exactly.
