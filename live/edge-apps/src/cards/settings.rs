@@ -924,7 +924,7 @@ impl Card for PowerCard {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]

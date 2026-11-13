@@ -89,8 +89,9 @@ pub struct Shell {
     pub pressed: Option<(usize, u32)>,
     /// each shown card's rectangle and hits in the last frame
     pub frame: RefCell<Vec<(usize, Rect, Hits)>>,
-    /// what the cards asked for, with the provider and source keys to fetch again after it ran
-    pub actions: Vec<(Action, &'static str, &'static [&'static str])>,
+    /// what the cards asked for: the action, its card ("owner/kind": one command at a time per
+    /// card), and the provider and source keys to fetch again after it ran
+    pub actions: Vec<(Action, String, &'static str, &'static [&'static str])>,
     pub opened_at: Option<Instant>,
     pub open_ms: f64,
     pub last_tick: Option<Instant>,
@@ -412,12 +413,13 @@ impl Shell {
         let pc = &mut self.panels[idx].cards[ci];
         let changed = pc.card.event(ev, &cx, &mut out);
         let (prov, keys) = (pc.provider.id(), pc.kind.sources);
+        let card = format!("{}/{}", pc.word.owner, pc.word.kind);
         for a in out {
             if a == Action::ClosePanel {
                 self.close();
                 return true;
             }
-            self.actions.push((a, prov, keys));
+            self.actions.push((a, card.clone(), prov, keys));
         }
         changed
     }
@@ -663,7 +665,10 @@ mod tests {
             sh.actions[0].0,
             Action::Run("powerprofilesctl set 'performance' >/dev/null 2>&1".into())
         );
-        assert_eq!(sh.actions[0].1, "settings");
+        assert_eq!(
+            (sh.actions[0].1.as_str(), sh.actions[0].2),
+            ("settings/power", "settings")
+        );
         assert!(
             sh.click(1920.0, 1080.0, 10.0, 10.0, Button::Left),
             "outside: closes"

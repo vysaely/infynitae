@@ -89,7 +89,10 @@ pub trait Provider: Sync {
 
 /// Every provider, in the order claims are tried. A card file adds its provider here.
 pub fn providers() -> &'static [&'static dyn Provider] {
-    &[&crate::cards::settings::Settings]
+    &[
+        &crate::cards::settings::Settings,
+        &crate::cards::sound::Sound,
+    ]
 }
 
 pub fn by_id(id: &str) -> Option<&'static dyn Provider> {

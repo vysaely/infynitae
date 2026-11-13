@@ -2,3 +2,4 @@
 //! and one line to `provider::providers()`.
 
 pub mod settings;
+pub mod sound;

@@ -404,6 +404,8 @@ struct App {
     fetch_tx: Sender<Fetched>,
     /// sources being fetched now (one fetch at a time each)
     fetching: HashSet<(&'static str, &'static str)>,
+    /// cards with a command running, and the latest one waiting after it
+    queued: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, Option<String>>>>,
     last_fetch: Option<Instant>,
     was_animating: bool,
     exit: bool,
@@ -507,20 +509,40 @@ impl App {
     /// links started detached, windows focused or closed through the compositor's list.
     fn run_actions(&mut self) {
         let actions = std::mem::take(&mut self.shell.actions);
-        for (a, prov, keys) in actions {
+        for (a, card, prov, keys) in actions {
             match a {
                 Action::Run(cmd) => {
-                    let tx = self.fetch_tx.clone();
+                    // one command at a time per card, the latest waiting one next: a slider dragged
+                    // sends many levels, and run in no order an older one could land last
+                    let mut q = self.queued.lock().unwrap_or_else(|p| p.into_inner());
+                    if let Some(waiting) = q.get_mut(&card) {
+                        *waiting = Some(cmd);
+                        continue;
+                    }
+                    q.insert(card.clone(), None);
+                    drop(q);
+                    let (tx, queued) = (self.fetch_tx.clone(), self.queued.clone());
                     let keys: Vec<&'static str> = keys.to_vec();
                     std::thread::spawn(move || {
-                        let _ = Command::new("sh")
-                            .arg("-c")
-                            .arg(&cmd)
-                            .stdin(Stdio::null())
-                            .stdout(Stdio::null())
-                            .stderr(Stdio::null())
-                            .status();
-                        // what the command changed, shown at once
+                        let mut cmd = cmd;
+                        loop {
+                            let _ = Command::new("sh")
+                                .arg("-c")
+                                .arg(&cmd)
+                                .stdin(Stdio::null())
+                                .stdout(Stdio::null())
+                                .stderr(Stdio::null())
+                                .status();
+                            let mut q = queued.lock().unwrap_or_else(|p| p.into_inner());
+                            match q.get_mut(&card).and_then(Option::take) {
+                                Some(next) => cmd = next,
+                                None => {
+                                    q.remove(&card);
+                                    break;
+                                }
+                            }
+                        }
+                        // what the commands changed, shown at once
                         for key in keys {
                             if let Some(mut src) =
                                 crate::provider::by_id(prov).and_then(|p| p.source(key))
@@ -1094,6 +1116,7 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
         shell,
         fetch_tx,
         fetching: HashSet::new(),
+        queued: Default::default(),
         last_fetch: None,
         was_animating: false,
         exit: false,
