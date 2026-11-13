@@ -8,6 +8,7 @@
 #![allow(dead_code)]
 
 mod app;
+mod ask;
 mod boxes;
 mod card;
 mod cards;
@@ -36,6 +37,11 @@ fn render(name: &str, size: &str, out: &str) -> Result<(), String> {
         .filter(|&(w, h)| (200..=8192).contains(&w) && (200..=8192).contains(&h))
         .ok_or("--render needs WxH, e.g. 1920x1080")?;
     let mut sh = shell::Shell::new(Config::load(), app::load(&app::dirs()));
+    if name == "ask" {
+        // the question card (INFYNITAE_EDGE_RENDER_ASK: "title|choice|choice...")
+        sh.ask.ask.load_render_env();
+        return paint(&sh, w, h, out);
+    }
     let idx = sh
         .panels
         .iter()
@@ -78,6 +84,11 @@ fn render(name: &str, size: &str, out: &str) -> Result<(), String> {
             let (a, b) = v.split_once(',')?;
             Some((a.trim().parse().ok()?, b.trim().parse().ok()?))
         });
+    paint(&sh, w, h, out)
+}
+
+/// Draws what the shell shows on a `w x h` screen into the PNG file `out`.
+fn paint(sh: &shell::Shell, w: i32, h: i32, out: &str) -> Result<(), String> {
     let surface =
         cairo::ImageSurface::create(cairo::Format::ARgb32, w, h).map_err(|e| e.to_string())?;
     let cr = cairo::Context::new(&surface).map_err(|e| e.to_string())?;
@@ -127,9 +138,9 @@ fn main() -> ExitCode {
                 ExitCode::from(1)
             }
         },
-        // the ask card comes in the next part of stage 1: until then "no edge running", so its
-        // callers (the keyring, the drive formatter, the share picker) use their fallbacks
-        ["ask", ..] => ExitCode::from(3),
+        // a question for the running edge (the keyring, the drive formatter, the share picker):
+        // exit 0 answered, 1 cancelled, 2 wrong use, 3 no edge running
+        ["ask", rest @ ..] => ExitCode::from(ask::run_client(rest)),
         ["stop"] => {
             wayland::stop_running();
             ExitCode::SUCCESS

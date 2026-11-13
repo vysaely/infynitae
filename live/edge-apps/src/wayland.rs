@@ -132,7 +132,10 @@ impl OutputSurface {
         };
         let (w, h) = (self.width as f64, self.height as f64);
         if w > 0.0 && h > 0.0 {
-            if let Some(idx) = shell.open {
+            if shell.ask.ask.on {
+                // the question takes the whole screen: a click outside it cancels
+                region.add(0, 0, w.ceil() as i32, h.ceil() as i32);
+            } else if let Some(idx) = shell.open {
                 // opened by its key: the whole screen, so a click outside reaches the edge and
                 // closes it; opened by hover: the panel and the way to it, so leaving closes it
                 let r = if shell.opened_by_hover {
@@ -166,7 +169,7 @@ impl OutputSurface {
     }
 
     fn apply_mode(&mut self, qh: &QueueHandle<App>, compositor: &CompositorState, shell: &Shell) {
-        let active = shell.open.is_some();
+        let active = shell.active();
         if !active && self.fullscreen_under {
             if !self.unmapped {
                 // a null buffer unmaps a layer surface; it maps again after a commit and its configure
@@ -302,7 +305,7 @@ impl OutputSurface {
     }
 
     fn render_if_needed(&mut self, qh: &QueueHandle<App>, shell: &Shell) {
-        if !self.configured || !self.dirty || self.frame_pending || shell.open.is_none() {
+        if !self.configured || !self.dirty || self.frame_pending || !shell.active() {
             return;
         }
         let (w, h) = (self.width as i32, self.height as i32);
@@ -315,10 +318,11 @@ impl OutputSurface {
             self.frame_pending = true;
             return;
         };
-        let Some(idx) = shell.open else { return };
-        let ((bx, by, bw, bh), _) = shell.layout(idx, w as f64, h as f64);
+        let Some((bx, by, bw, bh)) = shell.shown_box(w as f64, h as f64) else {
+            return;
+        };
         let pad = 4;
-        let lift = if shell.open_ms.is_finite() {
+        let lift = if shell.open_ms.is_finite() && !shell.ask.ask.on {
             ARRIVE_LIFT.ceil() as i32
         } else {
             0
@@ -410,6 +414,8 @@ struct App {
     was_animating: bool,
     /// the notification pop-ups' strip, made with the first pop-up
     popups: Option<PopupLayer>,
+    /// the ask watcher's word that the asker went away
+    ask_tx: Sender<()>,
     /// the session bus connection serving org.freedesktop.Notifications
     notify_conn: Option<zbus::blocking::Connection>,
     exit: bool,
@@ -639,6 +645,64 @@ impl App {
         }
     }
 
+    /// Watches the asker of the question showing: when its connection closes or it exits, the
+    /// loop hears it (the question goes without an answer to give).
+    fn watch_current_ask(&mut self) {
+        if !self.shell.ask.ask.on {
+            return;
+        }
+        let Some(fd) = self.shell.ask.ask.conn_fd else {
+            return;
+        };
+        let dup_fd = unsafe { libc::dup(fd) };
+        if dup_fd < 0 {
+            return;
+        }
+        let pid = self.shell.ask.ask.pid;
+        let tx = self.ask_tx.clone();
+        std::thread::spawn(move || {
+            loop {
+                let mut pfd = libc::pollfd {
+                    fd: dup_fd,
+                    events: libc::POLLIN | libc::POLLERR | libc::POLLHUP,
+                    revents: 0,
+                };
+                let r = unsafe { libc::poll(&mut pfd, 1, 100) };
+                if r > 0 {
+                    if (pfd.revents & (libc::POLLERR | libc::POLLHUP)) != 0 {
+                        let _ = tx.send(());
+                        break;
+                    }
+                    if (pfd.revents & libc::POLLIN) != 0 {
+                        let mut b = [0u8; 1];
+                        let k = unsafe {
+                            libc::recv(
+                                dup_fd,
+                                b.as_mut_ptr().cast(),
+                                1,
+                                libc::MSG_PEEK | libc::MSG_DONTWAIT,
+                            )
+                        };
+                        if k == 0 {
+                            let _ = tx.send(());
+                            break;
+                        }
+                    }
+                }
+                if let Some(p) = pid {
+                    if p > 0 && unsafe { libc::kill(p, 0) } != 0 {
+                        let err = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+                        if err == libc::ESRCH {
+                            let _ = tx.send(());
+                            break;
+                        }
+                    }
+                }
+            }
+            unsafe { libc::close(dup_fd) };
+        });
+    }
+
     fn sync_windows(&mut self) {
         self.shell.windows = self
             .toplevels
@@ -673,9 +737,15 @@ impl App {
                 }
             }
             b'K' => {
-                // fetch the open panel's data again (a script changed something)
-                self.fetch_due(true);
-                false
+                // a question in the ask file, or a cancel; else: fetch the open panel's data again
+                // (a script changed something)
+                if self.shell.ask_load() {
+                    self.watch_current_ask();
+                    true
+                } else {
+                    self.fetch_due(true);
+                    false
+                }
             }
             _ => false,
         };
@@ -1245,6 +1315,7 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
     );
     let (fetch_tx, fetch_rx) = channel::channel::<Fetched>();
     let (notify_tx, notify_rx) = channel::channel::<crate::notify::Incoming>();
+    let (ask_tx, ask_rx) = channel::channel::<()>();
     let output_state = OutputState::new(&globals, &qh);
     let existing: Vec<_> = output_state.outputs().collect();
     let mut app = App {
@@ -1269,6 +1340,7 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
         last_fetch: None,
         was_animating: false,
         popups: None,
+        ask_tx,
         notify_conn: None,
         exit: false,
     };
@@ -1325,6 +1397,16 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
             }
         })
         .map_err(|e| e.to_string())?;
+    handle
+        .insert_source(ask_rx, |evt, _, app| {
+            if let channel::Event::Msg(()) = evt {
+                if crate::ask::check_asker_gone(&mut app.shell.ask) {
+                    app.sync_all();
+                    app.watch_current_ask();
+                }
+            }
+        })
+        .map_err(|e| e.to_string())?;
     let sig_rd = setup_signal_pipe()?;
     handle
         .insert_source(
@@ -1349,12 +1431,30 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
         .insert(handle)
         .map_err(|e| e.to_string())?;
 
+    // callers read this to know the running edge can ask (live/infynitae-format-drive)
+    let features_file = runtime_path(crate::ask::FEATURES_FILE);
+    let _ = std::fs::write(&features_file, "ask\n");
+    // a question sent before the edge started
+    if app.shell.ask_load() {
+        app.watch_current_ask();
+        app.sync_all();
+    }
     while !app.exit {
         // while a panel is open its data is fetched every 2 s; closed, nothing wakes the edge
         let mut timeout = app.shell.open.map(|_| Duration::from_secs(2));
         if app.shell.open.is_some() {
             app.shell.now = chrono::Local::now().naive_local();
             app.fetch_due(false);
+        }
+        // an asker that went away without the watcher seeing it (no connection to watch)
+        if app.shell.ask.ask.on {
+            if crate::ask::check_asker_gone(&mut app.shell.ask) {
+                app.sync_all();
+                app.watch_current_ask();
+            }
+            timeout = Some(timeout.map_or(Duration::from_millis(100), |t| {
+                t.min(Duration::from_millis(100))
+            }));
         }
         // the pop-ups' time: the next one up wakes the loop
         if app.shell.notify.next_deadline().is_some() {
@@ -1372,6 +1472,11 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
         event_loop
             .dispatch(timeout, &mut app)
             .map_err(|e| e.to_string())?;
+    }
+    let _ = std::fs::remove_file(&features_file);
+    // whoever still waits hears "cancelled", not silence
+    while app.shell.ask.ask.on {
+        crate::ask::answer(&mut app.shell.ask, None);
     }
     Ok(())
 }

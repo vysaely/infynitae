@@ -121,6 +121,8 @@ pub struct Shell {
     /// what the cards asked for: the action, its card ("owner/kind": one command at a time per
     /// card), and the provider and source keys to fetch again after it ran
     pub actions: Vec<(Action, String, &'static str, &'static [&'static str])>,
+    /// the ask prompt (`infynitae-edge ask`): over everything while it asks
+    pub ask: crate::ask::World,
     /// what was typed while the panel is open (the cards with a search field read it)
     pub query: String,
     /// the keyboard's selection: a card and one of its hits; shown from the first arrow or Tab
@@ -152,6 +154,7 @@ impl Shell {
             windows: Vec::new(),
             notes: Vec::new(),
             notify: Default::default(),
+            ask: Default::default(),
             query: String::new(),
             selected: None,
             keyboard: false,
@@ -290,8 +293,12 @@ impl Shell {
     }
 
     pub fn open_panel(&mut self, idx: usize, by_hover: bool, now: Instant) -> bool {
-        if idx >= self.panels.len() {
+        if idx >= self.panels.len() || (by_hover && self.ask.ask.on) {
             return false;
+        }
+        // a panel asked for by its key: the question is put aside (cancelled), as in the old edge
+        if self.ask.ask.on {
+            crate::ask::answer(&mut self.ask, None);
         }
         if self.open == Some(idx) {
             return if by_hover { false } else { self.close() };
@@ -349,6 +356,9 @@ impl Shell {
     /// the hit under it; a held button drags. True when something must be drawn again.
     pub fn pointer_motion(&mut self, w: f64, h: f64, x: f64, y: f64) -> bool {
         self.last_screen = (w, h);
+        if self.ask.ask.on {
+            return crate::ask::hover(&mut self.ask, w, h, x, y);
+        }
         // the pointer moved: the keyboard's selection hides (the light follows the pointer)
         let hid = std::mem::take(&mut self.keyboard);
         let Some(idx) = self.open else {
@@ -379,6 +389,9 @@ impl Shell {
     }
 
     pub fn pointer_leave(&mut self) -> bool {
+        if self.ask.ask.on {
+            return false;
+        }
         self.pointer = None;
         let lit = self.hovered.take().is_some();
         if self.opened_by_hover && self.open.is_some() {
@@ -389,6 +402,14 @@ impl Shell {
 
     /// A button went down: on a hit, the card's Press; outside an open panel, it closes.
     pub fn click(&mut self, w: f64, h: f64, x: f64, y: f64, button: Button) -> bool {
+        if self.ask.ask.on {
+            let raw = match button {
+                Button::Left => 0x110,
+                Button::Right => 0x111,
+                Button::Middle => 0x112,
+            };
+            return crate::ask::click(&mut self.ask, w, h, x, y, raw);
+        }
         let Some(idx) = self.open else {
             return false;
         };
@@ -480,6 +501,35 @@ impl Shell {
         changed
     }
 
+    /// Something shows: a panel, or the question.
+    pub fn active(&self) -> bool {
+        self.open.is_some() || self.ask.ask.on
+    }
+
+    /// What is drawn on a `w x h` screen: the question's card while it asks, else the open
+    /// panel's box.
+    pub fn shown_box(&self, w: f64, h: f64) -> Option<Rect> {
+        if self.ask.ask.on {
+            return Some(self.ask.ask.geometry(w, h));
+        }
+        self.open.map(|idx| self.layout(idx, w, h).0)
+    }
+
+    /// A request in the ask file (SIGRTMIN+3), or a cancel: loaded, queued after one already
+    /// asking. True when what shows changed. A question closes the open panel.
+    pub fn ask_load(&mut self) -> bool {
+        let cancel = crate::wayland::runtime_path(crate::ask::ASK_CANCEL_FILE);
+        let mut changed = crate::ask::handle_cancel_from_path(&mut self.ask, &cancel);
+        let req = crate::wayland::runtime_path(crate::ask::ASK_FILE);
+        changed |= crate::ask::load_from_path(&mut self.ask, &req);
+        changed |= crate::ask::check_asker_gone(&mut self.ask);
+        if self.ask.ask.on && self.open.is_some() {
+            self.close();
+            changed = true;
+        }
+        changed
+    }
+
     /// Escape closes the open panel. True when it did.
     pub fn escape(&mut self) -> bool {
         self.key(Key::Escape)
@@ -534,6 +584,21 @@ impl Shell {
 
     /// A key while a panel is open. True when something must be drawn again.
     pub fn key(&mut self, k: Key) -> bool {
+        // the question first: it takes the keyboard while it asks, panel or not
+        if self.ask.ask.on {
+            let (sym, ch) = match k {
+                Key::Escape => (0xff1b, None),
+                Key::Enter => (0xff0d, None),
+                Key::Up => (0xff52, None),
+                Key::Down => (0xff54, None),
+                Key::Tab => (0xff09, None),
+                Key::BackTab => (0xfe20, None),
+                Key::Backspace => (0xff08, None),
+                Key::Char(c) => (0, Some(c)),
+                Key::Super(_) => return false,
+            };
+            return crate::ask::key(&mut self.ask, sym, ch);
+        }
         let Some(idx) = self.open else {
             return false;
         };
@@ -696,6 +761,9 @@ impl Shell {
     /// Draws the open panel on a screen of `w x h`: each card's box, header and body, rising in as
     /// the panel opens; keeps each card's hits for the pointer. Returns the panel's box.
     pub fn draw(&self, cr: &cairo::Context, w: f64, h: f64) -> Option<Rect> {
+        if self.ask.ask.on {
+            return Some(crate::ask::draw(cr, &self.theme, &self.ask.ask, (w, h)));
+        }
         let idx = self.open?;
         let (pbox, rects) = self.layout(idx, w, h);
         let ps = &self.panels[idx];
