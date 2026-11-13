@@ -1058,7 +1058,8 @@ int main(int argc, char *argv[]) {
     }
 
     if (!overlay) {
-        if (get_pid_file_path()) unlink(get_pid_file_path());
+        const char *pid_path = get_pid_file_path();
+        if (pid_path) unlink(pid_path);
     }
 
     struct wallpaper_output *curr = app.outputs;

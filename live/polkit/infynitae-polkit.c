@@ -37,8 +37,6 @@ typedef struct {
     GtkWidget *btn_cancel;
     GtkWidget *lbl_error;
     GtkWidget *lbl_prompt;
-
-    gboolean authenticated;
 } AuthDialogData;
 
 static void free_auth_dialog(AuthDialogData *data) {
@@ -178,7 +176,6 @@ static void on_session_completed(PolkitAgentSession *session,
                                  gpointer user_data) {
     (void)session;
     AuthDialogData *data = (AuthDialogData *)user_data;
-    data->authenticated = gained_authorization;
 
     if (gained_authorization) {
         if (data->task && !g_task_get_completed(data->task)) {

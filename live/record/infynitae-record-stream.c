@@ -23,8 +23,6 @@
 #include "wlr-screencopy-protocol.h"
 
 #define DEFAULT_FPS 60
-#define DEFAULT_REPLAY_SECONDS 1200 // 20 minutes
-#define SEGMENT_DURATION 10         // 10s per segment
 
 typedef struct {
     struct wl_display *display;
@@ -50,7 +48,6 @@ typedef struct {
     struct wl_buffer *wl_buffer[2];
     int current_buf;
 
-    bool ready;
     bool running;
     /* the bound zwlr_screencopy_manager_v1 version (buffer_done is v3) */
     uint32_t manager_version;
@@ -61,7 +58,6 @@ typedef struct {
     struct timespec last_frame_time;
 
     int pipe_fd;
-    pid_t ffmpeg_pid;
 } RecorderState;
 
 static RecorderState state;
@@ -149,8 +145,12 @@ static void frame_buffer(void *data, struct zwlr_screencopy_frame_v1 *frame,
 
     size_t size = (size_t)stride * height;
     if (s->shm_size[s->current_buf] != size) {
-        create_shm_buffer(s, 0, size);
-        create_shm_buffer(s, 1, size);
+        if (create_shm_buffer(s, 0, size) < 0 || create_shm_buffer(s, 1, size) < 0) {
+            fprintf(stderr, "[infynitae-record] Failed to allocate screencopy shared-memory buffers.\n");
+            s->running = false;
+            zwlr_screencopy_frame_v1_destroy(frame);
+            return;
+        }
     }
 
     /* from v3 the copy waits for buffer_done, the end of the list of formats */

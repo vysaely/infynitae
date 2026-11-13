@@ -1528,6 +1528,8 @@ int main(int argc, char **argv) {
     if (app.greeter_mode && app.auth_state == AUTH_STATE_SUCCESS) {
         printf("[infynitae-lock] Launching session: %s\n", app.session_cmd);
         execlp(app.session_cmd, app.session_cmd, NULL);
+        perror("[infynitae-lock] execlp");
+        return 1;
     }
 
     printf("[infynitae-lock] Unlocked.\n");

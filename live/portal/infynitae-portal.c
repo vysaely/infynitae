@@ -709,7 +709,7 @@ static void on_bus_acquired(GDBusConnection *connection,
     GError *error = NULL;
     global_node_info = g_dbus_node_info_new_for_xml(introspection_xml, &error);
     if (!global_node_info) {
-        fprintf(stderr, "Failed to parse introspection xml: %s\n", error->message);
+        g_printerr("[infynitae-portal] Failed to parse introspection xml: %s\n", error->message);
         g_error_free(error);
         return;
     }
@@ -723,7 +723,7 @@ static void on_bus_acquired(GDBusConnection *connection,
                                       NULL,
                                       &error);
     if (error) {
-        fprintf(stderr, "Failed to register object: %s\n", error->message);
+        g_printerr("[infynitae-portal] Failed to register object: %s\n", error->message);
         g_error_free(error);
     } else {
         printf("[infynitae-portal] Registered %s on %s\n", INTERFACE_NAME, OBJECT_PATH);
@@ -801,7 +801,7 @@ static void setup_socket_listener(void) {
                                        NULL,
                                        NULL,
                                        &error)) {
-        fprintf(stderr, "Failed to bind shortcuts socket %s: %s\n", sock_path, error->message);
+        g_printerr("[infynitae-portal] Failed to bind shortcuts socket %s: %s\n", sock_path, error->message);
         g_error_free(error);
     } else {
         chmod(sock_path, 0700);
