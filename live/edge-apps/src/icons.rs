@@ -521,9 +521,9 @@ pub fn image_surface_from_decoded(img: &DecodedImage) -> Option<cairo::ImageSurf
     Some(surf)
 }
 
-/// An image file at `size` x `size` through gdk-pixbuf (a cover is filled, not letterboxed),
-/// as a cairo surface (premultiplied ARGB).
-fn load_pixbuf_surface(path: &Path, size: i32) -> Option<cairo::ImageSurface> {
+/// Loads an image file scaled to at most `size` x `size` through `gdk-pixbuf` into an ARGB32
+/// Cairo surface.
+pub fn load_pixbuf_surface(path: &Path, size: i32) -> Option<cairo::ImageSurface> {
     let fns = pixbuf_fns()?;
     let img = decode_pixbuf_image(fns, path, size, size, false)?;
     image_surface_from_decoded(&img)

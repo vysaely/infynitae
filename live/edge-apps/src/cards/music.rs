@@ -13,10 +13,8 @@ use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::f64::consts::{FRAC_PI_2, PI};
-use std::ffi::{c_char, c_int, c_void, CString};
 use std::fs::File;
 use std::path::Path;
-use std::sync::OnceLock;
 
 pub struct Music;
 
@@ -1788,121 +1786,6 @@ thread_local! {
         const { RefCell::new(Vec::new()) };
 }
 
-struct PixbufFns {
-    new_at_scale:
-        unsafe extern "C" fn(*const c_char, c_int, c_int, c_int, *mut *mut c_void) -> *mut c_void,
-    pixels: unsafe extern "C" fn(*mut c_void) -> *mut u8,
-    width: unsafe extern "C" fn(*mut c_void) -> c_int,
-    height: unsafe extern "C" fn(*mut c_void) -> c_int,
-    rowstride: unsafe extern "C" fn(*mut c_void) -> c_int,
-    channels: unsafe extern "C" fn(*mut c_void) -> c_int,
-    unref: unsafe extern "C" fn(*mut c_void),
-    g_error_free: Option<unsafe extern "C" fn(*mut c_void)>,
-}
-
-fn pixbuf_fns() -> Option<&'static PixbufFns> {
-    static PB: OnceLock<Option<PixbufFns>> = OnceLock::new();
-    PB.get_or_init(|| unsafe {
-        let lib = libc::dlopen(
-            CString::new("libgdk_pixbuf-2.0.so.0").ok()?.as_ptr(),
-            libc::RTLD_LAZY,
-        );
-        let gobj = libc::dlopen(
-            CString::new("libgobject-2.0.so.0").ok()?.as_ptr(),
-            libc::RTLD_LAZY,
-        );
-        if lib.is_null() || gobj.is_null() {
-            return None;
-        }
-        let glib = libc::dlopen(
-            CString::new("libglib-2.0.so.0").ok()?.as_ptr(),
-            libc::RTLD_LAZY,
-        );
-        let sym = |h: *mut c_void, n: &str| -> Option<*mut c_void> {
-            let c = CString::new(n).ok()?;
-            let p = libc::dlsym(h, c.as_ptr());
-            (!p.is_null()).then_some(p)
-        };
-        let err = if glib.is_null() {
-            None
-        } else {
-            sym(glib, "g_error_free")
-                .map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(*mut c_void)>(p))
-        };
-        Some(PixbufFns {
-            new_at_scale: std::mem::transmute::<
-                *mut c_void,
-                unsafe extern "C" fn(*const c_char, c_int, c_int, c_int, *mut *mut c_void) -> *mut c_void,
-            >(sym(lib, "gdk_pixbuf_new_from_file_at_scale")?),
-            pixels: std::mem::transmute::<*mut c_void, unsafe extern "C" fn(*mut c_void) -> *mut u8>(
-                sym(lib, "gdk_pixbuf_get_pixels")?,
-            ),
-            width: std::mem::transmute::<*mut c_void, unsafe extern "C" fn(*mut c_void) -> c_int>(
-                sym(lib, "gdk_pixbuf_get_width")?,
-            ),
-            height: std::mem::transmute::<*mut c_void, unsafe extern "C" fn(*mut c_void) -> c_int>(
-                sym(lib, "gdk_pixbuf_get_height")?,
-            ),
-            rowstride: std::mem::transmute::<*mut c_void, unsafe extern "C" fn(*mut c_void) -> c_int>(
-                sym(lib, "gdk_pixbuf_get_rowstride")?,
-            ),
-            channels: std::mem::transmute::<*mut c_void, unsafe extern "C" fn(*mut c_void) -> c_int>(
-                sym(lib, "gdk_pixbuf_get_n_channels")?,
-            ),
-            unref: std::mem::transmute::<*mut c_void, unsafe extern "C" fn(*mut c_void)>(
-                sym(gobj, "g_object_unref")?,
-            ),
-            g_error_free: err,
-        })
-    })
-    .as_ref()
-}
-
-fn load_pixbuf_surface(path: &Path, size: i32) -> Option<cairo::ImageSurface> {
-    let fns = pixbuf_fns()?;
-    let c_path = CString::new(path.to_str()?).ok()?;
-    unsafe {
-        let mut err: *mut c_void = std::ptr::null_mut();
-        let pb = (fns.new_at_scale)(c_path.as_ptr(), size, size, 0, &mut err);
-        if !err.is_null() {
-            if let Some(free_fn) = fns.g_error_free {
-                free_fn(err);
-            }
-        }
-        if pb.is_null() {
-            return None;
-        }
-        let (w, h) = ((fns.width)(pb), (fns.height)(pb));
-        let (stride, ch) = ((fns.rowstride)(pb) as usize, (fns.channels)(pb) as usize);
-        let px = (fns.pixels)(pb);
-        let out = (|| {
-            if w <= 0 || h <= 0 || px.is_null() || !(ch == 3 || ch == 4) {
-                return None;
-            }
-            let mut surf = cairo::ImageSurface::create(cairo::Format::ARgb32, w, h).ok()?;
-            let dst_stride = surf.stride() as usize;
-            {
-                let mut data = surf.data().ok()?;
-                for y in 0..h as usize {
-                    let row = std::slice::from_raw_parts(px.add(y * stride), w as usize * ch);
-                    for x in 0..w as usize {
-                        let s = &row[x * ch..x * ch + ch];
-                        let a = if ch == 4 { s[3] as u32 } else { 255 };
-                        let pm = |c: u8| (c as u32 * a + 127) / 255;
-                        let v = (a << 24) | (pm(s[0]) << 16) | (pm(s[1]) << 8) | pm(s[2]);
-                        data[y * dst_stride + x * 4..y * dst_stride + x * 4 + 4]
-                            .copy_from_slice(&v.to_ne_bytes());
-                    }
-                }
-            }
-            surf.mark_dirty();
-            Some(surf)
-        })();
-        (fns.unref)(pb);
-        out
-    }
-}
-
 fn load_cover_surface(path: &Path, size: i32) -> Option<cairo::ImageSurface> {
     if size <= 0 || !path.is_file() {
         return None;
@@ -1935,7 +1818,7 @@ fn load_cover_surface(path: &Path, size: i32) -> Option<cairo::ImageSurface> {
         dst.flush();
         return Some(dst);
     }
-    load_pixbuf_surface(path, size)
+    crate::icons::load_pixbuf_surface(path, size)
 }
 
 fn cover_surface(p: &Path, size: i32) -> Option<cairo::ImageSurface> {
