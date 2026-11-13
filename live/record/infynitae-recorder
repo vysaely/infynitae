@@ -334,7 +334,7 @@ supervisor_loop() {
 
 save_replay_clip() {
     # gpu-screen-recorder saves its own buffer on SIGUSR1 (into CLIPS_DIR)
-    engine=$(cat "$REPLAY_PID_FILE" 2>/dev/null)
+    engine=$(cat "$REPLAY_PID_FILE" 2>/dev/null || true)
     if [ -n "$engine" ] && [ "$(cat "/proc/$engine/comm" 2>/dev/null)" = "gpu-screen-reco" ]; then
         kill -USR1 "$engine"
         notify_toast "Clip saved" "Saved to ${CLIPS_DIR##*/}"
