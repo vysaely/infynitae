@@ -8,11 +8,18 @@ rest=$(printf '%s' "$line" | sed 's/%%//g; s/%[sbaight]//g')
 case "$rest" in
     *%*) echo "FAIL: mako does not know a % here: $line" >&2; exit 1 ;;
 esac
+dir=$(mktemp -d)
+trap 'rm -rf "$dir"' EXIT
+mkdir -p "$dir/.config/mako" "$dir/.config/infynitae"
+: > "$dir/.config/infynitae/config"
+HOME="$dir" CONFIG_FILE="$dir/.config/infynitae/config" sh live/settings.sh apply >/dev/null 2>&1 || true
+mako_cfg="$dir/.config/mako/config"
+[ -f "$mako_cfg" ] || { echo "FAIL: settings.sh did not write mako config" >&2; exit 1; }
+grep -qx 'font=sans-serif 13px' "$mako_cfg" || { echo "FAIL: mako font mismatch" >&2; exit 1; }
+grep -qx 'margin=24' "$mako_cfg" || { echo "FAIL: mako margin mismatch" >&2; exit 1; }
+grep -qx 'padding=16,18' "$mako_cfg" || { echo "FAIL: mako padding mismatch" >&2; exit 1; }
 if command -v mako >/dev/null 2>&1; then
-    dir=$(mktemp -d)
-    trap 'rm -rf "$dir"' EXIT
-    grep '^format=' live/settings.sh | head -1 > "$dir/config"
-    if mako -c "$dir/config" --help 2>&1 | grep -q 'Failed to parse'; then
+    if mako -c "$mako_cfg" --help 2>&1 | grep -q 'Failed to parse'; then
         echo "FAIL: mako refuses it" >&2
         exit 1
     fi
