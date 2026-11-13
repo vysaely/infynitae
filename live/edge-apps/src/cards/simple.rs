@@ -170,21 +170,8 @@ fn app_initial(name: &str) -> String {
         .collect()
 }
 
-/// Draws the app icon tile (fallback until `app::draw_icon` exists in `app.rs`).
 fn draw_app_tile(cr: &Context, cx: &Cx, app: &App, x: f64, y: f64) {
-    let th = cx.theme;
-    draw::round_rect(cr, x, y, ICON_SZ, ICON_SZ, th.small_radius());
-    draw::set(cr, th.track);
-    let _ = cr.fill();
-    let letter = app_initial(&app.name);
-    let t = Text {
-        size: 14.0,
-        bold: true,
-        color: th.text,
-        text: &letter,
-    };
-    let (_, lh) = draw::measure(cr, &t);
-    draw::text_center(cr, x + ICON_SZ / 2.0, y + (ICON_SZ - lh) / 2.0, &t);
+    crate::icons::draw_app_icon(cr, cx, &app.icon, &app.name, x, y, ICON_SZ);
 }
 
 fn draw_sub(cr: &Context, cx: &Cx, x: f64, y: f64, w: f64, label: &str) {

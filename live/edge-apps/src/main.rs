@@ -13,6 +13,7 @@ mod card;
 mod cards;
 mod config;
 mod draw;
+mod icons;
 mod notify;
 mod notify_server;
 mod panel;

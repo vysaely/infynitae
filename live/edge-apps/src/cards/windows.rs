@@ -130,30 +130,6 @@ fn filtered_windows<'a>(cx: &'a Cx, query: &str) -> Vec<(&'a Window, &'a str)> {
         .collect()
 }
 
-/// Draws the app icon tile (fallback until `app::draw_icon` exists in `app.rs`).
-fn draw_app_tile(cr: &Context, cx: &Cx, label: &str, x: f64, y: f64) {
-    let th = cx.theme;
-    let r = th.small_radius().min(7.0);
-    draw::round_rect(cr, x, y, ICON_SZ, ICON_SZ, r);
-    draw::set(cr, th.track);
-    let _ = cr.fill();
-
-    let letter = label
-        .trim()
-        .chars()
-        .next()
-        .map(|c| c.to_uppercase().to_string())
-        .unwrap_or_else(|| "?".to_string());
-    let t = Text {
-        size: 13.0,
-        bold: true,
-        color: th.text,
-        text: &letter,
-    };
-    let (_, lh) = draw::measure(cr, &t);
-    draw::text_center(cr, x + ICON_SZ / 2.0, y + (ICON_SZ - lh) / 2.0, &t);
-}
-
 fn draw_close_mark(cr: &Context, xr: Rect, color: crate::theme::Rgba) {
     let cx = xr.0 + xr.2 / 2.0;
     let cy = xr.1 + xr.3 / 2.0;
@@ -248,7 +224,13 @@ impl Card for WindowsCard {
             } else {
                 win.title.as_str()
             };
-            draw_app_tile(cr, cx, tile_label, ix, iy);
+            // the app's icon; a window with no entry tries its app id as an icon name
+            let icon = cx
+                .apps
+                .iter()
+                .find(|a| crate::cards::simple::app_matches_window_id(a, &win.app_id))
+                .map_or(win.app_id.as_str(), |a| a.icon.as_str());
+            crate::icons::draw_app_icon(cr, cx, icon, tile_label, ix, iy, ICON_SZ);
 
             let tx = ix + ICON_SZ + 10.0;
             let right_edge = if hovered { xr.0 - 4.0 } else { r.0 + r.2 - 8.0 };
