@@ -14,6 +14,7 @@ pub mod session;
 pub mod settings;
 pub mod settings_games;
 pub mod settings_rows;
+pub mod settings_windows;
 pub mod simple;
 pub mod sound;
 pub mod steam;
