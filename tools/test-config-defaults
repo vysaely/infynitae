@@ -43,6 +43,10 @@ got=$(sh -c 'SQUARE_CORNERS=true; unset CORNERS; . live/settings.sh >/dev/null 2
 check "SQUARE_CORNERS=true leaves Infynitae's corners at 8" "$got" "8"
 got=$(sh -c 'SQUARE_CORNERS=true CORNERS=12; . live/settings.sh >/dev/null 2>&1; look_load; echo "$LOOK_CORNERS"')
 check "CORNERS=12 sets them" "$got" "12"
+got=$(sh -c 'unset CORNERS; WINDOW_CORNERS=14; . live/settings.sh >/dev/null 2>&1; look_load; echo "$LOOK_CORNERS"')
+check "WINDOW_CORNERS alone shapes the interface too" "$got" "14"
+got=$(sh -c 'CORNERS=4 WINDOW_CORNERS=14; . live/settings.sh >/dev/null 2>&1; look_load; echo "$LOOK_CORNERS"')
+check "CORNERS given wins for the interface" "$got" "4"
 
 # 6. RECORD_CODEC: default is hevc
 got=$(sed -n 's/^RECORD_CODEC="\${RECORD_CODEC:-\([^}]*\)}".*/\1/p' live/record/infynitae-recorder)

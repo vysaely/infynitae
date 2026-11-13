@@ -585,8 +585,12 @@ pub struct Config {
     pub text: [u8; 3],
     pub accent: [u8; 3],
     pub hair: Option<[u8; 3]>,
-    /// CORNERS, 8 unless set (owner 2026-11-12: 8 everywhere; SQUARE_CORNERS only squares apps)
+    /// CORNERS, else WINDOW_CORNERS, else 8: one corner for windows and everything Infynitae draws
+    /// (owner 2026-11-13: "all the ui elements should use the setting ... for the windows");
+    /// SQUARE_CORNERS only squares apps
     pub corners: f64,
+    /// CORNERS was given (WINDOW_CORNERS then does not change the interface's corners)
+    corners_given: bool,
     /// THEME_SCHEME
     pub scheme: String,
     /// NOTIFICATIONS: "auto" or "edge" make the edge the notification server (another daemon
@@ -642,6 +646,7 @@ impl Config {
             accent: [0x33, 0x3b, 0x54],
             hair: None,
             corners: 8.0,
+            corners_given: false,
             scheme: "yours".into(),
             notifications: "auto".into(),
             opacity: 0.90, // 90 % until CARD_BLUR exists: 70 % without blur reads as see-through
@@ -699,6 +704,12 @@ impl Config {
                 "BORDER_ACTIVE" => c.accent = parse_hex(v).unwrap_or(c.accent),
                 "TEXT_COLOR" => c.text = parse_hex(v).unwrap_or(c.text),
                 "CORNERS" => {
+                    if let Ok(n) = value_text(v).parse::<f64>() {
+                        c.corners = n.clamp(0.0, 28.0);
+                        c.corners_given = true;
+                    }
+                }
+                "WINDOW_CORNERS" if !c.corners_given => {
                     if let Ok(n) = value_text(v).parse::<f64>() {
                         c.corners = n.clamp(0.0, 28.0);
                     }
@@ -908,6 +919,18 @@ mod tests {
         assert!((c.opacity - 0.55).abs() < 1e-9);
         let c = Config::from_text("CORNERS=\"12\"\nSQUARE_CORNERS=\"true\"\n");
         assert_eq!(c.corners, 12.0);
+    }
+
+    /// One corner for windows and the interface: WINDOW_CORNERS shapes the edge too unless
+    /// CORNERS is given, in either order.
+    #[test]
+    fn window_corners_shape_the_interface_unless_corners_is_given() {
+        assert_eq!(Config::from_text("WINDOW_CORNERS=\"14\"\n").corners, 14.0);
+        assert_eq!(Config::from_text("WINDOW_CORNERS=\"0\"\n").corners, 0.0);
+        let c = Config::from_text("CORNERS=\"4\"\nWINDOW_CORNERS=\"14\"\n");
+        assert_eq!(c.corners, 4.0);
+        let c = Config::from_text("WINDOW_CORNERS=\"14\"\nCORNERS=\"4\"\n");
+        assert_eq!(c.corners, 4.0);
     }
 
     #[test]
