@@ -1,0 +1,21 @@
+# Vendored Dependency Patches
+
+All `0001`–`0007` patches apply cleanly on top of published `smithay = "=0.7.0"` inside `vendor/smithay-0.7.0`. Every file hash is pinned in `enforcement/smithay-0.7.0.sha256` and checked by `tools/verify-architecture`.
+
+## Smithay 0.7.0 (`vendor/smithay-0.7.0`)
+
+| # | Patch file | Patch lines | Files and hunks touched | Why | Upstream state |
+| --- | --- | --- | --- | --- | --- |
+| P1 | `0001-seat-leave-deactivate-only-active-constraint.patch` | 13 | `src/wayland/seat/pointer.rs` (`250–258`) | `PointerHandle::leave` deactivated inactive pointer constraints, emitting duplicate `unlocked`/`unconfined` events (W-SM-4c, OB-11 Option B / `D-B12-PIN`, 2026-10-07). | Issue submission tracked as outward user action (`docs/foundation/FOUNDATION_TEST_PLAN.md:186`); not in `0.7.0`. |
+| P2 | `0002-drm-async-page-flip.patch` | 203 | `src/backend/drm/surface/atomic.rs` (`858`, `881`), `src/backend/drm/surface/legacy.rs` (`334`, `355`), `src/backend/drm/surface/mod.rs` (`439`), `src/backend/drm/compositor/mod.rs` (`748`, `1060`, `1246`, `1428`, `2511`, `2538`) | Add `page_flip_async` and `DrmCompositor::set_async_flip` (`DRM_MODE_PAGE_FLIP_ASYNC`) so fullscreen tearing can flip immediately without waiting for vblank (owner decision 2026-10-26). | Local patch on `0.7.0`; upstream status not recorded. |
+| P3 | `0003-egl-lose-context-on-reset.patch` | 104 | `src/backend/egl/context.rs` (`117–308`) | Add `EGLContext::new_lose_context_on_reset` (`EGL_EXT_create_context_robustness`, `LOSE_CONTEXT_ON_RESET_EXT`) so GPU resets lose the context cleanly instead of aborting the process (owner decision 2026-10-26). | Local patch on `0.7.0`; upstream status not recorded. |
+| P4 | `0004-egl-context-priority.patch` | 42 | `src/backend/egl/context.rs` (`128–169`) | Add `EGLContext::new_lose_context_on_reset_with_priority` and `EGLContext::priority` (`EGL_IMG_context_priority`) to request high GPU priority for compositor work and read back the granted priority (owner decision 2026-10-31). | Local patch on `0.7.0`; upstream status not recorded. |
+| P5 | `0005-remove-unused-tracing-error-imports.patch` | 73 | `src/backend/drm/surface/gbm.rs` (`19`), `src/backend/session/libseat.rs` (`28`), `src/backend/winit/mod.rs` (`27`), `src/input/keyboard/mod.rs` (`15`), `src/wayland/seat/keyboard.rs` (`3`) | Remove five unused `tracing::error` imports that emitted compiler warnings on every build (applied 2026-11-13). | Not sent yet; whether upstream `Smithay/smithay` already removed them on `master` was not confirmed offline. |
+| P6 | `0006-xdg-unconfigured-buffer-error.patch` | 497 | `src/wayland/shell/xdg/handlers/surface.rs` (`107`, `189`, `209`, `305`), `src/wayland/shell/xdg/handlers/surface/popup.rs` (`90`), `src/wayland/shell/xdg/handlers/surface/toplevel.rs` (`182`), `src/wayland/shell/xdg/mod.rs` (`209`, `309`, `1089`, `1680`, `1725`, `1749`, `2063`, `2130`, `2155`) | Track acknowledged configures in `RoleLastAcked<S>` (`MultiCache`) across commits, unmaps, and destruction; post `xdg_surface::Error::UnconfiguredBuffer` (`3`) in `pre_commit_hook` when a buffer is attached before `ack_configure` (W-SM-18, applied 2026-11-13). Non-erroring `ensure_configured` compatibility helpers remain temporarily until `crates/infynitae-wayland` migrates in batch 4. | Fixed upstream in `Smithay/smithay` PR #1817 (commit `641d2ad`, 2025-09-17); not in `0.7.0`. |
+| P7 | `0007-pointer-constraints-expose-lifetime.patch` | 23 | `src/wayland/pointer_constraints.rs` (`179–180`) | Expose `pub fn lifetime(&self) -> WEnum<Lifetime>` on `PointerConstraint` so callers can read `Oneshot` vs `Persistent` on `new_constraint` instead of assuming `Persistent` and dropping after deactivation (W-SM-21, applied 2026-11-13). | Not sent yet; candidate for upstream `Smithay/smithay`. |
+
+## External Patches
+
+| Patch file | Patch lines | Files touched | Why | Upstream state |
+| --- | --- | --- | --- | --- |
+| `xwayland-satellite-0001-answer-minimize.patch` | 146 | `src/xstate/mod.rs`, `tests/integration.rs` | Answer `WM_CHANGE_STATE` (`Iconic`) on X11 windows and restore `Normal` on focus or when already focused (`fa7e131`, 2026-11-02). | Local patch for `xwayland-satellite`. |
