@@ -591,6 +591,9 @@ pub fn value_text(v: &str) -> String {
     let v = v.trim_end_matches(['\n', '\r']);
     if let Some(rest) = v.strip_prefix('"') {
         rest.split('"').next().unwrap_or("").to_string()
+    } else if let Some(rest) = v.strip_prefix('\'') {
+        // settings.sh writes KEY='value'
+        rest.split('\'').next().unwrap_or("").to_string()
     } else {
         v.split_whitespace().next().unwrap_or("").to_string()
     }

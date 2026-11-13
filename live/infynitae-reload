@@ -255,7 +255,8 @@ reload_notifications() {
     edge_serves=false
     case "${NOTIFICATIONS:-auto}" in auto|""|edge)
         if [ "${ENABLE_EDGE:-true}" != false ] \
-            && [ "$(readlink "$BIN_DIR/infynitae-edge" 2>/dev/null)" = infynitae-edge-rs ]; then
+            && case "$(readlink "$BIN_DIR/infynitae-edge" 2>/dev/null)" in
+                infynitae-edge-rs | infynitae-edge-apps) true ;; *) false ;; esac; then
             edge_serves=true
         fi ;;
     esac

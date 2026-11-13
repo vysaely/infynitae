@@ -527,6 +527,12 @@ impl App {
         if self.shell.open.is_none() {
             return;
         }
+        // a Settings card's change shows in the open panel at the next data tick
+        if self.shell.reload_if_changed() {
+            for os in &mut self.outputs {
+                os.dirty = true;
+            }
+        }
         let due = force
             || self
                 .last_fetch
@@ -1297,6 +1303,8 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
     for output in existing {
         app.create_output_surface(output);
     }
+    // notes the config file's time: a later change is read again
+    app.shell.reload_if_changed();
     if let Some(name) = initial_panel {
         app.shell.toggle_named(name);
     }

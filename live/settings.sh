@@ -44,7 +44,9 @@ look_load() {
     LOOK_CARD="${SURFACE_COLOR:-#1e2030}" LOOK_CARD_AA=f7
     LOOK_EDGE="${BORDER_INACTIVE:-#333b54}" LOOK_EDGE_AA=e6
     LOOK_TEXT="${TEXT_COLOR:-#e6e6e6}" LOOK_ACCENT="${BORDER_ACTIVE:-#7aa2f7}"
-    look_edge="$HOME/.local/bin/infynitae-edge-rs"
+    # the edge EDGE_IMPL picked (its link), else the Rust one: the C edge prints no theme
+    look_edge="$HOME/.local/bin/$(readlink "$HOME/.local/bin/infynitae-edge" 2>/dev/null || true)"
+    case "$look_edge" in */infynitae-edge-rs | */infynitae-edge-apps) ;; *) look_edge="$HOME/.local/bin/infynitae-edge-rs" ;; esac
     [ -x "$look_edge" ] || return 0
     look_out=$("$look_edge" --print-theme 2>/dev/null) || return 0
     while IFS= read -r look_line; do
@@ -761,9 +763,11 @@ EOF
 }
 
 cmd_set() {
-    KEY="$1"
-    VAL="$2"
-    if [ -z "$KEY" ] || [ -z "$VAL" ]; then
+    KEY="${1:-}"
+    VAL="${2:-}"
+    # an empty value is allowed when given (set KEY ""): it puts a key like WALLPAPER back to its
+    # default; a missing one is a mistake
+    if [ -z "$KEY" ] || [ $# -lt 2 ]; then
         echo "Usage: infynitae-settings set <KEY> <VALUE>" >&2
         exit 1
     fi

@@ -135,6 +135,8 @@ pub struct Shell {
     pub last_screen: (f64, f64),
     pub now: chrono::NaiveDateTime,
     pub edit: crate::edit::EditState,
+    /// the config file's time when it was last read (None: not looked at yet)
+    pub config_mtime: Option<std::time::SystemTime>,
     pub panel_scroll: f64,
     pub live: bool,
     pub save_paths: Option<(std::path::PathBuf, std::path::PathBuf)>,
@@ -160,6 +162,7 @@ impl Shell {
             notes: Vec::new(),
             notify: Default::default(),
             ask: Default::default(),
+            config_mtime: None,
             query: String::new(),
             selected: None,
             keyboard: false,
@@ -551,6 +554,31 @@ impl Shell {
         true
     }
 
+    /// The config file changed (a Settings card, `settings.sh set`, the owner's editor): read it
+    /// again and rebuild the panels, the open one staying open. Never while a panel is edited
+    /// (Done saves that one). The first call only notes the file's time. True when it reloaded.
+    pub fn reload_if_changed(&mut self) -> bool {
+        if self.edit.active {
+            return false;
+        }
+        let mtime = std::fs::metadata(crate::config::config_path())
+            .and_then(|m| m.modified())
+            .ok();
+        if self.config_mtime.is_none() || mtime.is_none() {
+            self.config_mtime = mtime;
+            return false;
+        }
+        if mtime == self.config_mtime {
+            return false;
+        }
+        self.config_mtime = mtime;
+        let open = self.open.map(|i| self.panels[i].panel.name.clone());
+        self.rebuild_panels(Config::load(), None);
+        self.open = open.and_then(|n| self.panels.iter().position(|ps| ps.panel.name == n));
+        self.fetch_needed = true;
+        true
+    }
+
     pub fn rebuild_panels(&mut self, cfg: Config, apps: Option<Vec<App>>) {
         if let Some(a) = apps {
             self.apps = a;
@@ -638,6 +666,8 @@ impl Shell {
     }
 
     pub fn open_panel(&mut self, idx: usize, by_hover: bool, now: Instant) -> bool {
+        // what changed in the file shows from this opening on (a reload keeps the order of panels)
+        self.reload_if_changed();
         if idx >= self.panels.len() || (by_hover && self.ask.ask.on) {
             return false;
         }

@@ -181,7 +181,8 @@ fi
 NOTIFY_CMD=""
 edge_notifies() {
     infy_on "${ENABLE_EDGE:-true}" \
-        && [ "$(readlink "$HOME/.local/bin/infynitae-edge" 2>/dev/null)" = infynitae-edge-rs ]
+        && case "$(readlink "$HOME/.local/bin/infynitae-edge" 2>/dev/null)" in
+            infynitae-edge-rs | infynitae-edge-apps) true ;; *) false ;; esac
 }
 case "${NOTIFICATIONS:-auto}" in
     none|off|false|edge) ;;
