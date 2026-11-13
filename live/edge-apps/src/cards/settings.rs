@@ -40,6 +40,7 @@ const KINDS: &[CardKind] = &[
     },
     crate::cards::quick::KIND,
     crate::cards::session::KIND,
+    crate::cards::settings_about::KIND,
     crate::cards::settings_games::KIND,
 ];
 
@@ -63,6 +64,9 @@ impl Provider for Settings {
         match kind {
             "quick" => Some(Box::new(crate::cards::quick::QuickCard::new(argument))),
             "session" if argument.is_none() => Some(Box::new(crate::cards::session::new())),
+            "about" if argument.is_none() => {
+                Some(Box::new(crate::cards::settings_about::AboutCard::default()))
+            }
             "games" => Some(Box::new(crate::cards::settings_rows::TableCard::new(
                 crate::cards::settings_games::TABLE,
             ))),
@@ -79,6 +83,7 @@ impl Provider for Settings {
             "power" => Some(Box::new(PowerSource)),
             "quick" => Some(Box::new(crate::cards::quick::QuickSource)),
             "config" => Some(Box::new(crate::cards::settings_rows::ConfigSource::system())),
+            "pc" => Some(Box::new(crate::cards::settings_about::PcSource::system())),
             _ => None,
         }
     }
