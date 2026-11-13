@@ -1865,7 +1865,7 @@ mod tests {
         let lines: Vec<&str> = logged.lines().collect();
         assert_eq!(lines, vec!["nvim", "+77", &evil_file.to_string_lossy()]);
 
-        // Appearance open -> right-click returns false, slider Press+Drag+Release forwards cleanly
+        // Appearance open -> right-click returns false, slider Press+Drag+Release forwards to child
         let th = Theme::from_config(&Config::from_text(""));
         let cx = test_cx(&th);
         let cfg = full_config_data();
@@ -2018,7 +2018,7 @@ mod tests {
             &mut out
         ));
 
-        // Click second Wallpaper thumbnail (child 1 -> 200_000 + 1001) sets WALLPAPER cleanly.
+        // Click second Wallpaper thumbnail (child 1 -> 200_000 + 1001) sets WALLPAPER.
         out.clear();
         assert!(card.event(
             &Event::Press {

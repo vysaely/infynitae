@@ -724,14 +724,14 @@ mod tests {
         assert!(!Arc::ptr_eq(&t1a, &t1m));
         assert_eq!(cache.decode_count(), 2);
 
-        // Tall 1:2 image still fills 16:9 target cleanly via cover crop without aspect stretch failure.
+        // Tall 1:2 image still fills 16:9 target via cover crop without aspect stretch.
         let t2 = cache.get_or_decode(&p2, 192, 108).unwrap();
         assert_eq!((t2.width, t2.height), (192, 108));
         let surf2 = image_surface_from_decoded(&t2).unwrap();
         assert_eq!((surf2.width(), surf2.height()), (192, 108));
         assert_eq!(cache.decode_count(), 3);
 
-        // Broken file returns None cleanly and is cached until replaced.
+        // Broken file returns None and is cached until replaced.
         assert!(cache.get_or_decode(&broken, 192, 108).is_none());
         assert_eq!(cache.decode_count(), 4);
         assert!(cache.get_or_decode(&broken, 192, 108).is_none());

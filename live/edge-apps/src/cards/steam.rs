@@ -107,7 +107,7 @@ enum Tok {
 }
 
 /// Tokenizes Valve's KeyValues (VDF/ACF) text: quoted strings with backslash escapes, `{`, `}`, and
-/// `//` line comments. Incomplete trailing quotes stop parsing cleanly instead of producing junk.
+/// `//` line comments. Incomplete trailing quotes stop parsing without producing junk.
 fn vdf_tokens(text: &str) -> Vec<Tok> {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let mut out = Vec::new();

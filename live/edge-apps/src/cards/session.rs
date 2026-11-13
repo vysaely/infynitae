@@ -373,7 +373,7 @@ mod tests {
             assert!(out.is_empty());
             assert!(card.is_armed(act));
 
-            // Still armed just before 3 seconds.
+            // Still armed before 3 seconds elapse.
             assert!(card.tick(2999.0));
             assert!(card.is_armed(act));
 

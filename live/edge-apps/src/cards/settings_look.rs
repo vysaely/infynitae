@@ -635,7 +635,7 @@ fn index_has_icon_directories(index_text: &str) -> bool {
         let Some(rest) = line.strip_prefix("Directories=") else {
             continue;
         };
-        // Require at least one non-empty directory entry that is not just "cursors".
+        // Require at least one non-empty directory entry other than "cursors".
         return rest
             .split(',')
             .map(str::trim)
@@ -3934,7 +3934,7 @@ mod tests {
         assert_eq!(data.thumbs_s.len(), 24);
         assert_eq!(data.thumbs_m.len(), 24);
         assert!(data.thumbs_s[0].is_some());
-        // Broken file stays None cleanly without failing valid neighbors.
+        // Broken file stays None without failing valid neighbors.
         assert!(data.thumbs_s[1].is_none());
         assert!(data.thumbs_m[1].is_none());
         assert!(data.thumbs_s[2].is_some());
@@ -4210,7 +4210,7 @@ mod tests {
         );
         assert_eq!(wp.display_word(0), "dawn's light.jpg");
 
-        // Empty folder still draws cleanly without panicking and matches card height.
+        // Empty folder draws without panicking and matches card height.
         let wp_empty = init_wallpaper(&[], true, &[]);
         let (hits_empty, h_empty) = draw_card(&wp_empty, &cx_s, 408.0);
         assert!(h_empty >= 2.0 * ui::ROW_H);

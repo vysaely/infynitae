@@ -2163,7 +2163,7 @@ mod tests {
         assert_eq!(no_wlr.screens[0].title(), "eDP-1  1920x1080  60 Hz");
         assert_eq!(no_wlr.screens[0].subtitle(), "BOE NV140FHM");
 
-        // Failed snapshot falls back cleanly to wlr-randr enabled outputs only
+        // Failed snapshot falls back to wlr-randr enabled outputs only
         let fallback = parse_screens(
             r#"{"ok":false,"error":"socket_not_found"}
 ===WLR_RANDR===
@@ -2575,7 +2575,7 @@ mod tests {
         let ord_log = fs::read_to_string(&log_file).unwrap();
         assert!(ord_log.contains(&format!("set:set|OUTPUT_ORDER|{evil}\n")));
 
-        // Weird connector names are single-quoted cleanly
+        // Weird connector names are single-quoted
         let quoted_cmd = wlr_and_write_command(
             "DP-1'$(evil)",
             "--scale",
