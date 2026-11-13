@@ -308,6 +308,8 @@ struct Screen {
     schedule: infynitae_wayland::frame_schedule::FrameSchedule,
     /// Whether this screen spares the GPU (`GPU_RELIEF`).
     relief: infynitae_wayland::frame_schedule::FrameRelief,
+    /// Whether `GPU_RELIEF` is currently acting on this screen.
+    relief_on: bool,
     /// A frame had nothing to show since the last refresh.
     empty_since_refresh: bool,
     /// Whether its last frame went to the screen without being drawn.
@@ -539,6 +541,8 @@ struct LoopData {
     latency_logged: Option<std::time::Instant>,
     /// Slowest turn of each 1 s window, flushed when the second ends.
     slow_turn: SlowTurnLog,
+    /// Whether the immediately preceding loop turn took at least one refresh period.
+    last_turn_slow: bool,
     /// Capture streams and one-shot clients already logged with their path (`dmabuf` vs `shm`).
     capture_log: CaptureSeen<(
         Option<smithay::reexports::wayland_server::backend::ClientId>,
@@ -1061,6 +1065,7 @@ fn connect_screen(
         ),
         deferred: None,
         relief: Default::default(),
+        relief_on: false,
         latency: Default::default(),
         scanout_logged: None,
         modes: conn
@@ -1497,6 +1502,7 @@ pub fn run_console_with(
                             .output(id)
                             .map_or(60, |m| u64::from(m.refresh_mhz / 1000));
                         let (on, changed) = s.relief.step(s.schedule.counts(), hz);
+                        s.relief_on = on;
                         if changed {
                             data.state.core_mut().set_frame_relief(id, on);
                             log_line!(
@@ -1509,6 +1515,7 @@ pub fn run_console_with(
                             );
                         }
                     } else {
+                        s.relief_on = false;
                         data.state.core_mut().set_frame_relief(id, false);
                     }
                     if !data.dpms_active {
@@ -1594,6 +1601,7 @@ pub fn run_console_with(
         last_user_activity: std::time::Instant::now(),
         latency_logged: None,
         slow_turn: SlowTurnLog::default(),
+        last_turn_slow: false,
         capture_log: CaptureSeen::default(),
         dpms_active: false,
         idle_sleep_timeout_min: idle_timeout_min,
@@ -1625,7 +1633,8 @@ pub fn run_console_with(
 
     log_line!("[infynitae] Compositor running. Ctrl+Alt+Backspace quits.");
     data.session.follow_display();
-    let mut turn_started = data.state.latency_stats.then(std::time::Instant::now);
+    let mut turn_began = std::time::Instant::now();
+    let mut turn_started = data.state.latency_stats.then_some(turn_began);
     let mut turn = turn_started.map_or_else(TurnClock::off, TurnClock::new);
     while !data.quit && !data.session.finished() {
         data.session
@@ -1681,11 +1690,12 @@ pub fn run_console_with(
         .min();
         // time spent in the loop's own turn, every wait left out: a stall of this process alone,
         // where "refresh to submit" also counts a quiet screen
-        if let Some(started) = turn_started {
-            let now = std::time::Instant::now();
-            let busy = now.saturating_duration_since(started);
+        let now = std::time::Instant::now();
+        let busy = now.saturating_duration_since(turn_began);
+        let threshold = slow_turn_threshold(&data.screens);
+        data.last_turn_slow = busy >= threshold;
+        if turn_started.is_some() {
             data.loop_busy_max = data.loop_busy_max.max(busy);
-            let threshold = slow_turn_threshold(&data.screens);
             if let Some(line) = data.slow_turn.record_at(&turn, busy, threshold, now) {
                 log_line!("{line}");
             }
@@ -1693,7 +1703,8 @@ pub fn run_console_with(
         let slow_flush = data.slow_turn.remaining(std::time::Instant::now());
         let timeout = [timeout, slow_flush].into_iter().flatten().min();
         event_loop.dispatch(timeout, &mut data)?;
-        turn_started = data.state.latency_stats.then(std::time::Instant::now);
+        turn_began = std::time::Instant::now();
+        turn_started = data.state.latency_stats.then_some(turn_began);
         turn = turn_started.map_or_else(TurnClock::off, TurnClock::new);
         if data.active
             && data
@@ -2216,8 +2227,21 @@ fn render(data: &mut LoopData, turn: &mut TurnClock) {
         }
 
         // just in time for the next refresh (LATENCY): held back until its start time, unless the
-        // window on it tears or a fullscreen game runs under VRR (those are drawn at once)
+        // window on it tears, a fullscreen game runs under VRR, or a composited frame in Direct
+        // mode hits a safety guard (GPU relief, a game on another screen, or a slow previous turn)
         let started = infynitae_wayland::presentation_clock_now();
+        let relief_active = data.state.gpu_relief && data.screens.iter().any(|sc| sc.relief_on);
+        let game_on_other = data
+            .screens
+            .iter()
+            .any(|other| other.id != id && data.state.exclusive_window(other.id).is_some());
+        let skip_composited_late = skip_composited_late_start(
+            data.state.latency_mode,
+            data.screens[i].scanned_out,
+            relief_active,
+            game_on_other,
+            data.last_turn_slow,
+        );
         {
             let s = &mut data.screens[i];
             let m = s.compositor.pending_mode();
@@ -2225,8 +2249,9 @@ fn render(data: &mut LoopData, turn: &mut TurnClock) {
             s.schedule.set_period(std::time::Duration::from_nanos(
                 1_000_000_000_000 / u64::from(mhz),
             ));
-            s.schedule
-                .set_mode(data.state.latency_mode.for_screen(s.scanned_out));
+            s.schedule.set_mode(data.state.latency_mode);
+            s.schedule.set_scanned_out(s.scanned_out);
+            s.schedule.set_skip_late(skip_composited_late);
             // a frame the GPU has to draw needs more of the refresh than one it only shows
             s.schedule.set_guard_percent(if s.scanned_out {
                 data.state.frame_guard_percent / 4
@@ -2352,6 +2377,7 @@ fn render(data: &mut LoopData, turn: &mut TurnClock) {
                 use smithay::backend::drm::compositor::PrimaryPlaneElement;
                 let scanout = matches!(result.primary_element, PrimaryPlaneElement::Element(_));
                 s.scanned_out = scanout;
+                s.schedule.set_scanned_out(scanout);
                 data.state.fullscreen_frame_shown(id);
                 // a change of (fullscreen shown, scanned out) is logged; composited while
                 // fullscreen says what else is drawn over or around the window
@@ -3305,6 +3331,20 @@ impl SlowTurnLog {
     }
 }
 
+/// Skips late scheduling on a composited desktop frame under `Direct` while the GPU is under
+/// relief, a fullscreen window owns another screen, or the previous loop turn ran over one refresh.
+fn skip_composited_late_start(
+    mode: infynitae_wayland::frame_schedule::LatencyMode,
+    scanned_out: bool,
+    relief_active: bool,
+    game_on_other_screen: bool,
+    last_turn_slow: bool,
+) -> bool {
+    mode == infynitae_wayland::frame_schedule::LatencyMode::Direct
+        && !scanned_out
+        && (relief_active || game_on_other_screen || last_turn_slow)
+}
+
 /// LATENCY_STATS: every 10 s, each screen's input-to-screen times and missed refreshes, in the
 /// session log.
 fn latency_summary(data: &mut LoopData) {
@@ -3332,8 +3372,20 @@ fn latency_summary(data: &mut LoopData) {
         let (pauses, paused) = s.schedule.pauses();
         if let Some((p50, p95, max, n)) = s.latency.take_summary() {
             let ms = |d: std::time::Duration| d.as_secs_f64() * 1000.0;
+            let (direct_m, comp_m) = s.schedule.margins();
+            let margins = if data.state.latency_mode
+                == infynitae_wayland::frame_schedule::LatencyMode::Direct
+            {
+                format!(
+                    " (direct {:.2}, composited {:.2})",
+                    ms(direct_m),
+                    ms(comp_m)
+                )
+            } else {
+                String::new()
+            };
             log_line!(
-                "[infynitae] Latency {:?}: input to screen p50 {:.2} ms, p95 {:.2} ms, max {:.2} ms ({n} frames); budget {:.2} ms, margin {:.2} ms, {misses} of {frames} frames in a run missed their refresh ({pause_misses} of {pause_frames} after pause); paused {pauses} times{}",
+                "[infynitae] Latency {:?}: input to screen p50 {:.2} ms, p95 {:.2} ms, max {:.2} ms ({n} frames); budget {:.2} ms, margin {:.2} ms{margins}, {misses} of {frames} frames in a run missed their refresh ({pause_misses} of {pause_frames} after pause); paused {pauses} times{}",
                 s.id,
                 ms(p50),
                 ms(p95),
@@ -4042,6 +4094,54 @@ mod tests {
             ),
             "[infynitae] Capture started by org.obsproject.Studio (sandboxed by flatpak): into memory (shm), copied on the main thread"
         );
+    }
+
+    #[test]
+    fn composited_late_start_respects_mode_scanout_and_safety_guards() {
+        use infynitae_wayland::frame_schedule::LatencyMode;
+        assert!(!super::skip_composited_late_start(
+            LatencyMode::Direct,
+            false,
+            false,
+            false,
+            false,
+        ));
+        assert!(super::skip_composited_late_start(
+            LatencyMode::Direct,
+            false,
+            true,
+            false,
+            false,
+        ));
+        assert!(super::skip_composited_late_start(
+            LatencyMode::Direct,
+            false,
+            false,
+            true,
+            false,
+        ));
+        assert!(super::skip_composited_late_start(
+            LatencyMode::Direct,
+            false,
+            false,
+            false,
+            true,
+        ));
+        // Direct scanout (fullscreen game) and explicit Balanced mode are unaffected.
+        assert!(!super::skip_composited_late_start(
+            LatencyMode::Direct,
+            true,
+            true,
+            true,
+            true,
+        ));
+        assert!(!super::skip_composited_late_start(
+            LatencyMode::Balanced,
+            false,
+            true,
+            true,
+            true,
+        ));
     }
 
     use super::*;

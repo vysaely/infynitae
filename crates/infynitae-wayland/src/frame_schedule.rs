@@ -21,8 +21,8 @@ pub enum LatencyMode {
     Balanced,
     /// The margin starts at 0.5 ms and may go down to 0.25 ms.
     Lowest,
-    /// `Balanced` while the screen shows a client's buffer directly (a fullscreen game: the compositor then only
-    /// flips, its frame takes a fraction of a millisecond, so drawing late costs no refreshes), `Off` otherwise.
+    /// Direct scanout (`Balanced`: 1 ms start, 0.5 ms floor) and composited desktop frames (1.5 ms
+    /// start, 0.5 ms floor) both schedule late with independent margins and budgets.
     Direct,
 }
 
@@ -43,19 +43,13 @@ impl LatencyMode {
         }
     }
 
-    /// The mode a screen's next frame is scheduled with: `Direct` becomes `Balanced` while the screen's last frame
-    /// was shown directly (scanned out), `Off` while the compositor draws it.
-    pub fn for_screen(self, scanned_out: bool) -> LatencyMode {
+    /// `(start, floor)` margins for `scanned_out` (`true` = direct scanout, `false` = composited).
+    fn margins_for(self, scanned_out: bool) -> (Duration, Duration) {
         match self {
-            LatencyMode::Direct if scanned_out => LatencyMode::Balanced,
-            LatencyMode::Direct => LatencyMode::Off,
-            other => other,
-        }
-    }
-
-    fn margins(self) -> (Duration, Duration) {
-        match self {
-            LatencyMode::Direct => LatencyMode::Balanced.margins(),
+            LatencyMode::Direct if !scanned_out => {
+                (Duration::from_micros(1500), Duration::from_micros(500))
+            }
+            LatencyMode::Direct => LatencyMode::Balanced.margins_for(true),
             LatencyMode::Off => (Duration::ZERO, Duration::ZERO),
             LatencyMode::Balanced => (Duration::from_micros(1000), Duration::from_micros(500)),
             LatencyMode::Lowest => (Duration::from_micros(500), Duration::from_micros(250)),
@@ -87,22 +81,113 @@ const GUARD_TRUSTED: Duration = Duration::from_secs(1);
 /// A guarded frame starts this long after the refresh it waited for.
 const AFTER_REFRESH: Duration = Duration::from_micros(100);
 
-/// One screen's schedule.
-#[derive(Debug)]
-pub struct FrameSchedule {
-    mode: LatencyMode,
-    period: Duration,
-    /// The last refresh seen (a vblank's timestamp).
-    last_vblank: Option<Duration>,
-    /// The refresh the frame in flight was drawn for.
-    target: Option<Duration>,
+/// Render times and margin state for one screen path (direct scanout or composited).
+#[derive(Debug, Clone, Copy)]
+struct Lane {
     samples: [Duration; SAMPLES],
     filled: usize,
     next: usize,
     margin: Duration,
     made_in_a_row: u32,
-    /// Refreshes left in which a miss does not widen the margin (SETTLE_REFRESHES after a mode change).
+    /// Refreshes left in which a miss does not widen the margin (SETTLE_REFRESHES after a switch).
     settling: u32,
+    /// Refreshes left drawn at once (PAUSE_REFRESHES).
+    paused: u32,
+    pauses: u64,
+}
+
+impl Lane {
+    fn new(start_margin: Duration) -> Self {
+        Self {
+            samples: [Duration::ZERO; SAMPLES],
+            filled: 0,
+            next: 0,
+            margin: start_margin,
+            made_in_a_row: 0,
+            settling: 0,
+            paused: 0,
+            pauses: 0,
+        }
+    }
+
+    fn set_margin_for_mode(&mut self, start_margin: Duration) {
+        self.margin = start_margin;
+        self.settling = SETTLE_REFRESHES;
+    }
+
+    fn record_sample(&mut self, took: Duration) {
+        self.samples[self.next] = took;
+        self.next = (self.next + 1) % SAMPLES;
+        self.filled = (self.filled + 1).min(SAMPLES);
+    }
+
+    fn budget(&self, period: Duration) -> Option<Duration> {
+        if self.filled == 0 {
+            return None;
+        }
+        let mut v: Vec<Duration> = self.samples[..self.filled].to_vec();
+        v.sort_unstable();
+        let p95 = v[((v.len() * 95).div_ceil(100)).saturating_sub(1)];
+        let recent = (0..RECENT.min(self.filled))
+            .map(|i| self.samples[(self.next + SAMPLES - 1 - i) % SAMPLES])
+            .max()
+            .unwrap_or_default();
+        let b = p95.max(recent) + self.margin;
+        Some(b.min(period.mul_f64(0.9)))
+    }
+
+    fn vblank_outcome(
+        &mut self,
+        late_scheduled: bool,
+        missed: bool,
+        (start_margin, floor): (Duration, Duration),
+    ) {
+        if missed {
+            self.made_in_a_row = 0;
+        }
+        let settling = self.settling > 0;
+        self.settling = self.settling.saturating_sub(1);
+        if late_scheduled && missed && settling {
+            // the switch's own frames: counted as missed, the margin left alone
+        } else if late_scheduled && missed {
+            if self.margin >= MARGIN_MAX {
+                self.paused = PAUSE_REFRESHES;
+                self.pauses += 1;
+                self.margin = start_margin;
+            } else {
+                self.margin = (self.margin + MISS_STEP).min(MARGIN_MAX);
+            }
+        } else if late_scheduled {
+            self.made_in_a_row += 1;
+            if self.made_in_a_row >= SHRINK_AFTER {
+                self.made_in_a_row = 0;
+                self.margin = self.margin.saturating_sub(MISS_STEP).max(floor);
+            }
+        }
+    }
+}
+
+/// One screen's schedule.
+#[derive(Debug)]
+pub struct FrameSchedule {
+    mode: LatencyMode,
+    period: Duration,
+    /// Whether this screen is currently scanning out directly (`true`) or compositing (`false`).
+    scanned_out: bool,
+    /// Temporary bypass for this frame (composited desktop under `Direct` when guards trigger).
+    skip_late: bool,
+    /// The last refresh seen (a vblank's timestamp).
+    last_vblank: Option<Duration>,
+    /// The refresh the frame in flight was drawn for.
+    target: Option<Duration>,
+    /// Independent render history and margin for scanned-out frames (`true`).
+    direct: Lane,
+    /// Independent render history and margin for composited frames (`false`).
+    composited: Lane,
+    /// Which path drew the frame currently in flight.
+    in_flight_scanned_out: bool,
+    /// Whether late scheduling was bypassed for the frame currently in flight.
+    in_flight_skipped: bool,
     misses: u64,
     frames: u64,
     /// Frames whose target came after a quiet gap (`>= 4 * period`): counted apart from runs and
@@ -111,9 +196,6 @@ pub struct FrameSchedule {
     pause_frames: u64,
     /// Whether the frame currently in flight was submitted after a quiet gap.
     in_flight_after_pause: bool,
-    /// Refreshes left drawn at once (PAUSE_REFRESHES).
-    paused: u32,
-    pauses: u64,
     /// LATENCY off: how much of a refresh before its end a frame no longer starts, and waits for
     /// the next instead (FRAME_GUARD, percent).
     guard_percent: u32,
@@ -149,21 +231,19 @@ impl FrameSchedule {
         FrameSchedule {
             mode,
             period,
+            scanned_out: false,
+            skip_late: false,
             last_vblank: None,
             target: None,
-            samples: [Duration::ZERO; SAMPLES],
-            filled: 0,
-            next: 0,
-            margin: mode.margins().0,
-            made_in_a_row: 0,
-            settling: 0,
+            direct: Lane::new(mode.margins_for(true).0),
+            composited: Lane::new(mode.margins_for(false).0),
+            in_flight_scanned_out: false,
+            in_flight_skipped: false,
             misses: 0,
             frames: 0,
             pause_misses: 0,
             pause_frames: 0,
             in_flight_after_pause: false,
-            paused: 0,
-            pauses: 0,
             guard_percent: 0,
             submitted: None,
             to_submit: Vec::new(),
@@ -174,8 +254,47 @@ impl FrameSchedule {
     pub fn set_mode(&mut self, mode: LatencyMode) {
         if mode != self.mode {
             self.mode = mode;
-            self.margin = mode.margins().0;
-            self.settling = SETTLE_REFRESHES;
+            self.direct.set_margin_for_mode(mode.margins_for(true).0);
+            self.composited
+                .set_margin_for_mode(mode.margins_for(false).0);
+        }
+    }
+
+    /// Selects whether the screen currently scans out (`true`) or composes (`false`). Switching
+    /// paths enters settling so transition frames do not widen the new path's margin.
+    pub fn set_scanned_out(&mut self, scanned_out: bool) {
+        if scanned_out != self.scanned_out {
+            self.scanned_out = scanned_out;
+            self.lane_mut(scanned_out).settling = SETTLE_REFRESHES;
+        }
+    }
+
+    /// Bypasses late scheduling for the next frame while keeping both lanes' state intact.
+    pub fn set_skip_late(&mut self, skip: bool) {
+        self.skip_late = skip;
+    }
+
+    fn active(&self) -> &Lane {
+        if self.scanned_out {
+            &self.direct
+        } else {
+            &self.composited
+        }
+    }
+
+    fn lane(&self, scanned_out: bool) -> &Lane {
+        if scanned_out {
+            &self.direct
+        } else {
+            &self.composited
+        }
+    }
+
+    fn lane_mut(&mut self, scanned_out: bool) -> &mut Lane {
+        if scanned_out {
+            &mut self.direct
+        } else {
+            &mut self.composited
         }
     }
 
@@ -220,31 +339,21 @@ impl FrameSchedule {
     /// recent ones, at least the slowest of the last few, plus the margin; capped below the
     /// period. `None` before any frame was measured.
     pub fn budget(&self) -> Option<Duration> {
-        if self.filled == 0 {
-            return None;
-        }
-        let mut v: Vec<Duration> = self.samples[..self.filled].to_vec();
-        v.sort_unstable();
-        let p95 = v[((v.len() * 95).div_ceil(100)).saturating_sub(1)];
-        let recent = (0..RECENT.min(self.filled))
-            .map(|i| self.samples[(self.next + SAMPLES - 1 - i) % SAMPLES])
-            .max()
-            .unwrap_or_default();
-        let b = p95.max(recent) + self.margin;
-        Some(b.min(self.period.mul_f64(0.9)))
+        self.active().budget(self.period)
     }
 
     /// When the next frame should start, given a frame is wanted at `now`: just in time for
-    /// the next refresh that can still be made. `None`: draw now (late scheduling off, nothing
-    /// measured yet, no refresh seen, or no time to wait).
+    /// the next refresh that can still be made. `None`: draw now (late scheduling off, skipped,
+    /// nothing measured yet, no refresh seen, or no time to wait).
     pub fn start_at(&self, now: Duration) -> Option<Duration> {
         if self.mode == LatencyMode::Off {
             return self.guarded_start(now);
         }
-        if self.paused > 0 {
+        let lane = self.active();
+        if self.skip_late || lane.paused > 0 {
             return None;
         }
-        let (last, budget) = (self.last_vblank?, self.budget()?);
+        let (last, budget) = (self.last_vblank?, lane.budget(self.period)?);
         let period = self.period.max(Duration::from_micros(1));
         // the first refresh after `now` that the frame can still make
         let mut refresh = last + period;
@@ -270,9 +379,10 @@ impl FrameSchedule {
     /// refresh after it.
     pub fn rendered(&mut self, started: Duration, submitted: Duration) {
         let took = submitted.saturating_sub(started);
-        self.samples[self.next] = took;
-        self.next = (self.next + 1) % SAMPLES;
-        self.filled = (self.filled + 1).min(SAMPLES);
+        let scanned_out = self.scanned_out;
+        self.lane_mut(scanned_out).record_sample(took);
+        self.in_flight_scanned_out = scanned_out;
+        self.in_flight_skipped = self.skip_late;
         self.submitted = Some(submitted);
         // a frame long after the last refresh is a screen that was quiet, not a late frame
         let in_run = self
@@ -296,18 +406,21 @@ impl FrameSchedule {
     }
 
     /// The refresh at `time` showed the frame in flight: a frame that came a refresh or more
-    /// after the one it was meant for missed it, and the margin widens.
-    /// A miss at the widest margin stops late scheduling for PAUSE_REFRESHES; frames drawn at
-    /// once meanwhile leave the margin alone.
+    /// after the one it was meant for missed it, and the active path's margin widens.
+    /// A miss at the widest margin stops late scheduling on that path for PAUSE_REFRESHES;
+    /// frames drawn at once meanwhile leave its margin alone.
     pub fn vblank(&mut self, time: Duration) {
-        let paused = self.paused > 0;
-        self.paused = self.paused.saturating_sub(1);
+        let in_flight_direct = self.in_flight_scanned_out;
+        let paused = self.lane(in_flight_direct).paused > 0;
+        self.direct.paused = self.direct.paused.saturating_sub(1);
+        self.composited.paused = self.composited.paused.saturating_sub(1);
         if let Some(submitted) = self.submitted.take()
             && self.to_flip.len() < TIMINGS_KEPT
         {
             self.to_flip.push(time.saturating_sub(submitted));
         }
         let after_pause = std::mem::take(&mut self.in_flight_after_pause);
+        let skipped = std::mem::take(&mut self.in_flight_skipped);
         if let Some(target) = self.target.take() {
             let missed = time > target + self.period / 2;
             if after_pause {
@@ -319,29 +432,11 @@ impl FrameSchedule {
                 self.frames += 1;
                 if missed {
                     self.misses += 1;
-                    self.made_in_a_row = 0;
                 }
-                let late_scheduled = !paused && self.mode != LatencyMode::Off;
-                let settling = self.settling > 0;
-                self.settling = self.settling.saturating_sub(1);
-                if late_scheduled && missed && settling {
-                    // the switch's own frames: counted as missed, the margin left alone
-                } else if late_scheduled && missed {
-                    if self.margin >= MARGIN_MAX {
-                        self.paused = PAUSE_REFRESHES;
-                        self.pauses += 1;
-                        self.margin = self.mode.margins().0;
-                    } else {
-                        self.margin = (self.margin + MISS_STEP).min(MARGIN_MAX);
-                    }
-                } else if late_scheduled {
-                    self.made_in_a_row += 1;
-                    if self.made_in_a_row >= SHRINK_AFTER {
-                        self.made_in_a_row = 0;
-                        let floor = self.mode.margins().1;
-                        self.margin = self.margin.saturating_sub(MISS_STEP).max(floor);
-                    }
-                }
+                let late_scheduled = !paused && !skipped && self.mode != LatencyMode::Off;
+                let bounds = self.mode.margins_for(in_flight_direct);
+                self.lane_mut(in_flight_direct)
+                    .vblank_outcome(late_scheduled, missed, bounds);
             }
         }
         self.last_vblank = Some(time);
@@ -369,13 +464,21 @@ impl FrameSchedule {
     }
 
     pub fn margin(&self) -> Duration {
-        self.margin
+        self.active().margin
     }
 
-    /// How often late scheduling stopped for a while (PAUSE_REFRESHES), and whether it is
-    /// stopped now.
+    /// `(direct, composited)` margins kept per screen path.
+    pub fn margins(&self) -> (Duration, Duration) {
+        (self.direct.margin, self.composited.margin)
+    }
+
+    /// How often late scheduling stopped for a while (PAUSE_REFRESHES), and whether the active
+    /// path is stopped now.
     pub fn pauses(&self) -> (u64, bool) {
-        (self.pauses, self.paused > 0)
+        (
+            self.direct.pauses + self.composited.pauses,
+            self.active().paused > 0,
+        )
     }
 }
 
@@ -486,16 +589,16 @@ impl LatencyStats {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn direct_is_late_only_while_scanned_out() {
+    fn direct_schedules_both_paths_with_independent_starting_margins() {
         use super::LatencyMode;
         assert_eq!(LatencyMode::parse("direct"), LatencyMode::Direct);
-        assert_eq!(LatencyMode::Direct.for_screen(true), LatencyMode::Balanced);
-        assert_eq!(LatencyMode::Direct.for_screen(false), LatencyMode::Off);
-        assert_eq!(LatencyMode::Off.for_screen(true), LatencyMode::Off);
-        assert_eq!(
-            LatencyMode::Balanced.for_screen(false),
-            LatencyMode::Balanced
-        );
+        let s = FrameSchedule::new(LatencyMode::Direct, P);
+        assert_eq!(s.margins(), (ms(1.0), ms(1.5)));
+        assert_eq!(s.margin(), ms(1.5), "starts composited at 1.5 ms");
+        let off = FrameSchedule::new(LatencyMode::Off, P);
+        assert_eq!(off.margins(), (Duration::ZERO, Duration::ZERO));
+        let bal = FrameSchedule::new(LatencyMode::Balanced, P);
+        assert_eq!(bal.margins(), (ms(1.0), ms(1.0)));
     }
 
     use super::*;
@@ -834,5 +937,88 @@ mod tests {
         let (_, _, max, n) = l.take_summary().unwrap();
         assert_eq!(n, 2);
         assert_eq!(max, ms(5.0));
+    }
+
+    #[test]
+    fn direct_keeps_game_and_desktop_margins_and_budgets_separate() {
+        let mut s = FrameSchedule::new(LatencyMode::Direct, P);
+        // Warm composited (desktop) path with 2.0 ms frames -> budget 2.0 + 1.5 = 3.5 ms.
+        for _ in 0..20 {
+            s.rendered(Duration::ZERO, ms(2.0));
+        }
+        // Switch to direct scanout and warm past settling with 0.2 ms frames -> budget 0.2 + 1.0 = 1.2 ms.
+        s.set_scanned_out(true);
+        let mut t = ms(100.0);
+        s.vblank(t);
+        for _ in 0..(SETTLE_REFRESHES + 16) {
+            s.rendered(t + P - ms(1.0), t + P - ms(0.8));
+            t += P;
+            s.vblank(t);
+        }
+        assert_eq!(s.margins(), (ms(1.0), ms(1.5)));
+        let direct_budget = s.budget().unwrap();
+        assert!(
+            direct_budget.abs_diff(ms(1.2)) < Duration::from_micros(5),
+            "{direct_budget:?}"
+        );
+
+        // Switching back to composited keeps the 2.0 ms desktop samples and 1.5 ms margin.
+        s.set_scanned_out(false);
+        let composited_budget = s.budget().unwrap();
+        assert!(
+            composited_budget.abs_diff(ms(3.5)) < Duration::from_micros(5),
+            "{composited_budget:?}"
+        );
+        // Run out composited settling with good frames.
+        for _ in 0..SETTLE_REFRESHES {
+            s.rendered(t + P - ms(3.0), t + P - ms(1.0));
+            t += P;
+            s.vblank(t);
+        }
+
+        // A miss on composited widens only composited margin; direct margin stays 1.0 ms.
+        s.rendered(t + ms(1.0), t + ms(3.0));
+        t += P * 2;
+        s.vblank(t);
+        assert_eq!(s.margins(), (ms(1.0), ms(1.5) + MISS_STEP));
+
+        // Pushing composited all the way to pause stops only composited late start; direct still schedules late.
+        while !s.pauses().1 {
+            s.rendered(t + ms(1.0), t + ms(3.0));
+            t += P * 2;
+            s.vblank(t);
+        }
+        assert_eq!(s.start_at(t + ms(0.2)), None, "composited is paused");
+        s.set_scanned_out(true);
+        assert!(
+            s.start_at(t + ms(0.2)).is_some(),
+            "direct path is not paused by composited misses"
+        );
+        assert_eq!(s.margins().0, ms(1.0), "direct margin untouched");
+    }
+
+    #[test]
+    fn skipped_composited_frames_draw_at_once_and_leave_margin_alone() {
+        let mut s = warmed(LatencyMode::Direct, 1.0);
+        let mut t = ms(100.0);
+        s.vblank(t);
+        assert!(
+            s.start_at(t + ms(0.2)).is_some(),
+            "composited late at 1.5 ms"
+        );
+        assert_eq!(s.margin(), ms(1.5));
+
+        s.set_skip_late(true);
+        assert_eq!(s.start_at(t + ms(0.2)), None, "guard forces immediate draw");
+        assert_eq!(s.start_for(t + ms(0.2), None), None);
+        // A miss while guarded does not widen or pause the composited margin.
+        s.rendered(t + ms(1.0), t + ms(2.0));
+        t += P * 2;
+        s.vblank(t);
+        assert_eq!(s.margin(), ms(1.5));
+        assert_eq!(s.counts(), (1, 1));
+
+        s.set_skip_late(false);
+        assert!(s.start_at(t + ms(0.2)).is_some(), "late start resumes");
     }
 }
