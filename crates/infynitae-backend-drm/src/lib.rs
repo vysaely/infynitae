@@ -1241,8 +1241,7 @@ pub fn run_console_with(
                         idle_timeout_min = m;
                     }
                 } else if key == "IDLE_AUTO_LOCK" {
-                    idle_auto_lock =
-                        !matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no");
+                    idle_auto_lock = infynitae_wayland::parse_bool(val).unwrap_or(true);
                 } else if key.starts_with("OUTPUT_") && key.ends_with("_SCALE") {
                     let conn_name = key
                         .trim_start_matches("OUTPUT_")
@@ -1621,8 +1620,8 @@ pub fn run_console_with(
 
     log_line!("[infynitae] Compositor running. Ctrl+Alt+Backspace quits.");
     data.session.follow_display();
-    let mut turn_started = std::time::Instant::now();
-    let mut turn = TurnClock::new(turn_started);
+    let mut turn_started = data.state.latency_stats.then(std::time::Instant::now);
+    let mut turn = turn_started.map_or_else(TurnClock::off, TurnClock::new);
     while !data.quit && !data.session.finished() {
         data.session
             .wake_at(data.state.core().next_settlement_deadline());
@@ -1677,12 +1676,14 @@ pub fn run_console_with(
         .min();
         // time spent in the loop's own turn, every wait left out: a stall of this process alone,
         // where "refresh to submit" also counts a quiet screen
-        let busy = turn_started.elapsed();
-        data.loop_busy_max = data.loop_busy_max.max(busy);
-        turn.report_if_slow(busy, &mut data.slow_turn_logged);
+        if let Some(started) = turn_started {
+            let busy = started.elapsed();
+            data.loop_busy_max = data.loop_busy_max.max(busy);
+            turn.report_if_slow(busy, &mut data.slow_turn_logged);
+        }
         event_loop.dispatch(timeout, &mut data)?;
-        turn_started = std::time::Instant::now();
-        turn = TurnClock::new(turn_started);
+        turn_started = data.state.latency_stats.then(std::time::Instant::now);
+        turn = turn_started.map_or_else(TurnClock::off, TurnClock::new);
         if data.active
             && data
                 .rescan_at
@@ -1721,7 +1722,9 @@ pub fn run_console_with(
                         "[infynitae] Config change detected (~/.config/infynitae/config). Live reloading..."
                     );
                     data.state.reload_config();
+                    turn.mark("config reload");
                     data.state.config_changed();
+                    turn.mark("config-check");
                     if let Some(ds) = data.state.direct_scanout {
                         data.direct_scanout = ds;
                     }
@@ -1734,10 +1737,8 @@ pub fn run_console_with(
                                     data.idle_sleep_timeout_min = m;
                                 }
                             } else if key == "IDLE_AUTO_LOCK" {
-                                data.idle_auto_lock = !matches!(
-                                    val.to_lowercase().as_str(),
-                                    "0" | "false" | "off" | "no"
-                                );
+                                data.idle_auto_lock =
+                                    infynitae_wayland::parse_bool(val).unwrap_or(true);
                             }
                         }
                     }
@@ -1746,6 +1747,7 @@ pub fn run_console_with(
                         configure_input_device(dev, &input_cfg);
                     }
                     data.session.request_frame();
+                    turn.mark("config second read");
                 } else if data.last_config_mtime.is_none() {
                     data.last_config_mtime = Some(mtime);
                 }
@@ -2200,14 +2202,23 @@ fn render(data: &mut LoopData, turn: &mut TurnClock) {
             }
         }
 
+        turn.mark("frame schedule");
         if locked {
             data.state.set_fitted_window(id, None);
         }
         // locked: only the lock surface (lock.rs); never a window
         let frame = match convert::lock_elements(&data.state, &mut data.renderer, id) {
-            Ok(Some(f)) => Ok(f),
-            Ok(None) => convert::output_elements(&mut data.state, &mut data.renderer, id)
-                .map_err(|e| format!("{e:?}")),
+            Ok(Some(f)) => {
+                turn.mark("lock elements");
+                Ok(f)
+            }
+            Ok(None) => {
+                let enabled = turn.is_enabled();
+                let mut record = |name: &'static str| turn.mark(name);
+                let mark = enabled.then_some(&mut record as &mut dyn FnMut(&'static str));
+                convert::output_elements_with_marks(&mut data.state, &mut data.renderer, id, mark)
+                    .map_err(|e| format!("{e:?}"))
+            }
             Err(e) => Err(format!("{e:?}")),
         };
         let (elements, k) = match frame {
@@ -2228,7 +2239,7 @@ fn render(data: &mut LoopData, turn: &mut TurnClock) {
                 smooth::Smoothed::new(e, data.smooth_program.clone()).rounded(round)
             })
             .collect();
-        turn.mark("element building");
+        turn.mark("smooth wrap");
         // VRR auto: on while this screen shows a fullscreen window
         let want_vrr = data.screens[i]
             .vrr_mode
@@ -3027,7 +3038,7 @@ fn core_presentation_format(
 /// ([`SLOW_TURN`]): the session log names its slowest parts. "Loop busy" said only how long
 /// (553 ms on the owner's PC, 2026-11-06), not where.
 struct TurnClock {
-    last: std::time::Instant,
+    last: Option<std::time::Instant>,
     phases: Vec<(&'static str, Duration)>,
 }
 
@@ -3037,22 +3048,37 @@ const SLOW_TURN: Duration = Duration::from_millis(8);
 impl TurnClock {
     fn new(start: std::time::Instant) -> Self {
         Self {
-            last: start,
-            phases: Vec::with_capacity(12),
+            last: Some(start),
+            phases: Vec::with_capacity(20),
         }
+    }
+
+    /// Disabled clock: allocates nothing and takes no timestamps.
+    fn off() -> Self {
+        Self {
+            last: None,
+            phases: Vec::new(),
+        }
+    }
+
+    fn is_enabled(&self) -> bool {
+        self.last.is_some()
     }
 
     /// The part of the turn since the last mark is `name`.
     fn mark(&mut self, name: &'static str) {
+        let Some(last) = self.last else {
+            return;
+        };
         let now = std::time::Instant::now();
-        self.phases.push((name, now.duration_since(self.last)));
-        self.last = now;
+        self.phases.push((name, now.duration_since(last)));
+        self.last = Some(now);
     }
 
     /// The parts of a turn of `busy`, slowest first, those of 1 ms or more; the rest is time
     /// before the first mark or between marks this turn did not reach.
     fn slow_parts(&self, busy: Duration) -> Option<String> {
-        if busy < SLOW_TURN {
+        if self.last.is_none() || busy < SLOW_TURN {
             return None;
         }
         let mut phase_totals: HashMap<&'static str, Duration> = HashMap::new();
@@ -3081,7 +3107,7 @@ impl TurnClock {
     }
 
     fn report_if_slow(&self, busy: Duration, last_logged: &mut Option<std::time::Instant>) {
-        if busy < SLOW_TURN {
+        if self.last.is_none() || busy < SLOW_TURN {
             return;
         }
         let now = std::time::Instant::now();
@@ -3584,9 +3610,7 @@ pub fn calculate_abs_pointer_delta(
 /// Unset defaults to true (TOUCHPAD_TAP="true").
 pub fn resolve_touchpad_tap(configured: Option<bool>, env_val: Option<&str>) -> bool {
     configured
-        .or_else(|| {
-            env_val.map(|t| matches!(t.to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
-        })
+        .or_else(|| env_val.map(|t| infynitae_wayland::parse_bool(t).unwrap_or(false)))
         .unwrap_or(true)
 }
 
@@ -3637,7 +3661,7 @@ fn configure_input_device(
     let nat = config.touchpad_natural_scroll.or_else(|| {
         std::env::var("TOUCHPAD_NATURAL_SCROLL")
             .ok()
-            .map(|t| matches!(t.to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+            .map(|t| infynitae_wayland::parse_bool(&t).unwrap_or(false))
     });
     if let Some(enable) = nat
         && device.config_scroll_has_natural_scroll()
@@ -3658,8 +3682,36 @@ mod tests {
         assert!(!resolve_touchpad_tap(Some(false), None));
         assert!(!resolve_touchpad_tap(None, Some("false")));
         assert!(!resolve_touchpad_tap(None, Some("0")));
+        assert!(resolve_touchpad_tap(None, Some("YES")));
+        assert!(resolve_touchpad_tap(None, Some("On")));
+        assert!(!resolve_touchpad_tap(None, Some("NO")));
+        assert!(!resolve_touchpad_tap(None, Some("invalid")));
         assert!(resolve_touchpad_tap(Some(true), Some("false")));
         assert!(!resolve_touchpad_tap(Some(false), Some("true")));
+    }
+
+    #[test]
+    fn turn_clock_marks_only_when_enabled() {
+        use std::time::{Duration, Instant};
+        let mut off = super::TurnClock::off();
+        assert!(!off.is_enabled());
+        off.mark("config reload");
+        off.mark("cursor");
+        assert!(off.phases.is_empty());
+        assert_eq!(off.phases.capacity(), 0);
+        assert_eq!(off.slow_parts(Duration::from_millis(50)), None);
+        let mut last_logged = None;
+        off.report_if_slow(Duration::from_millis(50), &mut last_logged);
+        assert_eq!(last_logged, None);
+
+        let mut on = super::TurnClock::new(Instant::now());
+        assert!(on.is_enabled());
+        on.mark("config reload");
+        on.mark("cursor");
+        assert_eq!(
+            on.phases.iter().map(|(n, _)| *n).collect::<Vec<_>>(),
+            ["config reload", "cursor"]
+        );
     }
 
     #[test]
