@@ -42,6 +42,7 @@ const KINDS: &[CardKind] = &[
     crate::cards::session::KIND,
     crate::cards::settings_display::KIND,
     crate::cards::settings_apps::KIND,
+    crate::cards::settings_about::KIND,
     crate::cards::settings_games::KIND,
     crate::cards::settings_look::KIND_APPEARANCE,
     crate::cards::settings_look::KIND_WALLPAPER,
@@ -74,6 +75,9 @@ impl Provider for Settings {
             "quick" => Some(Box::new(crate::cards::quick::QuickCard::new(argument))),
             "session" if argument.is_none() => Some(Box::new(crate::cards::session::new())),
             "display" => Some(Box::new(crate::cards::settings_display::DisplayCard::new())),
+            "about" if argument.is_none() => {
+                Some(Box::new(crate::cards::settings_about::AboutCard::default()))
+            }
             "games" => Some(Box::new(crate::cards::settings_rows::TableCard::new(
                 crate::cards::settings_games::TABLE,
             ))),
@@ -128,6 +132,7 @@ impl Provider for Settings {
             "battery_limit" => Some(Box::new(
                 crate::cards::settings_lock::BatteryLimitSource::system(),
             )),
+            "pc" => Some(Box::new(crate::cards::settings_about::PcSource::system())),
             _ => None,
         }
     }
