@@ -99,6 +99,7 @@ pub fn providers() -> &'static [&'static dyn Provider] {
         &crate::cards::chat::Chat,
         &crate::cards::files::Files,
         &crate::cards::notifications::Notifications,
+        &crate::cards::windows::Windows,
         // last: it claims every app no one above claimed (an empty category list matches any)
         &crate::cards::simple::Simple,
     ]
