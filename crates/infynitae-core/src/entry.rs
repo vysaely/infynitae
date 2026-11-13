@@ -11,7 +11,7 @@
 
 use crate::input::bindings;
 use crate::input::interaction::Interaction;
-use crate::input::keys::KeyAction;
+use crate::input::keys::{self, KeyAction, KeyCapture};
 use crate::input::ownership::Owner;
 use crate::output::{self, OutputDescriptor, OutputId, OutputModel};
 use crate::pointer::{self, PointerState};
@@ -171,21 +171,26 @@ impl Core {
                 if pressed {
                     self.closed_windows.clear();
                     // a press bound to fit or restore mutates a camera: its proof is minted here
-                    let navigation = matches!(
-                        self.resolve_key_binding(key, modifiers, self.input.interaction.active()),
-                        Some(
-                            KeyAction::FitViewport
-                                | KeyAction::ViewportRestore
-                                | KeyAction::FitToggle
-                                | KeyAction::Recenter
-                                | KeyAction::RecenterKeepZoom
-                                | KeyAction::FocusSlot(_)
-                                | KeyAction::FocusClusterSlot(_)
-                                | KeyAction::FocusNext
-                                | KeyAction::FocusDirection(_)
-                                | KeyAction::ToggleOverview
-                        )
-                    )
+                    let navigation = (!self.is_capturing_key()
+                        && matches!(
+                            self.resolve_key_binding(
+                                key,
+                                modifiers,
+                                self.input.interaction.active()
+                            ),
+                            Some(
+                                KeyAction::FitViewport
+                                    | KeyAction::ViewportRestore
+                                    | KeyAction::FitToggle
+                                    | KeyAction::Recenter
+                                    | KeyAction::RecenterKeepZoom
+                                    | KeyAction::FocusSlot(_)
+                                    | KeyAction::FocusClusterSlot(_)
+                                    | KeyAction::FocusNext
+                                    | KeyAction::FocusDirection(_)
+                                    | KeyAction::ToggleOverview
+                            )
+                        ))
                     .then(authority::Authorized::mint);
                     self.keyboard_press(key, modifiers, mods_changed, time_us, navigation, out);
                 } else {
@@ -638,9 +643,24 @@ impl Core {
             return;
         }
 
+        if self.is_capturing_key() && !keys::is_modifier_key(key) && !mods_changed {
+            if key == keys::KEY_ESC && modifiers == bindings::Modifiers::default() {
+                self.key_capture = Some(KeyCapture::Cancelled);
+            } else if keys::key_name(key).is_some() {
+                self.key_capture = Some(KeyCapture::Captured(keys::Chord {
+                    key,
+                    mods: modifiers,
+                }));
+            }
+            self.input.key_ownership.press(key, Owner::Compositor);
+            out.push(Effect::KeyboardIntercept { key });
+            return;
+        }
+
         let interaction_active = self.input.interaction.active();
-        let matched = self
-            .resolve_key_binding(key, modifiers, interaction_active)
+        let matched = (!self.is_capturing_key())
+            .then(|| self.resolve_key_binding(key, modifiers, interaction_active))
+            .flatten()
             .filter(|a| {
                 !self.shortcuts_inhibited
                     || matches!(

@@ -10,11 +10,14 @@ use crate::input::bindings::Modifiers;
 pub const KEY_ESC: u32 = 1;
 pub const KEY_ENTER: u32 = 28;
 pub const KEY_LEFTCTRL: u32 = 29;
+pub const KEY_RIGHTCTRL: u32 = 97;
 pub const KEY_LEFTALT: u32 = 56;
+pub const KEY_RIGHTALT: u32 = 100;
 pub const KEY_F: u32 = 33;
 pub const KEY_A: u32 = 30;
 pub const KEY_D: u32 = 32;
 pub const KEY_LEFTSHIFT: u32 = 42;
+pub const KEY_RIGHTSHIFT: u32 = 54;
 pub const KEY_B: u32 = 48;
 pub const KEY_TAB: u32 = 15;
 pub const KEY_UP: u32 = 103;
@@ -24,6 +27,7 @@ pub const KEY_DOWN: u32 = 108;
 pub const KEY_DELETE: u32 = 111;
 pub const KEY_SPACE: u32 = 57;
 pub const KEY_LEFTMETA: u32 = 125;
+pub const KEY_RIGHTMETA: u32 = 126;
 pub const KEY_1: u32 = 2;
 pub const KEY_2: u32 = 3;
 pub const KEY_3: u32 = 4;
@@ -171,6 +175,57 @@ pub enum KeyAction {
 pub struct Chord {
     pub key: u32,
     pub mods: Modifiers,
+}
+
+/// State of an active shortcut capture request in Core.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KeyCapture {
+    Waiting,
+    Captured(Chord),
+    Cancelled,
+}
+
+/// True for pure modifier keys (Left/Right Ctrl, Shift, Alt, Super) that do not finish a chord.
+pub fn is_modifier_key(key: u32) -> bool {
+    matches!(
+        key,
+        KEY_LEFTCTRL
+            | KEY_RIGHTCTRL
+            | KEY_LEFTSHIFT
+            | KEY_RIGHTSHIFT
+            | KEY_LEFTALT
+            | KEY_RIGHTALT
+            | KEY_LEFTMETA
+            | KEY_RIGHTMETA
+    )
+}
+
+/// Canonical config key name for `key`, or `None` if `parse_chord` does not know it.
+pub fn key_name(key: u32) -> Option<&'static str> {
+    KEY_NAMES
+        .iter()
+        .find(|&&(_, code)| code == key)
+        .map(|&(name, _)| name)
+}
+
+/// Formats `chord` in canonical config spelling (`SUPER+CTRL+ALT+SHIFT+KEY`).
+pub fn format_chord(chord: Chord) -> Option<String> {
+    let key = key_name(chord.key)?;
+    let mut out = String::new();
+    if chord.mods.logo {
+        out.push_str("SUPER+");
+    }
+    if chord.mods.ctrl {
+        out.push_str("CTRL+");
+    }
+    if chord.mods.alt {
+        out.push_str("ALT+");
+    }
+    if chord.mods.shift {
+        out.push_str("SHIFT+");
+    }
+    out.push_str(key);
+    Some(out)
 }
 
 /// The user's bindings from the config, checked before the built-in ones: chords and what they
@@ -1289,5 +1344,39 @@ mod tests {
                 mods: mods(true, false, false, true)
             })
         );
+    }
+
+    #[test]
+    fn chords_format_to_canonical_config_spelling() {
+        for (raw, expected) in [
+            ("SUPER+SHIFT+Q", "SUPER+SHIFT+Q"),
+            ("shift + super + return", "SUPER+SHIFT+RETURN"),
+            ("control+alt+dot", "CTRL+ALT+PERIOD"),
+            ("win+shift+escape", "SUPER+SHIFT+ESC"),
+            ("F5", "F5"),
+            ("print", "PRINT"),
+        ] {
+            let c = parse_chord(raw).unwrap();
+            let s = format_chord(c).unwrap();
+            assert_eq!(s, expected);
+            assert_eq!(parse_chord(&s), Some(c));
+        }
+        assert_eq!(
+            format_chord(Chord {
+                key: KEY_VOLUMEUP,
+                mods: mods(true, false, false, false),
+            }),
+            None
+        );
+        assert!(is_modifier_key(KEY_LEFTMETA));
+        assert!(is_modifier_key(KEY_RIGHTMETA));
+        assert!(is_modifier_key(KEY_LEFTSHIFT));
+        assert!(is_modifier_key(KEY_RIGHTSHIFT));
+        assert!(is_modifier_key(KEY_LEFTCTRL));
+        assert!(is_modifier_key(KEY_RIGHTCTRL));
+        assert!(is_modifier_key(KEY_LEFTALT));
+        assert!(is_modifier_key(KEY_RIGHTALT));
+        assert!(!is_modifier_key(KEY_Q));
+        assert!(!is_modifier_key(KEY_ESC));
     }
 }
