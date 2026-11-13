@@ -223,7 +223,7 @@ Then, once:
 | Night light warmth | Slide 3000-6500 K, step 100 | `NIGHT_LIGHT_TEMP` | | save |
 | M Order, left to right | Text | `OUTPUT_ORDER` | names with commas | restart |
 | M Sharper when zoomed in | Pick | `MAX_APP_SCALE` | Never `1`, 2x, 3x | save |
-| M Zoomed windows | Pick | `SCALING_FILTER` | Sharp `nearest`, Smooth `linear`, Fast `fast` | restart |
+| M Zoomed windows | Pick | `SCALING_FILTER` | Sharp `sharp`, Smooth `smooth`, FSR `fsr`, FSR sharp `fsr-sharp` | save |
 
 A mode change through `wlr-randr` is followed by a card "Keep this? 10" in the edge's ask prompt
 (`infynitae-edge ask`, choices Keep and Back); no answer in 10 s puts the old mode back and does not

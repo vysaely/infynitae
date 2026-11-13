@@ -42,14 +42,14 @@ const HIT_EDIT: u32 = 2;
 const HIT_UNDO: u32 = 3;
 
 /// Keys tagged `[restart]` in `config/config`. All `OUTPUT_*` display keys also require restart
-/// (and `BATTERY_LIMIT` runs `battery-limit`, `MAX_APP_SCALE`/`ZOOM_SHARPEN` are `[save]`).
+/// (and `BATTERY_LIMIT` runs `battery-limit`; `SCALING_FILTER`, `MAX_APP_SCALE`, `ZOOM_SHARPEN`
+/// reload live on `[save]`).
 const RESTART_KEYS: &[&str] = &[
     "XKB_DEFAULT_LAYOUT",
     "XKB_DEFAULT_OPTIONS",
     "OUTPUT_ORDER",
     "OUTPUT_LAYOUT",
     "OUTPUT_SCALE",
-    "SCALING_FILTER",
     "VRR_ENABLED",
     "VIRTUAL_SCREEN",
     "OSK",
@@ -1082,6 +1082,7 @@ mod tests {
             assert!(def.contains_key(*k), "{k} missing from config/config");
         }
         assert!(!is_restart_key("BATTERY_LIMIT"));
+        assert!(!is_restart_key("SCALING_FILTER"));
         assert!(!is_restart_key("MAX_APP_SCALE"));
         assert!(!is_restart_key("ZOOM_SHARPEN"));
     }

@@ -126,7 +126,7 @@ export KEYBOARD_REPEAT_RATE="${KEYBOARD_REPEAT_RATE:-35}"
 export PAN_MODE="${PAN_MODE:-free}"
 export XWAYLAND="${XWAYLAND:-true}"
 export SCREENCOPY_CURSOR="${SCREENCOPY_CURSOR:-false}"
-export SCALING_FILTER="${SCALING_FILTER:-nearest}"
+export SCALING_FILTER="${SCALING_FILTER:-sharp}"
 export OUTPUT_SCALE="${OUTPUT_SCALE:-1.0}"
 
 if [ "${INFYNITAE_SETTINGS_APPLIED:-0}" != "1" ] && [ -f "$HOME/infynitae/live/settings.sh" ]; then

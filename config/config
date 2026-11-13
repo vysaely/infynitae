@@ -401,13 +401,14 @@ OUTPUT_SCALE="1.0"
     # default: 1.0
     # options: 1.0  · 1.25  · 1.5  · 2.0 …
 
-SCALING_FILTER="nearest"
-    # How windows look when not at 100% zoom
-    # default: nearest
-    #   nearest    zoomed in: sharp pixels · zoomed out: averaged, so text stays legible
-    #    linear    zoomed in: smooth      · zoomed out: averaged
-    #    fast      not averaged: the crispest edges zoomed out, but text shimmers while the
-    #              camera moves; the least GPU work (games are never affected)
+SCALING_FILTER="sharp"
+    # How windows look when not at 100% zoom [save]
+    # default: sharp
+    #   sharp      zoomed in: sharp pixels (nearest) · zoomed out: cached averaging
+    #   smooth     zoomed in: smooth (linear) · zoomed out: cached averaging
+    #   fsr        zoomed in: AMD FSR 1 (EASU + mild RCAS) · zoomed out: cached averaging
+    #   fsr-sharp  zoomed in: AMD FSR 1 (EASU + stronger RCAS) · zoomed out: cached averaging
+    #   (nearest and linear are accepted aliases for sharp and smooth)
 
 MAX_APP_SCALE="1"
     # Apps redraw sharper as you zoom in, up to this scale [save]
