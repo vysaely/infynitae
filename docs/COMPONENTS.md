@@ -19,10 +19,10 @@ this repository already.
 
 | Piece | Default | Alternatives | Switch | Build our own? |
 | :--- | :--- | :--- | :--- | :--- |
-| Notifications | mako | swaync (with a panel), dunst, fnott | `NOTIFICATIONS` | **Yes, small**: notifications placed on the screen you look at, matching the canvas look |
+| Notifications | the edge (ours), else first installed: mako, swaync, dunst, fnott | mako, swaync (with a panel), dunst, fnott | `NOTIFICATIONS` | Ours (pop-ups and history in `edge-rs` and `edge-apps`; `EDGE_IMPL="c"` falls back) |
 | Volume / brightness pop-ups | `notify-send` from `live/launch.sh` | swayosd, avizo, wob | none yet (the edge's sound card shows the level) | **Yes, small**: a native on-screen display |
 | Control menu (Wi-Fi, Bluetooth, volume, sound output, power) | `live/control-menu` (ours) on fuzzel | nm-applet, iwgtk, blueman, pwvucontrol, a bar's widgets | `CONTROL_MENU` | Ours already; the edge's control panel (Super+A) is the graphical one |
-| Bar / panel | the edge (ours, in Rust; the C one stays as `EDGE_IMPL="c"`) | waybar, ironbar, eww, quickshell | `ENABLE_EDGE="false"`, then start yours in `autostart.sh`; `LAUNCHER` / `CONTROL_MENU` give it Super+W / Super+A | **Yes, medium**: the edge is the start |
+| Bar / panel | the edge (ours: `live/edge-rs` by default, `live/edge-apps` as `EDGE_IMPL="apps"` replacing it; `live/edge` in C is archived as `EDGE_IMPL="c"`) | waybar, ironbar, eww, quickshell | `ENABLE_EDGE="false"`, then start yours in `autostart.sh`; `LAUNCHER` / `CONTROL_MENU` give it Super+W / Super+A | Ours (`live/edge` and `live/edge-rs` are frozen) |
 | Clipboard history | cliphist + wl-clip-persist | clipman, copyq | `CLIPBOARD_HISTORY`, `CLIPBOARD_PICKER` | Low value |
 | Screenshots | grim + slurp | grimblast, flameshot, satty (annotate) | `SCREENSHOT_CMD` | **Yes, small**: the compositor can already capture; a native region picker is little work |
 | Recording, replay buffer | `infynitae-recorder` (ours) + ffmpeg | wf-recorder, gpu-screen-recorder, OBS | `ENABLE_REPLAY_BUFFER` | Ours |
