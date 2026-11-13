@@ -16,16 +16,13 @@ use std::time::Duration;
 use common::{Lockstep, PopupSpec, output};
 use infynitae_backend_headless::set_focus;
 
-/// The xdg_surface errors that say "a buffer on a surface that was not configured":
-/// `unconfigured_buffer` (3) is the protocol's name for it; Smithay 0.7.0 reports
-/// `not_constructed` (1), "Surface has not been configured yet". Either ends the client; which
-/// code is sent is the library's choice and is recorded as a finding, not asserted.
-const UNCONFIGURED: [u32; 2] = [1, 3];
+/// `xdg_surface.error.unconfigured_buffer` (code 3): a buffer attached before ack_configure.
+const UNCONFIGURED_BUFFER: u32 = 3;
 
 fn assert_unconfigured_error(got: Option<(String, u32)>) {
     let (interface, code) = got.expect("the client received a protocol error");
     assert_eq!(interface, "xdg_surface");
-    assert!(UNCONFIGURED.contains(&code), "xdg_surface error {code}");
+    assert_eq!(code, UNCONFIGURED_BUFFER, "xdg_surface error {code}");
 }
 
 fn spec() -> PopupSpec {

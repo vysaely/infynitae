@@ -1,0 +1,73 @@
+What failed:
+Five modules in vendored Smithay 0.7.0 imported `tracing::error` without using `error!`, producing five `unused import: error` compiler warnings on every build.
+
+Owner decision and date:
+`docs/POLISH_PLAN.md` sections 6.2 (row 1), 6.3, 6.4, and 7 batch 5 (applied 2026-11-13).
+
+Upstream status:
+Not sent, because whether upstream `Smithay/smithay` already removed these five imports on `master` was not confirmed from this worktree (`docs/POLISH_PLAN.md` section 6.2 row 1); ready to send upstream if still present.
+
+diff --git a/src/backend/drm/surface/gbm.rs b/src/backend/drm/surface/gbm.rs
+index b367f00..bf5dee1 100644
+--- a/src/backend/drm/surface/gbm.rs
++++ b/src/backend/drm/surface/gbm.rs
+@@ -16,7 +16,7 @@ use crate::backend::renderer::sync::SyncPoint;
+ use crate::backend::SwapBuffersError;
+ use crate::utils::{DevPath, Physical, Rectangle, Transform};
+ 
+-use tracing::{debug, error, info_span, instrument, trace, warn};
++use tracing::{debug, info_span, instrument, trace, warn};
+ 
+ use super::{PlaneConfig, PlaneDamageClips, PlaneState, VrrSupport};
+ 
+diff --git a/src/backend/session/libseat.rs b/src/backend/session/libseat.rs
+index bd4b574..66db22d 100644
+--- a/src/backend/session/libseat.rs
++++ b/src/backend/session/libseat.rs
+@@ -25,7 +25,7 @@ use calloop::{
+ 
+ use crate::backend::session::{AsErrno, Event as SessionEvent, Session};
+ 
+-use tracing::{debug, error, info_span, instrument};
++use tracing::{debug, info_span, instrument};
+ 
+ #[derive(Debug)]
+ struct LibSeatSessionImpl {
+diff --git a/src/backend/winit/mod.rs b/src/backend/winit/mod.rs
+index a226576..8a53c29 100644
+--- a/src/backend/winit/mod.rs
++++ b/src/backend/winit/mod.rs
+@@ -24,7 +24,7 @@ use std::time::Duration;
+ 
+ use calloop::generic::Generic;
+ use calloop::{EventSource, Interest, PostAction, Readiness, Token};
+-use tracing::{debug, error, info, info_span, instrument, trace, warn};
++use tracing::{debug, info, info_span, instrument, trace, warn};
+ use wayland_egl as wegl;
+ use winit::platform::pump_events::PumpStatus;
+ use winit::platform::scancode::PhysicalKeyExtScancode;
+diff --git a/src/input/keyboard/mod.rs b/src/input/keyboard/mod.rs
+index 1c00d0c..d01e7cf 100644
+--- a/src/input/keyboard/mod.rs
++++ b/src/input/keyboard/mod.rs
+@@ -12,7 +12,7 @@ use std::{
+     sync::{Arc, Mutex},
+ };
+ use thiserror::Error;
+-use tracing::{debug, error, info, info_span, instrument, trace};
++use tracing::{debug, info, info_span, instrument, trace};
+ 
+ use xkbcommon::xkb::ffi::XKB_STATE_LAYOUT_EFFECTIVE;
+ pub use xkbcommon::xkb::{self, keysyms, Keycode, Keysym};
+diff --git a/src/wayland/seat/keyboard.rs b/src/wayland/seat/keyboard.rs
+index 71ade86..5312d00 100644
+--- a/src/wayland/seat/keyboard.rs
++++ b/src/wayland/seat/keyboard.rs
+@@ -1,6 +1,6 @@
+ use std::fmt;
+ 
+-use tracing::{error, instrument, trace, warn};
++use tracing::{instrument, trace, warn};
+ use wayland_server::{
+     backend::{ClientId, ObjectId},
+     protocol::{

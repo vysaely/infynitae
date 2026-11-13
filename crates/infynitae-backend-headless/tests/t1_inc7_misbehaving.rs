@@ -23,10 +23,8 @@ use wayland_client::protocol::wl_registry::WlRegistry;
 use wayland_client::{Connection, DispatchError, EventQueue, QueueHandle};
 use wayland_protocols::xdg::shell::client::xdg_positioner::{self, XdgPositioner};
 
-/// The error the pinned Smithay raises for a buffer on an unconfigured xdg_surface:
-/// `xdg_surface.error.not_constructed`. (xdg-shell names `unconfigured_buffer`, code 3, for this;
-/// the client is disconnected either way, which is what OB-18 asks for.)
-const NOT_CONSTRUCTED: u32 = 1;
+/// `xdg_surface.error.unconfigured_buffer` (code 3): a buffer attached before ack_configure.
+const UNCONFIGURED_BUFFER: u32 = 3;
 /// The error the pinned Smithay raises for an acknowledgement of an unknown serial:
 /// `xdg_wm_base.error.invalid_surface_state`. (xdg-shell names `xdg_surface.invalid_serial`.)
 const INVALID_SURFACE_STATE: u32 = 4;
@@ -258,7 +256,7 @@ fn a_toplevel_buffer_on_the_initial_commit() {
     let qh = m.ls.qh.clone();
     let w = m.ls.probe.toplevel_uncommitted(&qh, "W", (200, 100));
     m.ls.probe.draw(&qh, w);
-    assert_eq!(m.drive(), killed("xdg_surface", NOT_CONSTRUCTED));
+    assert_eq!(m.drive(), killed("xdg_surface", UNCONFIGURED_BUFFER));
     m.assert_survived();
 }
 
@@ -273,7 +271,7 @@ fn a_toplevel_buffer_before_the_acknowledgement() {
     assert_eq!(m.drive(), None);
     assert_eq!(m.ls.probe.held_acks.len(), 1, "the initial configure");
     m.ls.probe.draw(&qh, w);
-    assert_eq!(m.drive(), killed("xdg_surface", NOT_CONSTRUCTED));
+    assert_eq!(m.drive(), killed("xdg_surface", UNCONFIGURED_BUFFER));
     m.assert_survived();
 }
 
@@ -289,7 +287,7 @@ fn a_popup_buffer_on_the_initial_commit() {
     let xdg = m.ls.probe.surfaces[p].xdg.clone().expect("xdg");
     m.ls.probe.surfaces[p].popup = Some(xdg.get_popup(Some(&parent), &pos, &qh, p));
     m.ls.probe.draw(&qh, p);
-    assert_eq!(m.drive(), killed("xdg_surface", NOT_CONSTRUCTED));
+    assert_eq!(m.drive(), killed("xdg_surface", UNCONFIGURED_BUFFER));
     m.assert_survived();
 }
 
@@ -314,7 +312,7 @@ fn a_popup_buffer_before_the_acknowledgement() {
     assert_eq!(m.drive(), None);
     assert_eq!(m.ls.probe.held_acks.len(), 1, "the popup's configure");
     m.ls.probe.draw(&qh, p);
-    assert_eq!(m.drive(), killed("xdg_surface", NOT_CONSTRUCTED));
+    assert_eq!(m.drive(), killed("xdg_surface", UNCONFIGURED_BUFFER));
     m.assert_survived();
 }
 
@@ -369,4 +367,22 @@ fn a_grabbing_popup_of_a_surface_without_a_role() {
     assert_eq!(m.ls.state.elements().count(), 1, "the offender's window");
     assert_eq!(m.ls.probe.kb.active.as_deref(), Some("W"));
     m.assert_bystander_works();
+}
+
+#[test]
+fn a_toplevel_buffer_after_unmap_without_configure() {
+    let mut m = M::new();
+    let w = m.offender_window();
+    // Hold any configure sent while unmapped (e.g. from focus loss) so the test does not auto-ack.
+    m.ls.probe.hold_acks = true;
+    {
+        let wl = &m.ls.probe.surfaces[w].wl;
+        wl.attach(None, 0, 0);
+        wl.commit();
+    }
+    assert_eq!(m.drive(), None);
+    let qh = m.ls.qh.clone();
+    m.ls.probe.draw(&qh, w);
+    assert_eq!(m.drive(), killed("xdg_surface", UNCONFIGURED_BUFFER));
+    m.assert_survived();
 }

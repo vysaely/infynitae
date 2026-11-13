@@ -1,0 +1,23 @@
+What failed:
+`PointerConstraint::lifetime` in `src/wayland/pointer_constraints.rs` was private in Smithay 0.7.0, forcing compositors to guess `Persistent` instead of reading `Oneshot` vs `Persistent` on `new_constraint` (W-SM-21, `docs/foundation/FOUNDATION_BLOCKERS.md:395-399`).
+
+Owner decision and date:
+`docs/POLISH_PLAN.md` sections 6.2 (row 3), 6.3, 6.4, and 7 batch 5 (applied 2026-11-13).
+
+Upstream status:
+Not sent yet; candidate for upstream `Smithay/smithay`.
+
+diff --git a/src/wayland/pointer_constraints.rs b/src/wayland/pointer_constraints.rs
+index 59c1bab..eb18147 100644
+--- a/src/wayland/pointer_constraints.rs
++++ b/src/wayland/pointer_constraints.rs
+@@ -176,7 +176,8 @@ impl PointerConstraint {
+         }
+     }
+ 
+-    fn lifetime(&self) -> WEnum<Lifetime> {
++    /// Lifetime of the constraint (oneshot or persistent)
++    pub fn lifetime(&self) -> WEnum<Lifetime> {
+         match self {
+             PointerConstraint::Confined(confined) => confined.lifetime,
+             PointerConstraint::Locked(locked) => locked.lifetime,
