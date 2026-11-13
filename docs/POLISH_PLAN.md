@@ -741,9 +741,18 @@ gain for risk. Batches marked "after N" touch the same files as batch N and wait
 | 28 | Zoom as one picture (8.8 stage 2): the canvas drawn once on one grid while a zoom runs and shown through a fractional source rectangle; three-frame fade at the hand-over | M | `drm` (render path), `crates/infynitae-backend-drm/src/smooth.rs`, `wl/convert.rs` (a canvas-only element list) | headless: two windows' edges keep their distance through a whole zoom; `frame-probe` shows no missed refresh over 100 zooms; `pzoom.py` at rest unchanged; after 18 and 27 |
 | 29 | Sharper pictures fade in; scale goes down only after a rest (8.8 stage 3) | S | `crates/infynitae-core/src/scale.rs`, `wl/convert.rs` (a window's last picture kept for the fade), `drm` | unit tests in `scale.rs` (no flip when the zoom hovers at a scale's edge); VM `pzoom.py` with a screenshot every frame of the settle; with or after 19 |
 | 30 | Names on far windows (8.8, the new way): the edge labels windows too small to read, at rest only | S to M | `live/edge-apps/src/wayland.rs`, new `live/edge-apps/src/labels.rs` | `--render` picture with fixed data; a VM script that zooms out and reads the labels' boxes; after 28 |
+| 31 | Honest numbers (8.9): the slowest turn of each second is reported, at one refresh and over; misses counted apart for frames in a run and frames after a pause; an input that needed no frame leaves the input-to-screen figure; the captures and flush marks split; the capturing program and its path named | S | `drm` (`TurnClock`, `latency_summary`, the marks), `wl/frame_schedule.rs` (`vblank`, `LatencyStats`) | unit tests in `frame_schedule.rs` for the two miss counts and the dropped input; then one owner session |
+| 32 | A zoom filter change redraws, it does not set the screen's mode again (8.9) | S | `drm` (`sync_scaling_filter`) | change the Zoomed windows setting in the VM: no "queue" slow turn, no "screen rescan" after it |
 
 Batches 16, 17, 20, 22 and 23 share no files and can run together. 19 and 21 each wait for
 one earlier batch. 25 and 26 are large and start only when the owner asks for them.
+**Order after the session of 2026-11-13, 21:23 (section 8.9).** First 31 and 10 in one build
+(31 makes the miss count true, which 10's learned margin depends on; 10 is the largest real
+gain, about 6 ms off every moving frame). Then 18's first step (map a capture only when the GPU
+has finished: the 182 ms freeze) and 32. Batch 17's settings step is dropped: the new build shows
+no slow turn after a settings change. Batch 17's upload step and the rest of 18 wait for one more
+owner session with batch 31's marks.
+
 Batches 27 to 29 are one lane in the compositor, in that order; 30 is the edge alone. Batch 24's
 reduced copies are also what batch 30's far windows are drawn from, so 24 moves before 30.
 
@@ -1330,3 +1339,146 @@ in batch 28. Risk: 28 is the one that changes the render path, and only while a 
 so a fault there shows as a wrong picture for a fraction of a second and the resting frame
 is untouched. The headless tests compare the last glide frame with the resting frame so a
 fault cannot pass unseen.
+
+### 8.9 What stalls the owner's desktop (measured)
+
+From `the owner's session log of 2026-11-13 21:23 (not kept in the repository)` (1,770 lines), read 2026-11-13. Nothing was run. PC:
+one 165 Hz screen (a refresh is 6.06 ms), `LATENCY="direct"`, replay on through
+gpu-screen-recorder.
+
+**First, what the file is.** It holds six compositor starts (the "Direct scanout log" line at
+1, 156, 506, 1088, 1654, 1719). Only the last two were built with batch 4's marks: the first
+four still print "element building" and "config and idle", names that no longer exist in the
+code (`drm:2234-2332`, `1725-1751`). So most of the file's 212 slow turns are from older
+builds. The two new-build runs together:
+
+| | Run 5 (from line 1654) | Run 6 (from line 1719, the 21:23 login) |
+| :--- | :--- | :--- |
+| Refreshes missed | 303 of 10,509 (2.9%) | 169 of 6,477 (2.6%) |
+| Slow turns logged | 4 | 4 |
+| 10 s windows with a turn over 5 ms | 4 of 27 | 5 of 19 |
+
+**The main finding: the misses are not the loop stalling.** 472 misses against 8 slow turns.
+In most 10 s windows the loop's longest turn was under 5 ms (no "Loop busy" line), and
+frames were still counted missed. Drawing takes 0.12 to 0.5 ms ("budget"). The causes are in
+how frames are timed and how a miss is counted (items 5 and 6).
+
+#### Each stall kind
+
+**1. "queue 72 to 85 ms" (18 times; once in each new-build run).**
+
+- *Cause.* A blocking mode set. Smithay's `queue_frame` sends an ordinary frame as a
+  non-blocking flip, but when the screen's state has to be set again it sends one commit
+  that waits for the hardware (`vendor/…/drm/compositor/mod.rs:2554-2557`;
+  `drm/surface/atomic.rs:818-828` against `:904-906`). That happens after `reset_state`, a
+  mode change or a VRR change (`atomic.rs:676-678`, `621-624`). It does not wait on a
+  pending flip, on client fences, on GPU_RELIEF or on a tearing retry: those paths are
+  non-blocking or come after the commit.
+- *In the log.* Lines 1, 157, 507, 1089, 1655, 1720 are each run's first frame, with
+  `render_frame` 2.5 to 3.3 ms beside it. In the old-build runs it also follows every
+  settings change: "config and idle 92 ms", then "queue 72 ms", then "screen rescan 9 ms"
+  (lines 325 to 381, seven times in a row). In run 6 there are five settings changes and
+  no slow turn after any; the longest turn in that window is 5.8 ms. So in the new build
+  this is the first frame only, where nothing is on screen yet.
+- *Still open in the code.* Changing the zoom filter calls `reset_state` on every screen
+  (`drm:2134-2136`), which will cost the same 72 ms and a screen rescan each time the
+  Zoomed windows setting is changed. Not seen in this log. A redraw is what is needed:
+  `reset_buffers` (`vendor/…/compositor/mod.rs:2651`). Batch 32.
+- *Mark to confirm.* None needed. With VRR on at the monitor later, watch for "queue"
+  when a window enters or leaves fullscreen (`drm:2273`).
+
+**2. "captures", 92 times, 4.6 to 16.5 ms, median 8.7 (4 times in the new-build runs); and
+"capture copies" 18 and 182 ms.**
+
+- *Who.* Not gpu-screen-recorder: it reads the screen from the display hardware and asks
+  the compositor for nothing (`live/record/infynitae-recorder:202`). The owner's logs say
+  "A capture into memory (shm), copied on the main thread" 34 times and into a GPU buffer
+  10 times (`drm:2734-2746`, once per start each), but not which program. Candidates:
+  screenshots, screen sharing, RustDesk, or the recorder's own fallback, which takes over
+  for the session after gpu-screen-recorder fails three times
+  (`live/record/infynitae-recorder:309-310`). Not confirmed.
+- *Cause of "capture copies 182 ms" (line 1074).* Certain from the code: the copy started
+  in one turn is mapped at the start of the next (`drm:2150`, `2915`, `ExportMem::map_texture`),
+  and mapping waits until the GPU has finished. With the GPU busy, that wait is the freeze.
+- *Cause of "captures" 8.7 ms.* The mark covers three things: building the screen's
+  elements again for the capture, drawing them off screen, and starting the readback
+  (`drm:2168-2182`). Which one takes the time is not confirmed.
+- *Mark to confirm.* Split it into "capture elements", "capture draw" and "capture
+  readback", and log the capturing program and whether it took a GPU buffer or memory each
+  time a new one starts (the capture indicator already knows the program). Batch 31.
+- *Fix.* Batch 18: map only when the frame's GPU fence has signalled (no session needed,
+  the cause is certain); the rest after the split marks.
+
+**3. "layers below 10.6 ms, layers above 4.6 ms" (once, line 1663, 10 s into run 5).**
+
+- *Cause.* Layer elements are built every frame, but building is cheap unless a layer
+  attached a new buffer: then its pixels are uploaded to the GPU inside that step
+  (`wl/convert.rs:538-566`; `vendor/…/renderer/element/surface.rs:194-206`). Below the
+  windows is the wallpaper, a full-screen memory buffer (14.7 MB at 2560 x 1440); above is
+  the edge's full-screen surface (`live/edge-apps/src/wayland.rs:474`). Both attach their
+  first buffer at login. Likely the old builds' "element building 8 to 12 ms" (69 times)
+  was the same upload for windows; in the new build "windows" has not appeared as slow in
+  about eight minutes.
+- *Mark to confirm.* The size of each buffer uploaded in a slow turn (one log line when an
+  upload takes over 2 ms: surface, size, time).
+- *Fix.* Batch 17's upload at commit time, after a longer session shows it outside login.
+
+**4. "flush 7.6 to 52.7 ms" (4 times, old builds only), "shell socket 10 ms" (once).**
+Cause not confirmed. The flush mark also covers the frame fallback, the idle check and the
+cursor animation (`drm:2036-2047`). Batch 31 splits it; no fix until it shows again.
+
+**5. A 34 ms turn in run 6 that no "Slow turn" line names.** The report is limited to one a
+second and prints the first, not the worst (`drm:3131-3143`): an 8.5 ms capture was printed
+and the 34.1 ms turn in the same second was not. The threshold is 8 ms, more than one
+refresh (`drm:3068`), so a 6 to 8 ms turn, which already costs a refresh, is never named.
+Batch 31: keep the worst turn of each second, threshold one refresh.
+
+**6. The 2.6% missed.** A frame is "missed" when its refresh comes more than half a refresh
+after a target worked out from the last refresh seen plus whole periods
+(`wl/frame_schedule.rs:271-278`, `295`). On a desktop that draws only on change, the last
+refresh can be seconds old; the guard that keeps a frame from starting too late in a
+refresh is switched off once the last refresh is over a second old (`:197-200`, `:86`).
+So the first frame after a pause is submitted at a random point in the refresh, sometimes
+too late for it ("submit to refresh max 7.0 to 7.9 ms" in almost every window), and its
+target is a guess. These are counted with real misses in a run of frames. A late first
+frame after a pause is 6 ms of delay on one frame with nothing moving; a miss in a run is
+a visible hitch. The counter cannot tell them apart. Batch 31: two counts.
+
+#### The 500 ms input-to-screen maxima
+
+A measuring artefact, not freezes. The figure is the time from the earliest input not yet
+drawn to the refresh that shows the next frame drawn (`wl/frame_schedule.rs:416-437`;
+set at `drm:3200-3204`, taken at `drm:2440`). An input that changes nothing on screen (a
+modifier key, a key an app ignores) stays "not yet drawn" until some later frame, and is
+then reported as that frame's delay. Evidence in the file:
+
+- the windows with max 504, 514, 518 and 272 ms have no "Loop busy" line, so no turn took
+  5 ms, and their "submit to refresh" max is 7 to 7.6 ms, so no flip was late;
+- each run's first window reports 24 to 44 seconds for "1 frames": an input from before
+  the first frame.
+
+Fix (batch 31): when a turn after an input finds nothing to draw (`drm:2559-2566`), the
+input leaves the figure.
+
+**The real number is the p50 of 11.3 ms.** While the pointer moves, each frame is drawn
+right after a refresh ("refresh to submit p50 0.00 to 0.05 ms") and shown at the next one,
+6 ms later; the oldest input in it arrived right after the previous draw, another 6 ms
+before. That is two refreshes, 12.1 ms, and the log's p50 11.3, p95 12.1 says exactly that.
+Windows with p50 near 5.5 ms are single inputs (typing) drawn at once. Drawing just before
+the refresh (8.2) makes it one refresh at most: about 6 ms off every frame while anything
+moves. This is the largest real gain in "responsive", and it is batch 10.
+
+#### Order of work
+
+| Order | Batch | Why now | Needs a session first? |
+| :--- | :--- | :--- | :--- |
+| 1 | 31, honest numbers (S) | every later judgement reads these lines; batch 10's margin learns from the miss count, which today includes guesses | no; it is what the next session reads |
+| 2 | 10, late start for desktop frames (M) | 11.3 ms to about 6 ms while moving; also puts first-after-pause frames on a known refresh | no, if shipped with 31 |
+| 3 | 18 step 1, map a capture when the GPU is done (S) | the 182 ms freeze; cause certain | no |
+| 4 | 32, filter change without a mode set (S) | 72 ms and a rescan on a settings row the owner has only now been given | no |
+| 5 | 18 rest, 17 upload step | captures 8.7 ms and the login uploads | yes: one session with 31's split marks |
+| dropped | 17 settings step | no slow turn after five settings changes in run 6 | |
+
+Targets for the session after 1 and 2: misses in a run under 0.2% of frames; input-to-screen
+p50 under 7 ms while moving and max under 30 ms; no turn over one refresh except each
+start's first frame.
