@@ -166,6 +166,23 @@ fn parse_place(a: &str) -> Option<(i32, i32, i32, i32)> {
     (w >= 24 && h >= 20).then_some((x, y, w, h))
 }
 
+/// The panel's cards, with the owner's `FAVORITES` as the argument of a favorites card that has
+/// none (the old `favorites` word, or `apps/favorites` written bare).
+pub fn cards_with(p: &Panel, favorites: &str) -> Vec<CardRef> {
+    let ids: Vec<&str> = favorites
+        .split([' ', ',', '\t'])
+        .map(str::trim)
+        .filter(|w| !w.is_empty())
+        .collect();
+    let mut out = cards(p);
+    for c in &mut out {
+        if c.owner == "apps" && c.kind == "favorites" && c.argument.is_none() && !ids.is_empty() {
+            c.argument = Some(ids.join(","));
+        }
+    }
+    out
+}
+
 /// A panel's cards from its words: old switch words become one `settings/quick` card at the place
 /// of the first of them, the switches in the order written; each card once.
 pub fn cards(p: &Panel) -> Vec<CardRef> {
@@ -248,6 +265,26 @@ mod tests {
             .iter()
             .map(|c| c.word())
             .collect()
+    }
+
+    #[test]
+    fn favorites_come_from_the_config_unless_the_word_names_them() {
+        let arg = |line: &str, fav: &str| {
+            let cfg = Config::from_text(&format!("PANEL_CONTROL=\"{line}\"\n"));
+            let p = cfg.panels.iter().find(|p| p.name == "control").unwrap();
+            cards_with(p, fav)[0].argument.clone()
+        };
+        let fav = "firefox discord  steam";
+        assert_eq!(
+            arg("SUPER+A top right favorites", fav).as_deref(),
+            Some("firefox,discord,steam")
+        );
+        assert_eq!(
+            arg("SUPER+A top right apps/favorites=steam", fav).as_deref(),
+            Some("steam")
+        );
+        // no FAVORITES: left bare (the card hides)
+        assert_eq!(arg("SUPER+A top right favorites", "  "), None);
     }
 
     #[test]

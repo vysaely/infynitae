@@ -630,6 +630,8 @@ impl App {
                 Action::ClosePanel => {
                     self.shell.close();
                 }
+                // the shell takes it before it gets here
+                Action::SetQuery(_) => {}
             }
         }
         if notes_changed {

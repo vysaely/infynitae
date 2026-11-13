@@ -83,6 +83,12 @@ pub trait Card {
 
     fn status(&self, cx: &Cx) -> Status;
 
+    /// Whether the core draws its header (title and app). A card that says what it is by itself
+    /// (a search field) goes without.
+    fn header(&self, _cx: &Cx) -> bool {
+        true
+    }
+
     /// The header's title when it is not the kind's.
     fn title(&self, _cx: &Cx) -> Option<String> {
         None
@@ -202,6 +208,8 @@ pub enum Action {
     /// a notification's action
     Invoke(u32, String),
     ClosePanel,
+    /// the panel's typed query becomes this (a search field's Clear: "")
+    SetQuery(String),
 }
 
 /// The fixture's values (`INFYNITAE_EDGE_RENDER_DATA`: `key=value` lines, `\n` and `\t` escaped),

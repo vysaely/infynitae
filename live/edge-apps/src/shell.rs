@@ -44,9 +44,9 @@ pub struct PanelState {
 
 /// The cards of `p` that can be made: a word whose app is not installed, or whose provider or kind
 /// does not exist, is left out (docs section 3.3, "App not installed", comes with edit mode).
-pub fn place(p: &Panel, apps: &[App]) -> Vec<Placed> {
+pub fn place(p: &Panel, apps: &[App], favorites: &str) -> Vec<Placed> {
     let mut out = Vec::new();
-    for w in crate::panel::cards(p) {
+    for w in crate::panel::cards_with(p, favorites) {
         let Some((prov, app)) = provider::resolve(&w.owner, apps) else {
             continue;
         };
@@ -141,7 +141,7 @@ impl Shell {
             .panels
             .iter()
             .map(|p| PanelState {
-                cards: place(p, &apps),
+                cards: place(p, &apps, &cfg.favorites),
                 panel: p.clone(),
             })
             .collect();
@@ -194,10 +194,11 @@ impl Shell {
     /// A card's whole height (its box: header, body, padding) at `width`; 0 when it hides.
     fn card_h(&self, pc: &Placed, width: f64, list_above: bool) -> f64 {
         let cx = self.cx(pc.size, pc.app_id.as_deref(), list_above);
+        let head = if pc.card.header(&cx) { HEAD_H } else { 0.0 };
         match pc.card.status(&cx) {
             Status::Hidden => 0.0,
             Status::Ready => {
-                PAD_TOP + HEAD_H + pc.card.height(&cx, width - 2.0 * (PAD_X - 8.0)) + PAD_BOTTOM
+                PAD_TOP + head + pc.card.height(&cx, width - 2.0 * (PAD_X - 8.0)) + PAD_BOTTOM
             }
             _ => PAD_TOP + HEAD_H + 20.0 + PAD_BOTTOM,
         }
@@ -459,12 +460,22 @@ impl Shell {
         let changed = pc.card.event(ev, &cx, &mut out);
         let (prov, keys) = (pc.provider.id(), pc.kind.sources);
         let card = format!("{}/{}", pc.word.owner, pc.word.kind);
+        let mut requery = None;
         for a in out {
-            if a == Action::ClosePanel {
-                self.close();
-                return true;
+            match a {
+                Action::ClosePanel => {
+                    self.close();
+                    return true;
+                }
+                Action::SetQuery(q) => requery = Some(q),
+                a => self.actions.push((a, card.clone(), prov, keys)),
             }
-            self.actions.push((a, card.clone(), prov, keys));
+        }
+        if let Some(q) = requery {
+            // every card hears it, the one that asked too (a Text never asks again)
+            self.query = q;
+            self.send_text(idx);
+            return true;
         }
         changed
     }
@@ -472,6 +483,14 @@ impl Shell {
     /// Escape closes the open panel. True when it did.
     pub fn escape(&mut self) -> bool {
         self.key(Key::Escape)
+    }
+
+    /// What was typed, as if typed now (renders and tests).
+    pub fn type_text(&mut self, q: &str) {
+        if let Some(idx) = self.open {
+            self.query = q.to_string();
+            self.send_text(idx);
+        }
     }
 
     /// A new panel's typing starts empty, and its cards hear so (a search shows everything again).
@@ -690,11 +709,15 @@ impl Shell {
         for (ci, r) in &rects {
             let pc = &ps.cards[*ci];
             let cx = self.cx(pc.size, pc.app_id.as_deref(), above);
+            // a card without its header only while it shows itself (Loading and Missing say
+            // whose they are)
+            let headed = pc.card.header(&cx) || pc.card.status(&cx) != Status::Ready;
+            let head = if headed { HEAD_H } else { 0.0 };
             let body = (
                 r.0 + PAD_X - 8.0,
-                r.1 + PAD_TOP + HEAD_H,
+                r.1 + PAD_TOP + head,
                 r.2 - 2.0 * (PAD_X - 8.0),
-                r.3 - PAD_TOP - HEAD_H - PAD_BOTTOM,
+                r.3 - PAD_TOP - head - PAD_BOTTOM,
             );
             let sel = self
                 .selected
@@ -718,33 +741,35 @@ impl Shell {
                 cr.translate(0.0, (1.0 - p) * ARRIVE_LIFT);
             }
             draw::card(cr, th, r.0, r.1, r.2, r.3);
-            let title = pc
-                .card
-                .title(&cx)
-                .unwrap_or_else(|| pc.kind.title.to_string());
-            let from_w = draw::text_right(
-                cr,
-                r.0 + r.2 - PAD_X,
-                r.1 + PAD_TOP + 3.0,
-                &Text {
-                    size: 12.0,
-                    bold: false,
-                    color: th.muted,
-                    text: &pc.from,
-                },
-            );
-            draw::text_max(
-                cr,
-                r.0 + PAD_X,
-                r.1 + PAD_TOP,
-                (r.2 - 2.0 * PAD_X - from_w - 12.0).max(40.0),
-                &Text {
-                    size: 15.0,
-                    bold: true,
-                    color: th.text,
-                    text: &title,
-                },
-            );
+            if headed {
+                let title = pc
+                    .card
+                    .title(&cx)
+                    .unwrap_or_else(|| pc.kind.title.to_string());
+                let from_w = draw::text_right(
+                    cr,
+                    r.0 + r.2 - PAD_X,
+                    r.1 + PAD_TOP + 3.0,
+                    &Text {
+                        size: 12.0,
+                        bold: false,
+                        color: th.muted,
+                        text: &pc.from,
+                    },
+                );
+                draw::text_max(
+                    cr,
+                    r.0 + PAD_X,
+                    r.1 + PAD_TOP,
+                    (r.2 - 2.0 * PAD_X - from_w - 12.0).max(40.0),
+                    &Text {
+                        size: 15.0,
+                        bold: true,
+                        color: th.text,
+                        text: &title,
+                    },
+                );
+            }
             match pc.card.status(&cx) {
                 Status::Ready => {
                     cr.save().ok();
