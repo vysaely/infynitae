@@ -75,6 +75,9 @@ jobs:
     name: Old edges frozen
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -83,12 +86,17 @@ jobs:
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
-          FIX: ${{ contains(github.event.pull_request.labels.*.name, 'edge-fix') }}
+          PR: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           changed=$(git diff --name-only "$BASE...$HEAD" -- live/edge live/edge-rs)
           if [ -z "$changed" ]; then echo "old edges untouched"; exit 0; fi
           echo "$changed"
-          if [ "$FIX" = true ]; then echo "allowed: labelled edge-fix"; exit 0; fi
+          # the labels as they are now (a rerun after labelling sees the label; the event's copy is old)
+          if gh pr view "$PR" --json labels -q '.labels[].name' | grep -qx edge-fix; then
+            echo "allowed: labelled edge-fix"; exit 0
+          fi
           echo "live/edge and live/edge-rs are frozen; label the pull request edge-fix for a bug fix"
           exit 1
 
