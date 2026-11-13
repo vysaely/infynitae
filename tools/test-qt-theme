@@ -62,4 +62,44 @@ H="$TMP/b"; mkdir -p "$H/.config/infynitae"
 printf 'THEME_SYNC="false"\n' > "$H/.config/infynitae/config"
 apply "$H"
 check "THEME_SYNC=false writes no Qt palette" "$([ -e "$H/.config/qt6ct" ] && echo written || echo none)" "none"
+
+# Built scheme via --print-theme drives Qt and GTK from LOOK_* (ignoring stale SURFACE_COLOR / BORDER_ACTIVE)
+H="$TMP/c"; mkdir -p "$H/.config/infynitae" "$H/.local/bin"
+cat > "$H/.local/bin/infynitae-edge-rs" << 'EOF'
+#!/bin/sh
+[ "${1:-}" = "--print-theme" ] || exit 1
+cat << 'OUT'
+LOOK_CARD="#1b1824"
+LOOK_CARD_AA="e6"
+LOOK_EDGE="#e8e2f0"
+LOOK_EDGE_AA="1a"
+LOOK_TEXT="#e8e2f0"
+LOOK_TEXT_AA="ff"
+LOOK_MUTED="#a8a3b4"
+LOOK_MUTED_AA="ff"
+LOOK_ACCENT="#c49ef7"
+LOOK_ACCENT_AA="ff"
+LOOK_ON_ACCENT="#111015"
+LOOK_ON_ACCENT_AA="ff"
+LOOK_ACCENT_TEXT="#c49ef7"
+LOOK_ACCENT_TEXT_AA="ff"
+LOOK_TRACK="#e8e2f0"
+LOOK_TRACK_AA="1f"
+LOOK_CORNERS="8"
+LOOK_SMALL_RADIUS="4"
+LOOK_FONT="Cantarell"
+OUT
+EOF
+chmod +x "$H/.local/bin/infynitae-edge-rs"
+printf 'SURFACE_COLOR="#111317"\nBORDER_ACTIVE="#7aa2f7"\nTEXT_COLOR="#eef2f8"\nTHEME_SCHEME="tonal"\nICON_THEME="Adwaita"\n' > "$H/.config/infynitae/config"
+apply "$H"
+p="$H/.config/qt6ct/colors/infynitae.conf"
+check "scheme Qt window uses LOOK_CARD" "$(role "$p" 11)" "#ff1b1824"
+check "scheme Qt highlight uses LOOK_ACCENT" "$(role "$p" 13)" "#ffc49ef7"
+check "scheme Qt highlighted text uses LOOK_ON_ACCENT" "$(role "$p" 14)" "#ff111015"
+check "scheme Qt text uses LOOK_TEXT" "$(role "$p" 7)" "#ffe8e2f0"
+check "scheme Qt mid uses blended LOOK_EDGE" "$(role "$p" 6)" "#ff302d39"
+check "scheme qt6ct.conf general font uses LOOK_FONT" "$(sed -n 's/^general="\([^,]*\),.*/\1/p' "$H/.config/qt6ct/qt6ct.conf")" "Cantarell"
+check "scheme GTK 4 window_bg_color uses LOOK_CARD" "$(sed -n 's/^@define-color window_bg_color \(.*\);$/\1/p' "$H/.config/gtk-4.0/gtk.css")" "#1b1824"
+check "scheme GTK 4 accent_fg_color uses LOOK_ON_ACCENT" "$(sed -n 's/^@define-color accent_fg_color \(.*\);$/\1/p' "$H/.config/gtk-4.0/gtk.css")" "#111015"
 exit $fail

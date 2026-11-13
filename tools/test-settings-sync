@@ -86,4 +86,89 @@ HOME="$H2" CONFIG_FILE="$H2/.config/infynitae/config" sh "$REPO_DIR/live/setting
 check "apply --force writes even when unchanged" \
     "$([ "$(cat "$H2/.icons/default/index.theme" 2>/dev/null)" = "custom-marker-force" ] && echo unchanged || echo overwritten)" "overwritten"
 
+# 6. Fallback defaults without edge binary and resolved LOOK_* scheme propagation
+H_FALLBACK="$TMP/h_fallback"
+mkdir -p "$H_FALLBACK/.config/infynitae"
+: > "$H_FALLBACK/.config/infynitae/config"
+apply "$H_FALLBACK"
+look_fb="$H_FALLBACK/.cache/infynitae/look"
+check "fallback look uses #111317 card and e6 opacity" \
+    "$(grep -E '^LOOK_CARD=|^LOOK_CARD_AA=|^LOOK_TEXT=|^LOOK_SMALL_RADIUS=' "$look_fb" | tr '\n' ' ')" \
+    'LOOK_CARD="#111317" LOOK_CARD_AA="e6" LOOK_TEXT="#eef2f8" LOOK_SMALL_RADIUS="4" '
+
+H3="$TMP/h3"
+mkdir -p "$H3/.local/bin" "$H3/.config/infynitae" "$H3/.config/mako" "$H3/.config/fuzzel" \
+    "$H3/.config/foot" "$H3/.config/kitty" "$H3/.config/alacritty"
+cat > "$H3/.local/bin/infynitae-edge-rs" << 'EOF'
+#!/bin/sh
+[ "${1:-}" = "--print-theme" ] || exit 1
+cat << 'OUT'
+LOOK_CARD="#1b1824"
+LOOK_CARD_AA="cc"
+LOOK_EDGE="#e8e2f0"
+LOOK_EDGE_AA="1a"
+LOOK_TEXT="#e8e2f0"
+LOOK_TEXT_AA="ff"
+LOOK_MUTED="#a8a3b4"
+LOOK_MUTED_AA="ff"
+LOOK_ACCENT="#c49ef7"
+LOOK_ACCENT_AA="ff"
+LOOK_ON_ACCENT="#1b1824"
+LOOK_ON_ACCENT_AA="ff"
+LOOK_ACCENT_TEXT="#d0b2fa"
+LOOK_ACCENT_TEXT_AA="ff"
+LOOK_TRACK="#e8e2f0"
+LOOK_TRACK_AA="1f"
+LOOK_CORNERS="12"
+LOOK_SMALL_RADIUS="7"
+LOOK_FONT="Cantarell"
+OUT
+EOF
+chmod +x "$H3/.local/bin/infynitae-edge-rs"
+printf 'SURFACE_COLOR="#111317"\nBORDER_ACTIVE="#7aa2f7"\nTEXT_COLOR="#eef2f8"\nTHEME_SCHEME="tonal"\n' > "$H3/.config/infynitae/config"
+
+# Count awk invocations during apply when --print-theme prints the full palette
+AWK_REAL=$(command -v awk)
+AWK_BIN="$TMP/awkbin"
+AWK_LOG="$TMP/awk.calls"
+mkdir -p "$AWK_BIN"
+cat > "$AWK_BIN/awk" << EOF
+#!/bin/sh
+echo x >> "$AWK_LOG"
+exec "$AWK_REAL" "\$@"
+EOF
+chmod +x "$AWK_BIN/awk"
+: > "$AWK_LOG"
+PATH="$AWK_BIN:$PATH" apply "$H3"
+check "apply with full --print-theme runs awk at most once" "$(wc -l < "$AWK_LOG" | tr -d ' ')" "1"
+
+check "look file saves all 19 LOOK_* lines" "$(wc -l < "$H3/.cache/infynitae/look" | tr -d ' ')" "19"
+check "look file saves LOOK_ACCENT_TEXT" "$(grep '^LOOK_ACCENT_TEXT=' "$H3/.cache/infynitae/look")" 'LOOK_ACCENT_TEXT="#d0b2fa"'
+check "look file saves LOOK_FONT" "$(grep '^LOOK_FONT=' "$H3/.cache/infynitae/look")" 'LOOK_FONT="Cantarell"'
+
+gtk3_ini="$H3/.config/gtk-3.0/settings.ini"
+gtk3_css="$H3/.config/gtk-3.0/gtk.css"
+check "GTK animations enabled" "$(grep '^gtk-enable-animations=' "$gtk3_ini")" "gtk-enable-animations=true"
+check "GTK accent_color uses LOOK_ACCENT_TEXT" "$(grep '^@define-color accent_color ' "$gtk3_css")" "@define-color accent_color #d0b2fa;"
+check "GTK borders blends translucent LOOK_EDGE onto LOOK_CARD" "$(grep '^@define-color borders ' "$gtk3_css")" "@define-color borders #302d39;"
+check "GTK button radius is LOOK_SMALL_RADIUS" "$(grep -c 'border-radius: 7px;' "$gtk3_css")" "2"
+check "GTK button:hover uses 8%" "$(grep '^button:hover ' "$gtk3_css")" "button:hover { background: mix(@theme_bg_color, @theme_fg_color, 0.08); }"
+check "GTK rows use 16% accent with normal text while selection stays solid" \
+    "$(grep -A1 '^\.view:selected' "$gtk3_css" | tr '\n' ' ')" \
+    ".view:selected, treeview:selected, row:selected {     background-color: alpha(@accent_bg_color, 0.16); color: @theme_fg_color; "
+
+mako_cfg="$H3/.config/mako/config"
+check "mako font uses LOOK_FONT 13px" "$(grep '^font=' "$mako_cfg")" "font=Cantarell 13px"
+check "mako margin is 24" "$(grep '^margin=' "$mako_cfg")" "margin=24"
+check "mako padding is 16,18" "$(grep '^padding=' "$mako_cfg")" "padding=16,18"
+
+fuzzel_cfg="$H3/.config/fuzzel/fuzzel.ini"
+check "fuzzel font uses LOOK_FONT:pixelsize=13" "$(grep '^font=' "$fuzzel_cfg")" "font=Cantarell:pixelsize=13"
+check "fuzzel selection uses 16% alpha (29)" "$(grep '^selection=' "$fuzzel_cfg")" "selection=c49ef729"
+
+check "foot background uses LOOK_CARD" "$(grep '^background=' "$H3/.config/foot/foot.ini")" "background=1b1824"
+check "kitty padding is 8" "$(grep '^window_padding_width ' "$H3/.config/kitty/infynitae-theme.conf")" "window_padding_width 8"
+check "kitty selection mixes 30% accent into surface" "$(grep '^selection_background ' "$H3/.config/kitty/infynitae-theme.conf")" "selection_background #4e4063"
+check "alacritty selection mixes 30% accent into surface" "$(grep '^background = ' "$H3/.config/alacritty/infynitae-theme.toml" | tail -1)" 'background = "#4e4063"'
+
 exit $fail

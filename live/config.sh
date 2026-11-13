@@ -4,7 +4,7 @@
 
 # the layout env.sh found (the system's), for a config that leaves it empty
 _infy_layout="${XKB_DEFAULT_LAYOUT:-}" _infy_options="${XKB_DEFAULT_OPTIONS:-}"
-_infy_config="$HOME/.config/infynitae/config"
+_infy_config="${CONFIG_FILE:-$HOME/.config/infynitae/config}"
 if [ -f "$_infy_config" ]; then
     if sh -n "$_infy_config" 2>/dev/null; then
         . "$_infy_config"
@@ -14,7 +14,12 @@ if [ -f "$_infy_config" ]; then
         # (live/config-check names them in a notification)
         while IFS= read -r _infy_line || [ -n "$_infy_line" ]; do
             case "$_infy_line" in
-                *=*) sh -n -c "$_infy_line" 2>/dev/null && eval "$_infy_line" ;;
+                '' | '#'* | ' '*'#'* | '	'*'#'*) ;;
+                *=*)
+                    if sh -n -c "$_infy_line" 2>/dev/null; then
+                        eval "$_infy_line" 2>/dev/null || true
+                    fi
+                    ;;
             esac
         done < "$_infy_config"
         unset _infy_line
@@ -22,15 +27,17 @@ if [ -f "$_infy_config" ]; then
 fi
 unset _infy_config
 # settings renamed (live/config-renames): the old name still works where the new one is not set
-if [ -f "$HOME/infynitae/live/config-renames" ]; then
+_infy_renames_file="${_infy_renames:-$HOME/infynitae/live/config-renames}"
+if [ -f "$_infy_renames_file" ]; then
     while read -r _infy_old _infy_new _infy_rest; do
         case "$_infy_old$_infy_new" in
             '' | '#'* | *[!A-Z0-9_]*) continue ;; # blank lines, comments, retired names ("-")
         esac
-        eval "[ -n \"\${$_infy_new:-}\" ] || { [ -n \"\${$_infy_old:-}\" ] && $_infy_new=\"\$$_infy_old\"; }"
-    done < "$HOME/infynitae/live/config-renames"
+        eval "[ -n \"\${$_infy_new:-}\" ] || [ -z \"\${$_infy_old:-}\" ] || $_infy_new=\"\$$_infy_old\""
+    done < "$_infy_renames_file"
     unset _infy_old _infy_new _infy_rest
 fi
+unset _infy_renames_file
 
 # the compositor checked the layout it uses makes a keymap (an empty or misspelled one does
 # not) and gives it to what it starts: the apps use that one, never another

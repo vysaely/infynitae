@@ -99,6 +99,8 @@ pub struct Theme {
     /// SWITCH_LOOK: rows, icons, tiles
     #[allow(dead_code)] // Read once SWITCH_LOOK styling is wired (docs/POLISH_PLAN.md Wave 2).
     pub switch_look: String,
+    /// typeface family (LOOK_FONT)
+    pub font: String,
 }
 
 /// `true` when `fg` has at least 3:1 WCAG contrast on opaque `bg` (`Theme`'s readable check).
@@ -147,6 +149,7 @@ impl Theme {
             track: text.alpha(0.12),
             corners: c.corners,
             switch_look: c.switch_look.clone(),
+            font: "sans-serif".to_string(),
         }
     }
 
@@ -167,14 +170,16 @@ impl Theme {
             ("MUTED", self.muted),
             ("ACCENT", self.accent),
             ("ON_ACCENT", self.on_accent),
+            ("ACCENT_TEXT", self.accent_text),
             ("TRACK", self.track),
         ] {
             out += &format!("LOOK_{name}=\"{}\"\nLOOK_{name}_AA=\"{}\"\n", hex(c), aa(c));
         }
         out += &format!(
-            "LOOK_CORNERS=\"{}\"\nLOOK_SMALL_RADIUS=\"{}\"\n",
+            "LOOK_CORNERS=\"{}\"\nLOOK_SMALL_RADIUS=\"{}\"\nLOOK_FONT=\"{}\"\n",
             self.corners.round() as i64,
-            self.small_radius() as i64
+            self.small_radius() as i64,
+            self.font
         );
         out
     }
@@ -201,10 +206,28 @@ mod tests {
         );
         assert!(out.contains("LOOK_ACCENT=\"#cc70a9\"\n"), "{out}");
         assert!(
-            out.contains("LOOK_CORNERS=\"12\"\nLOOK_SMALL_RADIUS=\"7\"\n"),
+            out.contains("LOOK_ACCENT_TEXT=\"#cc70a9\"\nLOOK_ACCENT_TEXT_AA=\"ff\"\n"),
             "{out}"
         );
-        assert_eq!(out.lines().count(), 16);
+        assert!(
+            out.contains(
+                "LOOK_CORNERS=\"12\"\nLOOK_SMALL_RADIUS=\"7\"\nLOOK_FONT=\"sans-serif\"\n"
+            ),
+            "{out}"
+        );
+        assert_eq!(out.lines().count(), 19);
+    }
+
+    #[test]
+    fn shell_lines_prints_readable_accent_text_when_accent_is_dark_on_card() {
+        let c = Config::from_text(
+            "SURFACE_COLOR=\"#111317\"\nTEXT_COLOR=\"#eef2f8\"\nBORDER_ACTIVE=\"#22242a\"\n",
+        );
+        let theme = Theme::from_config(&c);
+        let out = theme.shell_lines();
+        assert!(out.contains("LOOK_ACCENT=\"#22242a\"\n"), "{out}");
+        assert!(!out.contains("LOOK_ACCENT_TEXT=\"#22242a\"\n"), "{out}");
+        assert!(theme.accent_text.contrast(theme.card) >= 3.0);
     }
 
     #[test]
