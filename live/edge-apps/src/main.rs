@@ -67,6 +67,19 @@ fn render(name: &str, size: &str, out: &str) -> Result<(), String> {
             sh.apply(prov, key, data.as_ref());
         }
     }
+    // a tray app's menu and card in the panel's place (INFYNITAE_EDGE_RENDER_TRAY: their words,
+    // space separated, menu first), then their data
+    if let Ok(words) = std::env::var("INFYNITAE_EDGE_RENDER_TRAY") {
+        sh.show_cards(idx, words.split_whitespace().map(String::from).collect());
+        sh.open_ms = f64::INFINITY;
+        sh.opened_at = None;
+        for (prov, key) in sh.sources() {
+            if let Some(mut src) = provider::by_id(prov).and_then(|p| p.source(key)) {
+                let data = src.fetch();
+                sh.apply(prov, key, data.as_ref());
+            }
+        }
+    }
     if let Ok(q) = std::env::var("INFYNITAE_EDGE_RENDER_SEARCH") {
         sh.type_text(&q);
     }

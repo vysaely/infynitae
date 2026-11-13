@@ -641,8 +641,8 @@ impl App {
                 Action::ClosePanel => {
                     self.shell.close();
                 }
-                // the shell takes it before it gets here
-                Action::SetQuery(_) => {}
+                // the shell takes these before they get here
+                Action::SetQuery(_) | Action::ShowCards(_) => {}
             }
         }
         if notes_changed {

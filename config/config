@@ -564,6 +564,13 @@ CONTROL_MENU="auto"
     # default: auto
     # options: auto  · a command
 
+TRAY_CARD="menu-first"
+    # The edge from apps: a right click on a tray app's icon shows, in the panel's place, its own
+    # menu and its card (Steam's games, Discord's messages); a left click stays the app's own
+    # [reload]
+    # default: menu-first
+    # options: menu-first  · card-first  · menu
+
 NOTIFICATIONS="auto"
     # Who shows notifications [reload]: the edge's own pop-ups (top right, in the system's
     # look; held back during games and Do not disturb, still listed in the Notifications card)

@@ -623,6 +623,9 @@ pub struct Config {
     /// NOTIFICATIONS: "auto" or "edge" make the edge the notification server (another daemon
     /// named there, or "none", and it is not)
     pub notifications: String,
+    /// TRAY_CARD: what a right click on a tray app shows: "menu-first" (its menu, then its card;
+    /// the default), "card-first", "menu" (only its menu)
+    pub tray_card: String,
     /// CARD_OPACITY, 0..1
     pub opacity: f64,
     /// SWITCH_LOOK
@@ -676,6 +679,7 @@ impl Config {
             corners_given: false,
             scheme: "yours".into(),
             notifications: "auto".into(),
+            tray_card: "menu-first".into(),
             opacity: 0.90, // 90 % until CARD_BLUR exists: 70 % without blur reads as see-through
             switch_look: "rows".into(),
         };
@@ -743,6 +747,7 @@ impl Config {
                 }
                 "THEME_SCHEME" => c.scheme = value_text(v).to_ascii_lowercase(),
                 "NOTIFICATIONS" => c.notifications = value_text(v).trim().to_ascii_lowercase(),
+                "TRAY_CARD" => c.tray_card = value_text(v).trim().to_ascii_lowercase(),
                 "CARD_OPACITY" => {
                     if let Ok(n) = value_text(v).trim_end_matches('%').parse::<f64>() {
                         c.opacity = (n / 100.0).clamp(0.2, 1.0);

@@ -135,6 +135,9 @@ pub struct Shell {
     pub last_screen: (f64, f64),
     pub now: chrono::NaiveDateTime,
     pub edit: crate::edit::EditState,
+    /// the panel ShowCards put in the open one's place (a tray app's menu and card), removed when
+    /// it closes
+    pub transient: Option<usize>,
     /// the config file's time when it was last read (None: not looked at yet)
     pub config_mtime: Option<std::time::SystemTime>,
     pub panel_scroll: f64,
@@ -163,6 +166,7 @@ impl Shell {
             notify: Default::default(),
             ask: Default::default(),
             config_mtime: None,
+            transient: None,
             query: String::new(),
             selected: None,
             keyboard: false,
@@ -446,6 +450,10 @@ impl Shell {
         let Some(idx) = self.open else {
             return false;
         };
+        // a tray app's menu and card are not a panel of the config
+        if self.transient == Some(idx) {
+            return false;
+        }
         if self.editing() {
             return false;
         }
@@ -580,6 +588,7 @@ impl Shell {
     }
 
     pub fn rebuild_panels(&mut self, cfg: Config, apps: Option<Vec<App>>) {
+        self.transient = None;
         if let Some(a) = apps {
             self.apps = a;
         }
@@ -715,7 +724,40 @@ impl Shell {
         self.opened_at = None;
         self.open_ms = f64::INFINITY;
         self.frame.borrow_mut().clear();
+        if let Some(t) = self.transient.take() {
+            if t < self.panels.len() {
+                self.panels.remove(t);
+            }
+        }
         was
+    }
+
+    /// `words` (a tray app's menu, then its card) in the open panel's place: the same edge, side
+    /// and width, until it closes. TRAY_CARD orders them.
+    pub fn show_cards(&mut self, idx: usize, mut words: Vec<String>) {
+        match self.cfg.tray_card.as_str() {
+            "card-first" => words.reverse(),
+            "menu" => words.retain(|w| w.starts_with("apps/menu=")),
+            _ => {}
+        }
+        if words.is_empty() {
+            return;
+        }
+        let mut p = self.panels[idx].panel.clone();
+        p.name = "tray".into();
+        p.key = None;
+        p.hover = false;
+        p.items.clear();
+        p.words = words;
+        let cards = place(&p, &self.apps, &self.cfg.favorites);
+        self.close();
+        self.panels.push(PanelState { panel: p, cards });
+        let t = self.panels.len() - 1;
+        self.transient = Some(t);
+        self.open = Some(t);
+        self.opened_at = Some(Instant::now());
+        self.open_ms = 0.0;
+        self.fetch_needed = true;
     }
 
     /// The card and hit under `p` in the last frame.
@@ -1153,8 +1195,10 @@ impl Shell {
         let (prov, keys) = (pc.provider.id(), pc.kind.sources);
         let card = format!("{}/{}", pc.word.owner, pc.word.kind);
         let mut requery = None;
+        let mut show = None;
         for a in out {
             match a {
+                Action::ShowCards(w) => show = Some(w),
                 Action::ClosePanel => {
                     self.close();
                     return true;
@@ -1162,6 +1206,10 @@ impl Shell {
                 Action::SetQuery(q) => requery = Some(q),
                 a => self.actions.push((a, card.clone(), prov, keys)),
             }
+        }
+        if let Some(w) = show {
+            self.show_cards(idx, w);
+            return true;
         }
         if let Some(q) = requery {
             // every card hears it, the one that asked too (a Text never asks again)
@@ -1803,6 +1851,45 @@ mod tests {
         let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 1280, 800).unwrap();
         let cr = cairo::Context::new(&surf).unwrap();
         sh.draw(&cr, 1280.0, 800.0);
+    }
+
+    #[test]
+    fn a_tray_apps_cards_take_the_panels_place_in_the_chosen_order_and_go_on_close() {
+        for (choice, want) in [
+            ("", vec!["apps/menu", "calendar/clock"]),
+            (
+                "TRAY_CARD=\"card-first\"\n",
+                vec!["calendar/clock", "apps/menu"],
+            ),
+            ("TRAY_CARD=\"menu\"\n", vec!["apps/menu"]),
+        ] {
+            let mut sh = Shell::new(
+                Config::from_text(&format!(
+                    "PANEL_CONTROL=\"SUPER+A top right 380 apps/background\"\n{choice}"
+                )),
+                Vec::new(),
+            );
+            let n = sh.panels.len();
+            let idx = sh
+                .panels
+                .iter()
+                .position(|p| p.panel.name == "control")
+                .unwrap();
+            sh.open_panel(idx, false, Instant::now());
+            sh.show_cards(idx, vec!["apps/menu=steam".into(), "calendar/clock".into()]);
+            let t = sh.open.unwrap();
+            assert_eq!(sh.transient, Some(t));
+            let words: Vec<String> = sh.panels[t]
+                .cards
+                .iter()
+                .map(|c| format!("{}/{}", c.word.owner, c.word.kind))
+                .collect();
+            assert_eq!(words, want, "{choice}");
+            assert!(!sh.enter_edit(1920.0, 1080.0), "not editable");
+            sh.close();
+            assert_eq!(sh.panels.len(), n);
+            assert_eq!(sh.transient, None);
+        }
     }
 
     #[test]

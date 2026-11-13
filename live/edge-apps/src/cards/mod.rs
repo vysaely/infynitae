@@ -17,4 +17,5 @@ pub mod settings_rows;
 pub mod simple;
 pub mod sound;
 pub mod steam;
+pub mod tray_menu;
 pub mod windows;

@@ -91,6 +91,7 @@ const KINDS: &[CardKind] = &[
         half: false,
         sources: &["background"],
     },
+    crate::cards::tray_menu::KIND,
 ];
 
 pub struct Apps;
@@ -122,6 +123,8 @@ impl Provider for Apps {
             "favorites" => Some(Box::new(FavoritesCard::new(argument))),
             "search" if argument.is_none() => Some(Box::new(SearchCard::default())),
             "background" if argument.is_none() => Some(Box::new(BackgroundCard::default())),
+            "menu" => argument
+                .map(|a| Box::new(crate::cards::tray_menu::MenuCard::new(a)) as Box<dyn Card>),
             _ => None,
         }
     }
@@ -129,6 +132,7 @@ impl Provider for Apps {
     fn source(&self, key: &str) -> Option<Box<dyn Source>> {
         match key {
             "background" | "tray" => Some(Box::new(BackgroundSource::default())),
+            "traymenu" => Some(Box::new(crate::cards::tray_menu::MenusSource)),
             _ => None,
         }
     }
@@ -1349,6 +1353,43 @@ fn owned_tooltip_title(v: &OwnedValue) -> String {
         .unwrap_or_default()
 }
 
+/// The tray's apps now (the menu card's source reads their menus).
+pub fn tray_items() -> (Vec<TrayItem>, bool) {
+    fetch_dbus_tray()
+}
+
+/// The cards a right click on a tray app shows (owner 2026-11-13): its own menu, then its card (its
+/// provider's first kind; the simple card for an app nobody knows). The shell orders them by
+/// TRAY_CARD.
+pub fn tray_words(item: &TrayItem, apps: &[App]) -> Vec<String> {
+    let mut words = Vec::new();
+    let id = crate::cards::tray_menu::word_id(&item.id);
+    if !id.is_empty() && !item.menu_path.is_empty() {
+        words.push(format!("apps/menu={id}"));
+    }
+    let want = |s: &str| !s.is_empty();
+    let app = apps.iter().find(|a| {
+        let keys = [item.id.as_str(), item.title.as_str()];
+        keys.iter().filter(|k| want(k)).any(|k| {
+            a.id.eq_ignore_ascii_case(k)
+                || a.id
+                    .rsplit('.')
+                    .next()
+                    .is_some_and(|l| l.eq_ignore_ascii_case(k))
+                || a.wm_class
+                    .as_deref()
+                    .is_some_and(|w| w.eq_ignore_ascii_case(k))
+                || a.name.eq_ignore_ascii_case(k)
+        })
+    });
+    if let Some((p, a)) = app.and_then(|a| crate::provider::owner_of(a).map(|p| (p, a))) {
+        if let Some(k) = p.cards().first() {
+            words.push(format!("{}/{}", a.id, k.id));
+        }
+    }
+    words
+}
+
 fn fetch_dbus_tray() -> (Vec<TrayItem>, bool) {
     let Ok(conn) = zbus::blocking::Connection::session() else {
         return (Vec::new(), false);
@@ -1573,8 +1614,24 @@ impl Card for BackgroundCard {
         let _ = cr.restore();
     }
 
-    fn event(&mut self, ev: &Event, _cx: &Cx, out: &mut Vec<Action>) -> bool {
+    fn event(&mut self, ev: &Event, cx: &Cx, out: &mut Vec<Action>) -> bool {
         match ev {
+            // a right click: the app's own menu and its card, in the panel's place
+            Event::Press {
+                hit,
+                button: Button::Right,
+                ..
+            } => {
+                let Some(item) = self.data.as_ref().and_then(|d| d.items.get(*hit as usize)) else {
+                    return false;
+                };
+                let words = tray_words(item, cx.apps);
+                if words.is_empty() {
+                    return false;
+                }
+                out.push(Action::ShowCards(words));
+                true
+            }
             Event::Scroll { dy, .. } => {
                 let (total_h, cap_h) = self.bounds();
                 apply_scroll(&mut self.scroll, *dy, total_h, cap_h)
@@ -1663,7 +1720,13 @@ mod tests {
         assert!(Apps.claims().is_empty());
 
         let ids: Vec<&str> = Apps.cards().iter().map(|k| k.id).collect();
-        assert_eq!(ids, vec!["list", "favorites", "search", "background"]);
+        assert_eq!(
+            ids,
+            vec!["list", "favorites", "search", "background", "menu"]
+        );
+        // the menu is a tray app's: only with its id
+        assert!(Apps.card("menu", None).is_none());
+        assert!(Apps.card("menu", Some("steam")).is_some());
 
         assert!(Apps.card("list", None).is_some());
         assert!(Apps.card("list", Some("arg")).is_none());

@@ -622,6 +622,8 @@ pub fn add_entries(cards: &[CardRef], apps: &[App]) -> Vec<AddEntry> {
             .cards()
             .iter()
             .filter(|k| !has_card(prov.id(), k.id))
+            // a kind that only works with an argument (a tray app's menu) is opened, not added
+            .filter(|k| prov.card(k.id, None).is_some())
             .collect();
         if !kinds.is_empty() {
             infynitae.push(AddEntry {
@@ -654,6 +656,8 @@ pub fn add_entries(cards: &[CardRef], apps: &[App]) -> Vec<AddEntry> {
             .cards()
             .iter()
             .filter(|k| !has_card(&a.id, k.id))
+            // a kind that only works with an argument (a tray app's menu) is opened, not added
+            .filter(|k| prov.card(k.id, None).is_some())
             .collect();
         if kinds.is_empty() {
             continue;

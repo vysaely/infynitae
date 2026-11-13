@@ -210,6 +210,9 @@ pub enum Action {
     ClosePanel,
     /// the panel's typed query becomes this (a search field's Clear: "")
     SetQuery(String),
+    /// these cards (words, as in a panel line) in the open panel's place until it closes: a tray
+    /// app's menu and card
+    ShowCards(Vec<String>),
 }
 
 /// The fixture's values (`INFYNITAE_EDGE_RENDER_DATA`: `key=value` lines, `\n` and `\t` escaped),
