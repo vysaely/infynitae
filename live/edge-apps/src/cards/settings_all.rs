@@ -282,18 +282,17 @@ impl SettingsAllCard {
                 vec![layout, mouse, tap]
             }
             "windows" => {
-                let focus = match cfg.value("FOCUS_FOLLOWS_MOUSE").trim() {
-                    "strict" | "loose" => "Focus follows mouse".to_string(),
-                    "false" | "" => "Click to focus".to_string(),
-                    other => other.to_string(),
+                let focus = {
+                    let v = cfg.value("FOCUS_FOLLOWS_MOUSE");
+                    shown_word("FOCUS_FOLLOWS_MOUSE", v.trim())
+                        .map(|w| format!("Focus {}", w.to_lowercase()))
+                        .unwrap_or_default()
                 };
                 let open = {
-                    let p = cfg.value("PLACEMENT_POLICY").trim();
-                    if p.is_empty() {
-                        String::new()
-                    } else {
-                        format!("{p} open")
-                    }
+                    let v = cfg.value("PLACEMENT_POLICY");
+                    shown_word("PLACEMENT_POLICY", v.trim())
+                        .map(|w| format!("new windows {}", w.to_lowercase()))
+                        .unwrap_or_default()
                 };
                 vec![focus, open]
             }
@@ -338,17 +337,14 @@ impl SettingsAllCard {
                     "Standard"
                 }
                 .to_string();
-                let lat = {
-                    let l = cfg.value("LATENCY").trim();
-                    if l.is_empty() {
-                        String::new()
-                    } else {
-                        format!("{l} latency")
-                    }
-                };
+                let lat = shown_word("LATENCY", cfg.value("LATENCY").trim())
+                    .map(|w| format!("frames {}", w.to_lowercase()))
+                    .unwrap_or_default();
                 let tear = match cfg.value("TEARING").trim() {
                     "" | "false" => String::new(),
-                    t => format!("tearing {t}"),
+                    t => shown_word("TEARING", t)
+                        .map(|w| format!("tearing {}", w.to_lowercase()))
+                        .unwrap_or_default(),
                 };
                 vec![mode, lat, tear]
             }
@@ -1094,27 +1090,60 @@ pub(crate) fn parse_user_lines(user_text: &str) -> HashMap<String, usize> {
 
 /// Builds the terminal editor shell command, jumping to `+N` for editors that accept it and quoting
 /// every value with `settings::sq`.
+/// The word a card shows for a value (its Pick or Words label), so a summary says what the card says.
+fn shown_word(key: &str, value: &str) -> Option<&'static str> {
+    use super::settings_rows::Control;
+    let tables: [&[super::settings_rows::Setting]; 8] = [
+        super::settings_games::TABLE,
+        super::settings_windows::TABLE,
+        super::settings_input::TABLE,
+        super::settings_lock::TABLE,
+        super::settings_privacy::TABLE,
+        super::settings_display::TABLE,
+        super::settings_apps::TABLE,
+        super::settings_recording::TABLE,
+    ];
+    tables
+        .iter()
+        .flat_map(|t| t.iter())
+        .find(|s| s.key == key)
+        .and_then(|s| match s.control {
+            Control::Pick(o) | Control::Words(o) => {
+                o.iter().find(|(v, _)| *v == value).map(|(_, w)| *w)
+            }
+            _ => None,
+        })
+}
+
 pub(crate) fn open_file_command(editor: Option<&str>, path: &Path, line: Option<usize>) -> String {
     let ed = editor
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .unwrap_or("nano");
-    let bin = Path::new(ed)
+    // EDITOR can carry its own arguments ("code --wait", "nvim -p"): each word quoted on its own
+    let words: Vec<&str> = ed.split_whitespace().collect();
+    let ed_words = words
+        .iter()
+        .map(|w| settings::sq(w))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let first = words.first().copied().unwrap_or("nano");
+    let bin = Path::new(first)
         .file_name()
         .and_then(|s| s.to_str())
-        .unwrap_or(ed);
+        .unwrap_or(first);
     let path_str = path.to_string_lossy();
     if let Some(n) = line.filter(|_| PLUS_LINE_EDITORS.contains(&bin)) {
         format!(
             "sh \"$HOME/.local/bin/xdg-terminal-exec\" {} {} {}",
-            settings::sq(ed),
+            ed_words,
             settings::sq(&format!("+{n}")),
             settings::sq(&path_str),
         )
     } else {
         format!(
             "sh \"$HOME/.local/bin/xdg-terminal-exec\" {} {}",
-            settings::sq(ed),
+            ed_words,
             settings::sq(&path_str),
         )
     }
@@ -1529,6 +1558,9 @@ mod tests {
                 "sh \"$HOME/.local/bin/xdg-terminal-exec\" '/usr/bin/hx' {}",
                 settings::sq(&cfg_file.to_string_lossy())
             )
+        );
+        assert!(
+            open_file_command(Some("nvim -p"), &cfg_file, Some(3)).contains("'nvim' '-p' '+3' ")
         );
         let top_cmd = open_file_command(None, &cfg_file, None);
         assert_eq!(
