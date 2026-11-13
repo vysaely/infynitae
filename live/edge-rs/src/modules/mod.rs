@@ -293,7 +293,28 @@ pub struct World {
     /// every clickable target drawn in the last frame (`hot`), so a move redraws only when the
     /// pointer goes from one target to another
     pub hot: std::cell::RefCell<Vec<Rect>>,
+    /// milliseconds since the panel opened while its cards are still arriving (`OPEN_MS`), then
+    /// infinite: `draw_panel` lifts and fades each card in by it
+    pub open_ms: f64,
+    /// when the panel opened (cleared once the cards are in)
+    pub opened_at: Option<std::time::Instant>,
+    /// the last animation step, so each step moves by the time that passed
+    pub last_tick: Option<std::time::Instant>,
+    /// switches are drawn as rows (`SWITCH_LOOK` not icons or tiles): their lists open in place
+    pub switch_rows: bool,
+    /// the keyboard was used since the panel opened or the pointer last moved: only then is the
+    /// keyboard's selection drawn (Enter still opens it either way). Shown from the start, the
+    /// first favourite looked stuck lit beside the pointer's light (owner 2026-11-13)
+    pub keyboard: bool,
 }
+
+/// How long one card takes to rise and fade in, and how much later each card above it starts.
+pub const CARD_IN_MS: f64 = 200.0;
+pub const CARD_STAGGER_MS: f64 = 28.0;
+/// How long a list opening or closing in place takes.
+pub const LIST_MS: f64 = 220.0;
+/// The most cards whose arrival is spaced (a long panel does not take longer than this).
+pub const STAGGER_CARDS: f64 = 8.0;
 
 impl Default for World {
     fn default() -> Self {
@@ -335,6 +356,11 @@ impl World {
             edit_preview: false,
             pointer: None,
             hot: std::cell::RefCell::new(Vec::new()),
+            open_ms: f64::INFINITY,
+            opened_at: None,
+            last_tick: None,
+            switch_rows: true,
+            keyboard: false,
         };
         if std::env::var_os("INFYNITAE_EDGE_RENDER_DATA").is_some() {
             w.load_from_helper();
@@ -378,6 +404,7 @@ impl World {
     pub fn sync_config(&mut self, cfg: &Config) {
         self.windows_key = cfg.key_for_module(Module::Windows);
         self.clipboard_key = cfg.key_for_module(Module::Clipboard);
+        self.switch_rows = !matches!(cfg.switch_look.as_str(), "icons" | "tiles");
     }
 
     /// Sets the search query, resets selection and list scroll positions, and re-filters `apps`
@@ -800,6 +827,12 @@ pub fn toggle_child(world: &mut World, kind: child::ChildKind) -> bool {
     }
     world.child.open = true;
     world.child.kind = Some(kind);
+    // a list that opens in place starts folded and grows (Shell::tick); another one shown in
+    // place gives way at once
+    if child::opens_in_place(kind) && world.child.shown != Some(kind) {
+        world.child.shown = Some(kind);
+        world.child.reveal = 0.0;
+    }
     // a card opens on the list as it is; a search is asked from inside it
     world.child.scan = false;
     match kind {
@@ -970,7 +1003,23 @@ pub fn click(it: &Item, world: &mut World, size: (f64, f64), pos: (f64, f64), bu
         Module::Notifications => notifications::click(world, size, pos, button),
         Module::Tray => tray::click(world, size, pos, button),
         Module::Media => media::click(world, size, pos, button),
-        m if m.is_switch() => switches::click(m, world, button),
+        m if m.is_switch() => {
+            // its More button (shown on hover): the list opens in place, or folds again
+            let cell = (0.0, 0.0, size.0, size.1);
+            if let (Some(kind), true) = (switches::more_kind(m), is_left_button(button)) {
+                let mr = switches::more_rect(cell);
+                if world.switch_rows
+                    && it.rect.is_none()
+                    && pos.0 >= mr.0
+                    && pos.0 <= mr.0 + mr.2
+                    && pos.1 >= mr.1 - 4.0
+                    && pos.1 <= mr.1 + mr.3 + 4.0
+                {
+                    return toggle_child(world, kind);
+                }
+            }
+            switches::click(m, world, button)
+        }
         _ => false,
     }
 }
@@ -1128,6 +1177,21 @@ pub fn sq(s: &str) -> String {
 /// neighbours, whatever size it was given.
 pub fn draw(cr: &Context, th: &Theme, it: &Item, world: &World, rect: Rect) {
     let (x, y, w, h) = rect;
+    let more = it
+        .module
+        .is_switch()
+        .then(|| switches::more_shown(it, world, rect))
+        .flatten();
+    if let Some((_, mr, open)) = more {
+        // its More button first: under the pointer it is lit, not the whole switch
+        hot(cr, th, world, mr.0, mr.1, mr.2, mr.3, th.small_radius());
+        if open {
+            // the switch whose list is open stays lit, so the list reads as its own
+            draw::round_rect(cr, x - 6.0, y - 4.0, w + 12.0, h + 8.0, th.small_radius());
+            draw::set(cr, th.text.alpha(0.06));
+            let _ = cr.fill();
+        }
+    }
     if it.module.is_switch() {
         // a switch is pressed anywhere in its cell: light a little more than the cell (the module
         // draws clipped to it), so the light is not flush with the icon
@@ -1147,6 +1211,9 @@ pub fn draw(cr: &Context, th: &Theme, it: &Item, world: &World, rect: Rect) {
     cr.clip();
     draw_unclipped(cr, th, it, world, rect);
     cr.restore().ok();
+    if let Some((_, mr, open)) = more {
+        switches::draw_more(cr, th, mr, open);
+    }
 }
 
 fn draw_unclipped(cr: &Context, th: &Theme, it: &Item, world: &World, rect: Rect) {
@@ -1254,6 +1321,62 @@ fn inside(r: Rect, (px, py): (f64, f64)) -> bool {
 }
 
 impl World {
+    /// Starts the cards' arrival (the panel just opened).
+    pub fn start_open(&mut self, now: std::time::Instant) {
+        self.opened_at = Some(now);
+        self.open_ms = 0.0;
+        self.keyboard = false;
+    }
+
+    /// Moves the animations on to `now`. True while one is running: the edge draws again on the
+    /// next frame, and stops asking for frames once nothing moves.
+    pub fn tick(&mut self, now: std::time::Instant) -> bool {
+        let dt = self
+            .last_tick
+            .map_or(0.0, |t| now.duration_since(t).as_secs_f64() * 1000.0)
+            // a stalled frame does not jump the animation to its end
+            .min(50.0);
+        self.last_tick = Some(now);
+        let mut running = false;
+
+        // the list in place: grows while open, folds once closed
+        let c = &mut self.child;
+        let target = if c.open && c.shown.is_some() && c.kind == c.shown {
+            1.0
+        } else {
+            0.0
+        };
+        if c.reveal != target {
+            let step = dt / LIST_MS;
+            c.reveal = if target > c.reveal {
+                (c.reveal + step).min(target)
+            } else {
+                (c.reveal - step).max(target)
+            };
+            running = true;
+        }
+        if c.reveal <= 0.0 && !(c.open && c.kind == c.shown) {
+            c.shown = None;
+        }
+
+        // the cards arriving
+        if let Some(t0) = self.opened_at {
+            let ms = now.duration_since(t0).as_secs_f64() * 1000.0;
+            if ms < CARD_IN_MS + CARD_STAGGER_MS * STAGGER_CARDS {
+                self.open_ms = ms;
+                running = true;
+            } else {
+                self.opened_at = None;
+                self.open_ms = f64::INFINITY;
+                running = true;
+            }
+        }
+        if !running {
+            self.last_tick = None;
+        }
+        running
+    }
+
     /// The target under `p` in the last frame (its place in `hot`).
     pub fn hot_at(&self, p: (f64, f64)) -> Option<usize> {
         self.hot.borrow().iter().position(|r| inside(*r, p))
@@ -1272,6 +1395,13 @@ pub fn draw_panel(
     let (ox, oy_raw) = origin;
     let oy = oy_raw - world.panel_scroll;
     world.hot.borrow_mut().clear();
+    // the cards rise and fade in as the panel opens, the bottom one first (`arriving`)
+    let content_bottom = rects
+        .iter()
+        .filter(|r| r.3 > 0.0)
+        .map(|r| r.1 + r.3)
+        .fold(0.0, f64::max);
+    let mut runs: Vec<(f64, f64)> = Vec::new();
     if !panel.placed {
         let mut y = 0.0;
         let mut i = 0;
@@ -1287,10 +1417,19 @@ pub fn draw_panel(
                 while j < panel.items.len() && panel.items[j].module.is_switch() {
                     j += 1;
                 }
-                let (_, card_h) =
-                    switches::layout_run(&panel.items[i..j], world, &th.switch_look, pw, y + strip);
+                let (_, card_h) = switches::layout_run(
+                    &panel.items[i..j],
+                    world,
+                    &th.switch_look,
+                    pw,
+                    y + strip,
+                    child::list_above(panel),
+                );
                 if card_h > 0.0 {
-                    switches::draw_card(cr, th, world, (ox, oy + y + strip, pw, card_h));
+                    runs.push((y + strip, y + strip + card_h));
+                    arriving(cr, world, y + strip + card_h, content_bottom, || {
+                        switches::draw_card(cr, th, world, (ox, oy + y + strip, pw, card_h))
+                    });
                     y += strip + card_h + draw::GAP;
                 }
                 i = j;
@@ -1305,34 +1444,93 @@ pub fn draw_panel(
         }
     }
     for (it, r) in panel.items.iter().zip(rects) {
+        // a switch arrives with its card, anything else as its own card
+        let bottom = runs
+            .iter()
+            .find(|(t, b)| it.module.is_switch() && r.1 >= *t && r.1 < *b)
+            .map_or(r.1 + r.3, |(_, b)| *b);
         if r.2 > 0.0 && r.3 > 0.0 {
-            if panel.placed && it.module.is_switch() {
-                draw::card(cr, th, ox + r.0, oy + r.1, r.2, r.3);
-                let cell = if r.3 < 56.0 {
-                    (ox + r.0, oy + r.1, r.2, r.3)
-                } else if th.switch_look == "rows" || th.switch_look.is_empty() {
-                    (
-                        ox + r.0 + 12.0,
-                        oy + r.1 + ((r.3 - 34.0) / 2.0).max(4.0),
-                        (r.2 - 24.0).max(20.0),
-                        34.0,
-                    )
-                } else {
-                    (ox + r.0, oy + r.1, r.2, r.3)
-                };
-                draw(cr, th, it, world, cell);
-            } else {
-                let is_editing = std::env::var_os("INFYNITAE_EDGE_RENDER_EDIT").is_some();
-                if is_placeholder(it, world, th, r.2)
-                    || (panel.placed
-                        && is_editing
-                        && (it.module == Module::Media && world.media.is_empty()))
-                {
-                    draw_placeholder(cr, th, it, (ox + r.0, oy + r.1, r.2, r.3));
-                } else {
-                    draw(cr, th, it, world, (ox + r.0, oy + r.1, r.2, r.3));
-                }
-            }
+            arriving(cr, world, bottom, content_bottom, || {
+                draw_item(cr, th, panel, it, *r, world, ox, oy)
+            });
+        }
+    }
+    // a list open in place, under its switch in the Quick settings card, cut to how far it is open
+    if let Some(lr) = child::inplace_rect(panel, rects, &world.child, &th.switch_look, (ox, oy), pw)
+    {
+        cr.save().ok();
+        cr.rectangle(lr.0, lr.1, lr.2, lr.3);
+        cr.clip();
+        child::draw_child_card(cr, th, world, &world.child, lr, true);
+        cr.restore().ok();
+    }
+}
+
+/// Draws `f`'s card lifted and faded by how far it has arrived: cards come in one after another
+/// from the bottom of the panel (`content_bottom`) as it opens; once all are in, `f` draws
+/// straight.
+fn arriving(cr: &Context, world: &World, bottom: f64, content_bottom: f64, f: impl FnOnce()) {
+    if !world.open_ms.is_finite() {
+        f();
+        return;
+    }
+    // about one card per 90 px from the bottom
+    let k = ((content_bottom - bottom) / 90.0).clamp(0.0, STAGGER_CARDS);
+    let p = child::ease((world.open_ms - k * CARD_STAGGER_MS) / CARD_IN_MS);
+    if p >= 1.0 {
+        f();
+        return;
+    }
+    if p <= 0.0 {
+        return;
+    }
+    cr.push_group();
+    cr.translate(0.0, (1.0 - p) * ARRIVE_LIFT);
+    f();
+    let _ = cr.pop_group_to_source();
+    let _ = cr.paint_with_alpha(p);
+}
+
+/// How far below its place a card starts as the panel opens.
+pub const ARRIVE_LIFT: f64 = 14.0;
+
+#[allow(clippy::too_many_arguments)]
+/// Draws one module of a stacked or placed panel at its rectangle `r`.
+fn draw_item(
+    cr: &Context,
+    th: &Theme,
+    panel: &Panel,
+    it: &Item,
+    r: Rect,
+    world: &World,
+    ox: f64,
+    oy: f64,
+) {
+    if panel.placed && it.module.is_switch() {
+        draw::card(cr, th, ox + r.0, oy + r.1, r.2, r.3);
+        let cell = if r.3 < 56.0 {
+            (ox + r.0, oy + r.1, r.2, r.3)
+        } else if th.switch_look == "rows" || th.switch_look.is_empty() {
+            (
+                ox + r.0 + 12.0,
+                oy + r.1 + ((r.3 - 34.0) / 2.0).max(4.0),
+                (r.2 - 24.0).max(20.0),
+                34.0,
+            )
+        } else {
+            (ox + r.0, oy + r.1, r.2, r.3)
+        };
+        draw(cr, th, it, world, cell);
+    } else {
+        let is_editing = std::env::var_os("INFYNITAE_EDGE_RENDER_EDIT").is_some();
+        if is_placeholder(it, world, th, r.2)
+            || (panel.placed
+                && is_editing
+                && (it.module == Module::Media && world.media.is_empty()))
+        {
+            draw_placeholder(cr, th, it, (ox + r.0, oy + r.1, r.2, r.3));
+        } else {
+            draw(cr, th, it, world, (ox + r.0, oy + r.1, r.2, r.3));
         }
     }
 }

@@ -430,13 +430,40 @@ pub fn item_height(item: &NotifItem) -> f64 {
     }
 }
 
+/// Notifications from one app stack under one name: the app's line shows on the first of a run
+/// (with how many there are), and the others go without it.
+pub fn shows_app(items: &[NotifItem], idx: usize) -> bool {
+    idx == 0 || items.get(idx - 1).map(|p| &p.app) != items.get(idx).map(|i| &i.app)
+}
+
+/// How many in a row come from the app of `idx` (the run it starts).
+pub fn run_len(items: &[NotifItem], idx: usize) -> usize {
+    items[idx..]
+        .iter()
+        .take_while(|i| i.app == items[idx].app)
+        .count()
+}
+
+/// The height of notification `idx` among `items`: without its app's line inside a run.
+pub fn item_h(items: &[NotifItem], idx: usize) -> f64 {
+    item_height(&items[idx]) - if shows_app(items, idx) { 0.0 } else { APP_LINE }
+}
+
+/// The app's line above a notification's title.
+pub const APP_LINE: f64 = 16.0;
+
+/// The dismiss x of a notification at `ry` in a card at `x` of width `w` (shown on hover).
+pub fn dismiss_rect(x: f64, w: f64, ry: f64) -> Rect {
+    (x + w - PAD_X - 16.0, ry - 3.0, 20.0, 20.0)
+}
+
 /// Returns `0.0` when there are no notifications so the module hides itself.
 pub fn height(world: &World) -> f64 {
     let items = &world.notifications.items;
     if items.is_empty() {
         return 0.0;
     }
-    let content_h: f64 = items.iter().map(item_height).sum::<f64>()
+    let content_h: f64 = (0..items.len()).map(|i| item_h(items, i)).sum::<f64>()
         + (items.len().saturating_sub(1) as f64) * ITEM_GAP;
     2.0 * PAD_Y + HEAD_H + content_h
 }
@@ -488,15 +515,23 @@ pub fn click(world: &mut World, size: (f64, f64), pos: (f64, f64), button: u32) 
 
     let mut ry = PAD_Y + HEAD_H;
     let mut hit_idx = None;
-    for (idx, item) in world.notifications.items.iter().enumerate() {
-        let ih = item_height(item);
+    let items = &world.notifications.items;
+    for idx in 0..items.len() {
+        let ih = item_h(items, idx);
         if y >= ry && y <= ry + ih && x >= 0.0 && x <= w {
-            hit_idx = Some(idx);
+            hit_idx = Some((idx, ry));
             break;
         }
         ry += ih + ITEM_GAP;
     }
-    if let Some(idx) = hit_idx {
+    if let Some((idx, ry)) = hit_idx {
+        // its x (shown on hover): gone without opening it
+        let d = dismiss_rect(0.0, w, ry);
+        if x >= d.0 && x <= d.0 + d.2 && y >= d.1 && y <= d.1 + d.3 {
+            let item = world.notifications.items.remove(idx);
+            world.run(format!("makoctl dismiss -n {} 2>/dev/null", item.id));
+            return true;
+        }
         if let Some(cmd) = invoke_item_action(&mut world.notifications, idx) {
             world.run(cmd);
             return true;
@@ -551,13 +586,25 @@ pub fn draw(cr: &Context, th: &Theme, world: &World, rect: Rect) {
 
     let iw = (w - 2.0 * PAD_X).max(20.0);
     let mut ry = y + PAD_Y + HEAD_H;
-    for (idx, item) in world.notifications.items.iter().enumerate() {
-        let ih = item_height(item);
+    let items = &world.notifications.items;
+    for (idx, item) in items.iter().enumerate() {
+        let ih = item_h(items, idx);
+        let head = shows_app(items, idx);
         // whole notifications only (the first always, however small the card)
         if idx > 0 && ry + ih > y + h - PAD_Y / 2.0 {
             break;
         }
-        // a click opens the notification (and dismisses it)
+        // its x first (under the pointer it is lit, not the notification); a click elsewhere
+        // opens the notification (and dismisses it)
+        let d = dismiss_rect(x, w, ry);
+        let x_lit = super::hot(cr, th, world, d.0, d.1, d.2, d.3, th.small_radius());
+        let pointed = x_lit
+            || world.pointer.is_some_and(|(px, py)| {
+                px >= x + PAD_X - 8.0
+                    && px < x + w - PAD_X + 8.0
+                    && py >= ry - 5.0
+                    && py < ry - 5.0 + ih + ITEM_GAP
+            });
         super::hot(
             cr,
             th,
@@ -568,7 +615,10 @@ pub fn draw(cr: &Context, th: &Theme, world: &World, rect: Rect) {
             ih + ITEM_GAP,
             th.small_radius(),
         );
-        let time_w = if !item.time.is_empty() {
+        let time_w = if pointed {
+            draw_x(cr, th, d, x_lit);
+            24.0
+        } else if !item.time.is_empty() {
             draw::text_right(
                 cr,
                 x + w - PAD_X,
@@ -583,23 +633,34 @@ pub fn draw(cr: &Context, th: &Theme, world: &World, rect: Rect) {
         } else {
             0.0
         };
+        let run = if head { run_len(items, idx) } else { 1 };
+        let app_line = if run > 1 {
+            format!("{} \u{b7} {run}", item.app)
+        } else {
+            item.app.clone()
+        };
+        if head {
+            draw::text_max(
+                cr,
+                x + PAD_X,
+                ry,
+                (iw - time_w).max(20.0),
+                &Text {
+                    size: 11.0,
+                    bold: false,
+                    color: th.muted,
+                    text: &app_line,
+                },
+            );
+        }
+        // inside a run the title takes the app line's place
+        let ty = if head { ry } else { ry - APP_LINE };
+        let title_w = if head { iw } else { (iw - time_w).max(20.0) };
         draw::text_max(
             cr,
             x + PAD_X,
-            ry,
-            (iw - time_w).max(20.0),
-            &Text {
-                size: 11.0,
-                bold: false,
-                color: th.muted,
-                text: &item.app,
-            },
-        );
-        draw::text_max(
-            cr,
-            x + PAD_X,
-            ry + 16.0,
-            iw,
+            ty + 16.0,
+            title_w,
             &Text {
                 size: 13.0,
                 bold: true,
@@ -611,7 +672,7 @@ pub fn draw(cr: &Context, th: &Theme, world: &World, rect: Rect) {
             draw_body_two_lines(
                 cr,
                 x + PAD_X,
-                ry + 36.0,
+                ty + 36.0,
                 iw,
                 &Text {
                     size: 12.0,
@@ -625,9 +686,66 @@ pub fn draw(cr: &Context, th: &Theme, world: &World, rect: Rect) {
     }
 }
 
+/// The dismiss x in `r`, brighter while pointed at.
+fn draw_x(cr: &Context, th: &Theme, r: Rect, lit: bool) {
+    let (cx, cy) = (r.0 + r.2 / 2.0, r.1 + r.3 / 2.0);
+    draw::set(cr, if lit { th.text } else { th.muted });
+    cr.set_line_width(1.5);
+    cr.move_to(cx - 4.0, cy - 4.0);
+    cr.line_to(cx + 4.0, cy + 4.0);
+    cr.move_to(cx + 4.0, cy - 4.0);
+    cr.line_to(cx - 4.0, cy + 4.0);
+    let _ = cr.stroke();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn notif(id: u32, app: &str, body: &str) -> NotifItem {
+        NotifItem {
+            id,
+            app: app.into(),
+            title: format!("t{id}"),
+            body: body.into(),
+            time: String::new(),
+        }
+    }
+
+    /// A run from one app shows the app once; the others go without its line. The x dismisses
+    /// without opening.
+    #[test]
+    fn one_apps_notifications_stack_and_the_x_dismisses() {
+        let items = vec![
+            notif(3, "Discord", "hi"),
+            notif(2, "Discord", ""),
+            notif(1, "Steam", ""),
+        ];
+        assert!(shows_app(&items, 0) && !shows_app(&items, 1) && shows_app(&items, 2));
+        assert_eq!(run_len(&items, 0), 2);
+        assert_eq!(item_h(&items, 1), item_height(&items[1]) - APP_LINE);
+        let mut world = World::now();
+        world.notifications.items = items;
+        let w = 380.0;
+        let first = PAD_Y + HEAD_H;
+        let d = dismiss_rect(0.0, w, first);
+        assert!(click(
+            &mut world,
+            (w, 400.0),
+            (d.0 + 10.0, d.1 + 10.0),
+            0x110
+        ));
+        assert_eq!(world.notifications.items.len(), 2);
+        assert_eq!(world.notifications.items[0].id, 2, "the first one went");
+        assert!(world
+            .actions
+            .iter()
+            .any(|a| a.contains("makoctl dismiss -n 3")));
+        assert!(
+            !world.actions.iter().any(|a| a.contains("invoke")),
+            "not opened"
+        );
+    }
 
     #[test]
     fn parses_real_makoctl_json_and_text_outputs_newest_first() {

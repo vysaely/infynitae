@@ -157,8 +157,14 @@ pub fn layout_in(
             while j < p.items.len() && p.items[j].module.is_switch() {
                 j += 1;
             }
-            let (run_rects, card_h) =
-                modules::switches::layout_run(&p.items[i..j], world, &th.switch_look, pw, y);
+            let (run_rects, card_h) = modules::switches::layout_run(
+                &p.items[i..j],
+                world,
+                &th.switch_look,
+                pw,
+                y,
+                modules::child::list_above(p),
+            );
             rects.extend(run_rects);
             if card_h > 0.0 {
                 y += card_h + draw::GAP;
@@ -469,8 +475,14 @@ impl Shell {
     pub fn hover_closes(&self) -> bool {
         self.opened_by_hover
             && !self.edit.active
-            && !self.world.child.open
+            && !self.side_card_open()
             && self.world.tray.open_menu.is_none()
+    }
+
+    /// A list is open in a card beside the panel (not one open in place, which is inside it: the
+    /// pointer leaving the panel then leaves it too).
+    pub fn side_card_open(&self) -> bool {
+        self.world.child.open && self.world.child.shown != self.world.child.kind
     }
 
     /// reload_if_changed, saying whether the config was read again.
@@ -728,6 +740,7 @@ impl Shell {
         self.opened_by_hover = by_hover;
         self.pointer_down = false;
         self.prepare_panel(idx);
+        self.world.start_open(std::time::Instant::now());
         true
     }
 
@@ -1660,6 +1673,12 @@ impl Shell {
             self.edit_exit();
         }
         self.world.child.open = false;
+        // opened again, the panel starts with no list open and its cards arriving afresh
+        self.world.child.shown = None;
+        self.world.child.reveal = 0.0;
+        self.world.opened_at = None;
+        self.world.open_ms = f64::INFINITY;
+        self.world.last_tick = None;
         self.world.tray.open_menu = None;
         self.world.media.pending_seek_us = None;
         self.world.panel_has_clipboard = false;
@@ -1674,6 +1693,25 @@ impl Shell {
     }
 
     pub fn key(&mut self, k: Key) -> bool {
+        // the keyboard's selection shows from now on (until the pointer moves)
+        let shown_before = self.world.keyboard;
+        self.world.keyboard = true;
+        // the first arrow or Tab while the selection is hidden shows it where it is (the first
+        // item): moving it at once skipped the first app
+        let moves = matches!(
+            k,
+            Key::Sym {
+                keysym: 0xff54 | 0xff09 | 0xff53 | 0xff52 | 0xfe20 | 0xff51,
+                ..
+            }
+        );
+        if moves && !shown_before && self.open.is_some() && !self.edit.active {
+            return true;
+        }
+        self.key_inner(k) || !shown_before
+    }
+
+    fn key_inner(&mut self, k: Key) -> bool {
         if self.world.ask.on {
             return match k {
                 Key::Escape => modules::ask::key(&mut self.world, 0xff1b, None),
@@ -1856,30 +1894,46 @@ impl Shell {
         let ph = ph_of(panel, content_h, h);
         let (ox, oy) = panel_origin(panel, w, h, pw, ph);
 
-        // 1. Child list interaction
-        if self.world.child.open {
+        // 1. Child list interaction: a list open in place takes clicks on its rows and stays open
+        // while the rest of the panel is used (its switch's More / Less, or a right click, closes it)
+        let inplace = modules::child::inplace_rect(
+            panel,
+            &rects,
+            &self.world.child,
+            &self.theme.switch_look,
+            (ox, oy - self.world.panel_scroll),
+            pw,
+        );
+        if let Some(lr) = inplace.filter(|_| self.world.child.open) {
+            if x >= lr.0 && x <= lr.0 + lr.2 && y >= lr.1 && y <= lr.1 + lr.3 {
+                let (changed, _) =
+                    modules::child::click_child(&mut self.world, lr, (x, y), button, true);
+                return changed;
+            }
+        }
+        let side = modules::child::side_rect(
+            panel,
+            &rects,
+            &self.world.child,
+            &self.theme.switch_look,
+            (ox, oy),
+            pw,
+            (w, h),
+        );
+        if let Some(cr_rect) = side {
             let child_kind = self
                 .world
                 .child
                 .kind
                 .unwrap_or(modules::child::ChildKind::Wifi);
             let parent_rect = modules::child::find_parent_rect(panel, &rects, child_kind);
-            let parent_y = parent_rect.map(|r| r.1).unwrap_or(0.0);
-            let cr_rect = modules::child::child_card_geometry(
-                child_kind,
-                (ox, oy),
-                pw,
-                parent_y,
-                self.world.child.items.len(),
-                (w, h),
-            );
             if x >= cr_rect.0
                 && x <= cr_rect.0 + cr_rect.2
                 && y >= cr_rect.1
                 && y <= cr_rect.1 + cr_rect.3
             {
                 let (changed, _) =
-                    modules::child::click_child(&mut self.world, cr_rect, (x, y), button);
+                    modules::child::click_child(&mut self.world, cr_rect, (x, y), button, false);
                 return changed;
             }
             // anywhere else: the card closes, and the click does what it was for (outside the
@@ -2141,10 +2195,12 @@ impl Shell {
                     return changed;
                 }
             }
-            // the hover light: a redraw only when the pointer goes onto another target
+            // the hover light: a redraw only when the pointer goes onto another target; the
+            // keyboard's selection gives way to it
             let before = self.world.pointer.and_then(|p| self.world.hot_at(p));
             self.world.pointer = Some((x, y));
-            return self.world.hot_at((x, y)) != before;
+            let was_keyboard = std::mem::replace(&mut self.world.keyboard, false);
+            return self.world.hot_at((x, y)) != before || was_keyboard;
         }
         for i in 0..self.cfg.panels.len() {
             if !self.cfg.panels[i].hover {
@@ -2175,7 +2231,7 @@ impl Shell {
         self.edit.drop_at = None;
         if self.world.ask.on
             || self.edit.active
-            || self.world.child.open
+            || self.side_card_open()
             || self.world.tray.open_menu.is_some()
         {
             return lit;
@@ -2305,6 +2361,8 @@ fn render(name: &str, size: &str, out: &str) -> Result<(), String> {
                 _ => modules::child::ChildKind::Wifi,
             };
             modules::toggle_child(&mut world, k);
+            // a still picture: a list that opens in place is shown fully open
+            world.child.reveal = 1.0;
             child_kind = Some(k);
         }
 
@@ -2410,19 +2468,28 @@ fn render(name: &str, size: &str, out: &str) -> Result<(), String> {
         }
 
         let mut drawn_child_rect = None;
-        if let Some(k) = child_kind {
-            if !is_editing {
-                let parent_rect = modules::child::find_parent_rect(panel, &rects, k);
-                let parent_y = parent_rect.map(|r| r.1).unwrap_or(0.0);
-                let c_rect = modules::child::child_card_geometry(
-                    k,
-                    (ox, oy),
-                    pw,
-                    parent_y,
-                    world.child.items.len(),
-                    (w as f64, h as f64),
-                );
-                modules::child::draw_child_card(&cr, &th, &world, &world.child, c_rect);
+        if child_kind.is_some() && !is_editing {
+            let inplace = modules::child::inplace_rect(
+                panel,
+                &rects,
+                &world.child,
+                &th.switch_look,
+                (ox, oy - world.panel_scroll),
+                pw,
+            );
+            let side = modules::child::side_rect(
+                panel,
+                &rects,
+                &world.child,
+                &th.switch_look,
+                (ox, oy),
+                pw,
+                (w as f64, h as f64),
+            );
+            if let Some(c_rect) = side {
+                modules::child::draw_child_card(&cr, &th, &world, &world.child, c_rect, false);
+            }
+            if let Some(c_rect) = side.or(inplace) {
                 drawn_child_rect = Some(c_rect);
                 let (cx, cy, cw, ch) = c_rect;
                 let min_x = total_rect.0.min(cx.round() as i32 - 2);
@@ -3186,8 +3253,9 @@ mod tests {
         let (_, _, _, ph) = panel_rect_in(&panel, w, h, &sh.world, &sh.theme);
         assert_eq!(ph, h - 2.0 * PANEL_MARGIN);
 
-        // Arrow Down past the 8 visible rows of Apps scrolls the Apps card and the panel
-        for _ in 0..16 {
+        // Arrow Down past the 8 visible rows of Apps scrolls the Apps card and the panel (the
+        // first press only shows the selection)
+        for _ in 0..17 {
             assert!(sh.key(Key::Sym {
                 keysym: 0xff54,
                 ch: None,
@@ -3361,11 +3429,123 @@ mod tests {
         );
     }
 
+    /// Switches as rows (the default): More opens the list inside the Quick settings card under
+    /// its switch; the card grows as it opens, other switches still work while it is open, and
+    /// More (now Less) folds it again.
+    #[test]
+    fn more_opens_a_list_in_place_and_it_stays_while_other_switches_are_used() {
+        let line =
+            "PANEL_CONTROL=\"SUPER+A top right 380 bluetooth dnd power nightlight volume\"\n";
+        let mut sh = Shell::from_config(Config::from_text(line));
+        sh.world.switches.ready = true;
+        let (w, h) = (1920.0, 1080.0);
+        assert!(sh.toggle_named("control"));
+        let panel = sh.cfg.panels[sh.open.unwrap()].clone();
+        let pw = panel_width(&panel, w);
+        let geo = |sh: &Shell| {
+            let (rects, ch) = layout_in(&panel, pw, &sh.world, &sh.theme);
+            let ph = ph_of(&panel, ch, h);
+            let (ox, oy) = panel_origin(&panel, w, h, pw, ph);
+            (rects, ch, ox, oy)
+        };
+        let (rects, ch0, ox, oy) = geo(&sh);
+        // Bluetooth's More, at the right of its cell
+        let mr = modules::switches::more_rect(rects[0]);
+        let (mx, my) = (ox + mr.0 + mr.2 / 2.0, oy + mr.1 + mr.3 / 2.0);
+        assert!(sh.click(w, h, mx, my, 1));
+        sh.pointer_release();
+        assert!(sh.world.child.open);
+        assert_eq!(
+            sh.world.child.shown,
+            Some(modules::child::ChildKind::Bluetooth)
+        );
+        // it grows over a few frames, and the card with it
+        let t0 = std::time::Instant::now();
+        assert!(sh.world.tick(t0));
+        for k in 1..=20 {
+            sh.world.tick(t0 + std::time::Duration::from_millis(16 * k));
+        }
+        assert_eq!(sh.world.child.reveal, 1.0);
+        let (rects2, ch1, _, _) = geo(&sh);
+        let grown = modules::child::list_height(sh.world.child.items.len());
+        assert!(
+            (ch1 - ch0 - grown).abs() < 0.5,
+            "the card grew by the list: {ch0} -> {ch1}"
+        );
+        // the first switch in a row under Bluetooth's (some are hidden when the system lacks
+        // them), and the volume card under the switches
+        if let Some(k) = (2..4).find(|&k| rects[k].3 > 0.0) {
+            assert!(
+                rects2[k].1 > rects[k].1,
+                "the row under the list moved down"
+            );
+        }
+        assert!(
+            rects2[4].1 > rects[4].1,
+            "the card under the switches moved down"
+        );
+        assert!(modules::child::side_rect(
+            &panel,
+            &rects2,
+            &sh.world.child,
+            &sh.theme.switch_look,
+            (ox, oy),
+            pw,
+            (w, h)
+        )
+        .is_none());
+        // Do not disturb still switches, and the list stays
+        let (_, _, ox, oy) = geo(&sh);
+        let dnd_before = sh.world.switches.dnd_on;
+        assert!(sh.click(w, h, ox + rects2[1].0 + 10.0, oy + rects2[1].1 + 10.0, 1));
+        sh.pointer_release();
+        assert_ne!(sh.world.switches.dnd_on, dnd_before);
+        assert!(sh.world.child.open, "the list stayed open");
+        // Less folds it
+        let (rects3, _, ox, oy) = geo(&sh);
+        let mr = modules::switches::more_rect(rects3[0]);
+        assert!(sh.click(w, h, ox + mr.0 + 5.0, oy + mr.1 + 5.0, 1));
+        sh.pointer_release();
+        assert!(!sh.world.child.open);
+        for k in 21..=40 {
+            sh.world.tick(t0 + std::time::Duration::from_millis(16 * k));
+        }
+        assert_eq!(sh.world.child.shown, None, "folded away");
+        assert!(!sh
+            .world
+            .tick(t0 + std::time::Duration::from_millis(16 * 41)));
+    }
+
+    /// The keyboard's selection is drawn only once the keyboard is used, and gives way to the
+    /// pointer: opened, the first favourite is not lit beside the pointer's light.
+    #[test]
+    fn the_keyboard_selection_shows_after_a_key_and_hides_when_the_pointer_moves() {
+        let line = "PANEL_APPS=\"SUPER+W bottom center search favorites apps\"\n";
+        let mut sh = Shell::from_config(Config::from_text(line));
+        assert!(sh.toggle_named("apps"));
+        assert!(!sh.world.keyboard, "not on opening");
+        let before = sh.world.selected;
+        sh.key(Key::Sym {
+            keysym: 0xff54,
+            ch: None,
+        });
+        assert!(sh.world.keyboard);
+        assert_eq!(
+            sh.world.selected, before,
+            "the first Down shows the first item"
+        );
+        let (w, h) = (1920.0, 1080.0);
+        sh.pointer_motion(w, h, w / 2.0, h - 100.0);
+        assert!(!sh.world.keyboard, "the pointer moved");
+    }
+
     /// With a card open, a click elsewhere in the panel closes the card and does what it was
     /// for (it took a second click before); one outside closes the panel too.
     #[test]
     fn a_click_beside_an_open_card_closes_it_and_still_counts() {
-        let line = "PANEL_CONTROL=\"SUPER+A top right 380 wifi dnd volume\"\n";
+        // switches as icons: their lists open in a card beside the panel
+        let line =
+            "SWITCH_LOOK=\"icons\"\nPANEL_CONTROL=\"SUPER+A top right 380 wifi dnd volume\"\n";
         let mut sh = Shell::from_config(Config::from_text(line));
         sh.world.switches.ready = true;
         let (w, h) = (1920.0, 1080.0);

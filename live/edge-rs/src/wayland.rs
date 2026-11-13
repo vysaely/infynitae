@@ -513,24 +513,20 @@ impl OutputSurface {
             }
         }
 
-        let mut child_draw_rect = None;
-        if shell.world.child.open && !shell.edit.active {
-            let child_kind = shell
-                .world
-                .child
-                .kind
-                .unwrap_or(modules::child::ChildKind::Wifi);
-            let parent_rect = modules::child::find_parent_rect(panel, &rects, child_kind);
-            let parent_y = parent_rect.map(|r| r.1).unwrap_or(0.0);
-            child_draw_rect = Some(modules::child::child_card_geometry(
-                child_kind,
+        // a list in a card beside the panel (one open in place is drawn with the panel)
+        let child_draw_rect = if shell.edit.active {
+            None
+        } else {
+            modules::child::side_rect(
+                panel,
+                &rects,
+                &shell.world.child,
+                &shell.theme.switch_look,
                 (ox, oy),
                 pw,
-                parent_y,
-                shell.world.child.items.len(),
                 (w as f64, h as f64),
-            ));
-        }
+            )
+        };
 
         // the panel's box; the desktop's widgets: the box around the widgets only (the whole
         // screen, cleared and sent each time, cost a 4K screen 33 MB a redraw)
@@ -556,6 +552,10 @@ impl OutputSurface {
         let mut min_y = by0.floor() as i32 - pad;
         let mut max_x = bx1.ceil() as i32 + pad;
         let mut max_y = by1.ceil() as i32 + pad;
+        if shell.world.open_ms.is_finite() {
+            // the cards arriving are drawn below their places
+            max_y += modules::ARRIVE_LIFT.ceil() as i32;
+        }
 
         if let Some(mr) = tray_m_rect {
             min_x = min_x.min(mr.0.floor() as i32 - pad);
@@ -664,6 +664,7 @@ impl OutputSurface {
                             &shell.world,
                             &shell.world.child,
                             cr_rect,
+                            false,
                         );
                     }
                 }
@@ -686,7 +687,17 @@ impl OutputSurface {
                 if shell.edit.active {
                     None
                 } else {
-                    child_draw_rect
+                    // a list open in place counts as the card (its rows are where clicks go)
+                    child_draw_rect.or_else(|| {
+                        modules::child::inplace_rect(
+                            panel,
+                            &rects,
+                            &shell.world.child,
+                            &shell.theme.switch_look,
+                            (ox, oy - shell.world.panel_scroll),
+                            pw,
+                        )
+                    })
                 },
                 (shell.edit.active && shell.edit.adding).then_some(shell.edit.add_rect),
                 shell.world.panel_scroll,
@@ -758,6 +769,8 @@ struct App {
     last_fetch: Option<Instant>,
     prev_open: Option<usize>,
     toplevel_sync: ToplevelSyncState,
+    /// an animation ran on the last frame (its end syncs the panel's size once)
+    was_animating: bool,
     touch_tracker: Option<TouchTracker>,
     exit: bool,
 }
@@ -1294,17 +1307,29 @@ impl CompositorHandler for App {
         surface: &wl_surface::WlSurface,
         _time: u32,
     ) {
+        // an animation running (the cards arriving, a list growing or folding): draw again
+        let animating = (self.shell.open.is_some() || self.shell.world.child.shown.is_some())
+            && self.shell.world.tick(Instant::now());
+        let anim_ended = self.was_animating && !animating;
+        self.was_animating = animating;
         if let Some(os) = self
             .outputs
             .iter_mut()
             .find(|o| o.layer.wl_surface() == surface)
         {
             os.frame_pending = false;
+            if animating {
+                os.dirty = true;
+            }
             if os.dirty {
                 os.render_if_needed(qh, &self.shell);
             } else if os.clear_pending {
                 os.clear_and_commit(qh);
             }
+        }
+        if anim_ended {
+            // the panel's size settled: its input region and box follow
+            self.sync_all();
         }
         if let Some(os) = self
             .desk
@@ -1996,6 +2021,7 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
         last_fetch: None,
         prev_open: None,
         toplevel_sync: ToplevelSyncState::default(),
+        was_animating: false,
         touch_tracker: None,
         exit: false,
     };

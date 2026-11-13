@@ -188,7 +188,7 @@ pub fn draw(cr: &Context, th: &Theme, world: &World, rect: Rect) {
         if cy + ICON_SZ > y + h {
             break;
         }
-        let is_sel = sel_fav == Some(slot);
+        let is_sel = world.keyboard && sel_fav == Some(slot);
         super::hot(
             cr,
             th,

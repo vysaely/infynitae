@@ -70,6 +70,52 @@ pub struct ChildState {
     /// the Network card: a search for networks was asked (the next list rescans)
     pub scan: bool,
     pub rect: Option<(f64, f64, f64, f64)>,
+    /// the list drawn inside the Quick settings card (`opens_in_place`): kept while it folds away
+    /// after closing, so the fold has something to show
+    pub shown: Option<ChildKind>,
+    /// how far that list is open, 0 to 1 (`Shell::tick` moves it; layout and drawing read it)
+    pub reveal: f64,
+}
+
+/// Lists that open inside the Quick settings card, under their switch, instead of a card beside
+/// the panel (owner 2026-11-13, the "More on hover" design): Network, Bluetooth, power, replay.
+pub fn opens_in_place(kind: ChildKind) -> bool {
+    matches!(
+        kind,
+        ChildKind::Wifi | ChildKind::Bluetooth | ChildKind::Power | ChildKind::Replay
+    )
+}
+
+/// The list's height when fully open in place: its rows and a little room above and below.
+pub fn list_height(item_count: usize) -> f64 {
+    item_count.max(1) as f64 * ROW_HEIGHT + 2.0 * LIST_PAD
+}
+
+/// The room above and below the rows of a list opened in place.
+pub const LIST_PAD: f64 = 6.0;
+
+/// The eased height the in-place list takes now (0 when none is shown).
+pub fn inplace_extra(state: &ChildState) -> f64 {
+    if state.shown.is_none() || state.reveal <= 0.0 {
+        return 0.0;
+    }
+    list_height(state.items.len()) * ease(state.reveal)
+}
+
+/// Ease out (cubic): fast at first, settling softly.
+pub fn ease(t: f64) -> f64 {
+    let t = t.clamp(0.0, 1.0);
+    1.0 - (1.0 - t).powi(3)
+}
+
+/// Where the first row starts in a list's rectangle: under the title in a card beside the panel,
+/// near the top when it opens in place.
+pub fn list_top(rect: (f64, f64, f64, f64), inplace: bool) -> f64 {
+    if inplace {
+        rect.1 + LIST_PAD
+    } else {
+        rect.1 + PAD_Y + 22.0 + GAP
+    }
 }
 
 /// The Network card's last row while Wi-Fi is on: search again for networks (the list is the
@@ -646,6 +692,86 @@ pub fn child_height(kind: ChildKind, item_count: usize) -> f64 {
     }
 }
 
+/// A list in place opens over its switch's row in a panel at the bottom of the screen (it grows
+/// upward: the row, its More / Less button under the pointer, stays put), under it elsewhere.
+pub fn list_above(panel: &Panel) -> bool {
+    panel.side == crate::config::Side::Bottom
+}
+
+/// Whether `kind`'s list opens inside `panel` under its switch: a stacked panel with switches as
+/// rows (the default look), and the switch in it.
+pub fn in_place_here(
+    panel: &Panel,
+    rects: &[(f64, f64, f64, f64)],
+    kind: ChildKind,
+    switch_look: &str,
+) -> bool {
+    opens_in_place(kind)
+        && !panel.placed
+        && !matches!(switch_look, "icons" | "tiles")
+        && find_parent_rect(panel, rects, kind).is_some()
+}
+
+/// The rectangle of the list open in place on screen (`origin`: the panel's top left with the
+/// scroll applied): the panel's width (rows keep the card's padding), from under its switch, as
+/// tall as it is open now.
+pub fn inplace_rect(
+    panel: &Panel,
+    rects: &[(f64, f64, f64, f64)],
+    state: &ChildState,
+    switch_look: &str,
+    origin: (f64, f64),
+    pw: f64,
+) -> Option<(f64, f64, f64, f64)> {
+    let kind = state.shown?;
+    if !in_place_here(panel, rects, kind, switch_look) {
+        return None;
+    }
+    let h = inplace_extra(state);
+    if h <= 0.0 {
+        return None;
+    }
+    let r = find_parent_rect(panel, rects, kind)?;
+    let y = if list_above(panel) {
+        r.1 - h
+    } else {
+        r.1 + 40.0
+    };
+    Some((origin.0, origin.1 + y, pw, h))
+}
+
+/// The card beside the panel for an open list that does not open in place (the sound outputs,
+/// the calendar, or any list in a placed panel or with switches as icons or tiles).
+#[allow(clippy::too_many_arguments)]
+pub fn side_rect(
+    panel: &Panel,
+    rects: &[(f64, f64, f64, f64)],
+    state: &ChildState,
+    switch_look: &str,
+    origin: (f64, f64),
+    pw: f64,
+    screen: (f64, f64),
+) -> Option<(f64, f64, f64, f64)> {
+    if !state.open {
+        return None;
+    }
+    let kind = state.kind.unwrap_or(ChildKind::Wifi);
+    if in_place_here(panel, rects, kind, switch_look) {
+        return None;
+    }
+    let parent_y = find_parent_rect(panel, rects, kind)
+        .map(|r| r.1)
+        .unwrap_or(0.0);
+    Some(child_card_geometry(
+        kind,
+        origin,
+        pw,
+        parent_y,
+        state.items.len(),
+        screen,
+    ))
+}
+
 /// Calculates the position `(cx, cy, cw, ch)` for the child card beside `panel`.
 pub fn child_card_geometry(
     kind: ChildKind,
@@ -705,8 +831,9 @@ pub fn draw_child_card(
     world: &World,
     state: &ChildState,
     rect: (f64, f64, f64, f64),
+    inplace: bool,
 ) {
-    let Some(kind) = state.kind else {
+    let Some(kind) = (if inplace { state.shown } else { state.kind }) else {
         return;
     };
     let (cx, cy, cw, ch) = rect;
@@ -716,13 +843,26 @@ pub fn draw_child_card(
         return;
     }
 
-    // Card background
-    draw::card(cr, th, cx, cy, cw, ch);
+    if inplace {
+        // inside the Quick settings card: a soft shaded box, no card or title of its own (the
+        // switch above says what it is)
+        draw::round_rect(
+            cr,
+            cx + PAD_X - 8.0,
+            cy,
+            cw - 2.0 * PAD_X + 16.0,
+            // a little room between the box and the switch's row (above or under it)
+            list_height(state.items.len()) - 4.0,
+            th.small_radius(),
+        );
+        draw::set(cr, th.text.alpha(0.04));
+        let _ = cr.fill();
+    } else {
+        draw::card(cr, th, cx, cy, cw, ch);
+        draw::title(cr, th, cx + PAD_X, cy + PAD_Y, kind.title());
+    }
 
-    // Title
-    draw::title(cr, th, cx + PAD_X, cy + PAD_Y, kind.title());
-
-    let start_y = cy + PAD_Y + 22.0 + GAP;
+    let start_y = list_top(rect, inplace);
 
     if state.items.is_empty() {
         let msg = if kind == ChildKind::Bluetooth && state.bt_scan {
@@ -902,6 +1042,7 @@ pub fn click_child(
     rect: (f64, f64, f64, f64),
     pos: (f64, f64),
     button: u32,
+    inplace: bool,
 ) -> (bool, Option<String>) {
     let Some(kind) = world.child.kind else {
         return (false, None);
@@ -919,7 +1060,7 @@ pub fn click_child(
         return (changed, None);
     }
 
-    let start_y = cy + PAD_Y + 22.0 + GAP;
+    let start_y = list_top(rect, inplace);
     if py < start_y {
         return (false, None);
     }
@@ -1114,19 +1255,19 @@ mod tests {
         );
         let rect = (0.0, 0.0, CHILD_WIDTH, 200.0);
         let row_y = PAD_Y + 22.0 + GAP + ROW_HEIGHT * 1.5;
-        let (_, cmd) = click_child(&mut world, rect, (PAD_X + 20.0, row_y), 1);
+        let (_, cmd) = click_child(&mut world, rect, (PAD_X + 20.0, row_y), 1, false);
         assert_eq!(
             cmd.as_deref(),
             Some("pactl set-source-mute @DEFAULT_SOURCE@ toggle >/dev/null 2>&1")
         );
         assert_eq!(world.child.items[1].meta, "Muted");
         let (x0, x1) = app_slider_span(0.0, CHILD_WIDTH);
-        let (_, cmd) = click_child(&mut world, rect, ((x0 + x1) / 2.0, row_y), 1);
+        let (_, cmd) = click_child(&mut world, rect, ((x0 + x1) / 2.0, row_y), 1, false);
         assert!(cmd
             .unwrap()
             .ends_with("pactl set-source-volume @DEFAULT_SOURCE@ 50% >/dev/null 2>&1"));
         let users_y = PAD_Y + 22.0 + GAP + ROW_HEIGHT * 2.5;
-        let (changed, cmd) = click_child(&mut world, rect, (60.0, users_y), 1);
+        let (changed, cmd) = click_child(&mut world, rect, (60.0, users_y), 1, false);
         assert!(!changed && cmd.is_none(), "the Used by line does nothing");
     }
 
@@ -1163,7 +1304,7 @@ mod tests {
         assert!(crate::modules::toggle_child(&mut world, ChildKind::Replay));
         let rect = (0.0, 0.0, CHILD_WIDTH, 200.0);
         let toggle_y = PAD_Y + 22.0 + GAP + ROW_HEIGHT * 2.5;
-        let (changed, cmd) = click_child(&mut world, rect, (60.0, toggle_y), 1);
+        let (changed, cmd) = click_child(&mut world, rect, (60.0, toggle_y), 1, false);
         assert!(changed && cmd.unwrap().contains("ENABLE_REPLAY_BUFFER false"));
         assert!(!world.switches.replay_on);
         assert!(world.child.items.iter().all(|r| r.id != REPLAY_SAVE));
@@ -1196,7 +1337,7 @@ mod tests {
         ];
         let rect = (0.0, 0.0, CHILD_WIDTH, 200.0);
         let y = PAD_Y + 22.0 + GAP + ROW_HEIGHT * 2.5;
-        let (changed, _) = click_child(&mut world, rect, (60.0, y), 1);
+        let (changed, _) = click_child(&mut world, rect, (60.0, y), 1, false);
         assert!(changed);
         assert!(world.child.scan, "the next list rescans");
     }
@@ -1248,14 +1389,14 @@ mod tests {
         let rect = (0.0, 0.0, CHILD_WIDTH, 200.0);
         let row_y = PAD_Y + 22.0 + GAP + ROW_HEIGHT * 1.5;
         let (x0, x1) = app_slider_span(0.0, CHILD_WIDTH);
-        let (changed, cmd) = click_child(&mut world, rect, ((x0 + x1) / 2.0, row_y), 1);
+        let (changed, cmd) = click_child(&mut world, rect, ((x0 + x1) / 2.0, row_y), 1, false);
         assert!(changed);
         assert_eq!(
             cmd.as_deref(),
             Some("pactl set-sink-input-mute 45 0 >/dev/null 2>&1; pactl set-sink-input-volume 45 50% >/dev/null 2>&1")
         );
         assert_eq!(world.child.items[1].meta, "50%");
-        let (changed, cmd) = click_child(&mut world, rect, (PAD_X + 20.0, row_y), 1);
+        let (changed, cmd) = click_child(&mut world, rect, (PAD_X + 20.0, row_y), 1, false);
         assert!(changed, "the name mutes the app");
         assert_eq!(
             cmd.as_deref(),
