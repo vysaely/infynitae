@@ -328,6 +328,251 @@ cmd_log() {
     tail -n 50 "$log_file" > "$log_file.new" && mv -f "$log_file.new" "$log_file"
 }
 
+# Validate a saved settings archive and unpack it into `$2`. Refuses non-archives,
+# non-regular members (symlinks, hardlinks, directories), traversal, and any file
+# other than config, panels.backup, and .face.
+archive_validate_and_unpack() {
+    av_arch="${1:-}" av_stage="${2:-}"
+    if [ -z "$av_arch" ] || [ ! -f "$av_arch" ] || [ -L "$av_arch" ]; then
+        echo "Settings file not found." >&2
+        return 1
+    fi
+    if ! gzip -t "$av_arch" >/dev/null 2>&1; then
+        echo "Not a valid settings archive." >&2
+        return 1
+    fi
+    av_names=$(tar -tzf "$av_arch" 2>/dev/null) || {
+        echo "Not a valid settings archive." >&2
+        return 1
+    }
+    av_meta=$(tar -tvzf "$av_arch" 2>/dev/null) || {
+        echo "Not a valid settings archive." >&2
+        return 1
+    }
+    av_nc=$(printf '%s\n' "$av_names" | awk '
+        BEGIN { ok = 1; n = 0; has_cfg = 0 }
+        {
+            n++
+            if (n > 3) { ok = 0; exit }
+            f = $0
+            if (f != ".config/infynitae/config" && f != ".config/infynitae/panels.backup" && f != ".face") {
+                ok = 0; exit
+            }
+            if (seen[f]++) { ok = 0; exit }
+            if (f == ".config/infynitae/config") has_cfg = 1
+        }
+        END {
+            if (!ok || n == 0 || !has_cfg) print "BAD"
+            else print n
+        }
+    ')
+    case "$av_nc" in
+        [1-3]) ;;
+        *)
+            echo "Archive holds unexpected files or is missing config." >&2
+            return 1
+            ;;
+    esac
+    av_mc=$(printf '%s\n' "$av_meta" | awk '
+        BEGIN { ok = 1; n = 0 }
+        {
+            n++
+            if (substr($1, 1, 1) != "-") { ok = 0; exit }
+            sz = -1
+            if ($3 ~ /^[0-9]+$/) sz = $3
+            else if ($5 ~ /^[0-9]+$/) sz = $5
+            if (sz < 0 || sz > 33554432) { ok = 0; exit }
+        }
+        END { print (ok ? n : "BAD") }
+    ')
+    if [ "$av_mc" != "$av_nc" ]; then
+        echo "Archive holds unsupported or oversized files." >&2
+        return 1
+    fi
+    mkdir -p "$av_stage"
+    if ! tar -xzf "$av_arch" -C "$av_stage" >/dev/null 2>&1; then
+        echo "Not a valid settings archive." >&2
+        return 1
+    fi
+    for av_f in .config/infynitae/config .config/infynitae/panels.backup .face; do
+        if [ -L "$av_stage/$av_f" ]; then
+            echo "Archive holds unsupported file type." >&2
+            return 1
+        fi
+    done
+    if [ ! -f "$av_stage/.config/infynitae/config" ]; then
+        echo "Archive is missing the config file." >&2
+        return 1
+    fi
+    return 0
+}
+
+# Print changed config key names (sorted, one per line) comparing `$1` to `$2` without eval.
+archive_diff_keys() {
+    ad_cur="${1:-}" ad_new="${2:-}" ad_stage="${3:-}"
+    { printf '#\n'; [ -f "$ad_cur" ] && cat "$ad_cur"; } > "$ad_stage/cur.in"
+    awk '
+        function trim(s) {
+            sub(/^[ \t\r]+/, "", s)
+            sub(/[ \t\r]+$/, "", s)
+            return s
+        }
+        function parse_val(raw,    out, i, c) {
+            raw = trim(raw)
+            if (substr(raw, 1, 1) == "\047") {
+                out = ""
+                i = 2
+                while (i <= length(raw)) {
+                    if (substr(raw, i, 4) == "\047\\\047\047") {
+                        out = out "\047"
+                        i += 4
+                    } else if (substr(raw, i, 1) == "\047") {
+                        break
+                    } else {
+                        out = out substr(raw, i, 1)
+                        i++
+                    }
+                }
+                return out
+            }
+            if (substr(raw, 1, 1) == "\"") {
+                out = ""
+                i = 2
+                while (i <= length(raw)) {
+                    c = substr(raw, i, 1)
+                    if (c == "\\" && i < length(raw)) {
+                        out = out substr(raw, i + 1, 1)
+                        i += 2
+                    } else if (c == "\"") {
+                        break
+                    } else {
+                        out = out c
+                        i++
+                    }
+                }
+                return out
+            }
+            sub(/[ \t]+#.*$/, "", raw)
+            sub(/^#.*$/, "", raw)
+            return trim(raw)
+        }
+        FNR == 1 { pass++ }
+        {
+            line = $0
+            sub(/\r$/, "", line)
+            sub(/^[ \t]+/, "", line)
+            if (line == "" || substr(line, 1, 1) == "#") next
+            eq = index(line, "=")
+            if (eq <= 1) next
+            k = substr(line, 1, eq - 1)
+            if (k !~ /^[A-Za-z_][A-Za-z0-9_]*$/) next
+            v = parse_val(substr(line, eq + 1))
+            seen[k] = 1
+            if (pass == 1) { cur_has[k] = 1; cur_val[k] = v }
+            else { new_has[k] = 1; new_val[k] = v }
+        }
+        END {
+            for (k in seen) {
+                if (!(k in cur_has) || !(k in new_has) || cur_val[k] != new_val[k]) {
+                    print k
+                }
+            }
+        }
+    ' "$ad_stage/cur.in" "$ad_new" | LC_ALL=C sort
+}
+
+cmd_export() {
+    exp_out="${1:-}"
+    if [ ! -f "$CONFIG_FILE" ]; then
+        echo "No settings file to save." >&2
+        exit 1
+    fi
+    if [ -z "$exp_out" ]; then
+        exp_dir="$HOME/Documents/Infynitae"
+        mkdir -p "$exp_dir"
+        exp_out="$exp_dir/settings-$(date +%Y-%m-%d-%H%M).tar.gz"
+    else
+        mkdir -p "$(dirname "$exp_out")"
+    fi
+    exp_stage=$(mktemp -d "${TMPDIR:-/tmp}/infynitae-export.XXXXXX") || exit 1
+    exp_tmp=$(mktemp "$(dirname "$exp_out")/.settings-export.XXXXXX") || { rm -rf "$exp_stage"; exit 1; }
+    mkdir -p "$exp_stage/.config/infynitae"
+    cat "$CONFIG_FILE" > "$exp_stage/.config/infynitae/config"
+    set -- ".config/infynitae/config"
+    exp_cfg_dir=$(dirname "$CONFIG_FILE")
+    if [ -f "$exp_cfg_dir/panels.backup" ]; then
+        cat "$exp_cfg_dir/panels.backup" > "$exp_stage/.config/infynitae/panels.backup"
+        set -- "$@" ".config/infynitae/panels.backup"
+    fi
+    if [ -f "$HOME/.face" ]; then
+        cat "$HOME/.face" > "$exp_stage/.face"
+        set -- "$@" ".face"
+    fi
+    if ! tar -czf "$exp_tmp" -C "$exp_stage" "$@"; then
+        rm -rf "$exp_stage" "$exp_tmp"
+        echo "Could not write settings archive." >&2
+        exit 1
+    fi
+    mv -f "$exp_tmp" "$exp_out"
+    rm -rf "$exp_stage"
+    if command -v notify-send >/dev/null 2>&1; then
+        notify-send -a Infynitae "Settings saved" "Saved to $exp_out" >/dev/null 2>&1 || true
+    fi
+    printf '%s\n' "$exp_out"
+}
+
+cmd_import_preview() {
+    ip_arch="${1:-}"
+    if [ -z "$ip_arch" ]; then
+        echo "Usage: infynitae-settings import-preview <ARCHIVE>" >&2
+        exit 1
+    fi
+    ip_stage=$(mktemp -d "${TMPDIR:-/tmp}/infynitae-preview.XXXXXX") || exit 1
+    if ! archive_validate_and_unpack "$ip_arch" "$ip_stage"; then
+        rm -rf "$ip_stage"
+        exit 1
+    fi
+    archive_diff_keys "$CONFIG_FILE" "$ip_stage/.config/infynitae/config" "$ip_stage"
+    rm -rf "$ip_stage"
+}
+
+cmd_import() {
+    im_arch="${1:-}"
+    if [ -z "$im_arch" ]; then
+        echo "Usage: infynitae-settings import <ARCHIVE>" >&2
+        exit 1
+    fi
+    im_stage=$(mktemp -d "${TMPDIR:-/tmp}/infynitae-import.XXXXXX") || exit 1
+    if ! archive_validate_and_unpack "$im_arch" "$im_stage"; then
+        rm -rf "$im_stage"
+        exit 1
+    fi
+    im_cfg_dir=$(dirname "$CONFIG_FILE")
+    mkdir -p "$im_cfg_dir"
+    if [ -f "$CONFIG_FILE" ]; then
+        cat "$CONFIG_FILE" > "$im_cfg_dir/config.before-load"
+    else
+        : > "$im_cfg_dir/config.before-load"
+    fi
+    im_tmp=$(mktemp "${CONFIG_FILE}.tmp.XXXXXX") || { rm -rf "$im_stage"; exit 1; }
+    cat "$im_stage/.config/infynitae/config" > "$im_tmp" && mv -f "$im_tmp" "$CONFIG_FILE"
+    if [ -f "$im_stage/.config/infynitae/panels.backup" ]; then
+        im_tmp=$(mktemp "$im_cfg_dir/.panels.backup.tmp.XXXXXX") || { rm -rf "$im_stage"; exit 1; }
+        cat "$im_stage/.config/infynitae/panels.backup" > "$im_tmp" && mv -f "$im_tmp" "$im_cfg_dir/panels.backup"
+    fi
+    if [ -f "$im_stage/.face" ]; then
+        if [ -f "$HOME/.face" ]; then
+            cat "$HOME/.face" > "$HOME/.face.bak"
+        fi
+        im_tmp=$(mktemp "$HOME/.face.tmp.XXXXXX") || { rm -rf "$im_stage"; exit 1; }
+        cat "$im_stage/.face" > "$im_tmp" && mv -f "$im_tmp" "$HOME/.face"
+    fi
+    rm -rf "$im_stage"
+    load_config
+    apply_defaults
+    apply_settings --force >/dev/null 2>&1 || true
+}
+
 # The theme colours from an image (infynitae-wallpaper --colors) into the config: the accent alone
 # ("accent"), a random candidate accent with backgrounds and borders ("shuffle"), or the first
 # candidate with backgrounds and borders ("all"). Returns 1 when the image cannot be read or the
@@ -1116,6 +1361,18 @@ case "$1" in
         else
             echo "==> Settings applied."
         fi
+        ;;
+    export)
+        shift
+        cmd_export "$@"
+        ;;
+    import-preview)
+        shift
+        cmd_import_preview "$@"
+        ;;
+    import)
+        shift
+        cmd_import "$@"
         ;;
     wallpaper-colors)
         # infynitae-settings wallpaper-colors [accent|all|accents|shuffle] [IMAGE]: theme from the wallpaper
