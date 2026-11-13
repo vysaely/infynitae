@@ -737,9 +737,15 @@ gain for risk. Batches marked "after N" touch the same files as batch N and wait
 | 24 | Zoom stage 2: reduced copies for far zoom-out, only if `pzoom.py` shows aliasing below one eighth (8.7), after 18 and 19 | M | `smooth.rs`, `drm` | `pzoom.py` at 1/16 and 1/32 |
 | 25 | HDR stage 0 and 1: read the screen's HDR block, colour management for a fullscreen game shown directly (8.4 A) | L | `crates/infynitae-backend-drm/src/edid.rs`, new `wl/color.rs`, `drm` scanout path, possibly `patches/0008` | the monitor's own HDR indicator; an HDR test video; headless protocol tests |
 | 26 | Keeper stage 2: the proxy that holds every app (8.3) | L | new crate `live/keep/` | VM: every VM script passes with apps behind it; kill and update tests; batch 16's client with and without it |
+| 27 | Zoom glides (8.8 stage 1): a target and a per-refresh approach in Core for the wheel, fit, overview, slots and back; the pointer's canvas point held from exact values | M | `crates/infynitae-core/src/entry.rs`, `navigation.rs`, `lib.rs` (one tick entry), `drm` (calls the tick each refresh), `crates/infynitae-backend-headless/tests/` (new `t1_zoom_glide.rs`) | the headless test's jump numbers (8.8, measured); `tools/verify-architecture` (the camera is still written only in Core); after 10 and 20, same files |
+| 28 | Zoom as one picture (8.8 stage 2): the canvas drawn once on one grid while a zoom runs and shown through a fractional source rectangle; three-frame fade at the hand-over | M | `drm` (render path), `crates/infynitae-backend-drm/src/smooth.rs`, `wl/convert.rs` (a canvas-only element list) | headless: two windows' edges keep their distance through a whole zoom; `frame-probe` shows no missed refresh over 100 zooms; `pzoom.py` at rest unchanged; after 18 and 27 |
+| 29 | Sharper pictures fade in; scale goes down only after a rest (8.8 stage 3) | S | `crates/infynitae-core/src/scale.rs`, `wl/convert.rs` (a window's last picture kept for the fade), `drm` | unit tests in `scale.rs` (no flip when the zoom hovers at a scale's edge); VM `pzoom.py` with a screenshot every frame of the settle; with or after 19 |
+| 30 | Names on far windows (8.8, the new way): the edge labels windows too small to read, at rest only | S to M | `live/edge-apps/src/wayland.rs`, new `live/edge-apps/src/labels.rs` | `--render` picture with fixed data; a VM script that zooms out and reads the labels' boxes; after 28 |
 
 Batches 16, 17, 20, 22 and 23 share no files and can run together. 19 and 21 each wait for
 one earlier batch. 25 and 26 are large and start only when the owner asks for them.
+Batches 27 to 29 are one lane in the compositor, in that order; 30 is the edge alone. Batch 24's
+reduced copies are also what batch 30's far windows are drawn from, so 24 moves before 30.
 
 ---
 
@@ -1139,6 +1145,8 @@ filter, GNOME with smaller texture copies. None asks apps to redraw for the zoom
 2. *While the zoom moves.* Nothing is asked of apps; the picture they last drew is scaled.
    The hint goes out once, 300 ms after the zoom stops (`scale.rs:29`). This is "after",
    already built and tested (`scale.rs:1495`).
+   The sharper picture is faded in, not swapped, and a window goes back down a scale only
+   after a rest (section 8.8, causes 5 and design point 4).
 3. *A pixel budget.* A window is never asked for more pixels than four times the screen's.
    This joins the texture limit in the same place (`scale.rs:6-8`). Only windows in view are
    asked at all, since the wanted scale counts only screens showing the window.
@@ -1183,3 +1191,166 @@ changes its buffer at the settle; with whole scales its rows and columns must st
 which is the case to test first (foot, kitty, alacritty). Memory rises for people who work
 zoomed in; the budget bounds it and `MAX_APP_SCALE="1"` remains for those who want none of
 it.
+
+### 8.8 Zoom without anything jumping
+
+Read on 2026-11-13 after wave 2 and batch 16 were merged (`ff7fa5f`). Nothing was run.
+
+#### What moves today, and why
+
+1. **The zoom is a step, not a motion.** Each wheel event multiplies the zoom by 1.15 per
+   notch and writes the camera at once (`crates/infynitae-core/src/entry.rs:2251-2288`).
+   Nothing in Core, the adapter or the DRM backend interpolates a camera (no match for
+   animation or easing in their sources, apart from the cursor's own frames). Fit, the
+   overview, zoom reset and the window slots write their target the same way
+   (`entry.rs:2292-2330`, `1401`; `navigation.rs:445`). The screen shows a 15% jump in one
+   refresh, then stands still until the next notch.
+2. **Steps follow input events, not refreshes.** A notch lands in whichever refresh it
+   arrives before. Two notches in one refresh give a 32% jump, none gives a still frame. A
+   touchpad's fine scroll (`axis.amount`, `entry.rs:2253-2256`) and a touch pinch
+   (`crates/infynitae-core/src/touch.rs:468`) are finer but paced the same way.
+3. **Every edge is rounded to a whole pixel, again at every step.** A window's four edges
+   are each `round((x - R)·k) - C` (`crates/infynitae-core/src/projection.rs:231-233`,
+   `134-141`), and the reference they are rounded against is set again on every zoom change
+   (`crates/infynitae-core/src/lib.rs:2098-2100`; kept only while panning,
+   `projection.rs:1292`). So from one step to the next a window's width, and the gap between
+   two windows, can each change by one pixel in a different direction: windows shift against
+   each other and thin lines shimmer.
+4. **The point under the pointer moves by up to half a pixel per step.** The new centre is
+   computed so the canvas point under the pointer stays (`entry.rs:2270-2284`), but the
+   camera is then snapped to the pixel grid (`projection.rs:226-229`). The error does not
+   add up (each step starts from the stored centre), but it is there on every step.
+5. **The sharper picture arrives in one frame.** With `MAX_APP_SCALE` above 1, an app is
+   told its new scale 300 ms after the zoom stops (`crates/infynitae-core/src/scale.rs:29`,
+   `48-52`) and its next buffer replaces the old one whole. Section 8.7 makes that the
+   default, so it would add this pop for everyone. With `ZOOM_SHARPEN="live"` it happens
+   at each step and terminals re-flow (`wl/lib.rs:98-101`).
+6. **The border does not scale, the corners do.** The corner radius is multiplied by the
+   zoom (`wl/convert.rs:971-977`); the border's width is multiplied by the screen's scale
+   only and never goes under one pixel (`wl/convert.rs:1017`). Zoomed out, a 1 px border
+   stays 1 px around a corner that got smaller; it reads as the border jumping thicker.
+7. **Panels and the cursor.** Layer surfaces are outside the canvas and do not move
+   (`wl/layers.rs:1-4`). The cursor keeps its size. Neither is a cause. Whether the edge
+   redraws when window titles change during a zoom is not confirmed.
+
+The far-zoom shimmer (smaller than one eighth) is section 8.7's item 6, not repeated here.
+
+#### The design
+
+1. **A target and a glide, in Core.** The wheel, a pinch, fit, the overview, the slots and
+   "back" set a target (zoom and the canvas point to hold). Once per refresh Core moves the
+   camera toward it: the logarithm of the zoom closes a fixed share of the remaining
+   distance per unit of time (time constant 50 ms: 95% there in 150 ms). A new notch while
+   it glides only moves the target, so ten fast notches are one motion. A finger on a
+   touchpad or screen is followed directly (no lag behind a finger), and released into the
+   same glide for the last part. The tick is one entry in Core called by the backend each
+   refresh while a glide runs: the camera is still written only in Core, which
+   `tools/verify-architecture` enforces (probes at lines 145 and 160).
+2. **The pointer's canvas point is exact.** The point is taken when the glide starts and
+   kept until the pointer moves; each frame's centre is computed from it and the frame's
+   zoom, from unrounded values. Rounding happens once, when the frame is drawn.
+3. **While a glide runs, the canvas is one picture.** The windows, borders and corners are
+   drawn into one off-screen picture on one pixel grid, the finer of the start's and the
+   target's, exactly as a resting frame is drawn. The screen then shows that picture through
+   a source rectangle with fractional edges, which the renderer already takes (source
+   rectangles are `f64`, `wl/convert.rs:127`; off-screen pictures are already made for
+   captures, `drm:2801`). Every window, border and corner goes through the same single
+   transform, so nothing can move against anything else, and positions are finer than a
+   pixel. Windows stay live: the picture is redrawn each frame. Panels and the cursor are
+   drawn on top as now. The picture is at most twice the screen per axis; a longer zoom-out
+   changes grid on the way, behind the same fade as point 5.
+4. **Apps are asked for nothing during a glide, and rarely after.** No logical size is ever
+   changed by a zoom (already true: only scale hints are sent, `wl/convert.rs:1618-1630`).
+   The scale hint goes out when the zoom has rested 300 ms, whole scales only (8.7). Going
+   up a scale happens when the zoom needs it; going down only after 2 s at rest and when the
+   need is at least half a scale lower, so a zoom hovering around 2.0 never flips. The
+   policy already forbids going down during a zoom (`scale.rs:14-17`); this adds the rest.
+5. **Hand-overs are faded.** Two moments change the pixel grid: the first and last frame of
+   a glide (the one picture against the normal frame, at most half a pixel apart per edge),
+   and an app's sharper buffer arriving. Both are a three-frame fade (18 ms at 165 Hz) for
+   the grid and a six-frame fade for the sharper buffer, from a kept copy of the window's
+   last picture (a window can already be drawn alone into a texture,
+   `wl/convert.rs` `window_capture_elements`). The copy is dropped after the fade, or after
+   500 ms if the app never answers.
+6. **Borders scale with the zoom**, like corners, and fade out below one pixel instead of
+   staying at one.
+
+**Why this and not the alternatives.**
+
+- *Placing each window at fractional positions* would need Smithay's draw call to take a
+  fractional destination; it takes whole pixels (`wl/convert.rs:126`). That is a patch to
+  the renderer's vertex stage and still rounds each window separately. One picture uses
+  only what exists and rounds once.
+- *A fixed-length animation with an ease curve* restarts or stutters when a second notch
+  comes mid-way. An approach toward a moving target has no start or end to collide with.
+- *Momentum after the hand stops* (the canvas coasting on) is left out: the owner asked for
+  nothing to move that he did not move.
+
+**What it costs at 165 Hz.** At rest: nothing; the normal path, and a fullscreen game is
+still shown directly. During a glide (about 150 ms after the last input):
+
+- Cheap: the glide's arithmetic (a few floating-point operations per refresh), the fades
+  (one extra textured rectangle for a few frames).
+- GPU: the canvas is drawn as now, into a picture of one to four times the screen's pixels,
+  plus one full-screen draw of that picture. On a 2560 x 1440 screen the extra draw is
+  3.7 million pixels a frame, 608 million a second; the picture itself is up to 14.7 million
+  pixels a frame in the worst case (a long zoom-out). Not measured. The dedicated GPU here
+  draws a whole desktop frame in 0.15 ms (section 8.1's log line), so there is room; on an
+  integrated GPU the cap drops to 1.5 times per axis.
+- Memory: one picture of at most four screens (59 MB at this size) while a glide runs, and
+  one kept copy per window in view for under a second after a settle.
+- Every refresh of a glide is a full redraw, so 8.1 (no stalls) matters more: a stall
+  during a glide is a visible hitch.
+
+#### A new way to zoom
+
+Two things, both made of the pieces above.
+
+1. **The overview is zoom-out, and every jump is a glide.** With point 1 in Core, Super+Tab,
+   the slots, fit, "back" (8.6) and the overview all travel instead of cutting. The overview
+   stops being a mode: it is the glide to the zoom that shows everything, and any zoom-in
+   from it lands where the pointer is. One key zooms to the window under the pointer and the
+   same key goes back (fit and the history exist, `navigation.rs:380-401`). Cost: none
+   beyond batch 27.
+2. **Names on far windows.** When a window is drawn smaller than about 160 px high its text
+   cannot be read, and averaging cannot fix that. At rest, the edge draws each such
+   window's icon and title beside it at normal text size: the canvas far out reads as named
+   cards with live pictures, and near it is the real windows. The edge already has the text
+   renderer, the icons and the window list; the positions come from the shell socket's
+   snapshot, which it can subscribe to (`crates/infynitae-ipc/src/protocol.rs:156`). Labels
+   fade in 100 ms after the zoom rests and are hidden the moment it moves, so they never
+   trail behind the canvas.
+
+**Why these.** Text in the compositor would need a font renderer there, a new dependency in
+crates that are held to a short list (`tools/verify-architecture:80-92`); the edge has one.
+Replacing far windows with cards entirely (no live picture) throws away what the canvas
+shows best, the windows themselves. Pinch and wheel "with momentum" is the coasting the
+owner did not ask for; the glide already gives the wheel a smooth finish.
+
+#### How smooth is measured
+
+- **Jump, in a test** (`t1_zoom_glide.rs`, headless, a fake clock at 165 Hz): a wheel zoom
+  of ten notches and a fit across the canvas. Per frame: the screen position of the held
+  canvas point (ideal: constant) and of two windows' edges. Targets: the held point moves
+  under 0.05 px in any frame; the distance between the two windows' edges, divided by the
+  zoom, is constant to 0.05 px during the glide; the zoom's step ratio from frame to frame
+  never grows (no speeding up after it starts slowing).
+- **Pacing, on the real screen:** `tools/frame-probe` in a window while a script zooms 100
+  times: no missed refresh, and the "Latency" line's missed count unchanged.
+- **The hand-over:** screenshots of the last glide frame and the first resting frame;
+  no edge more than half a pixel apart (compared as images), and the fade covers it.
+- **Sharpness at rest:** `tools/vm-edge/pzoom.py` gives the same numbers as before 8.8.
+- **Against others:** the same ten-notch zoom filmed at 240 fps on KDE's zoom, Hyprland's
+  and macOS's (from memory, each scales the finished screen, so nothing shifts but text is
+  soft) and on today's Infynitae (15% steps). The claim to prove: as steady as theirs
+  during the motion, and sharp at rest where theirs is not.
+
+#### Batches
+
+27 to 30 in wave 5's table. Sizes: 27 M, 28 M, 29 S, 30 S to M. Batch 27 alone removes
+causes 1, 2 and 4 and gives the gliding overview; 28 removes cause 3; 29 removes cause 5
+and must ship with batch 19, so the new default never shows the pop; cause 6 is ten lines
+in batch 28. Risk: 28 is the one that changes the render path, and only while a glide runs,
+so a fault there shows as a wrong picture for a fraction of a second and the resting frame
+is untouched. The headless tests compare the last glide frame with the resting frame so a
+fault cannot pass unseen.
