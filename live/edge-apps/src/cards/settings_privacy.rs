@@ -90,6 +90,8 @@ pub const TABLE: &[Setting] = &[
     },
 ];
 
+pub const KEYS: &[&str] = &["PRIVACY_APPS"];
+
 /// App IDs allowed to share the screen without asking again (lines of `screenshare-allowed`).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SharesData {

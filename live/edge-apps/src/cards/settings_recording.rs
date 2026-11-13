@@ -114,6 +114,8 @@ pub const FOLDERS: &[(&str, &str)] = &[
     ("Recordings", "RECORDINGS_DIR"),
 ];
 
+pub const KEYS: &[&str] = &[FOLDERS[0].1, FOLDERS[1].1, FOLDERS[2].1];
+
 const ROW: u32 = 100;
 const FOLDER: u32 = 4000;
 const LIST: u32 = 5000;

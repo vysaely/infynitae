@@ -813,6 +813,31 @@ pub const TABLE_FONTS: &[LookRow] = &[
     },
 ];
 
+pub const KEYS: &[&str] = &[
+    TABLE_APPEARANCE[0].key,
+    TABLE_APPEARANCE[1].key,
+    TABLE_APPEARANCE[2].key,
+    TABLE_APPEARANCE[3].key,
+    TABLE_APPEARANCE[4].key,
+    TABLE_APPEARANCE[5].key,
+    TABLE_APPEARANCE[6].key,
+    TABLE_APPEARANCE[7].key,
+    TABLE_APPEARANCE[8].key,
+    TABLE_APPEARANCE[9].key,
+    TABLE_APPEARANCE[10].key,
+    TABLE_APPEARANCE[11].key,
+    TABLE_APPEARANCE[12].key,
+    TABLE_WALLPAPER[0].key,
+    TABLE_WALLPAPER[1].key,
+    TABLE_WALLPAPER[2].key,
+    TABLE_FONTS[0].key,
+    TABLE_FONTS[1].key,
+    TABLE_FONTS[2].key,
+    TABLE_FONTS[3].key,
+    TABLE_FONTS[4].key,
+    TABLE_FONTS[5].key,
+];
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LookKind {
     Appearance,

@@ -93,6 +93,7 @@ const SUB_ONE_H: f64 = 26.0;
 const SUB_TWO_H: f64 = 42.0;
 const SECTION_GAP: f64 = 6.0;
 const SLIDER_ROW_H: f64 = 48.0;
+pub const KEYS: &[&str] = &["OUTPUT_SCALE"];
 const H_MORE: u32 = 1;
 const H_ROW_BASE: u32 = 100;
 const H_OPT_BASE: u32 = 10_000;

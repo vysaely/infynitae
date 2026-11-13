@@ -11,6 +11,7 @@ use std::any::Any;
 pub struct Settings;
 
 const KINDS: &[CardKind] = &[
+    crate::cards::settings_all::KIND,
     CardKind {
         id: "network",
         title: "Network",
@@ -72,6 +73,9 @@ impl Provider for Settings {
     }
     fn card(&self, kind: &str, argument: Option<&str>) -> Option<Box<dyn Card>> {
         match kind {
+            "all" if argument.is_none() => {
+                Some(Box::new(crate::cards::settings_all::SettingsAllCard::new()))
+            }
             "quick" => Some(Box::new(crate::cards::quick::QuickCard::new(argument))),
             "session" if argument.is_none() => Some(Box::new(crate::cards::session::new())),
             "display" => Some(Box::new(crate::cards::settings_display::DisplayCard::new())),

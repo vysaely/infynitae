@@ -839,9 +839,7 @@ impl Config {
         // without a PANEL_SETTINGS line (the compositor binds a panel's key from its line)
         if !c.panels.iter().any(|p| p.name == "settings") && c.panels.len() < 12 {
             let mut settings = Panel::new("settings", side, 0, Some('i'), false, &[]);
-            settings.apply(
-                "SUPER+I top center 440 apps/search settings/games settings/quick settings/power",
-            );
+            settings.apply("SUPER+I top center 440 apps/search settings/all settings/about");
             c.panels.push(settings);
         }
         c
