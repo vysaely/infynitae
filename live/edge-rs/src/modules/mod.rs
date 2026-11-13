@@ -39,6 +39,7 @@ pub mod flow;
 pub mod media;
 pub mod memory;
 pub mod notifications;
+pub mod notify;
 pub mod search;
 pub mod session;
 pub mod switches;
@@ -306,6 +307,8 @@ pub struct World {
     /// keyboard's selection drawn (Enter still opens it either way). Shown from the start, the
     /// first favourite looked stuck lit beside the pointer's light (owner 2026-11-13)
     pub keyboard: bool,
+    /// the edge's own notifications (pop-ups and history) when it serves them
+    pub notify: notify::Notify,
 }
 
 /// How long one card takes to rise and fade in, and how much later each card above it starts.
@@ -361,6 +364,7 @@ impl World {
             last_tick: None,
             switch_rows: true,
             keyboard: false,
+            notify: notify::Notify::default(),
         };
         if std::env::var_os("INFYNITAE_EDGE_RENDER_DATA").is_some() {
             w.load_from_helper();
@@ -654,6 +658,10 @@ impl World {
         if key == "calendar" || key == "events" {
             self.calendar_events = calendar::parse_calendar_events(out);
             return true;
+        }
+        if key == "notifications" && self.notify.serving {
+            // the edge's own list (`notify`), not makoctl's
+            return false;
         }
         switches::apply(&mut self.switches, key, out)
             || volume::apply(&mut self.volume, key, out)

@@ -771,6 +771,10 @@ struct App {
     toplevel_sync: ToplevelSyncState,
     /// an animation ran on the last frame (its end syncs the panel's size once)
     was_animating: bool,
+    /// the notification pop-ups' strip (made with the first pop-up)
+    popups: Option<PopupLayer>,
+    /// the edge serves org.freedesktop.Notifications on this connection (None: another daemon does)
+    notify_conn: Option<zbus::blocking::Connection>,
     touch_tracker: Option<TouchTracker>,
     exit: bool,
 }
@@ -1056,6 +1060,10 @@ impl App {
 
     fn sync_all(&mut self) {
         self.flush_window_ops();
+        // a notification dismissed or opened from the card: the sender told, the pop-ups follow
+        if !self.shell.world.notify.out.is_empty() {
+            self.sync_popups();
+        }
         if let Some(kind) = self.shell.world.child_pending.take() {
             let tx = self.child_tx.clone();
             // Bluetooth: find new devices; Network: search again for networks
@@ -1197,6 +1205,38 @@ impl App {
         self.desk.iter().any(|o| o.layer.wl_surface() == surface)
     }
 
+    /// After the notifications changed: the senders told (signals), the card's list from the
+    /// history, the pop-ups drawn (their strip made on the first screen with the first pop-up).
+    fn sync_popups(&mut self) {
+        let n = &mut self.shell.world.notify;
+        let out = std::mem::take(&mut n.out);
+        if let Some(conn) = &self.notify_conn {
+            crate::notify_server::send(conn, out);
+        }
+        if n.serving {
+            self.shell.world.notifications.items = n
+                .history
+                .iter()
+                .map(|h| modules::notifications::NotifItem {
+                    id: h.id,
+                    app: h.app.clone(),
+                    time: h.time.clone(),
+                    title: h.summary.clone(),
+                    body: h.body.clone(),
+                })
+                .collect();
+            self.shell.world.notifications.ready = true;
+        }
+        if self.popups.is_none() && !self.shell.world.notify.popups.is_empty() {
+            if let Some(output) = self.outputs.first().map(|o| o.output.clone()) {
+                self.popups = PopupLayer::new(self, output);
+            }
+        }
+        if let Some(pl) = self.popups.as_mut() {
+            pl.render(&self.qh, &self.compositor, &self.shell);
+        }
+    }
+
     fn handle_signal_byte(&mut self, b: u8) {
         let changed = match b {
             b'Q' => {
@@ -1331,6 +1371,14 @@ impl CompositorHandler for App {
             // the panel's size settled: its input region and box follow
             self.sync_all();
         }
+        if let Some(pl) = self
+            .popups
+            .as_mut()
+            .filter(|p| p.layer.wl_surface() == surface)
+        {
+            pl.frame_pending = false;
+            pl.render(qh, &self.compositor, &self.shell);
+        }
         if let Some(os) = self
             .desk
             .iter_mut()
@@ -1396,6 +1444,10 @@ impl OutputHandler for App {
     ) {
         self.outputs.retain(|o| o.output != output);
         self.desk.retain(|o| o.output != output);
+        if self.popups.as_ref().is_some_and(|p| p.output == output) {
+            // the next pop-up makes the strip again, on the first screen left
+            self.popups = None;
+        }
     }
 }
 
@@ -1403,6 +1455,9 @@ impl LayerShellHandler for App {
     fn closed(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, layer: &LayerSurface) {
         self.outputs.retain(|o| &o.layer != layer);
         self.desk.retain(|o| &o.layer != layer);
+        if self.popups.as_ref().is_some_and(|p| &p.layer == layer) {
+            self.popups = None;
+        }
     }
 
     fn configure(
@@ -1426,6 +1481,12 @@ impl LayerShellHandler for App {
             self.widgets.last_screen = (os.width as f64, os.height as f64);
             os.dirty = true;
             os.apply_mode(qh, &self.compositor, &self.widgets);
+        }
+        if let Some(pl) = self.popups.as_mut().filter(|p| &p.layer == layer) {
+            pl.width = configure.new_size.0.max(1);
+            pl.height = configure.new_size.1.max(1);
+            pl.configured = true;
+            pl.render(qh, &self.compositor, &self.shell);
         }
     }
 }
@@ -1602,7 +1663,41 @@ impl PointerHandler for App {
     ) {
         let mut changed = false;
         let mut desk_changed = false;
+        let mut pop_changed = false;
         for event in events {
+            if let Some(pl) = self
+                .popups
+                .as_mut()
+                .filter(|p| p.layer.wl_surface() == &event.surface)
+            {
+                // the pop-ups: pointing holds one's time; a click on its x, a button, or the card
+                use modules::notify::{hit, popup_at, Hit};
+                let w = pl.width as f64;
+                let now = Instant::now();
+                let n = &mut self.shell.world.notify;
+                let before = pl.pointer.and_then(|p| hit(n, w, p));
+                match event.kind {
+                    PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
+                        pl.pointer = Some(event.position);
+                        let over = popup_at(n, w, event.position);
+                        pop_changed |= n.hover(over, now) || hit(n, w, event.position) != before;
+                    }
+                    PointerEventKind::Leave { .. } => {
+                        pl.pointer = None;
+                        pop_changed |= n.hover(None, now) || before.is_some();
+                    }
+                    PointerEventKind::Press { button, .. } if button == BTN_LEFT => {
+                        pop_changed |= match hit(n, w, event.position) {
+                            Some(Hit::Dismiss(id)) => n.dismiss(id),
+                            Some(Hit::Action(id, key)) => n.invoke(id, &key),
+                            Some(Hit::Open(id)) => n.invoke(id, "default"),
+                            None => false,
+                        };
+                    }
+                    _ => {}
+                }
+                continue;
+            }
             let Some((w, h)) = self.surface_dims(&event.surface) else {
                 continue;
             };
@@ -1651,6 +1746,11 @@ impl PointerHandler for App {
                     }
                 }
             }
+        }
+        if pop_changed {
+            self.sync_popups();
+            // the open panel's Notifications card lists them too
+            changed |= self.shell.open.is_some();
         }
         if changed {
             self.sync_all();
@@ -1986,6 +2086,7 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
     let (child_tx, child_rx) =
         channel::channel::<(modules::child::ChildKind, Vec<modules::child::ChildItem>)>();
     let (ask_tx, ask_rx) = channel::channel::<()>();
+    let (notify_tx, notify_rx) = channel::channel::<modules::notify::Incoming>();
     let fetch_busy = Arc::new(AtomicBool::new(false));
 
     let output_state = OutputState::new(&globals, &qh);
@@ -2022,6 +2123,8 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
         prev_open: None,
         toplevel_sync: ToplevelSyncState::default(),
         was_animating: false,
+        popups: None,
+        notify_conn: None,
         touch_tracker: None,
         exit: false,
     };
@@ -2029,6 +2132,17 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
     if let Some(idx) = app.shell.open {
         app.prev_open = Some(idx);
         app.request_fetch(idx);
+    }
+    // the session's notifications (NOTIFICATIONS "auto" or "edge"), unless another daemon has them
+    if app.shell.cfg.serves_notifications() {
+        match crate::notify_server::start(notify_tx) {
+            Ok(conn) => {
+                app.notify_conn = Some(conn);
+                app.shell.world.notify.serving = true;
+                app.shell.world.notifications.ready = true;
+            }
+            Err(e) => eprintln!("[infynitae-edge] notifications: not serving: {e}"),
+        }
     }
 
     for output in existing_outputs {
@@ -2095,6 +2209,26 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
                 if modules::ask::check_asker_gone(&mut app.shell.world) {
                     app.sync_all();
                     app.watch_current_ask();
+                }
+            }
+        })
+        .map_err(|e| e.to_string())?;
+
+    loop_handle
+        .insert_source(notify_rx, |evt, _, app| {
+            if let channel::Event::Msg(m) = evt {
+                let n = &mut app.shell.world.notify;
+                match m {
+                    modules::notify::Incoming::Notify(note) => {
+                        n.receive(note, Instant::now(), modules::notify::quiet_now());
+                    }
+                    modules::notify::Incoming::Close(id) => {
+                        n.close(id);
+                    }
+                }
+                app.sync_popups();
+                if app.shell.open.is_some() {
+                    app.sync_all();
                 }
             }
         })
@@ -2208,6 +2342,22 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
                 app.apply_touch_actions(vec![action], w, h, is_desk);
             }
         }
+        // the pop-ups' time: the next one up wakes the loop
+        if app.shell.world.notify.next_deadline().is_some() {
+            let now = Instant::now();
+            if app.shell.world.notify.expire(now) {
+                app.sync_popups();
+                if app.shell.open.is_some() {
+                    app.sync_all();
+                }
+            }
+            if let Some(d) = app.shell.world.notify.next_deadline() {
+                let rem = d
+                    .saturating_duration_since(now)
+                    .max(Duration::from_millis(5));
+                timeout = Some(timeout.map_or(rem, |t| t.min(rem)));
+            }
+        }
         // a card held near the edited panel's edge: it keeps scrolling, a step a frame
         if app.shell.drag_autoscroll() {
             app.sync_all();
@@ -2224,4 +2374,142 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
         modules::ask::answer(&mut app.shell.world, None);
     }
     Ok(())
+}
+
+/// The notification pop-ups' surface (owner 2026-11-13: the edge's own, in place of mako): a strip
+/// down the right of the first screen on the Top layer, taking the pointer only on the cards, and
+/// unmapped (no buffer) while there is nothing to show, so it costs nothing and is never one more
+/// surface over a full-screen window.
+struct PopupLayer {
+    output: wl_output::WlOutput,
+    layer: LayerSurface,
+    pool: SlotPool,
+    buffer: Option<Buffer>,
+    width: u32,
+    height: u32,
+    configured: bool,
+    /// a buffer is attached (the surface shows)
+    mapped: bool,
+    frame_pending: bool,
+    /// draw again on the next frame (a card still sliding in)
+    again: bool,
+    /// where the pointer is on it
+    pointer: Option<(f64, f64)>,
+}
+
+/// The strip's width: the cards, their margin from the screen's right, a little room.
+const POPUP_STRIP_W: u32 = (modules::notify::POPUP_W + modules::notify::MARGIN + 16.0) as u32;
+
+impl PopupLayer {
+    fn new(app: &App, output: wl_output::WlOutput) -> Option<PopupLayer> {
+        let pool = SlotPool::new(4096, &app.shm).ok()?;
+        let surface = app.compositor.create_surface(&app.qh);
+        let layer = app.layer_shell.create_layer_surface(
+            &app.qh,
+            surface,
+            Layer::Top,
+            Some("infynitae-notifications"),
+            Some(&output),
+        );
+        layer.set_anchor(Anchor::TOP | Anchor::RIGHT | Anchor::BOTTOM);
+        layer.set_size(POPUP_STRIP_W, 0);
+        layer.set_exclusive_zone(-1);
+        layer.set_keyboard_interactivity(KeyboardInteractivity::None);
+        if let Ok(region) = Region::new(&app.compositor) {
+            layer
+                .wl_surface()
+                .set_input_region(Some(region.wl_region()));
+        }
+        layer.commit();
+        Some(PopupLayer {
+            output,
+            layer,
+            pool,
+            buffer: None,
+            width: 0,
+            height: 0,
+            configured: false,
+            mapped: false,
+            frame_pending: false,
+            again: false,
+            pointer: None,
+        })
+    }
+
+    /// Shows the pop-ups as they are now (or unmaps the strip when there are none).
+    fn render(&mut self, qh: &QueueHandle<App>, compositor: &CompositorState, shell: &Shell) {
+        let n = &shell.world.notify;
+        if n.popups.is_empty() {
+            if self.mapped {
+                // no buffer: unmapped; it maps again after a commit and the configure answering it
+                self.layer.wl_surface().attach(None, 0, 0);
+                self.layer.commit();
+                self.mapped = false;
+                self.configured = false;
+                self.buffer = None;
+                self.pointer = None;
+            }
+            return;
+        }
+        if !self.configured {
+            if !self.mapped {
+                self.layer.commit();
+            }
+            return;
+        }
+        if self.frame_pending {
+            self.again = true;
+            return;
+        }
+        let (w, h) = (self.width as i32, self.height as i32);
+        let stride = w * 4;
+        let Ok((buffer, canvas)) = self
+            .pool
+            .create_buffer(w, h, stride, wl_shm::Format::Argb8888)
+        else {
+            return;
+        };
+        canvas.fill(0);
+        let now = Instant::now();
+        if let Ok(surface) = unsafe {
+            cairo::ImageSurface::create_for_data_unsafe(
+                canvas.as_mut_ptr(),
+                cairo::Format::ARgb32,
+                w,
+                h,
+                stride,
+            )
+        } {
+            if let Ok(cr) = cairo::Context::new(&surface) {
+                modules::notify::draw(&cr, &shell.theme, n, w as f64, self.pointer, now);
+            }
+            surface.flush();
+        }
+        // only the cards take the pointer; the rest of the strip lets clicks through
+        if let Ok(region) = Region::new(compositor) {
+            for (_, r) in modules::notify::layout(n, w as f64) {
+                region.add(r.0 as i32, r.1 as i32, r.2.ceil() as i32, r.3.ceil() as i32);
+            }
+            self.layer
+                .wl_surface()
+                .set_input_region(Some(region.wl_region()));
+        }
+        let wl = self.layer.wl_surface();
+        wl.damage_buffer(0, 0, w, h);
+        // a card still sliding in: the next frame too
+        let arriving = n.popups.iter().any(|p| {
+            now.saturating_duration_since(p.born).as_secs_f64() * 1000.0
+                < modules::notify::ARRIVE_MS
+        });
+        if arriving {
+            wl.frame(qh, wl.clone());
+            self.frame_pending = true;
+        }
+        if buffer.attach_to(wl).is_ok() {
+            self.layer.commit();
+            self.mapped = true;
+            self.buffer = Some(buffer);
+        }
+        self.again = false;
+    }
 }

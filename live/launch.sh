@@ -119,18 +119,25 @@ GM_ARGS
             --object-path /com/feralinteractive/GameMode \
             --method "com.feralinteractive.GameMode.$call" "$gm_pid" >/dev/null 2>&1
         # GAME_QUIET: a notification drawn over the game ends its direct path to the screen
-        # (and tearing) until it goes; mako's do-not-disturb holds them back until the game
-        # ends. One the owner turned on stays on (only the one set here is removed)
-        if [ "${GAME_QUIET:-true}" = true ] && command -v makoctl >/dev/null 2>&1; then
-            gm_mark="${XDG_RUNTIME_DIR:-/tmp}/infynitae/game-quiet"
+        # (and tearing) until it goes, so none show until the game ends (they are still listed).
+        # The edge holds them while the game-quiet file is there; mako's do-not-disturb does
+        # for mako. One the owner turned on stays on (only the one set here is removed)
+        if [ "${GAME_QUIET:-true}" = true ]; then
+            gm_dir="${XDG_RUNTIME_DIR:-/tmp}/infynitae"
+            gm_mark="$gm_dir/game-quiet"
+            gm_mako="$gm_dir/game-quiet-mako"
             if [ "$gm_mode" = on ] && [ "$gm_quiet" = quiet ]; then
-                if ! makoctl mode 2>/dev/null | grep -qx do-not-disturb; then
-                    makoctl mode -a do-not-disturb >/dev/null 2>&1 \
-                        && mkdir -p "${gm_mark%/*}" && : > "$gm_mark"
+                mkdir -p "$gm_dir" && : > "$gm_mark"
+                if command -v makoctl >/dev/null 2>&1 && pidof mako >/dev/null 2>&1 \
+                    && ! makoctl mode 2>/dev/null | grep -qx do-not-disturb; then
+                    makoctl mode -a do-not-disturb >/dev/null 2>&1 && : > "$gm_mako"
                 fi
-            elif [ "$gm_mode" = off ] && [ -e "$gm_mark" ]; then
-                makoctl mode -r do-not-disturb >/dev/null 2>&1
+            elif [ "$gm_mode" = off ]; then
                 rm -f "$gm_mark"
+                if [ -e "$gm_mako" ]; then
+                    makoctl mode -r do-not-disturb >/dev/null 2>&1
+                    rm -f "$gm_mako"
+                fi
             fi
         fi
         ;;

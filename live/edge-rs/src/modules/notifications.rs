@@ -508,6 +508,12 @@ pub fn click(world: &mut World, size: (f64, f64), pos: (f64, f64), button: u32) 
     let (x, y) = pos;
     let clear = clear_all_rect(w);
     if x >= clear.0 && x <= clear.0 + clear.2 && y >= clear.1 && y <= clear.1 + clear.3 {
+        if world.notify.serving {
+            // the edge's own: every one dismissed (the list follows from the history)
+            world.notify.clear_all();
+            world.notifications.items.clear();
+            return true;
+        }
         let cmd = clear_all_action(&mut world.notifications);
         world.run(cmd);
         return true;
@@ -529,7 +535,17 @@ pub fn click(world: &mut World, size: (f64, f64), pos: (f64, f64), button: u32) 
         let d = dismiss_rect(0.0, w, ry);
         if x >= d.0 && x <= d.0 + d.2 && y >= d.1 && y <= d.1 + d.3 {
             let item = world.notifications.items.remove(idx);
-            world.run(format!("makoctl dismiss -n {} 2>/dev/null", item.id));
+            if world.notify.serving {
+                world.notify.dismiss(item.id);
+            } else {
+                world.run(format!("makoctl dismiss -n {} 2>/dev/null", item.id));
+            }
+            return true;
+        }
+        if world.notify.serving {
+            // opened: its default action, and it goes
+            let item = world.notifications.items.remove(idx);
+            world.notify.invoke(item.id, "default");
             return true;
         }
         if let Some(cmd) = invoke_item_action(&mut world.notifications, idx) {
