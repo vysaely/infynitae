@@ -347,11 +347,11 @@ pub fn button(cr: &Context, cx: &Cx, hits: &mut Hits, id: u32, x: f64, y: f64, w
     w
 }
 
-/// The value of a row that opens a list (owner's choice, 2026-11-13: today's quiet value inside
-/// the thin box of a drop-down): the word at the right in a faint outline with a small chevron.
-/// `lit` (the row pointed at) and `open` (its list shown) brighten the outline, `open` turns the
-/// chevron up; `changed` (not the default) puts the word in the accent. Returns the
-/// box's width, to keep the row's name clear of it.
+/// The value of a row that opens a list (owner's choice, 2026-11-13): a small copy of the list's
+/// chosen option, a soft accent block with the word in the accent and a small chevron, so pressing
+/// it reads as that option growing into the list. While the list is open the value is in it, so
+/// only the word (quiet) and the chevron, turned up, are drawn. `lit` (pointed at) deepens the
+/// block. Returns the block's width, to keep the row's name clear of it.
 #[allow(clippy::too_many_arguments)]
 pub fn value_box(
     cr: &Context,
@@ -359,7 +359,7 @@ pub fn value_box(
     row: Rect,
     x_right: f64,
     word: &str,
-    changed: bool,
+    _changed: bool,
     lit: bool,
     open: bool,
 ) -> f64 {
@@ -367,25 +367,18 @@ pub fn value_box(
     let t = Text {
         size: 12.0,
         bold: false,
-        color: if changed { th.accent_text } else { th.muted },
+        color: if open { th.muted } else { th.accent_text },
         text: word,
     };
     let tw = draw::measure(cr, &t).0;
-    let (h, pad, chev) = (24.0, 8.0, 10.0);
+    let (h, pad, chev) = (26.0, 10.0, 9.0);
     let w = (tw + pad * 2.0 + chev + 4.0).min(row.2 * 0.6);
     let (x, y) = (x_right - w, row.1 + (row.3 - h) / 2.0);
-    draw::round_rect(cr, x + 0.5, y + 0.5, w - 1.0, h - 1.0, th.small_radius());
-    // open: as when pointed at (owner: the accent outline looked wrong), the chevron turned up
-    draw::set(
-        cr,
-        if open || lit {
-            th.text.alpha(0.28)
-        } else {
-            th.text.alpha(0.12)
-        },
-    );
-    cr.set_line_width(1.0);
-    let _ = cr.stroke();
+    if !open {
+        draw::round_rect(cr, x, y, w, h, th.small_radius());
+        draw::set(cr, th.accent.alpha(if lit { 0.22 } else { 0.16 }));
+        let _ = cr.fill();
+    }
     draw::text_max(
         cr,
         x + pad,
@@ -396,11 +389,11 @@ pub fn value_box(
     // the chevron: down while closed, up while open
     let (cxp, cyp) = (x + w - pad - chev / 2.0, y + h / 2.0);
     let d = if open { -1.0 } else { 1.0 };
-    cr.move_to(cxp - 3.5, cyp - 1.75 * d);
-    cr.line_to(cxp, cyp + 1.75 * d);
-    cr.line_to(cxp + 3.5, cyp - 1.75 * d);
-    draw::set(cr, th.muted);
-    cr.set_line_width(1.4);
+    cr.move_to(cxp - 3.0, cyp - 1.5 * d);
+    cr.line_to(cxp, cyp + 1.5 * d);
+    cr.line_to(cxp + 3.0, cyp - 1.5 * d);
+    draw::set(cr, if open { th.muted } else { th.accent_text });
+    cr.set_line_width(1.2);
     let _ = cr.stroke();
     w
 }
