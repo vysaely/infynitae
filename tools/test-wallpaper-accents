@@ -1,0 +1,216 @@
+#!/bin/sh
+# End-to-end tests for theme_accents_from, infynitae-wallpaper --accents,
+# settings.sh wallpaper-colors accents/shuffle, and THEME_FROM_WALLPAPER=shuffle.
+set -eu
+
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
+
+H="$TMP/home"
+export HOME="$H"
+export CONFIG_FILE="$H/.config/infynitae/config"
+export XDG_CONFIG_HOME="$H/.config"
+export XDG_DATA_HOME="$H/.local/share"
+export XDG_STATE_HOME="$H/.local/state"
+export XDG_CACHE_HOME="$H/.cache"
+export XDG_RUNTIME_DIR="$TMP/run"
+unset DBUS_SESSION_BUS_ADDRESS WAYLAND_DISPLAY DISPLAY 2>/dev/null || true
+mkdir -p "$H/.config/infynitae" "$H/.local/bin" "$H/.local/state/infynitae" "$XDG_RUNTIME_DIR"
+
+pass=0 fail=0
+check() {
+    name="$1"; shift
+    if "$@"; then
+        pass=$((pass + 1))
+    else
+        echo "FAIL: $name" >&2
+        fail=$((fail + 1))
+    fi
+}
+
+# 1. C unit tests for theme_accents_from / theme_colors_from
+CFLAGS_PIXBUF=$(pkg-config --cflags gdk-pixbuf-2.0)
+LIBS_PIXBUF=$(pkg-config --libs gdk-pixbuf-2.0)
+gcc -O2 -Wall -Wextra -Werror $CFLAGS_PIXBUF \
+    "$ROOT/tools/test-wallpaper-accents.c" -o "$TMP/test-accents-c" $LIBS_PIXBUF -lm
+check "c unit tests" "$TMP/test-accents-c"
+
+# 2. Compile infynitae-wallpaper into the temporary HOME (with live/build-helpers flags)
+CFLAGS_ALL=$(pkg-config --cflags wayland-client cairo gdk-pixbuf-2.0)
+LIBS_ALL=$(pkg-config --libs wayland-client cairo gdk-pixbuf-2.0)
+W="$ROOT/live/wallpaper"
+gcc -O2 -Wall $CFLAGS_ALL \
+    "$W/infynitae-wallpaper.c" "$W/wlr-layer-shell-protocol.c" \
+    "$W/xdg-shell-protocol.c" "$W/viewporter-protocol.c" \
+    -o "$H/.local/bin/infynitae-wallpaper" $LIBS_ALL -lm
+WPBIN="$H/.local/bin/infynitae-wallpaper"
+
+# 3. Generate deterministic test PNG wallpapers in $TMP
+cat > "$TMP/gen_wp.c" <<'EOF'
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "theme-colors.h"
+
+static void paint(GdkPixbuf *pb, int x0, int x1, double h, double s, double v) {
+    double rgb[3];
+    tc_hsv_to_rgb(h, s, v, rgb);
+    guchar r = (guchar)(rgb[0] * 255 + 0.5);
+    guchar g = (guchar)(rgb[1] * 255 + 0.5);
+    guchar b = (guchar)(rgb[2] * 255 + 0.5);
+    int rs = gdk_pixbuf_get_rowstride(pb), nch = gdk_pixbuf_get_n_channels(pb);
+    guchar *px = gdk_pixbuf_get_pixels(pb);
+    int hpx = gdk_pixbuf_get_height(pb);
+    for (int y = 0; y < hpx; y++)
+        for (int x = x0; x < x1; x++) {
+            guchar *p = px + y * rs + x * nch;
+            p[0] = r; p[1] = g; p[2] = b;
+        }
+}
+
+int main(int argc, char **argv) {
+    if (argc != 3) return 1;
+    const char *kind = argv[1], *out = argv[2];
+    GdkPixbuf *pb = gdk_pixbuf_new(GDK_COLORSPACE_RGB, FALSE, 8, 60, 20);
+    if (!strcmp(kind, "wp3")) {
+        paint(pb, 0, 33, 10.0, 0.80, 0.90);
+        paint(pb, 33, 51, 220.0, 0.80, 0.90);
+        paint(pb, 51, 60, 125.0, 0.80, 0.90);
+    } else if (!strcmp(kind, "wp3b")) {
+        paint(pb, 0, 33, 180.0, 0.75, 0.88);
+        paint(pb, 33, 51, 285.0, 0.75, 0.88);
+        paint(pb, 51, 60, 48.0, 0.75, 0.88);
+    } else if (!strcmp(kind, "grey")) {
+        int rs = gdk_pixbuf_get_rowstride(pb), nch = gdk_pixbuf_get_n_channels(pb);
+        guchar *px = gdk_pixbuf_get_pixels(pb);
+        for (int y = 0; y < 20; y++)
+            for (int x = 0; x < 60; x++) {
+                guchar *p = px + y * rs + x * nch;
+                p[0] = p[1] = p[2] = 128;
+            }
+    } else {
+        return 1;
+    }
+    int ok = gdk_pixbuf_save(pb, out, "png", NULL, NULL);
+    g_object_unref(pb);
+    return ok ? 0 : 1;
+}
+EOF
+gcc -O2 $CFLAGS_PIXBUF -I"$ROOT/live/wallpaper" "$TMP/gen_wp.c" -o "$TMP/gen_wp" $LIBS_PIXBUF -lm
+"$TMP/gen_wp" wp3 "$TMP/wp3.png"
+"$TMP/gen_wp" wp3b "$TMP/wp3b.png"
+"$TMP/gen_wp" grey "$TMP/grey.png"
+
+# 4. CLI --accents vs --colors
+"$WPBIN" --accents "$TMP/wp3.png" > "$TMP/acc3"
+first_accent=$(head -n 1 "$TMP/acc3")
+colors_first=$("$WPBIN" --colors "$TMP/wp3.png" | awk -F= '$1 == "BORDER_ACTIVE" { gsub(/"/, "", $2); print $2 }')
+check "--accents returns 3 lines" test "$(wc -l < "$TMP/acc3")" -eq 3
+check "--accents line 1 equals --colors BORDER_ACTIVE" test "$first_accent" = "$colors_first"
+check "--accents grey returns #7aa2f7" test "$("$WPBIN" --accents "$TMP/grey.png")" = "#7aa2f7"
+check "--accents missing file fails" sh -c "! '$WPBIN' --accents '$TMP/nope.png' 2>/dev/null"
+check "--accents missing arg fails" sh -c "! '$WPBIN' --accents 2>/dev/null"
+
+# Helper to verify membership in a file of candidate hexes
+in_list() {
+    grep -iqFx "$1" "$2"
+}
+
+cp "$ROOT/config/config" "$CONFIG_FILE"
+SH="$ROOT/live/settings.sh"
+LOG="$H/.local/state/infynitae/settings-changes"
+
+# 5. settings.sh wallpaper-colors accents (with arg and via WALLPAPER, read-only on config)
+sh "$SH" set WALLPAPER "$TMP/wp3.png" >/dev/null
+before_cfg=$(cat "$CONFIG_FILE")
+sh "$SH" wallpaper-colors accents "$TMP/wp3.png" > "$TMP/sh_acc"
+check "settings wallpaper-colors accents matches --accents" cmp -s "$TMP/acc3" "$TMP/sh_acc"
+check "settings wallpaper-colors accents leaves config unchanged" test "$(cat "$CONFIG_FILE")" = "$before_cfg"
+sh "$SH" wallpaper-colors accents > "$TMP/sh_acc_default"
+check "settings wallpaper-colors accents uses WALLPAPER default" cmp -s "$TMP/acc3" "$TMP/sh_acc_default"
+check "settings wallpaper-colors accents missing image fails" sh -c "! sh '$SH' wallpaper-colors accents '$TMP/nope.png' 2>/dev/null"
+
+# 6. settings.sh wallpaper-colors shuffle:
+# 6a. When BORDER_ACTIVE line does not exist in config, logs '-' before set
+sed -i '/^BORDER_ACTIVE=/d' "$CONFIG_FILE"
+: > "$LOG"
+sh "$SH" wallpaper-colors shuffle "$TMP/wp3.png" >/dev/null
+got=$(sh "$SH" get BORDER_ACTIVE)
+check "shuffle picks candidate when BORDER_ACTIVE was unset" in_list "$got" "$TMP/acc3"
+last_log=$(tail -n 1 "$LOG")
+check "shuffle logs KEY and '-' before set" sh -c "printf '%s' '$last_log' | awk -F '\t' '\$2 == \"BORDER_ACTIVE\" && \$3 == \"-\" { ok=1 } END { exit !ok }'"
+
+# Undo from '-' removes the line cleanly via unset
+sh "$SH" unset BORDER_ACTIVE >/dev/null
+check "undo unset restores missing BORDER_ACTIVE line" sh -c "! grep -q '^BORDER_ACTIVE=' '$CONFIG_FILE'"
+
+# 6b. When BORDER_ACTIVE is set and other colours hold sentinels, shuffle changes only BORDER_ACTIVE
+#     to a different candidate and logs previous value
+sh "$SH" set SURFACE_COLOR '#123456' >/dev/null
+sh "$SH" set CANVAS_COLOR '#111111' >/dev/null
+sh "$SH" set BORDER_INACTIVE '#222222' >/dev/null
+sh "$SH" set BORDER_ACTIVE "$first_accent" >/dev/null
+
+prev="$first_accent"
+for i in 1 2 3 4 5; do
+    sh "$SH" wallpaper-colors shuffle "$TMP/wp3.png" >/dev/null
+    cur=$(sh "$SH" get BORDER_ACTIVE)
+    check "shuffle $i in candidate list" in_list "$cur" "$TMP/acc3"
+    check "shuffle $i differs from previous" test "$cur" != "$prev"
+    last_log=$(tail -n 1 "$LOG")
+    check "shuffle $i logged previous BORDER_ACTIVE" sh -c "printf '%s' '$last_log' | awk -F '\t' -v p='$prev' '\$2 == \"BORDER_ACTIVE\" && \$3 == p { ok=1 } END { exit !ok }'"
+    prev="$cur"
+done
+check "shuffle preserves SURFACE_COLOR" test "$(sh "$SH" get SURFACE_COLOR)" = "#123456"
+check "shuffle preserves CANVAS_COLOR" test "$(sh "$SH" get CANVAS_COLOR)" = "#111111"
+check "shuffle preserves BORDER_INACTIVE" test "$(sh "$SH" get BORDER_INACTIVE)" = "#222222"
+
+# Undo restores the logged old value via set
+undo_prev=$(tail -n 1 "$LOG" | awk -F '\t' '{ print $3 }')
+sh "$SH" set BORDER_ACTIVE "$undo_prev" >/dev/null
+check "undo via set restores previous BORDER_ACTIVE" test "$(sh "$SH" get BORDER_ACTIVE)" = "$undo_prev"
+
+# 6c. Grey wallpaper when already #7aa2f7: no change and no extra log entry
+sh "$SH" set BORDER_ACTIVE '#7aa2f7' >/dev/null
+log_lines_before=$(wc -l < "$LOG")
+sh "$SH" wallpaper-colors shuffle "$TMP/grey.png" >/dev/null
+check "shuffle single-candidate keeps #7aa2f7" test "$(sh "$SH" get BORDER_ACTIVE)" = "#7aa2f7"
+check "shuffle single-candidate appends no log" test "$(wc -l < "$LOG")" -eq "$log_lines_before"
+
+# 7. THEME_FROM_WALLPAPER=shuffle
+sh "$SH" set THEME_FROM_WALLPAPER shuffle >/dev/null
+check "set/get THEME_FROM_WALLPAPER shuffle" test "$(sh "$SH" get THEME_FROM_WALLPAPER)" = "shuffle"
+
+# Setting wallpaper triggers wallpaper_colors shuffle on apply
+sh "$SH" apply >/dev/null
+picked=$(sh "$SH" get BORDER_ACTIVE)
+exp_surface=$("$WPBIN" --colors "$TMP/wp3.png" | awk -F= '$1 == "SURFACE_COLOR" { gsub(/"/, "", $2); print $2 }')
+check "THEME_FROM_WALLPAPER=shuffle picks candidate accent" in_list "$picked" "$TMP/acc3"
+check "THEME_FROM_WALLPAPER=shuffle updates SURFACE_COLOR" test "$(sh "$SH" get SURFACE_COLOR)" = "$exp_surface"
+
+# Repeated login/apply with unchanged wallpaper never changes BORDER_ACTIVE
+for i in 1 2 3; do
+    sh "$SH" apply >/dev/null
+    check "THEME_FROM_WALLPAPER=shuffle stable on repeat apply $i" test "$(sh "$SH" get BORDER_ACTIVE)" = "$picked"
+done
+
+# Multiple wallpaper switches sample multiple candidates (not locked to candidate 0)
+: > "$TMP/seen"
+i=0
+while [ "$i" -lt 24 ]; do
+    sed -i "s|^WALLPAPER=.*|WALLPAPER='$TMP/wp3b.png'|" "$CONFIG_FILE"
+    sh "$SH" apply >/dev/null
+    sed -i "s|^WALLPAPER=.*|WALLPAPER='$TMP/wp3.png'|" "$CONFIG_FILE"
+    sh "$SH" apply >/dev/null
+    cur=$(sh "$SH" get BORDER_ACTIVE)
+    in_list "$cur" "$TMP/acc3" || { echo "FAIL: unexpected $cur on change $i" >&2; fail=$((fail + 1)); }
+    printf '%s\n' "$cur" >> "$TMP/seen"
+    i=$((i + 1))
+done
+distinct_seen=$(sort -u "$TMP/seen" | wc -l)
+check "THEME_FROM_WALLPAPER=shuffle observes >1 candidate across changes (saw $distinct_seen)" test "$distinct_seen" -ge 2
+
+echo "test-wallpaper-accents: $pass passed, $fail failed"
+test "$fail" -eq 0

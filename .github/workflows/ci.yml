@@ -59,6 +59,7 @@ jobs:
       - run: sh tools/test-lock-render
       - run: sh tools/test-xdg-autostart
       - run: sh tools/test-theme-from-wallpaper
+      - run: sh tools/test-wallpaper-accents
       - run: sh tools/test-settings-actions
       - run: sh tools/test-settings-sync
       - run: sh tools/test-firefox-theme
