@@ -504,7 +504,8 @@ impl App {
     /// After anything changed: the actions run, the sources fetched as needed, every surface drawn.
     fn sync_all(&mut self) {
         self.run_actions();
-        self.fetch_due(false);
+        let force = self.shell.take_fetch_needed();
+        self.fetch_due(force);
         for os in &mut self.outputs {
             os.apply_mode(&self.qh, &self.compositor, &self.shell);
         }
@@ -732,8 +733,9 @@ impl CompositorHandler for App {
         surface: &wl_surface::WlSurface,
         _: u32,
     ) {
-        // an animation running (the cards arriving, a list opening): draw again
-        let animating = self.shell.open.is_some() && self.shell.tick(Instant::now());
+        // an animation running (the cards arriving, a list opening, drag autoscroll): draw again
+        let animating = self.shell.open.is_some()
+            && (self.shell.tick(Instant::now()) || self.shell.wants_frame());
         let ended = self.was_animating && !animating;
         self.was_animating = animating;
         if let Some(os) = self
@@ -1248,10 +1250,11 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
     let shm = Shm::bind(&globals, &qh).map_err(|e| format!("wl_shm: {e}"))?;
     let _toplevel_mgr: Option<ZwlrForeignToplevelManagerV1> = globals.bind(&qh, 1..=3, ()).ok();
 
-    let shell = Shell::new(
+    let mut shell = Shell::new(
         crate::config::Config::load(),
         crate::app::load(&crate::app::dirs()),
     );
+    shell.live = true;
     let (fetch_tx, fetch_rx) = channel::channel::<Fetched>();
     let (notify_tx, notify_rx) = channel::channel::<crate::notify::Incoming>();
     let output_state = OutputState::new(&globals, &qh);
