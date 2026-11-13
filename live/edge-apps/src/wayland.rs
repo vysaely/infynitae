@@ -6,7 +6,7 @@
 //! and fixed; what the new edge does not have yet (edit mode, desktop widgets, the ask card, the
 //! notification server) is left out here and comes in the next parts of stage 1.
 
-use crate::card::{Action, Button, Data, Window};
+use crate::card::{Action, Button, Data, Source, Window};
 use crate::shell::{Shell, ARRIVE_LIFT};
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState, Region},
@@ -51,7 +51,7 @@ use smithay_client_toolkit::{
         Shm, ShmHandler,
     },
 };
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -389,6 +389,100 @@ enum Fetched {
     Data(&'static str, &'static str, Data),
 }
 
+type SourceId = (&'static str, &'static str);
+
+struct SourceEntry {
+    last: Instant,
+    every: Option<Duration>,
+}
+
+/// When each source on the open panel last ran and its interval (`None` = once per panel opening).
+#[derive(Default)]
+struct FetchSchedule {
+    open_panel: Option<usize>,
+    records: HashMap<SourceId, SourceEntry>,
+    in_flight: HashMap<SourceId, Option<Duration>>,
+}
+
+impl FetchSchedule {
+    fn sync_panel(&mut self, open: Option<usize>, sources: &[SourceId]) {
+        if self.open_panel != open {
+            self.open_panel = open;
+            self.records.clear();
+        }
+        if open.is_none() {
+            return;
+        }
+        self.records.retain(|id, _| sources.contains(id));
+    }
+
+    fn take_due(
+        &mut self,
+        open: Option<usize>,
+        sources: &[SourceId],
+        force: bool,
+        now: Instant,
+        mut make: impl FnMut(&'static str, &'static str) -> Option<Box<dyn Source>>,
+    ) -> Vec<(SourceId, Box<dyn Source>)> {
+        self.sync_panel(open, sources);
+        if open.is_none() {
+            return Vec::new();
+        }
+        let mut due_list = Vec::new();
+        for &id in sources {
+            if let Some(&every) = self.in_flight.get(&id) {
+                // Remember in-flight interval across reopen so finishing before close-reopen settle
+                // does not schedule a duplicate fetch for the same opening.
+                self.records
+                    .entry(id)
+                    .or_insert(SourceEntry { last: now, every });
+                continue;
+            }
+            let due = match self.records.get(&id) {
+                None => true,
+                Some(_) if force => true,
+                Some(entry) => entry
+                    .every
+                    .is_some_and(|every| now.saturating_duration_since(entry.last) >= every),
+            };
+            if !due {
+                continue;
+            }
+            let Some(src) = make(id.0, id.1) else {
+                continue;
+            };
+            let every = src.every();
+            self.records.insert(id, SourceEntry { last: now, every });
+            self.in_flight.insert(id, every);
+            due_list.push((id, src));
+        }
+        due_list
+    }
+
+    fn mark_done(&mut self, id: SourceId, now: Instant) {
+        self.in_flight.remove(&id);
+        if self.open_panel.is_some() {
+            if let Some(entry) = self.records.get_mut(&id) {
+                entry.last = now;
+            }
+        }
+    }
+
+    fn next_timeout(&self, sources: &[SourceId], now: Instant) -> Option<Duration> {
+        self.open_panel?;
+        sources
+            .iter()
+            .filter(|id| !self.in_flight.contains_key(*id))
+            .filter_map(|id| {
+                let entry = self.records.get(id)?;
+                let every = entry.every?;
+                let due_at = entry.last.checked_add(every)?;
+                Some(due_at.saturating_duration_since(now))
+            })
+            .min()
+    }
+}
+
 struct App {
     registry_state: RegistryState,
     seat_state: SeatState,
@@ -406,11 +500,9 @@ struct App {
     modifiers: Modifiers,
     shell: Shell,
     fetch_tx: Sender<Fetched>,
-    /// sources being fetched now (one fetch at a time each)
-    fetching: HashSet<(&'static str, &'static str)>,
+    fetch: FetchSchedule,
     /// cards with a command running, and the latest one waiting after it
     queued: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, Option<String>>>>,
-    last_fetch: Option<Instant>,
     was_animating: bool,
     /// the notification pop-ups' strip, made with the first pop-up
     popups: Option<PopupLayer>,
@@ -442,6 +534,9 @@ impl App {
                 time: n.time.clone(),
             })
             .collect();
+        if !self.shell.notify.popups.is_empty() {
+            self.reload_config();
+        }
         if self.popups.is_none() && !self.shell.notify.popups.is_empty() {
             if let Some(output) = self.outputs.first().map(|o| o.output.clone()) {
                 self.popups = PopupLayer::new(self, output);
@@ -501,8 +596,22 @@ impl App {
             .map(|o| (o.width as f64, o.height as f64))
     }
 
+    /// Reloads config, theme and boards when changed on disk, marking active surfaces dirty.
+    fn reload_config(&mut self) -> bool {
+        if !self.shell.reload_if_changed() {
+            return false;
+        }
+        if self.shell.active() {
+            for os in &mut self.outputs {
+                os.dirty = true;
+            }
+        }
+        true
+    }
+
     /// After anything changed: the actions run, the sources fetched as needed, every surface drawn.
     fn sync_all(&mut self) {
+        self.reload_config();
         self.run_actions();
         let force = self.shell.take_fetch_needed();
         self.fetch_due(force);
@@ -524,36 +633,42 @@ impl App {
     /// The open panel's sources, fetched on worker threads (each at most once at a time); `force`
     /// fetches again before its time.
     fn fetch_due(&mut self, force: bool) {
-        if self.shell.open.is_none() {
+        let reloaded = if self.shell.open.is_some() {
+            self.reload_config()
+        } else {
+            false
+        };
+        let Some(open) = self.shell.open else {
+            self.fetch.sync_panel(None, &[]);
             return;
-        }
-        // a Settings card's change shows in the open panel at the next data tick
-        if self.shell.reload_if_changed() {
-            for os in &mut self.outputs {
-                os.dirty = true;
-            }
-        }
-        let due = force
-            || self
-                .last_fetch
-                .is_none_or(|t| t.elapsed() >= Duration::from_secs(2));
-        if !due {
-            return;
-        }
-        self.last_fetch = Some(Instant::now());
-        for (prov, key) in self.shell.sources() {
-            if !self.fetching.insert((prov, key)) {
-                continue;
-            }
-            let Some(mut src) = crate::provider::by_id(prov).and_then(|p| p.source(key)) else {
-                self.fetching.remove(&(prov, key));
-                continue;
-            };
+        };
+        let force = force || self.shell.take_fetch_needed();
+        let sources = self.shell.sources();
+        let now = Instant::now();
+        for ((prov, key), mut src) in
+            self.fetch
+                .take_due(Some(open), &sources, force, now, |p, k| {
+                    crate::provider::by_id(p).and_then(|prov| prov.source(k))
+                })
+        {
             let tx = self.fetch_tx.clone();
             std::thread::spawn(move || {
                 let _ = tx.send(Fetched::Data(prov, key, src.fetch()));
             });
         }
+        if reloaded {
+            for os in &mut self.outputs {
+                os.apply_mode(&self.qh, &self.compositor, &self.shell);
+            }
+        }
+    }
+
+    fn fetch_timeout(&self, now: Instant) -> Option<Duration> {
+        self.shell.open?;
+        let sources = self.shell.sources();
+        self.fetch
+            .next_timeout(&sources, now)
+            .map(|d| d.max(Duration::from_millis(5)))
     }
 
     /// The cards' actions: commands on a thread each (then their sources fetched again), apps and
@@ -696,7 +811,6 @@ impl App {
             _ => false,
         };
         if changed {
-            self.last_fetch = None;
             self.sync_all();
         }
     }
@@ -739,6 +853,13 @@ impl CompositorHandler for App {
         surface: &wl_surface::WlSurface,
         _: u32,
     ) {
+        if self.shell.active()
+            || self.popups.as_ref().is_some_and(|p| {
+                p.layer.wl_surface() == surface && !self.shell.notify.popups.is_empty()
+            })
+        {
+            let _ = self.reload_config();
+        }
         // an animation running (the cards arriving, a list opening, drag autoscroll): draw again
         let animating = self.shell.open.is_some()
             && (self.shell.tick(Instant::now()) || self.shell.wants_frame());
@@ -827,6 +948,14 @@ impl LayerShellHandler for App {
         configure: LayerSurfaceConfigure,
         _: u32,
     ) {
+        if self.shell.active()
+            || self
+                .popups
+                .as_ref()
+                .is_some_and(|p| &p.layer == layer && !self.shell.notify.popups.is_empty())
+        {
+            let _ = self.reload_config();
+        }
         if let Some(os) = self.outputs.iter_mut().find(|o| &o.layer == layer) {
             os.width = configure.new_size.0.max(1);
             os.height = configure.new_size.1.max(1);
@@ -1282,9 +1411,8 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
         modifiers: Modifiers::default(),
         shell,
         fetch_tx,
-        fetching: HashSet::new(),
+        fetch: FetchSchedule::default(),
         queued: Default::default(),
-        last_fetch: None,
         was_animating: false,
         popups: None,
         notify_conn: None,
@@ -1315,8 +1443,10 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
     handle
         .insert_source(fetch_rx, |evt, _, app| {
             if let channel::Event::Msg(Fetched::Data(prov, key, data)) = evt {
-                app.fetching.remove(&(prov, key));
-                if app.shell.apply(prov, key, data.as_ref()) && app.shell.open.is_some() {
+                app.fetch.mark_done((prov, key), Instant::now());
+                let changed = app.shell.apply(prov, key, data.as_ref());
+                let reloaded = app.reload_config();
+                if (changed || reloaded) && app.shell.open.is_some() {
                     for os in &mut app.outputs {
                         os.dirty = true;
                         os.render_if_needed(&app.qh, &app.shell);
@@ -1377,12 +1507,13 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
         app.sync_all();
     }
     while !app.exit {
-        // while a panel is open its data is fetched every 2 s; closed, nothing wakes the edge
-        let mut timeout = app.shell.open.map(|_| Duration::from_secs(2));
         if app.shell.open.is_some() {
             app.shell.now = chrono::Local::now().naive_local();
             app.fetch_due(false);
         }
+        // while a panel is open, wake when its shortest periodic source interval is next due;
+        // closed (or only once-per-open sources), nothing wakes the edge for data fetches
+        let mut timeout = app.fetch_timeout(Instant::now());
         // an asker that went away (its pipe closed, or it exited): checked every 100 ms while it
         // asks. No watcher thread: a thread holding a copy of the pipe kept the asker from
         // seeing the answer's end (it reads to the end of the pipe).
@@ -1553,5 +1684,300 @@ impl PopupLayer {
             self.buffer = Some(buffer);
         }
         self.again = false;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+
+    struct CountingSource {
+        calls: Arc<AtomicUsize>,
+        every: Option<Duration>,
+    }
+
+    impl Source for CountingSource {
+        fn fetch(&mut self) -> Data {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            Box::new(())
+        }
+
+        fn every(&self) -> Option<Duration> {
+            self.every
+        }
+    }
+
+    fn run_due(
+        sched: &mut FetchSchedule,
+        open: Option<usize>,
+        specs: &[(SourceId, &Arc<AtomicUsize>, Option<Duration>)],
+        force: bool,
+        now: Instant,
+    ) -> Vec<SourceId> {
+        let ids: Vec<SourceId> = specs.iter().map(|(id, _, _)| *id).collect();
+        let due = sched.take_due(open, &ids, force, now, |p, k| {
+            let (_, calls, every) = specs.iter().find(|(id, _, _)| *id == (p, k))?;
+            Some(Box::new(CountingSource {
+                calls: Arc::clone(calls),
+                every: *every,
+            }))
+        });
+        let mut fetched = Vec::with_capacity(due.len());
+        for (id, mut src) in due {
+            let _ = src.fetch();
+            fetched.push(id);
+        }
+        fetched
+    }
+
+    #[test]
+    fn none_interval_fetches_once_until_reopen_or_switch() {
+        let mut sched = FetchSchedule::default();
+        let once_calls = Arc::new(AtomicUsize::new(0));
+        let specs = [(("about", "info"), &once_calls, None)];
+        let ids = [("about", "info")];
+        let t0 = Instant::now();
+
+        assert_eq!(
+            run_due(&mut sched, Some(0), &specs, false, t0),
+            vec![("about", "info")]
+        );
+        assert_eq!(once_calls.load(Ordering::Relaxed), 1);
+        sched.mark_done(("about", "info"), t0 + Duration::from_millis(10));
+
+        // While the same panel stays open, it never fetches again and needs no wakeup timeout.
+        assert_eq!(sched.next_timeout(&ids, t0 + Duration::from_secs(1)), None);
+        assert!(run_due(
+            &mut sched,
+            Some(0),
+            &specs,
+            false,
+            t0 + Duration::from_secs(60)
+        )
+        .is_empty());
+        assert_eq!(once_calls.load(Ordering::Relaxed), 1);
+
+        // Closing and reopening the same panel fetches once again.
+        assert!(run_due(
+            &mut sched,
+            None,
+            &specs,
+            false,
+            t0 + Duration::from_secs(61)
+        )
+        .is_empty());
+        assert_eq!(sched.next_timeout(&ids, t0 + Duration::from_secs(61)), None);
+        assert_eq!(
+            run_due(
+                &mut sched,
+                Some(0),
+                &specs,
+                false,
+                t0 + Duration::from_secs(62)
+            ),
+            vec![("about", "info")]
+        );
+        assert_eq!(once_calls.load(Ordering::Relaxed), 2);
+        sched.mark_done(("about", "info"), t0 + Duration::from_secs(62));
+
+        // Switching directly to another panel also treats the new opening as fresh.
+        assert_eq!(
+            run_due(
+                &mut sched,
+                Some(1),
+                &specs,
+                false,
+                t0 + Duration::from_secs(63)
+            ),
+            vec![("about", "info")]
+        );
+        assert_eq!(once_calls.load(Ordering::Relaxed), 3);
+    }
+
+    #[test]
+    fn honours_each_periodic_source_interval_and_next_timeout() {
+        let mut sched = FetchSchedule::default();
+        let once_calls = Arc::new(AtomicUsize::new(0));
+        let fast_calls = Arc::new(AtomicUsize::new(0));
+        let slow_calls = Arc::new(AtomicUsize::new(0));
+        let specs = [
+            (("about", "info"), &once_calls, None),
+            (("audio", "sink"), &fast_calls, Some(Duration::from_secs(2))),
+            (
+                ("weather", "now"),
+                &slow_calls,
+                Some(Duration::from_secs(10)),
+            ),
+        ];
+        let ids: Vec<SourceId> = specs.iter().map(|(id, _, _)| *id).collect();
+        let t0 = Instant::now();
+
+        // Opening fetches all three once; while all three are in flight no timer wakeup is needed.
+        let initial = run_due(&mut sched, Some(0), &specs, false, t0);
+        assert_eq!(initial, ids);
+        assert_eq!(sched.next_timeout(&ids, t0), None);
+
+        // Complete at distinct instants; next_timeout tracks the earliest remaining deadline.
+        let t_done_fast = t0 + Duration::from_millis(50);
+        sched.mark_done(("about", "info"), t0 + Duration::from_millis(20));
+        sched.mark_done(("audio", "sink"), t_done_fast);
+        assert_eq!(
+            sched.next_timeout(&ids, t_done_fast),
+            Some(Duration::from_secs(2))
+        );
+
+        let t_done_slow = t0 + Duration::from_millis(300);
+        sched.mark_done(("weather", "now"), t_done_slow);
+        assert_eq!(
+            sched.next_timeout(&ids, t_done_slow),
+            Some(Duration::from_millis(1750))
+        );
+
+        // Before 2 s elapses from fast's completion, nothing is due.
+        assert!(run_due(
+            &mut sched,
+            Some(0),
+            &specs,
+            false,
+            t_done_fast + Duration::from_millis(1999),
+        )
+        .is_empty());
+
+        // At 2 s from fast's completion, only fast runs; slow and None stay idle.
+        let t_tick1 = t_done_fast + Duration::from_secs(2);
+        assert_eq!(
+            run_due(&mut sched, Some(0), &specs, false, t_tick1),
+            vec![("audio", "sink")]
+        );
+        assert_eq!(once_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(fast_calls.load(Ordering::Relaxed), 2);
+        assert_eq!(slow_calls.load(Ordering::Relaxed), 1);
+
+        // While fast is in flight again, next_timeout looks at slow's deadline.
+        assert_eq!(
+            sched.next_timeout(&ids, t_tick1),
+            Some(Duration::from_secs(10) - (t_tick1 - t_done_slow))
+        );
+        sched.mark_done(("audio", "sink"), t_tick1 + Duration::from_millis(20));
+
+        // After 10 s from slow's completion, slow becomes due alongside any due fast interval.
+        let t_tick_slow = t_done_slow + Duration::from_secs(10);
+        assert_eq!(
+            run_due(&mut sched, Some(0), &specs, false, t_tick_slow),
+            vec![("audio", "sink"), ("weather", "now")]
+        );
+        assert_eq!(once_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(fast_calls.load(Ordering::Relaxed), 3);
+        assert_eq!(slow_calls.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn skips_in_flight_reopen_duplicates_and_honours_force() {
+        let mut sched = FetchSchedule::default();
+        let once_calls = Arc::new(AtomicUsize::new(0));
+        let fast_calls = Arc::new(AtomicUsize::new(0));
+        let specs = [
+            (("about", "info"), &once_calls, None),
+            (("audio", "sink"), &fast_calls, Some(Duration::from_secs(2))),
+        ];
+        let ids: Vec<SourceId> = specs.iter().map(|(id, _, _)| *id).collect();
+        let t0 = Instant::now();
+
+        assert_eq!(run_due(&mut sched, Some(0), &specs, false, t0), ids);
+
+        // In-flight sources are never overlapped, even on force.
+        assert!(run_due(
+            &mut sched,
+            Some(0),
+            &specs,
+            true,
+            t0 + Duration::from_millis(10)
+        )
+        .is_empty());
+
+        // Close and reopen while `about/info` (None) is still in flight, then complete it.
+        assert!(run_due(
+            &mut sched,
+            None,
+            &specs,
+            false,
+            t0 + Duration::from_millis(20)
+        )
+        .is_empty());
+        assert!(run_due(
+            &mut sched,
+            Some(0),
+            &specs,
+            false,
+            t0 + Duration::from_millis(30)
+        )
+        .is_empty());
+        sched.mark_done(("about", "info"), t0 + Duration::from_millis(40));
+        sched.mark_done(("audio", "sink"), t0 + Duration::from_millis(40));
+
+        // On later ticks in this reopened panel, `about/info` stays single-shot.
+        assert!(run_due(
+            &mut sched,
+            Some(0),
+            &specs,
+            false,
+            t0 + Duration::from_millis(500)
+        )
+        .is_empty());
+        assert_eq!(once_calls.load(Ordering::Relaxed), 1);
+
+        // Forced fetch runs both `None` and not-yet-due periodic sources immediately.
+        assert_eq!(
+            run_due(
+                &mut sched,
+                Some(0),
+                &specs,
+                true,
+                t0 + Duration::from_millis(600)
+            ),
+            ids
+        );
+        assert_eq!(once_calls.load(Ordering::Relaxed), 2);
+        assert_eq!(fast_calls.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn removed_source_fetches_again_if_re_added() {
+        let mut sched = FetchSchedule::default();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let full = [(("about", "info"), &calls, None)];
+        let empty: [(SourceId, &Arc<AtomicUsize>, Option<Duration>); 0] = [];
+        let t0 = Instant::now();
+
+        assert_eq!(
+            run_due(&mut sched, Some(0), &full, false, t0),
+            vec![("about", "info")]
+        );
+        sched.mark_done(("about", "info"), t0 + Duration::from_millis(10));
+
+        // Card removed from the open panel drops its record; re-adding fetches once again.
+        assert!(run_due(
+            &mut sched,
+            Some(0),
+            &empty,
+            false,
+            t0 + Duration::from_secs(1)
+        )
+        .is_empty());
+        assert_eq!(
+            run_due(
+                &mut sched,
+                Some(0),
+                &full,
+                false,
+                t0 + Duration::from_secs(2)
+            ),
+            vec![("about", "info")]
+        );
+        assert_eq!(calls.load(Ordering::Relaxed), 2);
     }
 }
