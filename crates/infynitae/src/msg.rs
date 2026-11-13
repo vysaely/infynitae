@@ -23,6 +23,8 @@ use infynitae_ipc::json::{self, Value};
 
 /// How long the compositor has to answer a request.
 const TIMEOUT: Duration = Duration::from_secs(2);
+/// `capture-chord` waits up to 10 s in the compositor; leave headroom for socket framing.
+const CAPTURE_TIMEOUT: Duration = Duration::from_secs(12);
 
 /// The runtime directory: `XDG_RUNTIME_DIR`, else the user's own.
 fn runtime_dir() -> PathBuf {
@@ -41,12 +43,17 @@ pub fn shell_socket() -> PathBuf {
 /// One request on a new connection to `socket`, and its reply; a failure is a reply too
 /// (`{"ok": false, "error": …}`), as the Python helper gave it.
 pub fn request_at(socket: &std::path::Path, req: &Value) -> Value {
+    request_at_timeout(socket, req, TIMEOUT)
+}
+
+/// Sends one request with an explicit read/write timeout.
+pub fn request_at_timeout(socket: &std::path::Path, req: &Value, timeout: Duration) -> Value {
     let fail = |e: &str| Value::obj([("ok", false.into()), ("error", e.into())]);
     let Ok(mut stream) = UnixStream::connect(socket) else {
         return fail("socket_not_found");
     };
-    let _ = stream.set_read_timeout(Some(TIMEOUT));
-    let _ = stream.set_write_timeout(Some(TIMEOUT));
+    let _ = stream.set_read_timeout(Some(timeout));
+    let _ = stream.set_write_timeout(Some(timeout));
     if stream
         .write_all(format!("{}\n", req.to_json()).as_bytes())
         .is_err()
@@ -87,9 +94,39 @@ fn first_output() -> u64 {
 
 fn usage() -> ExitCode {
     eprintln!(
-        "Usage: infynitae msg snapshot | focus <inst> <elem> | navigate <x> <y> | navigate element <inst> <elem> | restore [output] | shortcut <name> | overview | lock | night-light [on|off] | keyboard-layout | osk [on|off]"
+        "Usage: infynitae msg snapshot | focus <inst> <elem> | navigate <x> <y> | navigate element <inst> <elem> | restore [output] | shortcut <name> | overview | lock | night-light [on|off] | keyboard-layout | osk [on|off] | capture-chord"
     );
     ExitCode::from(2)
+}
+
+fn capture_chord_from_reply(reply: &Value) -> Result<&str, &str> {
+    if reply.get("ok") == Some(&Value::Bool(true))
+        && let Some(chord) = reply.get("chord").and_then(Value::as_str)
+    {
+        return Ok(chord);
+    }
+    Err(reply
+        .get("error")
+        .and_then(Value::as_str)
+        .unwrap_or("capture_failed"))
+}
+
+fn capture_chord() -> ExitCode {
+    let reply = request_at_timeout(
+        &shell_socket(),
+        &Value::obj([("id", 1u64.into()), ("cmd", "capture-chord".into())]),
+        CAPTURE_TIMEOUT,
+    );
+    match capture_chord_from_reply(&reply) {
+        Ok(chord) => {
+            println!("{chord}");
+            ExitCode::SUCCESS
+        }
+        Err(err) => {
+            eprintln!("{err}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 /// Prints a reply; success when it says `"ok": true`.
@@ -237,6 +274,7 @@ pub fn run(args: &[String]) -> ExitCode {
             id,
             ("cmd", "keyboard_layout".into()),
         ]))),
+        Some("capture-chord" | "capture_chord") if args.len() == 1 => capture_chord(),
         _ => usage(),
     }
 }
@@ -386,5 +424,67 @@ mod tests {
             &Value::obj([("cmd", "snapshot".into())]),
         );
         assert_eq!(reply.get("ok"), Some(&Value::Bool(false)));
+    }
+
+    #[test]
+    fn capture_chord_parses_replies_and_errors() {
+        let ok = Value::obj([
+            ("id", 1u64.into()),
+            ("ok", true.into()),
+            ("generation", 2u64.into()),
+            ("chord", "SUPER+SHIFT+Q".into()),
+        ]);
+        assert_eq!(capture_chord_from_reply(&ok), Ok("SUPER+SHIFT+Q"));
+
+        let cancelled = Value::obj([("ok", false.into()), ("error", "cancelled".into())]);
+        assert_eq!(capture_chord_from_reply(&cancelled), Err("cancelled"));
+
+        let timeout = Value::obj([("ok", false.into()), ("error", "timeout".into())]);
+        assert_eq!(capture_chord_from_reply(&timeout), Err("timeout"));
+
+        let missing_chord = Value::obj([("ok", true.into())]);
+        assert_eq!(
+            capture_chord_from_reply(&missing_chord),
+            Err("capture_failed")
+        );
+    }
+
+    #[test]
+    fn request_at_timeout_reads_capture_reply_over_unix_socket() {
+        let dir = std::env::temp_dir().join(format!("infynitae-msg-cap-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let sock_path = dir.join("shell.sock");
+        let _ = std::fs::remove_file(&sock_path);
+
+        let listener = std::os::unix::net::UnixListener::bind(&sock_path).unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut req_line = String::new();
+            BufReader::new(stream.try_clone().unwrap())
+                .read_line(&mut req_line)
+                .unwrap();
+            let req = json::parse(req_line.trim()).unwrap();
+            assert_eq!(
+                req.get("cmd").and_then(Value::as_str),
+                Some("capture-chord")
+            );
+            let reply = infynitae_ipc::protocol::capture_reply(
+                req.get("id").cloned().unwrap_or(Value::Null),
+                7,
+                "SUPER+RETURN",
+            );
+            writeln!(stream, "{reply}").unwrap();
+        });
+
+        let reply = request_at_timeout(
+            &sock_path,
+            &Value::obj([("id", 9u64.into()), ("cmd", "capture-chord".into())]),
+            Duration::from_secs(2),
+        );
+        server.join().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(capture_chord_from_reply(&reply), Ok("SUPER+RETURN"));
+        assert_eq!(reply.get("id").and_then(Value::as_u64), Some(9));
     }
 }
