@@ -122,6 +122,10 @@ impl Provider for Apps {
             "list" if argument.is_none() => Some(Box::new(AppsListCard::default())),
             "favorites" => Some(Box::new(FavoritesCard::new(argument))),
             "search" if argument.is_none() => Some(Box::new(SearchCard::default())),
+            "search" if argument == Some("settings") => Some(Box::new(SearchCard {
+                settings: true,
+                ..SearchCard::default()
+            })),
             "background" if argument.is_none() => Some(Box::new(BackgroundCard::default())),
             "menu" => argument
                 .map(|a| Box::new(crate::cards::tray_menu::MenuCard::new(a)) as Box<dyn Card>),
@@ -897,6 +901,8 @@ pub fn search_apps<'a>(apps: &'a [App], query: &str) -> Vec<&'a App> {
 #[derive(Default)]
 struct SearchCard {
     query: String,
+    /// "settings" (`apps/search=settings`, the Settings panel): the field says what it searches
+    settings: bool,
 }
 
 impl Card for SearchCard {
@@ -1005,7 +1011,11 @@ impl Card for SearchCard {
 
         if self.query.is_empty() {
             let ph_t = Text {
-                text: "Search apps",
+                text: if self.settings {
+                    "Search settings"
+                } else {
+                    "Search apps"
+                },
                 size: 13.0,
                 bold: false,
                 color: th.muted,
@@ -1734,6 +1744,7 @@ mod tests {
         assert!(Apps.card("favorites", Some("firefox,steam")).is_some());
         assert!(Apps.card("search", None).is_some());
         assert!(Apps.card("search", Some("arg")).is_none());
+        assert!(Apps.card("search", Some("settings")).is_some());
         assert!(Apps.card("background", None).is_some());
         assert!(Apps.card("background", Some("arg")).is_none());
         assert!(Apps.card("unknown", None).is_none());

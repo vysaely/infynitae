@@ -383,7 +383,7 @@ long; cut at the bracket.
 A fifth built-in panel beside the four of `config.rs:775-800`:
 
 ```
-PANEL_SETTINGS="SUPER+I top center 440 apps/search settings/all settings/about"
+PANEL_SETTINGS="SUPER+I top center 440 apps/search=settings settings/all settings/about"
 ```
 
 Super+I is free (Super+Shift+I is stay awake, `crates/infynitae-core/src/input/keys.rs:538`) and is

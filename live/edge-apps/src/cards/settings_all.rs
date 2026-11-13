@@ -1833,7 +1833,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             panel.words,
-            vec!["apps/search", "settings/all", "settings/about"]
+            vec!["apps/search=settings", "settings/all", "settings/about"]
         );
 
         let dir = temp_home("exec");
