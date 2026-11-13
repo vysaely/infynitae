@@ -23,6 +23,17 @@ def dump():
         elif w[0] == "addrow": d["add"].append((w[1], list(map(float, w[2:6]))))
     return d
 def order(): return [c for c, _ in dump()["cards"]]
+def menu_rect():
+    for l in open(BOX):
+        w = l.split()
+        if w and w[0] == "editmenu": return list(map(float, w[1:5]))
+    return None
+def start_edit(x, y):
+    # a right click offers the "Edit panel" menu; choosing it starts editing
+    click_at(x, y, "right"); wait(0.4)
+    r = menu_rect()
+    if r: click_at(r[0] + 20, r[1] + r[3] / 2)
+    return dump()
 def mid(r): return r[0] + r[2] / 2, r[1] + r[3] / 2
 def press(d, key):
     r = d["cb"].get(key)
@@ -40,8 +51,12 @@ apps_edge(); at(300, 300); wait(0.4); shot("z-base")
 # 1. a right click on a card's empty spot starts editing
 run_bg(f"{EDGE} control"); wait(1.5)
 d = dump(); first = d["cards"][0][1]
-click_at(first[0] + first[2] - 12, first[1] + first[3] - 8, "right"); d = dump(); shot("ed-1")
-check("a right click starts editing", d["state"] == "editing", str(d["state"]))
+click_at(first[0] + first[2] - 12, first[1] + first[3] - 8, "right"); wait(0.4)
+check("a right click alone does not start editing, it offers the menu", dump()["state"] != "editing" and menu_rect() is not None, str(dump()["state"]))
+chord("esc"); wait(0.4)
+check("Escape takes the menu away, the panel stays", menu_rect() is None and dump()["state"] is not None, str(dump()["state"]))
+d = start_edit(first[0] + first[2] - 12, first[1] + first[3] - 8); shot("ed-1")
+check("choosing Edit panel starts editing", d["state"] == "editing", str(d["state"]))
 check("the bar has Done, Cancel, Undo and Add", all(k in d["bb"] for k in ("Done", "Cancel", "Undo", "Add")), str(sorted(d["bb"])))
 
 # 2. Down moves the first card one place; Undo puts it back
@@ -79,7 +94,7 @@ check("the line from before is in panels.backup", "calendar/clock sound/volume s
 # 6. Cancel puts it back
 saved = line_now[0] if line_now else ""
 chord("esc"); wait(0.4); run_bg(f"{EDGE} control"); wait(1.5)
-d = dump(); r = d["cards"][0][1]; click_at(r[0] + r[2] - 12, r[1] + r[3] - 8, "right"); d = dump()
+d = dump(); r = d["cards"][0][1]; d = start_edit(r[0] + r[2] - 12, r[1] + r[3] - 8)
 r = d["cards"][0][1]; at(r[0] + 40, r[1] + 20); d = dump(); press(d, (d["cards"][0][0], "Remove"))
 bar("Cancel"); wait(0.6)
 check("Cancel leaves the line as it was", [l for l in open(CFG) if l.startswith("PANEL_CONTROL=")] == [saved], "")
@@ -88,7 +103,7 @@ check("Cancel leaves the line as it was", [l for l in open(CFG) if l.startswith(
 d = dump()
 if d["state"] != "editing":
     if d["state"] is None: run_bg(f"{EDGE} control"); wait(1.5); d = dump()
-    r = d["cards"][0][1]; click_at(r[0] + r[2] - 12, r[1] + r[3] - 8, "right"); d = dump()
+    r = d["cards"][0][1]; d = start_edit(r[0] + r[2] - 12, r[1] + r[3] - 8)
 before = order(); a = dict(d["cards"])[before[0]]; b = dict(d["cards"])[before[2]]
 drag(a[0] + 60, a[1] - 14, 0, (b[1] + b[3]) - a[1] + 4); shot("ed-3-drag")
 check("a drag moves the card down", order().index(before[0]) >= 2, f"{before} -> {order()}")

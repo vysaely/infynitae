@@ -59,6 +59,9 @@ pub fn text(shell: &Shell, w: f64, h: f64) -> String {
             );
         }
     }
+    if let Some(r) = shell.edit_menu_rect(w, h) {
+        out += &format!("editmenu {:.0} {:.0} {:.0} {:.0}\n", r.0, r.1, r.2, r.3);
+    }
     if editing {
         let (bar, add) = shell.edit_rects(idx, w, h);
         out += &format!("bar {:.0} {:.0} {:.0} {:.0}\n", bar.0, bar.1, bar.2, bar.3);

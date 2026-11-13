@@ -888,9 +888,9 @@ pub fn parse_power(out: &str) -> PowerData {
 /// What a mode does, in one line under the choice.
 pub fn mode_says(m: &str) -> &'static str {
     match m {
-        "power-saver" => "Quieter and cooler, slower",
-        "balanced" => "Speed when it is needed",
-        "performance" => "Full speed, more heat and noise",
+        "power-saver" => "Lower speeds: cooler, quieter, longer battery",
+        "balanced" => "Speeds up under load, slows down when idle",
+        "performance" => "Highest speeds: more heat and fan noise",
         _ => "",
     }
 }

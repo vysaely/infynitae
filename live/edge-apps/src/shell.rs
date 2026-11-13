@@ -138,6 +138,9 @@ pub struct Shell {
     /// the panel ShowCards put in the open one's place (a tray app's menu and card), removed when
     /// it closes
     pub transient: Option<usize>,
+    /// a right click on a free spot: the small menu with "Edit panel" at that point (owner,
+    /// 2026-11-13: a right click alone started editing too easily)
+    pub edit_menu: Option<(f64, f64)>,
     /// the config file's time when it was last read (None: not looked at yet)
     pub config_mtime: Option<std::time::SystemTime>,
     pub panel_scroll: f64,
@@ -167,6 +170,7 @@ impl Shell {
             ask: Default::default(),
             config_mtime: None,
             transient: None,
+            edit_menu: None,
             query: String::new(),
             selected: None,
             keyboard: false,
@@ -446,6 +450,27 @@ impl Shell {
         }
     }
 
+    /// A right click on a free spot of a panel of the config: the "Edit panel" menu at that point.
+    fn offer_edit(&mut self, idx: usize, x: f64, y: f64) -> bool {
+        if self.transient == Some(idx) {
+            return false;
+        }
+        self.edit_menu = Some((x, y));
+        true
+    }
+
+    /// The menu's one item, kept on the screen.
+    pub fn edit_menu_rect(&self, w: f64, h: f64) -> Option<Rect> {
+        let (x, y) = self.edit_menu?;
+        let (mw, mh) = (150.0, 34.0);
+        Some((
+            (x).min(w - mw - 4.0).max(4.0),
+            (y).min(h - mh - 4.0).max(4.0),
+            mw,
+            mh,
+        ))
+    }
+
     pub fn enter_edit(&mut self, w: f64, h: f64) -> bool {
         let Some(idx) = self.open else {
             return false;
@@ -722,6 +747,7 @@ impl Shell {
             self.cancel_edit();
         }
         let was = self.open.take().is_some();
+        self.edit_menu = None;
         self.query.clear();
         self.selected = None;
         self.keyboard = false;
@@ -1058,6 +1084,16 @@ impl Shell {
         let Some(idx) = self.open else {
             return false;
         };
+        if self.edit_menu.is_some() {
+            let item = self.edit_menu_rect(w, h);
+            self.edit_menu = None;
+            if button == Button::Left
+                && item.is_some_and(|r| x >= r.0 && x <= r.0 + r.2 && y >= r.1 && y <= r.1 + r.3)
+            {
+                return self.enter_edit(w, h);
+            }
+            return true;
+        }
         if self.editing() {
             return self.edit_press(idx, w, h, x, y, button);
         }
@@ -1067,7 +1103,7 @@ impl Shell {
         }
         let Some((ci, hit)) = self.hit_at((x, y)) else {
             if button == Button::Right {
-                return self.enter_edit(w, h);
+                return self.offer_edit(idx, x, y);
             }
             return false;
         };
@@ -1084,7 +1120,7 @@ impl Shell {
             },
         );
         if !used && button == Button::Right && self.open == Some(idx) {
-            return self.enter_edit(w, h);
+            return self.offer_edit(idx, x, y);
         }
         used
     }
@@ -1370,6 +1406,9 @@ impl Shell {
                 }
                 _ => false,
             };
+        }
+        if k == Key::Escape && self.edit_menu.take().is_some() {
+            return true;
         }
         match k {
             Key::Escape => {
@@ -1804,6 +1843,42 @@ impl Shell {
                 &overlay_state,
             );
         }
+        if let Some(r) = self.edit_menu_rect(w, h) {
+            let th = &self.theme;
+            crate::draw::round_rect(cr, r.0, r.1, r.2, r.3, th.small_radius());
+            crate::draw::set(cr, th.card.alpha(1.0));
+            let _ = cr.fill_preserve();
+            crate::draw::set(cr, th.edge);
+            cr.set_line_width(1.0);
+            let _ = cr.stroke();
+            let lit = self.pointer.is_some_and(|(px, py)| {
+                px >= r.0 && px <= r.0 + r.2 && py >= r.1 && py <= r.1 + r.3
+            });
+            if lit {
+                crate::draw::round_rect(
+                    cr,
+                    r.0 + 3.0,
+                    r.1 + 3.0,
+                    r.2 - 6.0,
+                    r.3 - 6.0,
+                    th.small_radius(),
+                );
+                crate::draw::set(cr, th.text.alpha(0.08));
+                let _ = cr.fill();
+            }
+            crate::draw::text_max(
+                cr,
+                r.0 + 12.0,
+                r.1 + (r.3 - 17.0) / 2.0,
+                r.2 - 24.0,
+                &crate::draw::Text {
+                    size: 13.0,
+                    bold: false,
+                    color: th.text,
+                    text: "Edit panel",
+                },
+            );
+        }
         *self.frame.borrow_mut() = frame;
         Some(pbox)
     }
@@ -2160,6 +2235,20 @@ mod tests {
             power_r.1 + 4.0,
             Button::Right
         ));
+        // a right click alone only offers the menu; Escape takes it away without editing
+        assert!(!sh.editing());
+        assert!(sh.edit_menu.is_some());
+        assert!(sh.key(Key::Escape));
+        assert!(sh.edit_menu.is_none() && !sh.editing() && sh.open.is_some());
+        sh.click(
+            1920.0,
+            1080.0,
+            power_r.0 + 4.0,
+            power_r.1 + 4.0,
+            Button::Right,
+        );
+        let m = sh.edit_menu_rect(1920.0, 1080.0).unwrap();
+        assert!(sh.click(1920.0, 1080.0, m.0 + 10.0, m.1 + 10.0, Button::Left));
         assert!(sh.editing());
         assert!(!sh.opened_by_hover);
 
@@ -2220,6 +2309,12 @@ mod tests {
         // Right-click empty header area starts editing
         let (pbox, _) = sh.layout(idx, 1920.0, 1080.0);
         assert!(sh.click(1920.0, 1080.0, pbox.0 + 10.0, pbox.1 + 10.0, Button::Right));
+        // a click elsewhere takes the menu away without editing
+        assert!(sh.click(1920.0, 1080.0, pbox.0 + 30.0, pbox.1 + 60.0, Button::Left));
+        assert!(!sh.editing() && sh.edit_menu.is_none());
+        sh.click(1920.0, 1080.0, pbox.0 + 10.0, pbox.1 + 10.0, Button::Right);
+        let m = sh.edit_menu_rect(1920.0, 1080.0).unwrap();
+        assert!(sh.click(1920.0, 1080.0, m.0 + 10.0, m.1 + 10.0, Button::Left));
         assert!(sh.editing());
 
         // Use cardbutton Down on calendar/clock
