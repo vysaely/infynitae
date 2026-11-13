@@ -563,9 +563,11 @@ CONTROL_MENU="auto"
     # options: auto  · a command
 
 NOTIFICATIONS="auto"
-    # Notification daemon [reload]
+    # Who shows notifications [reload]: the edge's own pop-ups (top right, in the system's
+    # look; held back during games and Do not disturb, still listed in the Notifications card)
     # default: auto
-    #   auto    mako, swaync, dunst, fnott (first installed)  · none / false  · a command
+    #   auto    the edge, or without it mako, swaync, dunst, fnott (first installed)
+    #    edge   the edge  · none / false  · a command (e.g. "mako")
 
 AUTOMOUNT="true"
     # USB drives and SD cards mount when plugged in (udisks2) [reload]

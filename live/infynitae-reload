@@ -250,11 +250,30 @@ reload_notifications() {
     for d in mako swaync dunst fnott; do
         stop_helper "$d"
     done
+    # the edge (the Rust one) serves them for "auto" and "edge": started again, it asks the bus
+    # for the name now that the other daemon is gone (and lets it go when told otherwise)
+    edge_serves=false
+    case "${NOTIFICATIONS:-auto}" in auto|""|edge)
+        if [ "${ENABLE_EDGE:-true}" != false ] \
+            && [ "$(readlink "$BIN_DIR/infynitae-edge" 2>/dev/null)" = infynitae-edge-rs ]; then
+            edge_serves=true
+        fi ;;
+    esac
+    if pids_of infynitae-edge >/dev/null; then
+        reload_edge
+    fi
     case "${NOTIFICATIONS:-auto}" in
         none|off|false|0|FALSE|False)
             echo "notifications: stopped (NOTIFICATIONS is off)"
             ;;
+        edge)
+            echo "notifications: the edge"
+            ;;
         auto|"")
+            if [ "$edge_serves" = true ]; then
+                echo "notifications: the edge"
+                return
+            fi
             for d in mako swaync dunst fnott; do
                 if command -v "$d" >/dev/null 2>&1; then
                     spawn "$d"

@@ -14,6 +14,7 @@
 mod config;
 mod draw;
 mod modules;
+mod notify_server;
 mod theme;
 mod wayland;
 
