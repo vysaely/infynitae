@@ -85,10 +85,7 @@ notify_toast() {
     fi
 }
 
-# ------------------------------------------------------------------------------
-# The display size
-# Queries Wayland compositor for real output width & height (works on any screen)
-# ------------------------------------------------------------------------------
+# ---- The display size (queried from the Wayland compositor) ----
 detect_screen_geometry() {
     resolve_wayland_display
     for _ in 1 2 3 4 5 6 7 8 9 10; do
@@ -107,10 +104,7 @@ detect_screen_geometry() {
     return 1
 }
 
-# ------------------------------------------------------------------------------
-# The video encoder: the GPU's, when there is one
-# Scans AMD, Intel, NVIDIA, and software CPU fallbacks for any device
-# ------------------------------------------------------------------------------
+# ---- The video encoder (GPU when available, else software fallback) ----
 # The ffmpeg arguments for a VAAPI encoder ($1, with its rate arguments $2), printed when the GPU
 # encodes a test frame. The frames come as BGRX: the GPU converts them to NV12 (scale_vaapi, tagged
 # BT.709), about a fifth of the CPU of converting them before the upload; a driver that cannot
@@ -171,10 +165,7 @@ detect_encoder_pipeline() {
     echo "-c:v libx264 -preset ultrafast -tune zerolatency -crf 22"
 }
 
-# ------------------------------------------------------------------------------
-# The audio input
-# Scans PipeWire, PulseAudio, and ALSA; gracefully falls back if soundcard absent
-# ------------------------------------------------------------------------------
+# ---- The audio input ----
 # RECORD_AUDIO: desktop (the default output's sound) | mic (the default input) | both (mixed) |
 # none. The devices are the system's defaults when recording starts. "true"/"false" are the old
 # spellings of desktop/none. The microphone is only ever recorded when asked for.
@@ -308,8 +299,6 @@ supervisor_loop() {
         ENGINE_PID=$!
         echo $ENGINE_PID > "$REPLAY_PID_FILE"
 
-        # Wait for engine process
-        started=$(date +%s)
         wait $ENGINE_PID || true
         # gpu-screen-recorder that dies within 10 s three times running (a driver it cannot use):
         # the compositor's capture for the rest of the session
@@ -324,7 +313,6 @@ supervisor_loop() {
             gsr_fails=0
         fi
 
-        # If supervisor still running, auto-heal and restart in 1 second
         echo "[infynitae-recorder] Replay buffer exited unexpectedly. Restarting in 1s..."
         sleep 1
     done
@@ -379,7 +367,7 @@ save_replay_clip() {
         DURATION_STR="${DURATION_MIN}m"
     fi
 
-    # Instant stream-copy concat (0% CPU, ~0.2s duration)
+    # stream-copy concat (no re-encoding)
     ffmpeg -loglevel error -y -f concat -safe 0 -i "$CONCAT_LIST" -c copy "$OUT_FILE"
     rm -f "$CONCAT_LIST"
 

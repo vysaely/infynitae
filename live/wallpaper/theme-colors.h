@@ -46,7 +46,7 @@ static int tc_sample_bins(GdkPixbuf *image, double bin_w[24], double bin_rgb[24]
     if (!image) return -1;
     int w = gdk_pixbuf_get_width(image), h = gdk_pixbuf_get_height(image);
     if (w <= 0 || h <= 0) return -1;
-    /* 96 px wide is plenty to find colours, and fast on any wallpaper */
+    /* 96 px wide is plenty to find colours without scanning every pixel */
     int sw = w > 96 ? 96 : w, sh = (int)((double)h * sw / w + 0.5);
     if (sh < 1) sh = 1;
     GdkPixbuf *small = gdk_pixbuf_scale_simple(image, sw, sh, GDK_INTERP_BILINEAR);

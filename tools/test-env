@@ -13,9 +13,7 @@ export INFYNITAE_ENV_TMP="$TMP/tmp"
 mkdir -p "$INFYNITAE_ENV_TMP"
 unset DBUS_SESSION_BUS_ADDRESS WAYLAND_DISPLAY DISPLAY
 
-# ----------------------------------------------------------------------
-# 1. Finding 6: DISPLAY auto-detection ignores foreign X11 sockets
-# ----------------------------------------------------------------------
+# ---- 1. Finding 6: DISPLAY auto-detection ignores foreign X11 sockets
 X11="$INFYNITAE_ENV_TMP/.X11-unix"
 mkdir -p "$X11"
 # /etc/pacman.d/gnupg/S.gpg-agent is an existing socket not owned by the test user
@@ -46,9 +44,7 @@ if [ "$DISPLAY" != ":1" ]; then
 fi
 echo "ok Finding 6: DISPLAY auto-detect skips foreign X11 sockets"
 
-# ----------------------------------------------------------------------
-# 2. Finding 7: Insecure predictable temporary files in shared /tmp
-# ----------------------------------------------------------------------
+# ---- 2. Finding 7: Insecure predictable temporary files in shared /tmp
 # A: When /tmp/infynitae-runtime-$(id -u) exists as a regular file (attacker blocked it),
 # env.sh must create a secure fallback directory instead of reusing the file.
 blocker="$INFYNITAE_ENV_TMP/infynitae-runtime-$(id -u)"
@@ -75,9 +71,7 @@ if [ "$res_dir" = "$blocker" ]; then
 fi
 echo "ok Finding 7: safe fallback directory created when predictable runtime path is blocked"
 
-# ----------------------------------------------------------------------
-# 3. Finding 11: Cross-user process matching prevents portal startup
-# ----------------------------------------------------------------------
+# ---- 3. Finding 11: Cross-user process matching prevents portal startup
 # Mock pgrep in a dedicated bin dir:
 # If -u <my_uid> is passed, return nothing (no portal running for my user).
 # If -u is omitted, simulate finding another user's portal process (PID 99999).

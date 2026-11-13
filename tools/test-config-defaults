@@ -48,11 +48,11 @@ check "WINDOW_CORNERS alone shapes the interface too" "$got" "14"
 got=$(sh -c 'CORNERS=4 WINDOW_CORNERS=14; . live/settings.sh >/dev/null 2>&1; look_load; echo "$LOOK_CORNERS"')
 check "CORNERS given wins for the interface" "$got" "4"
 
-# 6. RECORD_CODEC: default is hevc
+# 5. RECORD_CODEC: default is hevc
 got=$(sed -n 's/^RECORD_CODEC="\${RECORD_CODEC:-\([^}]*\)}".*/\1/p' live/record/infynitae-recorder)
 check "RECORD_CODEC in infynitae-recorder defaults to hevc" "$got" "hevc"
 
-# 7. TOUCHPAD_TAP: default is true
+# 6. TOUCHPAD_TAP: default is true
 got=$(sh -c 'unset TOUCHPAD_TAP; . live/env.sh >/dev/null 2>&1; echo "$TOUCHPAD_TAP"')
 check "TOUCHPAD_TAP in env.sh defaults to true" "$got" "true"
 

@@ -509,9 +509,7 @@ static void dispatch_action(const char *action) {
     }
 }
 
-// -----------------------------------------------------------------------------
-// D-Bus Method Handling
-// -----------------------------------------------------------------------------
+/* ---- D-Bus method handling ---- */
 
 static const GDBusInterfaceVTable vtable;
 
@@ -578,7 +576,6 @@ static void handle_method_call(GDBusConnection *connection,
                 sessions = g_list_append(sessions, sess);
             }
 
-            // Clear previous shortcuts
             g_list_free_full(sess->shortcuts, (GDestroyNotify)free_shortcut);
             sess->shortcuts = NULL;
 
@@ -606,7 +603,6 @@ static void handle_method_call(GDBusConnection *connection,
                 sc->active = FALSE;
                 sess->shortcuts = g_list_append(sess->shortcuts, sc);
 
-                // Build returned shortcut with trigger_description
                 GVariantBuilder ret_sc_opts;
                 g_variant_builder_init(&ret_sc_opts, G_VARIANT_TYPE("a{sv}"));
                 g_variant_builder_add(&ret_sc_opts, "{sv}", "description", g_variant_new_string(desc));
@@ -739,9 +735,7 @@ static void on_bus_acquired(GDBusConnection *connection,
     g_free(config);
 }
 
-// -----------------------------------------------------------------------------
-// UNIX Socket IPC Listener: /run/user/<uid>/infynitae/shortcuts.sock
-// -----------------------------------------------------------------------------
+/* ---- UNIX socket listener (/run/user/<uid>/infynitae/shortcuts.sock) ---- */
 
 /* One connection's read: asynchronous, so a client that connects and sends nothing never holds
  * the portal's main loop; it is dropped after SOCKET_READ_TIMEOUT_S. */
@@ -821,9 +815,7 @@ static void setup_socket_listener(void) {
     g_free(sock_dir);
 }
 
-/* ========================================================================== */
-/* org.freedesktop.ScreenSaver: apps that keep the screens on over D-Bus      */
-/* ========================================================================== */
+/* ---- org.freedesktop.ScreenSaver: apps that keep the screens on over D-Bus ---- */
 /*
  * X11 apps through Xwayland, VLC, Steam and some Electron apps call Inhibit while they play
  * video, and UnInhibit after. Each Inhibit takes a logind idle inhibitor ("idle", "block") and

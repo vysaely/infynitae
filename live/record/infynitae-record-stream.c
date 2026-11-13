@@ -168,11 +168,10 @@ static void frame_ready(void *data, struct zwlr_screencopy_frame_v1 *frame,
     (void)tv_sec_hi; (void)tv_sec_lo; (void)tv_nsec;
     RecorderState *s = (RecorderState *)data;
 
-    // 1. Output the current buffer to stdout/pipe
     if (s->pipe_fd >= 0 && s->shm_data[s->current_buf]) {
         size_t row_bytes = (size_t)s->width * 4;
         if ((size_t)s->stride == row_bytes) {
-            // Fast-path: stride matches row width exactly (no padding bytes)
+            /* stride matches row width: write directly without row stripping */
             size_t bytes_to_write = row_bytes * (size_t)s->height;
             ssize_t written = 0;
             char *buf = (char *)s->shm_data[s->current_buf];
@@ -358,14 +357,11 @@ int main(int argc, char **argv) {
         fcntl(STDOUT_FILENO, F_SETPIPE_SZ, 1 << 20);
     }
 
-    // Start first frame
     request_frame(&state);
 
     while (state.running && wl_display_dispatch(state.display) != -1) {
-        // Event loop continues until state.running is false
     }
 
-    // Cleanup
     for (int i = 0; i < 2; i++) {
         if (state.wl_buffer[i]) wl_buffer_destroy(state.wl_buffer[i]);
         if (state.shm_data[i]) munmap(state.shm_data[i], state.shm_size[i]);

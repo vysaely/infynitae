@@ -1,9 +1,5 @@
 #!/bin/sh
 # tools/test-settings-actions: checks the settings CLI (live/settings.sh).
-# Tests:
-# - list cursors does not split themes with spaces across multiple lines (finding 18)
-# - set on fresh install when config file does not exist creates config and succeeds (finding 1)
-# - wallpaper path with $(...) does not execute shell command substitution (finding 4)
 set -eu
 
 REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)

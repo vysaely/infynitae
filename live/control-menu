@@ -17,7 +17,7 @@ pick() { printf '%s\n' "$@" | $PICKER; }
 note() { have notify-send && notify-send -a Infynitae "$1" "${2:-}"; }
 in_terminal() { [ "$TERM_BIN" != "auto" ] && exec $TERM_BIN -e "$@"; note "No terminal found" "Set TERMINAL in the config"; }
 
-# ── Wi-Fi ──────────────────────────────────────────────────────────────────────────────────────
+# ---- Wi-Fi
 wifi_menu() {
     if have nmcli; then
         state=$(nmcli radio wifi 2>/dev/null)
@@ -53,7 +53,7 @@ wifi_menu() {
     fi
 }
 
-# ── Bluetooth ──────────────────────────────────────────────────────────────────────────────────
+# ---- Bluetooth
 bt_menu() {
     if ! bluetoothctl show 2>/dev/null | grep -q "Powered: yes"; then
         [ "$(pick 'Turn Bluetooth on')" = "Turn Bluetooth on" ] && bluetoothctl power on >/dev/null
@@ -83,7 +83,7 @@ bt_menu() {
     esac
 }
 
-# ── Sound output ───────────────────────────────────────────────────────────────────────────────
+# ---- Sound output
 sound_menu() {
     default=$(pactl get-default-sink 2>/dev/null)
     # "name<TAB>description" for every sink
@@ -98,7 +98,7 @@ sound_menu() {
     [ -n "$name" ] && pactl set-default-sink "$name" && note "Sound output" "$desc"
 }
 
-# ── Volume ─────────────────────────────────────────────────────────────────────────────────────
+# ---- Volume
 # "target<TAB>name<TAB>volume<TAB>muted": all sound (the default output) first, then every app
 # playing now (its sink input's index)
 volumes() {
@@ -140,7 +140,7 @@ volume_menu() {
     note "$name" "Volume ${now:-changed}"
 }
 
-# ── Power mode ─────────────────────────────────────────────────────────────────────────────────
+# ---- Power mode
 power_menu() {
     current=$(powerprofilesctl get 2>/dev/null)
     choice=$(powerprofilesctl list 2>/dev/null | sed -n 's/^[ *]*\([a-z-]*\):$/\1/p' | while read -r p; do
@@ -149,7 +149,7 @@ power_menu() {
     [ -n "$choice" ] && powerprofilesctl set "$(printf '%s' "$choice" | sed 's/^\(● \|  \)//')"
 }
 
-# ── Do not disturb ─────────────────────────────────────────────────────────────────────────────
+# ---- Do not disturb
 # One switch, its state a flag file the compositor reads (FOCUS_ON_OPEN=priority: no window an
 # app opens takes the focus while it is on); the notification daemon follows it
 DND_FLAG="${XDG_RUNTIME_DIR:-/tmp}/infynitae/do-not-disturb"
@@ -167,7 +167,7 @@ dnd_toggle() {
     fi
 }
 
-# ── Replay buffer ──────────────────────────────────────────────────────────────────────────────
+# ---- Replay buffer
 # on or off: ENABLE_REPLAY_BUFFER in the config (read from the file: the session's copy is from
 # its start), then the recorder restarted for it
 CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/infynitae/config"
@@ -185,7 +185,7 @@ replay_toggle() {
     if [ "$to" = true ]; then note "Replay buffer on" "Super+Alt+C saves a clip"; else note "Replay buffer off"; fi
 }
 
-# ── Battery limit ──────────────────────────────────────────────────────────────────────────────
+# ---- Battery limit
 # BATTERY_LIMIT in the config (80 or off), applied at once and at every login
 BATTERY_LIMIT_SCRIPT="$HOME/infynitae/live/battery-limit"
 battery_limit_now() { sh "$BATTERY_LIMIT_SCRIPT" 2>/dev/null; }
@@ -203,9 +203,9 @@ battery_limit_toggle() {
     if [ "$to" = off ]; then note "Battery charges to full"; else note "Battery stops at $to%" "It wears more slowly"; fi
 }
 
-# ── Tray & background apps ─────────────────────────────────────────────────────────────────────
+# ---- Tray & background apps
 # GUI apps connected to the display or session bus that have no window on the canvas right now
-# (minimized to tray, or lingering in the background), followed by open apps.
+# (minimized to tray, or lingering in the background).
 apps_list() {
     inf_bin="${INFYNITAE_BIN:-$HOME/.local/bin/infynitae}"
     snap=$("$inf_bin" msg snapshot 2>/dev/null)
@@ -316,7 +316,7 @@ apps_menu() {
     esac
 }
 
-# ── Session & power ────────────────────────────────────────────────────────────────────────────
+# ---- Session & power
 session_menu() {
     lock_bin="$HOME/.local/bin/infynitae-lock"
     [ -x "$lock_bin" ] || lock_bin="$HOME/infynitae/live/lock/infynitae-lock"
@@ -345,7 +345,7 @@ session_menu() {
     esac
 }
 
-# ── The menu ───────────────────────────────────────────────────────────────────────────────────
+# ---- The menu
 case "${1:-}" in
     apps) apps_menu; exit 0 ;;
     apps-list) apps_list; exit 0 ;;

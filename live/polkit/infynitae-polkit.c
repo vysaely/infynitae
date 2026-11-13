@@ -433,7 +433,6 @@ static void infynitae_agent_listener_initiate_authentication(
         return;
     }
 
-    // Build GUI Window
     data->window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
     gtk_window_set_title(GTK_WINDOW(data->window), "Password needed");
     gtk_window_set_position(GTK_WINDOW(data->window), GTK_WIN_POS_CENTER);

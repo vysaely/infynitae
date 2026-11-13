@@ -275,7 +275,7 @@ install_speed_settings() {
             warn "Could not add you to the realtime group"
         fi
     fi
-    # ntsync: fast NT synchronisation for Wine and Proton games
+    # ntsync: kernel NT synchronization primitive for Wine and Proton games
     if modinfo ntsync >/dev/null 2>&1; then
         install_root_file "$src/live/ntsync.conf" /etc/modules-load.d/ntsync.conf 644
         sudo modprobe ntsync || true
