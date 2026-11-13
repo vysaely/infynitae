@@ -75,10 +75,6 @@ impl OutputPowerState {
     }
 }
 
-// -----------------------------------------------------------------------------
-// Manager Dispatch
-// -----------------------------------------------------------------------------
-
 impl GlobalDispatch<ZwlrOutputPowerManagerV1, crate::trust::Gate> for WaylandState {
     fn can_view(client: Client, gate: &crate::trust::Gate) -> bool {
         gate.allows(&client)
@@ -134,10 +130,6 @@ impl Dispatch<ZwlrOutputPowerManagerV1, ()> for WaylandState {
         }
     }
 }
-
-// -----------------------------------------------------------------------------
-// Output Power Dispatch
-// -----------------------------------------------------------------------------
 
 impl Dispatch<ZwlrOutputPowerV1, OutputPowerUserData> for WaylandState {
     fn request(

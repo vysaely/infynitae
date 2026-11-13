@@ -255,13 +255,11 @@ fn test_tiny_compositor_end_to_end_client_session() {
         "frame callback must be completed by compositor vblank"
     );
 
-    // Disconnect client cleanly
     drop(surface);
     drop(xdg_surface);
     drop(toplevel);
     drop(conn);
 
-    // Wait for compositor thread to finish cleanly
     compositor_handle.join().expect("compositor thread join");
 }
 

@@ -387,7 +387,6 @@ mod tests {
         let (mut core, mut input_port, _, mut token) = Core::new(PersistedCameras::default());
         let (output_id, _) = core.output_connected(&mut token, desc).unwrap();
 
-        // Create an element with a 400x300 surface
         let elem = core.toplevel_created();
         let skey = crate::snapshot::tests::key(1);
         let tree = SurfaceTree {

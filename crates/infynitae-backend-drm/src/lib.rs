@@ -2740,11 +2740,7 @@ fn handle_screencopy<E>(
     let draw_transform = convert::output_transform(transform);
     let view = convert::capture_buffer_size(size, transform);
 
-    // -------------------------------------------------------------------------
-    // 1. Direct DMA-BUF GPU Render
-    // If the client supplied a linux_dmabuf (PipeWire, OBS, gpu-screen-recorder),
-    // import it as a GPU texture and render the composite scene directly onto it.
-    // -------------------------------------------------------------------------
+    // Direct DMA-BUF GPU render (PipeWire, OBS, gpu-screen-recorder) before the CPU/shm fallback.
     let mut remaining = Vec::new();
 
     for req in pending {
@@ -2794,14 +2790,10 @@ fn handle_screencopy<E>(
     }
 
     if remaining.is_empty() {
-        // All requests were fulfilled via direct GPU DMA-BUF rendering.
         return;
     }
 
-    // -------------------------------------------------------------------------
-    // 2. Fallback for wl_shm or CPU memory buffers
-    // Executed when at least one client requested a CPU or shm buffer.
-    // -------------------------------------------------------------------------
+    // Fallback for wl_shm or CPU buffers when a request was not fulfilled on GPU.
     if screencopy_texture
         .as_ref()
         .is_none_or(|t| t.width() != size.0 as u32 || t.height() != size.1 as u32)

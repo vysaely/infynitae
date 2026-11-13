@@ -1099,7 +1099,6 @@ mod tests {
         )
         .expect("write");
 
-        // Write static "default" cursor
         let pix_default = vec![0x11; 24 * 24 * 4];
         std::fs::write(
             cursors_dir.join("default"),
@@ -1107,7 +1106,6 @@ mod tests {
         )
         .expect("write default");
 
-        // Write animated "wait" cursor (2 frames: 100ms each)
         let pix_w0 = vec![0x22; 24 * 24 * 4];
         let pix_w1 = vec![0x33; 24 * 24 * 4];
         std::fs::write(

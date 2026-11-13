@@ -259,10 +259,6 @@ impl ScreencopyState {
     }
 }
 
-// -----------------------------------------------------------------------------
-// Manager Dispatch
-// -----------------------------------------------------------------------------
-
 impl GlobalDispatch<ZwlrScreencopyManagerV1, crate::trust::Gate> for WaylandState {
     fn can_view(client: Client, gate: &crate::trust::Gate) -> bool {
         gate.allows(&client)
@@ -436,10 +432,6 @@ impl Dispatch<ZwlrScreencopyManagerV1, ()> for WaylandState {
         }
     }
 }
-
-// -----------------------------------------------------------------------------
-// Frame Dispatch
-// -----------------------------------------------------------------------------
 
 impl Dispatch<ZwlrScreencopyFrameV1, FrameUserData> for WaylandState {
     fn request(

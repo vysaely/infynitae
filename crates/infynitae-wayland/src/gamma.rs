@@ -75,7 +75,6 @@ fn read_gamma_table(fd: &OwnedFd, gamma_size: u32) -> Result<Vec<u16>, ()> {
     let expected_u16s = 3 * (gamma_size as usize);
     let expected_bytes = expected_u16s * std::mem::size_of::<u16>();
 
-    // Ensure non-blocking read
     let _ = fcntl_setfl(fd, OFlags::NONBLOCK);
     let _ = seek(fd, SeekFrom::Start(0));
 
@@ -101,10 +100,6 @@ fn read_gamma_table(fd: &OwnedFd, gamma_size: u32) -> Result<Vec<u16>, ()> {
     }
     Ok(u16_ramps)
 }
-
-// -----------------------------------------------------------------------------
-// Manager Dispatch
-// -----------------------------------------------------------------------------
 
 impl GlobalDispatch<ZwlrGammaControlManagerV1, crate::trust::Gate> for WaylandState {
     fn can_view(client: Client, gate: &crate::trust::Gate) -> bool {
@@ -192,10 +187,6 @@ impl Dispatch<ZwlrGammaControlManagerV1, ()> for WaylandState {
         }
     }
 }
-
-// -----------------------------------------------------------------------------
-// Gamma Control Dispatch
-// -----------------------------------------------------------------------------
 
 impl Dispatch<ZwlrGammaControlV1, GammaControlUserData> for WaylandState {
     fn request(

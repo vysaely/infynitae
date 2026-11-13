@@ -242,7 +242,6 @@ mod tests {
         gate.wait();
         drained_rx.recv().unwrap();
 
-        // Send a message after unblocking.
         logger.log("after unblock".to_string());
 
         logger.flush();
