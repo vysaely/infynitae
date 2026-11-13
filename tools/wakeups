@@ -1,0 +1,394 @@
+#!/bin/sh
+#
+# wakeups — measure voluntary context switches per second for compositor and helpers.
+#
+# Reads voluntary_ctxt_switches across /proc/<pid>/task/*/status at two points
+# spaced INTERVAL seconds apart (default 60) and prints wakeups/s per process.
+# Handles Infynitae (including its helpers and "infynitae restore watch"),
+# KDE (kwin_wayland, plasmashell, kded*), and GNOME (gnome-shell).
+#
+# Usage:
+#   ./tools/wakeups [SECONDS]
+#   ./tools/wakeups [--interval SECS] [--all-users] [--all] [--self-test]
+#
+# Examples (run with screen idle, touching nothing):
+#   ./tools/wakeups            # default 60 s sample
+#   ./tools/wakeups 10         # quick 10 s sample
+#   ./tools/wakeups --all 60   # include every user process, not only desktop ones
+
+set -eu
+export LC_ALL=C
+
+INTERVAL=60
+ALL_USERS=0
+ALL_PROCS=0
+PROC_ROOT=/proc
+SELF_TEST=0
+
+usage() {
+	cat <<'EOF'
+Usage: wakeups [SECONDS] [OPTIONS]
+
+Reads voluntary_ctxt_switches from /proc/<pid>/task/*/status twice, SECONDS
+apart (default: 60), and prints wakeups/s for the compositor and helpers.
+
+Options:
+  -i, --interval SECS   Seconds between the two samples (default: 60)
+      --all-users       Include processes owned by other UIDs
+      --all             Include all matching user processes, not just desktop ones
+      --proc DIR        Read procfs tree from DIR instead of /proc
+      --self-test       Run built-in unit tests on synthetic /proc fixtures
+  -h, --help            Show this help and exit
+EOF
+}
+
+while [ $# -gt 0 ]; do
+	case "$1" in
+		-h|--help)
+			usage
+			exit 0
+			;;
+		-i|--interval)
+			[ $# -ge 2 ] || { echo "wakeups: --interval needs a value" >&2; exit 2; }
+			INTERVAL="$2"
+			shift 2
+			;;
+		--all-users)
+			ALL_USERS=1
+			shift
+			;;
+		--all)
+			ALL_PROCS=1
+			shift
+			;;
+		--proc)
+			[ $# -ge 2 ] || { echo "wakeups: --proc needs a directory" >&2; exit 2; }
+			PROC_ROOT="$2"
+			shift 2
+			;;
+		--self-test)
+			SELF_TEST=1
+			shift
+			;;
+		-*)
+			echo "wakeups: unknown option '$1'" >&2
+			usage >&2
+			exit 2
+			;;
+		*)
+			INTERVAL="$1"
+			shift
+			;;
+	esac
+done
+
+case "$INTERVAL" in
+	""|*[!0-9.]*)
+		echo "wakeups: interval must be a non-negative number: '$INTERVAL'" >&2
+		exit 2
+		;;
+esac
+
+SELF_PID=$$
+MY_UID=$(id -u)
+
+# Resolve a short human-readable process label from cmdline (or comm fallback).
+# Unwraps shell/script wrappers so e.g. "sh /usr/bin/infynitae-automount" becomes
+# "infynitae-automount", and keeps "infynitae restore watch" distinct.
+resolve_label() {
+	pid_dir="$1"
+	cmd_file="$pid_dir/cmdline"
+	comm_file="$pid_dir/comm"
+	label=""
+
+	if [ -r "$cmd_file" ]; then
+		label=$(tr '\0' '\n' < "$cmd_file" 2>/dev/null | awk '
+			{ args[++n] = $0 }
+			END {
+				if (n == 0 || args[1] == "") exit;
+				base = args[1];
+				sub(/^.*\//, "", base);
+				if (base == "infynitae") {
+					if (n >= 2 && args[2] != "" && substr(args[2], 1, 1) != "-") {
+						out = base " " args[2];
+						if (n >= 3 && args[3] != "" && substr(args[3], 1, 1) != "-")
+							out = out " " args[3];
+						print out;
+					} else {
+						print base;
+					}
+					exit;
+				}
+				if (base == "sh" || base == "bash" || base == "dash" || base == "ash" ||
+				    base == "env" || base ~ /^python/ || base == "gjs") {
+					for (i = 2; i <= n; i++) {
+						a = args[i];
+						if (a == "" || substr(a, 1, 1) == "-" || a ~ /=/) continue;
+						s = a;
+						sub(/^.*\//, "", s);
+						if (s == "gjs" || s == "sh" || s == "bash" || s == "dash" || s == "env") continue;
+						print s;
+						exit;
+					}
+				}
+				print base;
+			}
+		')
+	fi
+
+	if [ -z "$label" ] && [ -r "$comm_file" ]; then
+		read -r label < "$comm_file" 2>/dev/null || label=""
+	fi
+	printf '%s\n' "$label"
+}
+
+is_tracked_label() {
+	[ "$ALL_PROCS" -eq 1 ] && return 0
+	case "$1" in
+		infynitae|"infynitae "*|infynitae-*|edge-apps|edge-rs|session.sh|autorotate|\
+		kwin_wayland|kwin_wayland_*|plasmashell|kded[0-9]*|krunner|ksmserver|\
+		gnome-shell|mutter-*|gsd-*|\
+		Xwayland|xdg-desktop-portal|xdg-desktop-portal-*|\
+		wl-paste|wl-copy|cliphist|gpu-screen-recorder)
+			return 0
+			;;
+		*)
+			return 1
+			;;
+	esac
+}
+
+read_uptime_secs() {
+	up_file="$PROC_ROOT/uptime"
+	if [ -r "$up_file" ]; then
+		awk '{ print $1; exit }' "$up_file" 2>/dev/null && return 0
+	fi
+	date +%s
+}
+
+# Emit two record types per sampled PID to stdout:
+#   M <pid> <label>
+#   T <pid> <tid> <voluntary_ctxt_switches>
+sample_proc() {
+	for pid_dir in "$PROC_ROOT"/[0-9]*; do
+		[ -d "$pid_dir" ] || continue
+		pid=${pid_dir##*/}
+		[ "$pid" = "$SELF_PID" ] && continue
+
+		status_file="$pid_dir/status"
+		[ -r "$status_file" ] || continue
+
+		if [ "$ALL_USERS" -eq 0 ]; then
+			proc_uid=$(awk '/^Uid:/ { print $2; exit }' "$status_file" 2>/dev/null || true)
+			[ "$proc_uid" = "$MY_UID" ] || continue
+		fi
+
+		label=$(resolve_label "$pid_dir")
+		[ -n "$label" ] || continue
+		is_tracked_label "$label" || continue
+
+		printf 'M\t%s\t%s\n' "$pid" "$label"
+		# Collect per-TID voluntary switches so exited worker threads do not
+		# subtract from surviving threads between sample 1 and sample 2.
+		awk -v p="$pid" '
+			FNR == 1 {
+				tid = FILENAME;
+				sub(/\/status$/, "", tid);
+				sub(/^.*\//, "", tid);
+			}
+			/^voluntary_ctxt_switches:/ {
+				printf "T\t%s\t%s\t%s\n", p, tid, $2;
+			}
+		' "$pid_dir"/task/[0-9]*/status 2>/dev/null || true
+	done
+}
+
+compute_report() {
+	s1="$1"
+	s2="$2"
+	dt="$3"
+	awk -F '\t' -v dt="$dt" '
+		BEGIN {
+			if (dt <= 0) dt = 1.0;
+		}
+		pass == 1 {
+			if ($1 == "M") {
+				pids1[$2] = 1;
+				if (!($2 in label)) label[$2] = $3;
+			} else if ($1 == "T") {
+				csw1[$2 SUBSEP $3] = $4 + 0;
+			}
+			next;
+		}
+		pass == 2 {
+			if ($1 == "M") {
+				pids2[$2] = 1;
+				label[$2] = $3;
+			} else if ($1 == "T") {
+				key = $2 SUBSEP $3;
+				v2 = $4 + 0;
+				if ($2 in pids1) {
+					if (key in csw1) {
+						d = v2 - csw1[key];
+						if (d > 0) delta[$2] += d;
+					} else {
+						delta[$2] += v2;
+					}
+				} else {
+					delta[$2] += v2;
+				}
+			}
+		}
+		END {
+			n = 0;
+			for (p in pids1) seen[p] = 1;
+			for (p in pids2) seen[p] = 1;
+			for (p in seen) {
+				d = (p in delta) ? delta[p] : 0;
+				rate = d / dt;
+				status = (!(p in pids2)) ? "exited" : (!(p in pids1)) ? "new" : "ok";
+				rows[++n] = sprintf("%12.6f\t%s\t%d\t%s\t%s", rate, p, d, status, label[p]);
+			}
+			# Simple insertion sort by descending rate, then PID.
+			for (i = 2; i <= n; i++) {
+				cur = rows[i];
+				split(cur, cparts, "\t");
+				cr = cparts[1] + 0;
+				j = i - 1;
+				while (j >= 1) {
+					split(rows[j], jparts, "\t");
+					if ((jparts[1] + 0) >= cr) break;
+					rows[j + 1] = rows[j];
+					j--;
+				}
+				rows[j + 1] = cur;
+			}
+			printf "wakeups over %.2fs\n", dt;
+			if (n == 0) {
+				printf "  (no tracked processes found under %s)\n", ENVIRON["PROC_ROOT_PRINT"];
+				exit;
+			}
+			printf "  %8s  %8s  %8s  %-6s  %s\n", "WAKE/S", "PID", "DELTA", "STATE", "PROCESS";
+			total_delta = 0;
+			for (i = 1; i <= n; i++) {
+				split(rows[i], r, "\t");
+				total_delta += r[3];
+				if (r[4] == "exited") {
+					printf "  %8s  %8s  %8s  %-6s  %s\n", "-", r[2], "-", "exited", r[5];
+				} else {
+					printf "  %8.2f  %8s  %8d  %-6s  %s\n", r[1], r[2], r[3], r[4], r[5];
+				}
+			}
+			printf "  %8.2f  %8s  %8d  %-6s  %s\n", total_delta / dt, "-", total_delta, "-", "TOTAL";
+		}
+	' pass=1 "$s1" pass=2 "$s2"
+}
+
+run_measure() {
+	tmp_dir=$(mktemp -d)
+	trap 'rm -rf "$tmp_dir"' EXIT INT TERM
+	snap1="$tmp_dir/s1"
+	snap2="$tmp_dir/s2"
+
+	export PROC_ROOT_PRINT="$PROC_ROOT"
+	t1=$(read_uptime_secs)
+	sample_proc > "$snap1"
+	if awk -v i="$INTERVAL" 'BEGIN { exit !(i > 0) }'; then
+		sleep "$INTERVAL"
+	fi
+	t2=$(read_uptime_secs)
+	sample_proc > "$snap2"
+
+	dt=$(awk -v a="$t1" -v b="$t2" -v f="$INTERVAL" 'BEGIN { d = b - a; if (d <= 0) d = f; print (d > 0 ? d : 1.0) }')
+	compute_report "$snap1" "$snap2" "$dt"
+}
+
+make_fake_proc() {
+	base="$1"; pid="$2"; uid="$3"; cmd_zero="$4"; shift 4
+	mkdir -p "$base/$pid/task"
+	printf 'Name:\t%s\nUid:\t%s\t%s\t%s\t%s\n' "${cmd_zero##*/}" "$uid" "$uid" "$uid" "$uid" > "$base/$pid/status"
+	: > "$base/$pid/cmdline"
+	printf '%s\0' "$cmd_zero" >> "$base/$pid/cmdline"
+	while [ $# -gt 0 ]; do
+		arg="$1"; shift
+		case "$arg" in
+			--tids) break ;;
+		esac
+		printf '%s\0' "$arg" >> "$base/$pid/cmdline"
+	done
+	while [ $# -gt 0 ]; do
+		tid="${1%%:*}"
+		csw="${1#*:}"
+		shift
+		mkdir -p "$base/$pid/task/$tid"
+		printf 'voluntary_ctxt_switches:\t%s\nnonvoluntary_ctxt_switches:\t0\n' "$csw" > "$base/$pid/task/$tid/status"
+	done
+}
+
+run_self_test() {
+	td=$(mktemp -d)
+	trap 'rm -rf "$td"' EXIT
+	mkdir -p "$td/p1" "$td/p2"
+
+	# Build two synthetic /proc snapshots over a 10.00 s window.
+	# 101: infynitae with 2 threads -> (1010-1000) + (220-200) = 30 -> 3.00/s
+	make_fake_proc "$td/p1" 101 "$MY_UID" "/usr/bin/infynitae" --tids 101:1000 102:200
+	make_fake_proc "$td/p2" 101 "$MY_UID" "/usr/bin/infynitae" --tids 101:1010 102:220
+
+	# 102: infynitae-edge-apps with transient thread exit (999) + new thread spawn (1000) -> 6 -> 0.60/s
+	make_fake_proc "$td/p1" 102 "$MY_UID" "/usr/bin/infynitae-edge-apps" --tids 102:500 999:800
+	make_fake_proc "$td/p2" 102 "$MY_UID" "/usr/bin/infynitae-edge-apps" --tids 102:500 1000:6
+
+	# 103: shell-wrapped helper "sh /usr/bin/infynitae-automount" -> label infynitae-automount, 0/s
+	make_fake_proc "$td/p1" 103 "$MY_UID" "/bin/sh" "/usr/bin/infynitae-automount" --tids 103:42
+	make_fake_proc "$td/p2" 103 "$MY_UID" "/bin/sh" "/usr/bin/infynitae-automount" --tids 103:42
+
+	# 104: "infynitae restore watch" -> kept separate from compositor
+	make_fake_proc "$td/p1" 104 "$MY_UID" "/usr/bin/infynitae" "restore" "watch" --tids 104:10
+	make_fake_proc "$td/p2" 104 "$MY_UID" "/usr/bin/infynitae" "restore" "watch" --tids 104:12
+
+	# 105: kwin_wayland and 106: gnome-shell -> also tracked
+	make_fake_proc "$td/p1" 105 "$MY_UID" "/usr/bin/kwin_wayland" --tids 105:100
+	make_fake_proc "$td/p2" 105 "$MY_UID" "/usr/bin/kwin_wayland" --tids 105:105
+	make_fake_proc "$td/p1" 106 "$MY_UID" "/usr/bin/gnome-shell" --tids 106:200
+	make_fake_proc "$td/p2" 106 "$MY_UID" "/usr/bin/gnome-shell" --tids 106:200
+
+	# 107: unrelated user process ("vim") and 108: different UID -> must be excluded
+	make_fake_proc "$td/p1" 107 "$MY_UID" "/usr/bin/vim" --tids 107:100
+	make_fake_proc "$td/p2" 107 "$MY_UID" "/usr/bin/vim" --tids 107:999
+	make_fake_proc "$td/p1" 108 "99999" "/usr/bin/infynitae" --tids 108:100
+	make_fake_proc "$td/p2" 108 "99999" "/usr/bin/infynitae" --tids 108:999
+
+	PROC_ROOT="$td/p1"; sample_proc > "$td/s1"
+	PROC_ROOT="$td/p2"; sample_proc > "$td/s2"
+	export PROC_ROOT_PRINT="$td/p2"
+	report=$(compute_report "$td/s1" "$td/s2" "10.0")
+
+	echo "$report" | grep -qE '3\.00[[:space:]]+101[[:space:]]+30[[:space:]]+ok[[:space:]]+infynitae$'
+	echo "$report" | grep -qE '0\.60[[:space:]]+102[[:space:]]+6[[:space:]]+ok[[:space:]]+infynitae-edge-apps$'
+	echo "$report" | grep -qE '0\.00[[:space:]]+103[[:space:]]+0[[:space:]]+ok[[:space:]]+infynitae-automount$'
+	echo "$report" | grep -qE '0\.20[[:space:]]+104[[:space:]]+2[[:space:]]+ok[[:space:]]+infynitae restore watch$'
+	echo "$report" | grep -qE '0\.50[[:space:]]+105[[:space:]]+5[[:space:]]+ok[[:space:]]+kwin_wayland$'
+	echo "$report" | grep -qE '0\.00[[:space:]]+106[[:space:]]+0[[:space:]]+ok[[:space:]]+gnome-shell$'
+	if echo "$report" | grep -qE '\<(107|108|vim)\>'; then
+		echo "wakeups self-test failed: excluded process appeared in output" >&2
+		echo "$report" >&2
+		exit 1
+	fi
+	echo "$report" | grep -qE '4\.30[[:space:]]+-[[:space:]]+43[[:space:]]+-[[:space:]]+TOTAL$'
+
+	# Also run a real /proc smoke sample with --all 0 to ensure live parsing works.
+	PROC_ROOT=/proc
+	ALL_PROCS=1
+	INTERVAL=0
+	live_out=$(run_measure)
+	echo "$live_out" | grep -q "TOTAL"
+	echo "wakeups self-test passed (7/7 assertions + live /proc smoke)"
+}
+
+if [ "$SELF_TEST" -eq 1 ]; then
+	run_self_test
+	exit 0
+fi
+
+run_measure
