@@ -16,6 +16,22 @@ impl Rgba {
             1.0,
         )
     }
+    /// Relative luminance (WCAG), from sRGB.
+    pub fn luminance(self) -> f64 {
+        let f = |c: f64| {
+            if c <= 0.04045 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * f(self.0) + 0.7152 * f(self.1) + 0.0722 * f(self.2)
+    }
+    /// Contrast ratio with `o` (WCAG): 1 to 21.
+    pub fn contrast(self, o: Rgba) -> f64 {
+        let (a, b) = (self.luminance(), o.luminance());
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
     pub fn alpha(self, a: f64) -> Rgba {
         Rgba(self.0, self.1, self.2, a)
     }
@@ -74,11 +90,24 @@ pub struct Theme {
     pub accent: Rgba,
     /// text and icons on an accent fill
     pub on_accent: Rgba,
+    /// the accent where it is text or a thin line on a card: the accent itself when it reads
+    /// there (3:1 or more against the card), else moved toward the text colour until it does
+    pub accent_text: Rgba,
     /// a thin bar's empty part
     pub track: Rgba,
     pub corners: f64,
     /// SWITCH_LOOK: rows, icons, tiles
     pub switch_look: String,
+}
+
+/// `fg` as it reads on `bg`: itself at 3:1 contrast or more, else mixed toward `toward` in tenths
+/// until it does.
+fn readable(fg: Rgba, bg: Rgba, toward: Rgba) -> Rgba {
+    let bg = bg.alpha(1.0);
+    (0..=10)
+        .map(|i| fg.mix(toward, i as f64 / 10.0))
+        .find(|c| c.contrast(bg) >= 3.0)
+        .unwrap_or(toward)
 }
 
 impl Theme {
@@ -109,6 +138,7 @@ impl Theme {
             muted: text.mix(surface, 0.32),
             accent,
             on_accent: if lum > 0.45 { surface } else { text },
+            accent_text: readable(accent, card, text),
             track: text.alpha(0.12),
             corners: c.corners,
             switch_look: c.switch_look.clone(),

@@ -239,7 +239,11 @@ fn draw_row_entry(cr: &Context, cx: &Cx, hits: &mut Hits, e: &EntryRow<'_>) {
             text: e.note,
             size: 11.0,
             bold: e.note_accent,
-            color: if e.note_accent { th.accent } else { th.muted },
+            color: if e.note_accent {
+                th.accent_text
+            } else {
+                th.muted
+            },
         };
         let (nw, nh) = draw::measure(cr, &ns);
         let note_w = nw.min((e.row_r.2 * 0.36).max(48.0));
@@ -988,7 +992,7 @@ impl Card for SearchCard {
         cr.set_line_width(1.0);
         let _ = cr.stroke();
 
-        let icon_col = if active { th.accent } else { th.muted };
+        let icon_col = if active { th.accent_text } else { th.muted };
         draw_search_icon(cr, bar.0 + 18.0, bar.1 + bar.3 / 2.0 - 1.5, 5.5, icon_col);
 
         let text_x = bar.0 + 34.0;

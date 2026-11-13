@@ -219,7 +219,7 @@ pub fn row(cr: &Context, cx: &Cx, hits: &mut Hits, id: u32, r: Rect, row: &Row) 
             ic,
             tx,
             r.1 + (r.3 - ICON) / 2.0,
-            if row.on { th.accent } else { th.text },
+            if row.on { th.accent_text } else { th.text },
         );
         tx += ICON + 10.0;
     }
@@ -251,7 +251,7 @@ pub fn row(cr: &Context, cx: &Cx, hits: &mut Hits, id: u32, r: Rect, row: &Row) 
             &Text {
                 size: 11.0,
                 bold: false,
-                color: if row.on { th.accent } else { th.muted },
+                color: if row.on { th.accent_text } else { th.muted },
                 text: row.state,
             },
         );
@@ -395,7 +395,7 @@ pub fn choice(
             &Text {
                 size: 12.0,
                 bold: on,
-                color: if on { th.accent } else { th.text },
+                color: if on { th.accent_text } else { th.text },
                 text: word,
             },
         );
@@ -558,7 +558,7 @@ pub fn list_row(
         &Text {
             size: 13.0,
             bold: active,
-            color: if active { th.accent } else { th.text },
+            color: if active { th.accent_text } else { th.text },
             text,
         },
     );

@@ -1579,7 +1579,7 @@ impl Card for MemoryCard {
                 &Text {
                     size: 12.0,
                     bold: true,
-                    color: th.accent,
+                    color: th.accent_text,
                     text: &lbl,
                 },
             );
@@ -1772,7 +1772,7 @@ impl Card for GpuCard {
             let pause_t = Text {
                 size: 12.0,
                 bold: true,
-                color: th.accent,
+                color: th.accent_text,
                 text: "Pause",
             };
             let (pw, _) = draw::measure(cr, &pause_t);

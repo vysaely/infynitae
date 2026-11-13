@@ -125,7 +125,7 @@ impl Card for SessionCard {
                     let armed = self.is_armed(act);
                     draw_pill(cr, cx, row_r, armed, lit);
 
-                    let fg = if armed { th.accent } else { th.text };
+                    let fg = if armed { th.accent_text } else { th.text };
                     draw::set(cr, fg);
                     draw_icon(cr, act, row_r.0 + 8.0, row_r.1 + (row_r.3 - ICON_SZ) / 2.0);
 
@@ -159,7 +159,7 @@ impl Card for SessionCard {
                     let armed = self.is_armed(act);
                     draw_pill(cr, cx, slot_r, armed, lit);
 
-                    draw::set(cr, if armed { th.accent } else { th.text });
+                    draw::set(cr, if armed { th.accent_text } else { th.text });
                     draw_icon(
                         cr,
                         act,
@@ -172,7 +172,7 @@ impl Card for SessionCard {
                     let t = Text {
                         size: 11.0,
                         bold: false,
-                        color: if armed { th.accent } else { th.muted },
+                        color: if armed { th.accent_text } else { th.muted },
                         text: label,
                     };
                     let (lw, _) = draw::measure(cr, &t);

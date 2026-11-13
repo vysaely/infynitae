@@ -1493,7 +1493,7 @@ fn draw_large(
                 &Text {
                     size: 14.0,
                     bold: true,
-                    color: th.accent,
+                    color: th.accent_text,
                     text: &p.lyrics.current,
                 },
             );
@@ -1682,7 +1682,7 @@ fn draw_controls(
     let total_w = 5.0 * btn_w + 4.0 * gap;
     let start_x = x + (w - total_w) / 2.0;
 
-    let shuf_col = if p.shuffle { th.accent } else { th.muted };
+    let shuf_col = if p.shuffle { th.accent_text } else { th.muted };
     let rep_col = if p.loop_status != "None" && !p.loop_status.is_empty() {
         th.accent
     } else {

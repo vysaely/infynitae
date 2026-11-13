@@ -221,7 +221,10 @@ impl Card for VolumeCard {
         }
     }
     fn height(&self, _: &Cx, _: f64) -> f64 {
-        SLIDER_ROW * if self.has_brightness() { 2.0 } else { 1.0 } + OUTPUT_ROW
+        // the output's line only when its name is known
+        let output = self.volume.as_ref().is_some_and(|v| !v.output.is_empty());
+        SLIDER_ROW * if self.has_brightness() { 2.0 } else { 1.0 }
+            + if output { OUTPUT_ROW } else { 0.0 }
     }
     fn draw(&self, cr: &Context, cx: &Cx, body: Rect, hits: &mut Hits) {
         let Some(v) = &self.volume else { return };
@@ -291,6 +294,9 @@ impl Card for VolumeCard {
             y += SLIDER_ROW;
         }
         self.sliders.set(sliders);
+        if v.output.is_empty() {
+            return;
+        }
         draw::text_max(
             cr,
             body.0 + 8.0,
@@ -422,8 +428,8 @@ mod tests {
         assert_eq!(c.status(&cx), Status::Ready);
         assert_eq!(
             c.height(&cx, 300.0),
-            SLIDER_ROW + OUTPUT_ROW,
-            "no brightness row"
+            SLIDER_ROW,
+            "no brightness row, and no output line without the output's name"
         );
         let surface = cairo::ImageSurface::create(cairo::Format::ARgb32, 400, 200).unwrap();
         let cr = cairo::Context::new(&surface).unwrap();
