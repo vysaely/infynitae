@@ -580,8 +580,17 @@ impl Shell {
             return false;
         }
         self.config_mtime = mtime;
+        let cfg = Config::load();
+        if cfg.panels == self.cfg.panels && cfg.favorites == self.cfg.favorites {
+            // the same panels and cards: keep them (an open list, the accent picker stay as they
+            // are while a setting is written); the colours and the cards' data follow
+            self.theme = Theme::from_config(&cfg);
+            self.cfg = cfg;
+            self.fetch_needed = true;
+            return true;
+        }
         let open = self.open.map(|i| self.panels[i].panel.name.clone());
-        self.rebuild_panels(Config::load(), None);
+        self.rebuild_panels(cfg, None);
         self.open = open.and_then(|n| self.panels.iter().position(|ps| ps.panel.name == n));
         self.fetch_needed = true;
         true

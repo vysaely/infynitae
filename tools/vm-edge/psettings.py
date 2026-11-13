@@ -38,7 +38,7 @@ open(CFG, "a").write(f'PANEL_CONTROL="{START}"\n')
 apps_edge(); at(300, 300); wait(0.4)
 panel(); shot("set-1")
 d = hits()
-check("the Games and Windows rows are there", ("settings/games", 101) in d and ("settings/windows", 132) in d, str(sorted(d)[:12]))
+check("the Games and Windows rows are there", ("settings/games", 101) in d and ("settings/windows", 130) in d, str(sorted(d)[:12]))
 
 # 1. a switch: Game mode
 gm = get("GAME_MODE")
@@ -52,9 +52,9 @@ check("a pick opens its list", len(listed) == 3, str(listed))
 press("settings/games", 5002)
 check("choosing in the list writes the key", get("TEARING") == "false", get("TEARING"))
 
-# 3. word buttons: Super+Enter Fit
-press("settings/windows", 132)
-check("a word button writes its key", get("SUPER_ENTER_ACTION") == "fit", get("SUPER_ENTER_ACTION"))
+# 3. a short list: Super+Enter, open it and choose Fit (the list's second line, 5001)
+press("settings/windows", 130); press("settings/windows", 5001)
+check("a short list writes its key", get("SUPER_ENTER_ACTION") == "fit", get("SUPER_ENTER_ACTION"))
 
 # 4. every change is in the log, and About's Undo puts the last one back
 log = open(LOG).read() if os.path.exists(LOG) else ""
