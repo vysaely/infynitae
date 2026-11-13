@@ -664,6 +664,10 @@ Owner decisions first, since they change what is built: errors in the accent or 
 colour (1.6); motion as a fixed choice or a switch (group E); widgets ported or dropped
 (4.2); the patch policy (6.4).
 
+State on 2026-11-13, 18:00: batches 1 to 5 are merged on this branch (`git log`: `0e4cddb`,
+`afafd69`, `a3580f1`, `e9e822b`, `8a468e6`, `1acfc2b`, `99a5e88` to `b362bc8`). Line numbers in
+sections 1 to 6 are from before those merges; section 8 was read after them.
+
 Each batch is for one worker and lists the files it owns. Batches in one wave touch no file
 in common. CI means every job of `.github/workflows/ci.yml` passes; the jobs that matter are
 named. The VM scripts are in `tools/vm-edge/` and run in the test VM only, never on this PC.
@@ -713,3 +717,469 @@ not wait for batch 6. Batch 7 does not touch `theme.rs`; batch 6 does not touch 
 The first things to do, for the most gain at the least risk: batches 1, 2 and 3 (deletions,
 one loop fix, texts), then batch 4's marks, because two of the three largest speed items
 cannot be fixed until one session's log names their cause.
+
+### Wave 5: beyond Windows and other desktops (section 8)
+
+Order: the measuring tools first, because every item in section 8 is judged by them. Then by
+gain for risk. Batches marked "after N" touch the same files as batch N and wait for it.
+
+| # | Batch | Size | Files owned | Verify |
+| :--- | :--- | :--- | :--- | :--- |
+| 16 | Measuring tools (8.0): the frame and motion test client, the wakeup counter, the zoom sharpness script | M | new `tools/frame-probe/`, `tools/wakeups`, `tools/vm-edge/pzoom.py` | each tool run in the VM prints its numbers; CI builds the client in `helpers` |
+| 17 | Uploads at commit time, changed keys only on a settings change (8.1 steps 2 and 3), after one owner session with the marks | S to M | `crates/infynitae-wayland/src/handlers.rs`, `lib.rs` (`reload_config`) | "Slow turn" lines naming windows or config reload gone from one session's log; headless tests |
+| 10 | (already listed) Late start for desktop frames, now with its own learned margin (8.2) | M | `frame_schedule.rs`, `drm` | unit tests; batch 16's client; the "Latency" log line |
+| 18 | Captures never wait for the GPU (8.1 step 1), after 10 | M | the capture functions of `drm` (`serve_captures` to `deliver_copies`) | "captures" and "capture copies" gone from slow turns; VM `pshot.py`, `pcards.py` |
+| 19 | Zoom stage 1: apps redraw at the next whole scale after a zoom, pixel budget, sharp upscale (8.7), after 11 | M | `crates/infynitae-core/src/scale.rs`, `wl/lib.rs` (the two scale setters), `crates/infynitae-backend-drm/src/smooth.rs`, `config/config` | scale unit tests in `scale.rs`; headless `t1_scale`; VM `pzoom.py` numbers before and after |
+| 20 | Canvas: back, places, places in the window search (8.6) | M | `crates/infynitae-core/src/navigation.rs`, `entry.rs`, `input/keys.rs`, `crates/infynitae-ipc/src/protocol.rs`, `crates/infynitae/src/msg.rs`, `live/edge-apps/src/cards/windows.rs` | core unit tests; `crates/infynitae-ipc/tests/t1_shell.rs`; a VM script that jumps and comes back |
+| 21 | Game profiles (8.4 B), after 9 | S to M | `wl/background.rs`, `tearing.rs`, `live/launch.sh` (`game-mode`), `config/config`, `cards/settings_games.rs` | unit tests in `background.rs` and `tearing.rs`; `tools/test-launch-actions`; one play session |
+| 22 | Idle: fix what batch 16's counter names (8.5) | S | `crates/infynitae/src/restore.rs` and what the counter shows | `tools/wakeups` before and after, screen left alone for 60 s |
+| 23 | Keeper stage 1: the session keeps the socket and the apps (8.3) | M | `live/infynitae-session`, `wl/session.rs`, `wl/ownership.rs`, `live/session.sh` | VM: kill the compositor, count windows whose process is the same; `tools/test-session` |
+| 24 | Zoom stage 2: reduced copies for far zoom-out, only if `pzoom.py` shows aliasing below one eighth (8.7), after 18 and 19 | M | `smooth.rs`, `drm` | `pzoom.py` at 1/16 and 1/32 |
+| 25 | HDR stage 0 and 1: read the screen's HDR block, colour management for a fullscreen game shown directly (8.4 A) | L | `crates/infynitae-backend-drm/src/edid.rs`, new `wl/color.rs`, `drm` scanout path, possibly `patches/0008` | the monitor's own HDR indicator; an HDR test video; headless protocol tests |
+| 26 | Keeper stage 2: the proxy that holds every app (8.3) | L | new crate `live/keep/` | VM: every VM script passes with apps behind it; kill and update tests; batch 16's client with and without it |
+
+Batches 16, 17, 20, 22 and 23 share no files and can run together. 19 and 21 each wait for
+one earlier batch. 25 and 26 are large and start only when the owner asks for them.
+
+---
+
+## 8. Beyond Windows and other Linux desktops
+
+Read on 2026-11-13 after the wave 1 merges. Seven items. Each says where the code stands,
+the design chosen and why, what it costs, how it is measured against Windows, GNOME and KDE
+on this PC, and the risk. Statements about other systems are from memory, were not checked
+today, and are marked so. No number below is a promise: the targets are what the
+measurements are held against.
+
+### 8.0 The measuring tools (batch 16)
+
+Three small tools, since Infynitae's own log lines cannot be read on another desktop.
+
+- **`tools/frame-probe`**: one small Wayland client. It draws a counter every frame and reads
+  `wp_presentation` feedback, so a jump of more than one in the refresh sequence is a missed
+  refresh. It also draws a square at the pointer and pairs each motion event's time with
+  the presentation time of the frame that showed it: motion to screen, as an app sees it.
+  The same binary runs on Infynitae, GNOME and KDE (all three offer presentation feedback;
+  from memory). On Windows the same two numbers come from PresentMon (dropped frames) and a
+  240 fps phone camera (`docs/research/PERFORMANCE-LINUX.md:215`).
+- **`tools/wakeups`**: a shell script that reads `voluntary_ctxt_switches` from
+  `/proc/<pid>/task/*/status` twice, 60 s apart, for the compositor and every helper, and
+  prints wakeups per second each. It works for `kwin_wayland` and `gnome-shell` too.
+- **`tools/vm-edge/pzoom.py`**: section 8.7.
+
+Cost: about 300 lines of C for the client (the helpers already carry generated protocol
+files, e.g. `live/record/wlr-screencopy-protocol.c`), 30 of shell. No new dependency.
+GNOME and KDE numbers need those desktops installed on this PC or started from a USB stick;
+whether they are installed was not checked.
+
+### 8.1 Never miss a frame
+
+**Where it stands.** The running session (started 16:00:34) reported "2477 of 177930 frames
+missed their refresh" when read at 18:13: about 1,100 an hour, 1.4% of the frames drawn. A
+miss is a frame shown more than half a refresh after the one it was meant for
+(`wl/frame_schedule.rs:295`). Everything runs on one thread: input, client requests, captures,
+drawing (`drm:1625-2047`). The marks from batch 4 now split a slow turn into frame list,
+cursor, layers above, windows, layers below, smooth wrap (`wl/convert.rs`
+`output_elements_marked`; `drm:2219`, `2242`) and config reload, config-check, config second
+read (`drm:1725-1750`). The compositor running today was built at 15:59, before the marks, so
+no session has named the slow part yet.
+
+**Design.** Three steps, each small, none a second thread.
+
+1. *Captures never wait for the GPU* (batch 18). A capture into a client's GPU buffer is one
+   more draw and no readback (`drm:2751`). A capture into shared memory draws off screen,
+   starts a readback (`drm:2835`) and maps it at the start of the next turn (`drm:2885`,
+   `2126`); mapping waits until the GPU has finished. Change: map only once the frame's GPU
+   fence has signalled (Smithay hands out the fence: `vendor/…/renderer/sync/mod.rs:29-36`,
+   `gles/mod.rs:2302`), and start at most one readback per screen per turn. Our own recorder
+   moves to GPU buffers (batch 14).
+2. *Uploads at commit time* (batch 17). A client's shared-memory buffer is uploaded to the
+   GPU when the frame's elements are built (`wl/convert.rs:572-594`, `from_surface`), not when
+   it is committed (`wl/handlers.rs:447` only records it). Upload on commit instead, so the
+   work is done before the frame's start time. Only if the marks name the windows stage.
+3. *A settings change applies only what changed* (batch 17). Today a change re-applies every
+   key, starts `config-check` and reads the file a second time, all in one turn
+   (`drm:1719-1750`, `wl/lib.rs:1116` onward). Keep the last parsed values and apply the keys
+   that differ; move the second read into the first.
+
+**Why this and not threads.** The GL context and the Wayland state belong to the loop's
+thread; a render thread means sharing both, which is a rewrite of the backend and a new
+class of bugs. "Cached element building" is not chosen either: an element list reused across
+frames is wrong the moment a surface commits, and nothing measured says building the list
+(as opposed to uploading inside it) is slow. The three steps remove the waits that have been
+seen (captures 8.4 to 8.9 ms, config 92 ms, section 5) and leave the loop single-threaded.
+
+**Cost.** About 150 lines in `drm`, 60 in `wl/`. Runtime: less work, none added.
+
+**Measured.** Infynitae: the counter in the "Latency" line (`drm:3143`), as missed per hour
+of desktop use with no game running, and the count of "Slow turn" lines. Target: under 20 an
+hour (today about 1,100) and no slow turn outside a screen being plugged in. Other desktops:
+`frame-probe`'s gap count over the same hour of the same use; Windows: PresentMon.
+
+**Risk.** Step 1 low (a capture arrives a turn later). Step 2 medium: an upload on commit is
+wasted for a window that commits twice per refresh or is not in view; do it only for
+surfaces in the last frame. Step 3 medium: a key missed in the comparison is not applied
+until restart; the yes/no cases file from 4.3 and the headless config tests cover it.
+
+### 8.2 Lowest input-to-screen delay on the desktop
+
+**Where it stands.** The scheduler that starts a frame as late as it can still make the
+refresh exists and learns: render times of the last 128 frames, their 95th percentile, a
+margin that widens 0.75 ms on a miss and narrows after 240 good frames, a pause when misses
+persist (`wl/frame_schedule.rs:60-80`, `209-222`, `295-320`). One exists per screen
+(`drm:2181-2183`). With the default `LATENCY="direct"` it is used only while a game is shown
+directly; a composited desktop frame is drawn at once (`wl/frame_schedule.rs:48-54`). Today's
+log: "input to screen p50 11.57 ms … budget 0.15 ms".
+
+**Design.** In "direct", composited frames are scheduled too, with a margin of their own.
+The schedule keeps two margins per screen, one for frames shown directly and one for
+composited ones, so a game's misses do not widen the desktop's margin or the reverse. The
+composited margin starts at 1.5 ms and follows the same widen, narrow and pause rules. Late
+start is skipped while `GPU_RELIEF` is acting or the last turn was slow.
+
+**Why this.** The alternative is a fixed "draw N ms before the refresh" as KWin and Mutter
+do (from memory; the module's own header notes KWin predicting 11 ms for 2 ms of work,
+`wl/frame_schedule.rs:8-9`). A fixed lead is either too early (delay) or too late (misses)
+on a PC whose GPU is sometimes training a model. A margin learned from this screen's own
+misses adapts to both. It reuses the code that exists; the change is the second margin and
+one condition.
+
+**Cost.** About 60 lines in `frame_schedule.rs`, 10 in `drm`. Runtime: one more timer wake
+per drawn frame.
+
+**Measured.** The "Latency" line: input-to-screen p50 and p95, target p50 under 4 ms on the
+165 Hz screen with the missed count no higher than before. `frame-probe`'s motion-to-screen
+on Infynitae, GNOME and KDE. Across to Windows only the camera test compares: 20 clicks
+filmed at 240 fps, about 4 ms a camera frame.
+
+**Risk.** Medium. Step 8.1 must land first or with it: once frames start late, any stall in
+the turn is a miss where today it is only a late start. Unit tests in
+`frame_schedule.rs:451` onward get cases for the two margins.
+
+### 8.3 Apps survive a compositor crash or update
+
+**Where it stands.**
+
+- The compositor makes the listening socket itself (`wl/session.rs:343-346`) and is the
+  parent of everything in the session: on exit it ends every process it started
+  (`wl/ownership.rs:1-12`; the log's "Session processes ended … 70 terminated",
+  `wl/session.rs:703`).
+- `live/infynitae-session` restarts a compositor that crashed or quit (`:96`, `:138`).
+- After a restart `infynitae restore` reopens the saved apps where they were
+  (`crates/infynitae/src/restore.rs:8-11`). That is reopening, not surviving: unsaved work
+  in an app is lost.
+- `QT_WAYLAND_RECONNECT=1` is set (`live/env.sh:38-39`), but a Qt app is ended with the
+  session on a clean exit and loses its parent on a crash. Whether any app has ever
+  reconnected here is not confirmed.
+- An update installs the new binary and says it "runs from its next start"
+  (`update.sh:114`, `138`).
+
+**What exists elsewhere (from memory, not checked today).** KWin keeps the socket in a
+wrapper process and Qt and some patched toolkits reconnect; other apps die. `waypipe` and
+`wprs` are proxies that sit between apps and a compositor and track protocol state, built
+for remote use. No drop-in tool keeps every local app across a compositor restart.
+
+**What Smithay allows.** It accepts a client from any connected stream (`insert_client`,
+`wl/session.rs:351`), so the socket can be owned by another process without a patch. Its
+socket type has no constructor from an existing socket (`vendor/…/wayland/socket.rs:65`,
+`80`), so Infynitae accepts on the inherited one itself. All client state lives in the
+compositor's memory and nothing can save or hand it over, so a restarted compositor cannot
+"take clients back" by itself. Something has to replay each client's state to it.
+
+**Design, in two stages.**
+
+*Stage 1, the keeper holds the socket and the apps (batch 23, M).* `infynitae-session`
+already outlives the compositor. It creates the socket and passes it to each compositor it
+starts; the session's apps are started under it, not under the compositor; a crash no longer
+orphans them and an update's restart no longer ends them. Apps that can reconnect (Qt 6) come
+back by themselves; the others see their connection close and exit, and `restore` reopens
+them as today. The process-ownership rule (`wl/ownership.rs`) moves to the keeper with its
+tests.
+
+*Stage 2, the proxy (batch 26, L).* A separate program, `infynitae-keep`: a Wayland server to
+the apps and one client to the compositor. It keeps each app's objects (surfaces, roles,
+buffers, their sizes and states) and forwards requests and events. Buffers pass as file
+descriptors, so no pixels are copied and a game can still be shown directly. When the
+compositor goes away it holds the apps' connections, reconnects to the new one and creates
+every surface again from what it kept. `xwayland-satellite` runs behind it, so X11 apps and
+games survive too. The edge, wallpaper and lock connect directly as today; they restart in
+under a second.
+
+**Why two stages, and why a proxy.** Reconnecting inside each toolkit (KDE's way) can never
+cover every app: GTK, Electron, SDL and Wine would each need it. Splitting the compositor so
+the protocol side never restarts does not help an update, which replaces that side too. A
+proxy is the only design that covers every app without changing them, and it is also the
+largest and riskiest piece in this plan, so stage 1 is built first: it is needed by stage 2
+anyway and already saves Qt apps.
+
+**Size and risk, plainly.** Stage 2 is every protocol Infynitae offers to normal apps,
+handled twice (as server and as client) with state kept: core, xdg-shell, viewporter,
+fractional scale, shared memory and GPU buffers, clipboard and drag, pointer constraints and
+relative motion, text input, tearing, content type, presentation feedback, activation. My
+estimate is 8,000 to 15,000 lines of Rust and months, not weeks; it is not measured. Risks:
+(1) one bug in it breaks every app, so it ships off, behind `KEEP_APPS`, a trial switch that
+goes when it is the default; (2) each message crosses one more socket, added delay not
+known until measured; (3) the compositor knows apps by their process
+(`wl/session.rs:355-357`, trust and background priority), and behind a proxy every app is
+the proxy, so the proxy must pass the real process on over a private channel; (4) an app
+keeps running blind for the seconds the compositor is away and may time out.
+
+**Can `infynitae-update` restart the compositor without closing windows?** After stage 1:
+only Qt 6 windows stay; the rest are reopened in place. After stage 2: yes for every app
+behind the proxy, and the update can offer "restart now" instead of "from its next start".
+Before either: no.
+
+**Measured.** In the VM: open ten apps of different toolkits, kill the compositor, count the
+windows whose process id is unchanged and the seconds until the desktop is back. Same test
+on KDE (expect Qt apps only) and GNOME (expect none; from memory). Windows restarts its
+compositor with all windows kept, so stage 2 reaches Windows and passes both Linux desktops.
+Delay added by the proxy: `frame-probe` and the "Latency" line with and without it.
+
+### 8.4 Games
+
+#### A. HDR
+
+**Where it stands.** Nothing. Smithay 0.7 has no colour management module (the list of
+`vendor/smithay-0.7.0/src/wayland/`) and sets no HDR property on the screen; variable refresh
+is the only such property it handles (`vendor/…/drm/surface/atomic.rs:567-633`). Infynitae
+asks for 8-bit screen buffers (`drm:1001`). The renderer does know 10-bit and half-float
+formats (`vendor/…/renderer/gles/format.rs:22-23`). The colour management protocol's
+description is in the locked `wayland-protocols` 0.32.13 (`Cargo.lock:1883-1884`; its
+`protocols/staging/color-management`); whether the server bindings are built in this
+feature set is not confirmed. The EDID reader takes make, model and serial only
+(`crates/infynitae-backend-drm/src/edid.rs:3-9`), so whether this monitor does HDR is not
+known to the compositor. X11 has no HDR path (from memory), so a game through
+`xwayland-satellite` cannot be HDR whatever the compositor does; it needs Proton's Wayland
+driver (`docs/research/PERFORMANCE-LINUX.md:43`).
+
+**Design.** Passthrough first.
+
+- *Stage 0 (S).* Read the EDID's HDR block and log what the screen says it can do.
+- *Stage 1 (L).* Offer the colour management protocol with the smallest useful set: a
+  surface may say its content is HDR10 (PQ, BT.2020) with its mastering values. While such
+  a window is fullscreen and shown directly, set the screen's HDR metadata and colour space
+  and hand the game's buffer through untouched; set them back when it stops. Setting the two
+  screen properties needs either the DRM device handle Smithay exposes
+  (`vendor/…/drm/surface/mod.rs:191`) or a small patch beside `use_vrr`, listed as P8.
+- *Stage 2 (L, not planned now).* The whole desktop drawn in HDR with SDR windows mapped
+  into it.
+
+**Why passthrough.** Composited HDR needs a 10-bit or float screen buffer, a colour
+conversion in every draw and tone mapping, in a renderer that has none of it: a large change
+to the path every frame takes. A fullscreen game shown directly already skips the renderer
+(`DIRECT_SCANOUT`), so HDR for that case touches only the protocol and two screen
+properties. It covers the one use the owner named (games).
+
+**Cost.** Stage 1: about 600 to 900 lines (protocol objects are most of it). Runtime: none
+outside an HDR game.
+
+**Measured.** The monitor's own HDR indicator turns on with the game and off after; an HDR
+test pattern shows detail above SDR white; `drm_info` shows the metadata set. Against
+others: KDE and GNOME have composited HDR and Windows has it with Auto HDR (from memory), so
+this reaches parity for fullscreen games and stays behind for HDR video in a window. Not a
+place to claim a lead.
+
+**Risk.** High for its size: wrong metadata gives a washed-out or dark picture, and an
+overlay drawn over the game (a notification) forces compositing, where stage 1 must drop
+back to SDR cleanly. `GAME_QUIET` already holds notifications during a game.
+
+#### B. Per-game profiles
+
+**Where it stands.** A game is noticed when it fills the screen (`wl/background.rs:182-221`):
+game mode starts, notifications are held if it "plays like a game" (`:226-243`), and both
+end 5 s after it leaves (`:38`, `:156`). The hook runs `launch.sh game-mode on|off`
+(`wl/background.rs:245-251`, `live/launch.sh:107-141`). Tearing can be forced or refused per
+window, but only until the window closes (`wl/tearing.rs:34-37`, `113-139`). A per-app choice
+that is remembered in the config exists for keep-on-top and privacy
+(`wl/lib.rs:1657`, `live/launch.sh:597-607`).
+
+**Design.** One list, in the form `GLOBAL_SHORTCUTS` already uses:
+`GAME_PROFILES="steam_app_730=notear,power:performance cs2=composited"`. Words: `tear` or
+`notear`, `direct` or `composited`, `quiet` or `loud`, `power:performance|balanced|saver`.
+A game with no entry gets the global settings, as today. The profile is applied where game
+mode starts and undone where it ends, the pair that exists. "Automatic" means nobody writes
+the list by hand: Super+Shift+O on a game stores its tearing word for that app through
+`remember_for_app`, and the Games card lists the games seen with their words.
+
+**Why this.** The alternative is a file per game or a profile editor. One list keyed by app
+id is what the config already does three times, needs no new file format, and the start and
+end hooks exist. Variable refresh and the latency mode are left out: nobody asked to change
+them per game.
+
+**Cost.** About 150 lines in `wl/`, 20 in `launch.sh`, a list on the Games card. Runtime: a
+lookup when a game starts.
+
+**Measured.** Function, not speed: start a game with a profile, check tearing, the power
+mode (`powerprofilesctl get`) and held notifications; quit, check all three are back.
+Windows and the other desktops have no per-game compositor profile (from memory; GPU vendor
+panels do part of it), so the measure is that it works and restores.
+
+**Risk.** Low. A wrong app id means no profile, which is today's behaviour. X11 games all
+come through one satellite process, but each window still has its own app id; that the id is
+stable per game (e.g. `steam_app_<n>`) is not confirmed for every launcher.
+
+### 8.5 Idle efficiency
+
+**Where it stands.** Read from `/proc` today over 63 s while the owner was using the PC (so
+not idle): compositor 134 wakeups a second, Xwayland 61, the edge 2.0, `infynitae restore
+watch` 0.24, and 0.00 for the portal, password agent, wallpaper, automount, sleep-lock,
+recorder supervisor, clipboard tools and the session script. `gpu-screen-recorder`, the
+replay the owner turned on, woke 891 times a second. A true idle reading has not been taken.
+
+From the code, at idle the compositor sleeps until the earliest of a short list of
+deadlines, each `None` when there is nothing to wait for (`drm:1665-1677`,
+`wl/session.rs:504-529`); the config's time is looked at only on turns it takes anyway
+(`drm:1713`). What can still wake it with a still screen:
+
+- `restore watch` asks for the window list every 15 s (`crates/infynitae/src/restore.rs:23`).
+- an animated cursor (`wl/session.rs:512`).
+- any client that commits or sends a request, including the edge.
+- the logind question every 45 s while idle sleep is on (`wl/idle_inhibit.rs:71`).
+
+The edge's 2 a second with, as far as known, no panel open is not explained by its loop,
+which has no timeout when closed (`live/edge-apps/src/wayland.rs:1536-1538`); window title
+changes reaching it from the compositor are one candidate. Not confirmed.
+
+**Design.** Measure first (batch 16), then remove what the counter names (batch 22). Known
+now: `restore watch` saves on a change, using the shell socket's `subscribe`
+(`crates/infynitae-ipc/src/protocol.rs:156`), not every 15 s. The replay is the owner's
+choice and outside the count, but its cost is shown on its Settings row so the choice is
+informed.
+
+**Why this.** There is no polling loop left in the helpers to redesign; the scripts block on
+`gdbus monitor` or `wait` (`live/infynitae-automount:546`, `live/infynitae-sleep-lock:145`,
+`live/record/infynitae-recorder:302`). What remains is found by counting, not by reading.
+
+**Cost.** `restore watch` on events: about 40 lines. Others not known until measured.
+
+**Measured.** `tools/wakeups`, screen left alone for 60 s, no app drawing: target under 1 a
+second for the compositor and 0 for every helper. The same script on `kwin_wayland` and
+`gnome-shell` with their default panels. Across to Windows: CPU package power at idle
+(`/sys/class/powercap` on Linux, HWiNFO on Windows), same screen brightness and refresh
+rate. `powertop` is optional and is not in `live/packages.txt` (not checked).
+
+**Risk.** Low. Saving the session on change must still be throttled, or a window being
+dragged writes the file every frame.
+
+### 8.6 The canvas: what only Infynitae can do
+
+**Where it stands.** The camera can go to a window slot or a cluster (Super+1…9,
+`crates/infynitae-core/src/input/keys.rs:77-80`), to the last two windows (Super+Tab), and to
+an overview and back (`entry.rs:1385`). A history of 256 camera positions exists, but only a
+fit pushes to it and "restore" pops it (`navigation.rs:32`, `380-383`; `entry.rs:1828`). The
+shell socket's `navigate` takes a point and a zoom (`crates/infynitae-ipc/src/protocol.rs:159-187`);
+the command line passes no zoom (`crates/infynitae/src/msg.rs:206-228`). Windows can be
+searched and jumped to in the edge's Windows panel (`live/edge-apps/src/cards/windows.rs:1-4`)
+and in the overview's menu (`msg.rs:324` onward). Nothing names a place.
+
+**Design.** Three additions on what exists.
+
+1. *Back.* Every jump (slot, Super+Tab, a pick in the window search, `navigate`, the
+   overview) pushes the camera to the history that is there; one key walks back. The key is
+   the owner's to choose (`BIND_BACK`).
+2. *Places.* `PLACE_<NAME>="x,y,zoom [CHORD]"`, a line like `PANEL_<NAME>`.
+   `infynitae msg place NAME` saves where the camera is; the chord, or the name in the
+   window search, goes there. A place is where a task lives: "mail", "game", "work".
+3. *One search.* Places are rows in the Windows panel's list beside windows, and typing
+   while the overview is shown opens that panel with what was typed. The fuzzel menu in
+   `msg.rs` stays only as the fallback without the edge.
+
+**Why this.** Workspaces (GNOME, KDE, Windows) are a fixed row of screens; a place on an
+endless canvas is a point and a zoom, which needs no new object in the core, only a stored
+camera value and the navigate that exists. A separate "task" object with its own window
+list was the alternative: more state to keep right, and the canvas already groups windows by
+where they are (clusters, `keys.rs:79-80`).
+
+**Cost.** About 80 lines in core (history pushes, one key), 60 in the adapter and `msg.rs`,
+80 in the Windows card. Runtime: none.
+
+**Measured.** Key presses and time to reach a given window among 20, by the same person:
+Infynitae's search and places against Alt+Tab and the task view on Windows and the overview
+on GNOME and KDE. The time from key to frame is in the VM script `ptime.py` already.
+
+**Risk.** Low. A place saved on one screen size shows a different area on another; store the
+centre and the zoom, as the session file does (`restore.rs:4-5`).
+
+### 8.7 Zoom quality at any distance
+
+**Where it stands.**
+
+- Each window has a wanted scale: the largest, over the screens showing it, of screen scale
+  times camera zoom. The window is told the smallest step of a ladder that covers it,
+  through the fractional scale and buffer scale hints
+  (`crates/infynitae-core/src/scale.rs:3-13`; `wl/convert.rs:1618-1630`). During a zoom
+  nothing is sent; one hint goes out when it settles (`scale.rs:48-52`, "after"), and only
+  at whole scales (`wl/lib.rs:1098-1114`).
+- That machinery is off by default: `MAX_APP_SCALE="1"` (`config/config:412-416`;
+  `wl/lib.rs:98-101`: a terminal re-flowed its text while zooming, before "after" existed).
+  So zooming in today enlarges the pixels the app drew at 1x, with the nearest-pixel filter
+  (`drm:1190-1197`): text turns blocky.
+- Zoomed out, each screen pixel averages a 4 x 4 grid of samples over the area it covers
+  (`crates/infynitae-backend-drm/src/smooth.rs:1-9`, `53-64`), which is exact down to about
+  one eighth size. Smithay builds no smaller copies of textures (`smooth.rs:4`; no
+  `GenerateMipmap` in `vendor/…/renderer/gles`). The camera can zoom far past one eighth
+  (`crates/infynitae-core/src/geom.rs:23`).
+- The only ceiling on a window's scale is the GPU's largest texture, 16384
+  (`scale.rs:31-33`). A 2560 x 1440 window at 2x is 59 MB a buffer, at 3x 133 MB, and apps
+  keep two or three.
+
+**How others do it (from memory, not checked today).** KDE's zoom and macOS's zoom enlarge
+the finished screen picture, so text is soft or blocky at any zoom above 1. Hyprland's zoom
+does the same. niri's overview and GNOME's draw live windows smaller with the GPU's linear
+filter, GNOME with smaller texture copies. None asks apps to redraw for the zoom.
+
+**The design: draw at the next whole scale up, average down.**
+
+1. *Zoomed in, settled.* The window is asked to redraw at the next whole scale at or above
+   what it needs (zoom 1.4 gives 2, zoom 2.3 gives 3). The compositor averages that down to
+   the exact zoom with the shader that exists. Text is drawn by the app's own font code at
+   more pixels than the screen shows and then reduced, so it is sharp at every zoom in
+   between, and the app's layout does not change because whole scales keep its logical size.
+   Default `MAX_APP_SCALE` becomes 3.
+2. *While the zoom moves.* Nothing is asked of apps; the picture they last drew is scaled.
+   The hint goes out once, 300 ms after the zoom stops (`scale.rs:29`). This is "after",
+   already built and tested (`scale.rs:1495`).
+3. *A pixel budget.* A window is never asked for more pixels than four times the screen's.
+   This joins the texture limit in the same place (`scale.rs:6-8`). Only windows in view are
+   asked at all, since the wanted scale counts only screens showing the window.
+4. *Past the ceiling* (zoom above 3, or a window over budget), the enlarged picture uses a
+   sharp-edge filter: nearest inside each source pixel, blended across one screen pixel at
+   its border. About ten shader lines beside the existing ones in `smooth.rs`; it replaces
+   plain nearest, which staircases at uneven zooms.
+5. *Zoomed out to one eighth.* Unchanged: the 4 x 4 average.
+6. *Farther out* (stage 2, batch 24, only if measured to alias). Each window in view keeps
+   a quarter-size copy made with the same shader, redrawn when the window commits, at most
+   ten times a second; the screen draw samples the copy. That is clean to 1/32. A copy of
+   a 2560 x 1440 window is 0.9 MB.
+
+**Why this and not the others.**
+
+- *Exact fractional scales* (ask for 1.4 at zoom 1.4) give the fewest pixels, but apps round
+  their sizes at fractional scales, so text and layout shift at each new zoom; the owner
+  already rejected that for terminals. Whole scales cost more memory and never shift.
+- *Enlarging the finished picture* (KDE, macOS, Hyprland) costs nothing and cannot be sharp:
+  the detail was never drawn.
+- *Smaller texture copies for every window, always* (the GNOME way) needs a Smithay patch,
+  does not work for buffers that come straight from a game or video decoder, and costs GPU
+  time on every commit of every window for a case, far zoom-out, that is rare. A copy only
+  for windows in view at that distance costs nothing otherwise.
+
+**Cost.** Stage 1: the default, about 30 lines for the budget, 10 of shader, 20 to choose
+it. GPU: a window redrawn at 2x or 3x is the app's cost, paid once per zoom; the average
+down is the shader that runs today when zoomed out. Memory is bounded by item 3: at most
+four screens' worth of pixels per window in view.
+
+**Measured: `tools/vm-edge/pzoom.py`.** A test window shows black text at 10, 12 and 16 px
+and a pattern of 1 px lines. The script sets the zoom to 0.03, 0.06, 0.125, 0.25, 0.5, 0.75,
+1.5, 2, 2.7 and 4 through `navigate`, waits for it to settle, and takes a screenshot. Two
+numbers per zoom: for zoom above 1, the width in screen pixels over which a letter's edge
+goes from 10% to 90% of its contrast (sharp is under 1.5); for zoom below 1, the difference
+from a reference made by averaging the 1x picture on the CPU (the line pattern must become
+even grey, with no bands). The same window and zooms on KDE's zoom, and Windows' Magnifier
+by hand, give the comparison: their edge widths grow with the zoom, Infynitae's must not.
+
+**Risk.** Medium. Apps that ignore the scale hints stay at 1x and get item 4. A terminal
+changes its buffer at the settle; with whole scales its rows and columns must stay the same,
+which is the case to test first (foot, kitty, alacritty). Memory rises for people who work
+zoomed in; the budget bounds it and `MAX_APP_SCALE="1"` remains for those who want none of
+it.
