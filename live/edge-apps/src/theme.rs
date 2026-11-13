@@ -1,6 +1,6 @@
 //! One look for everything the edge draws (docs/EDGE_RUST.md, "One look, one set of settings"):
-//! the colours from the system (SURFACE_COLOR, TEXT_COLOR, BORDER_ACTIVE) or a scheme built from the
-//! accent, the corners, the cards' opacity.
+//! the colours from the system (SURFACE_COLOR, TEXT_COLOR, ACCENT or BORDER_ACTIVE) or a scheme
+//! built from the accent, light/dark polarity, the corners, the cards' opacity.
 
 use crate::config::Config;
 
@@ -93,6 +93,8 @@ pub struct Theme {
     /// the accent where it is text or a thin line on a card: the accent itself when it reads
     /// there (3:1 or more against the card), else moved toward the text colour until it does
     pub accent_text: Rgba,
+    /// errors and warnings derived from the theme (distinct from accent)
+    pub alert: Rgba,
     /// a thin bar's empty part
     pub track: Rgba,
     pub corners: f64,
@@ -108,48 +110,100 @@ pub fn is_readable(fg: Rgba, bg: Rgba) -> bool {
     fg.contrast(bg.alpha(1.0)) >= 3.0
 }
 
+/// `fg` mixed toward `toward` in tenths until WCAG contrast on opaque `bg` reaches `min`.
+fn readable_contrast(fg: Rgba, bg: Rgba, toward: Rgba, min: f64) -> Rgba {
+    let opaque = bg.alpha(1.0);
+    (0..=10)
+        .map(|i| fg.mix(toward, i as f64 / 10.0))
+        .find(|c| c.contrast(opaque) >= min)
+        .unwrap_or(toward)
+}
+
 /// `fg` as it reads on `bg`: itself at 3:1 contrast or more, else mixed toward `toward` in tenths
 /// until it does.
 fn readable(fg: Rgba, bg: Rgba, toward: Rgba) -> Rgba {
-    (0..=10)
-        .map(|i| fg.mix(toward, i as f64 / 10.0))
-        .find(|c| is_readable(*c, bg))
-        .unwrap_or(toward)
+    readable_contrast(fg, bg, toward, 3.0)
+}
+
+/// Alert colour derived from the theme's card polarity and text tint, readable at 4.5:1 on card and
+/// kept visually separate from `accent`.
+fn theme_alert(card: Rgba, text: Rgba, accent: Rgba, light: bool) -> Rgba {
+    let light_card = light || card.alpha(1.0).luminance() > 0.35;
+    let s = if light_card { 0.74 } else { 0.80 };
+    let l = if light_card { 0.42 } else { 0.65 };
+    let make = |h: f64| readable_contrast(Rgba::hsl(h, s, l).mix(text, 0.08), card, text, 4.5);
+    let c = make(358.0);
+    let close = (c.0 - accent.0)
+        .abs()
+        .max((c.1 - accent.1).abs())
+        .max((c.2 - accent.2).abs())
+        < 0.14;
+    if close {
+        make(28.0)
+    } else {
+        c
+    }
 }
 
 impl Theme {
     pub fn from_config(c: &Config) -> Theme {
         let surface = Rgba::rgb(c.surface);
-        let text = Rgba::rgb(c.text);
+        let cfg_text = Rgba::rgb(c.text);
         let seed = Rgba::rgb(c.accent);
         let h = seed.hue();
+        let card_l = if c.light { 0.96 } else { 0.09 };
+        let acc_l = if c.light { 0.38 } else { 0.72 };
         // per scheme: the card tint's saturation and the accent's (0..1)
-        let (card, accent) = match c.scheme.as_str() {
-            "monochrome" => (Rgba::hsl(0.0, 0.0, 0.09), Rgba(0.91, 0.91, 0.91, 1.0)),
-            "neutral" => (Rgba::hsl(h, 0.06, 0.09), Rgba::hsl(h, 0.22, 0.72)),
-            "tonal" => (Rgba::hsl(h, 0.14, 0.09), Rgba::hsl(h, 0.60, 0.72)),
-            "vibrant" => (Rgba::hsl(h, 0.28, 0.09), Rgba::hsl(h, 0.88, 0.72)),
-            "expressive" => (Rgba::hsl(h, 0.20, 0.09), Rgba::hsl(h, 0.75, 0.72)),
+        let (card, accent, built) = match c.scheme.as_str() {
+            "monochrome" => (
+                Rgba::hsl(0.0, 0.0, card_l),
+                if c.light {
+                    Rgba(0.18, 0.18, 0.18, 1.0)
+                } else {
+                    Rgba(0.91, 0.91, 0.91, 1.0)
+                },
+                true,
+            ),
+            "neutral" => (Rgba::hsl(h, 0.06, card_l), Rgba::hsl(h, 0.22, acc_l), true),
+            "tonal" => (Rgba::hsl(h, 0.14, card_l), Rgba::hsl(h, 0.60, acc_l), true),
+            "vibrant" => (Rgba::hsl(h, 0.28, card_l), Rgba::hsl(h, 0.88, acc_l), true),
+            "expressive" => (Rgba::hsl(h, 0.20, card_l), Rgba::hsl(h, 0.75, acc_l), true),
             // "yours" and anything unknown: the system's colours as they are
-            _ => (surface, seed),
+            _ => (surface, seed, false),
+        };
+        let text = if built && cfg_text.contrast(card) < 4.5 {
+            if c.light {
+                Rgba::rgb([0x11, 0x13, 0x17])
+            } else {
+                Rgba::rgb([0xee, 0xf2, 0xf8])
+            }
+        } else {
+            cfg_text
         };
         let edge = match (c.scheme.as_str(), c.hair) {
             ("yours", Some(hair)) | ("", Some(hair)) => Rgba::rgb(hair).alpha(0.9),
             _ => text.alpha(0.10),
         };
+        let muted = text.mix(if built { card } else { surface }, 0.32);
         let lum = 0.2126 * accent.0 + 0.7152 * accent.1 + 0.0722 * accent.2;
+        let (dark_fg, light_fg) = if card.luminance() <= text.luminance() {
+            (card, text)
+        } else {
+            (text, card)
+        };
         Theme {
             card: card.alpha(c.opacity),
             edge,
             text,
-            muted: text.mix(surface, 0.32),
+            muted,
             accent,
-            on_accent: if lum > 0.45 { surface } else { text },
+            on_accent: if lum > 0.45 { dark_fg } else { light_fg },
             accent_text: readable(accent, card, text),
+            alert: theme_alert(card, text, accent, c.light),
             track: text.alpha(0.12),
             corners: c.corners,
             switch_look: c.switch_look.clone(),
-            font: "sans-serif".to_string(),
+            font: c.font.clone(),
         }
     }
 
@@ -171,6 +225,7 @@ impl Theme {
             ("ACCENT", self.accent),
             ("ON_ACCENT", self.on_accent),
             ("ACCENT_TEXT", self.accent_text),
+            ("ALERT", self.alert),
             ("TRACK", self.track),
         ] {
             out += &format!("LOOK_{name}=\"{}\"\nLOOK_{name}_AA=\"{}\"\n", hex(c), aa(c));
@@ -197,7 +252,7 @@ mod tests {
     #[test]
     fn the_look_prints_as_shell_lines() {
         let c = Config::from_text(
-            "SURFACE_COLOR=\"#171013\"\nTEXT_COLOR=\"#ffffff\"\nBORDER_ACTIVE=\"#cc70a9\"\nCORNERS=\"12\"\nCARD_OPACITY=\"80\"\n",
+            "SURFACE_COLOR=\"#171013\"\nTEXT_COLOR=\"#ffffff\"\nBORDER_ACTIVE=\"#cc70a9\"\nCORNERS=\"12\"\nCARD_OPACITY=\"80\"\nFONT_NAME=\"Inter\"\n",
         );
         let out = Theme::from_config(&c).shell_lines();
         assert!(
@@ -210,12 +265,14 @@ mod tests {
             "{out}"
         );
         assert!(
-            out.contains(
-                "LOOK_CORNERS=\"12\"\nLOOK_SMALL_RADIUS=\"7\"\nLOOK_FONT=\"sans-serif\"\n"
-            ),
+            out.contains("LOOK_ALERT=\"#") && out.contains("LOOK_ALERT_AA=\"ff\"\n"),
             "{out}"
         );
-        assert_eq!(out.lines().count(), 19);
+        assert!(
+            out.contains("LOOK_CORNERS=\"12\"\nLOOK_SMALL_RADIUS=\"7\"\nLOOK_FONT=\"Inter\"\n"),
+            "{out}"
+        );
+        assert_eq!(out.lines().count(), 21);
     }
 
     #[test]
@@ -253,5 +310,101 @@ mod tests {
         let c = Config::from_text("THEME_SCHEME=\"monochrome\"\nBORDER_ACTIVE=\"#cc70a9\"\n");
         let t = Theme::from_config(&c);
         assert!((t.accent.0 - t.accent.1).abs() < 1e-9 && (t.accent.1 - t.accent.2).abs() < 1e-9);
+    }
+
+    #[test]
+    fn light_built_schemes_have_light_card_dark_text_and_readable_alert() {
+        for scheme in ["monochrome", "neutral", "tonal", "vibrant", "expressive"] {
+            let c = Config::from_text(&format!(
+                "COLOR_SCHEME=\"prefer-light\"\nTHEME_SCHEME=\"{scheme}\"\nACCENT=\"#7aa2f7\"\nTEXT_COLOR=\"#eef2f8\"\n"
+            ));
+            let t = Theme::from_config(&c);
+            let card = t.card.alpha(1.0);
+            assert!(
+                card.luminance() > 0.75,
+                "{scheme}: lum={}",
+                card.luminance()
+            );
+            assert!(t.text.contrast(card) >= 4.5, "{scheme}: text contrast");
+            assert!(t.muted.contrast(card) >= 3.0, "{scheme}: muted contrast");
+            assert!(is_readable(t.accent_text, card), "{scheme}: accent_text");
+            assert!(t.alert.contrast(card) >= 4.5, "{scheme}: alert contrast");
+            assert_ne!(t.alert, t.accent, "{scheme}: alert must differ from accent");
+        }
+    }
+
+    #[test]
+    fn alert_stays_readable_and_distinct_even_with_red_accent() {
+        let red_c = Config::from_text(
+            "ACCENT=\"#ed6a6f\"\nSURFACE_COLOR=\"#111317\"\nTEXT_COLOR=\"#eef2f8\"\n",
+        );
+        let t = Theme::from_config(&red_c);
+        let card = t.card.alpha(1.0);
+        assert!(t.alert.contrast(card) >= 4.5);
+        assert_ne!(t.alert, t.accent);
+        let d = (t.alert.0 - t.accent.0)
+            .abs()
+            .max((t.alert.1 - t.accent.1).abs())
+            .max((t.alert.2 - t.accent.2).abs());
+        assert!(d >= 0.14, "red accent and alert are too close: {d}");
+    }
+
+    #[test]
+    fn an_old_config_gives_the_same_look_lines_as_before() {
+        // Copy of config/config as it looked before ACCENT / MOTION / LOCK_WHEN_AWAY, with
+        // owner-style values appended.
+        let base: String = include_str!("../../../config/config")
+            .lines()
+            .filter(|l| {
+                let t = l.trim_start();
+                !t.starts_with("ACCENT=")
+                    && !t.starts_with("MOTION=")
+                    && !t.starts_with("LOCK_WHEN_AWAY=")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let old_cfg = format!(
+            "{base}\n\
+             WINDOW_CORNERS=\"14\"\n\
+             BORDER_ACTIVE=\"#cc70a9\"\n\
+             SURFACE_COLOR=\"#171013\"\n\
+             BORDER_INACTIVE=\"#452e3c\"\n\
+             TEXT_COLOR=\"#eef2f8\"\n\
+             THEME_SCHEME=\"yours\"\n\
+             CARD_OPACITY=\"80\"\n\
+             TEARING=\"true\"\n\
+             GAME_MODE=\"true\"\n"
+        );
+        let parsed = Config::from_text(&old_cfg);
+        assert_eq!(parsed.corners, 14.0);
+        assert_eq!(parsed.accent, [0xcc, 0x70, 0xa9]);
+        let lines: Vec<String> = Theme::from_config(&parsed)
+            .shell_lines()
+            .lines()
+            .filter(|l| !l.starts_with("LOOK_ALERT"))
+            .map(str::to_string)
+            .collect();
+        let expected = [
+            "LOOK_CARD=\"#171013\"",
+            "LOOK_CARD_AA=\"cc\"",
+            "LOOK_EDGE=\"#452e3c\"",
+            "LOOK_EDGE_AA=\"e6\"",
+            "LOOK_TEXT=\"#eef2f8\"",
+            "LOOK_TEXT_AA=\"ff\"",
+            "LOOK_MUTED=\"#a9aaaf\"",
+            "LOOK_MUTED_AA=\"ff\"",
+            "LOOK_ACCENT=\"#cc70a9\"",
+            "LOOK_ACCENT_AA=\"ff\"",
+            "LOOK_ON_ACCENT=\"#171013\"",
+            "LOOK_ON_ACCENT_AA=\"ff\"",
+            "LOOK_ACCENT_TEXT=\"#cc70a9\"",
+            "LOOK_ACCENT_TEXT_AA=\"ff\"",
+            "LOOK_TRACK=\"#eef2f8\"",
+            "LOOK_TRACK_AA=\"1f\"",
+            "LOOK_CORNERS=\"14\"",
+            "LOOK_SMALL_RADIUS=\"8\"",
+            "LOOK_FONT=\"sans-serif\"",
+        ];
+        assert_eq!(lines, expected);
     }
 }
