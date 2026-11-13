@@ -23,6 +23,62 @@ expand_path() {
     esac
 }
 
+# Reads the config with config.sh's syntax guard and legacy renames when available, falling back
+# to sourcing the file directly if config.sh is missing.
+load_config() {
+    for _lc_sh in "${SCRIPT_DIR:-}/config.sh" "${SCRIPT_DIR:-}/live/config.sh" "${SCRIPT_DIR:-}/../live/config.sh" "$HOME/infynitae/live/config.sh"; do
+        if [ -f "$_lc_sh" ]; then
+            _infy_renames="${_lc_sh%/*}/config-renames"
+            . "$_lc_sh"
+            unset _lc_sh _infy_renames
+            return 0
+        fi
+    done
+    unset _lc_sh
+    if [ -f "$CONFIG_FILE" ]; then
+        . "$CONFIG_FILE"
+    fi
+}
+
+# Fallback defaults for settings read outside config.sh (re-applied after config reloads)
+apply_defaults() {
+    CURSOR_THEME="${CURSOR_THEME:-${XCURSOR_THEME:-Adwaita}}"
+    CURSOR_SIZE="${CURSOR_SIZE:-${XCURSOR_SIZE:-24}}"
+    FONT_NAME="${FONT_NAME:-sans-serif}"
+    # Terminals' font: TERMINAL_FONT, else FONT_NAME when that is a monospace font (as before
+    # 2026-11-06, when one font served both), else monospace
+    if [ -z "${TERMINAL_FONT:-}" ]; then
+        case "$FONT_NAME" in
+            monospace|Monospace) TERMINAL_FONT="$FONT_NAME" ;;
+            sans-serif|sans|Sans|"Sans Serif"|serif|Serif) TERMINAL_FONT="monospace" ;;
+            *)
+                if command -v fc-list >/dev/null 2>&1 && [ -n "$(fc-list ":family=$FONT_NAME:spacing=100" family 2>/dev/null)" ]; then
+                    TERMINAL_FONT="$FONT_NAME"
+                else
+                    TERMINAL_FONT="monospace"
+                fi
+                ;;
+        esac
+    fi
+    FONT_SIZE="${FONT_SIZE:-10}"
+    ICON_THEME="${ICON_THEME:-Adwaita}"
+    COLOR_SCHEME="${COLOR_SCHEME:-prefer-dark}"
+    CANVAS_COLOR="${CANVAS_COLOR:-#0b0f14}"
+    SURFACE_COLOR="${SURFACE_COLOR:-#111317}"
+    BORDER_ACTIVE="${BORDER_ACTIVE:-#7aa2f7}"
+    BORDER_INACTIVE="${BORDER_INACTIVE:-#333b54}"
+    TEXT_COLOR="${TEXT_COLOR:-#eef2f8}"
+    MOUSE_ACCEL_PROFILE="${MOUSE_ACCEL_PROFILE:-flat}"
+    MOUSE_ACCEL_SPEED="${MOUSE_ACCEL_SPEED:-0.0}"
+    KEYBOARD_REPEAT_DELAY="${KEYBOARD_REPEAT_DELAY:-200}"
+    KEYBOARD_REPEAT_RATE="${KEYBOARD_REPEAT_RATE:-35}"
+    PAN_MODE="${PAN_MODE:-free}"
+    SCALING_FILTER="${SCALING_FILTER:-nearest}"
+    OUTPUT_SCALE="${OUTPUT_SCALE:-1.0}"
+    XKB_DEFAULT_LAYOUT="${XKB_DEFAULT_LAYOUT:-us}"
+    XKB_DEFAULT_OPTIONS="${XKB_DEFAULT_OPTIONS:-}"
+}
+
 # The look shared by everything Infynitae draws (docs/EDGE_RUST.md, stage 7: CORNERS, THEME_SCHEME,
 # CARD_OPACITY), as the Rust edge resolves it (infynitae-edge-rs --print-theme): LOOK_CORNERS,
 # LOOK_CARD, LOOK_CARD_AA, LOOK_EDGE, LOOK_EDGE_AA, LOOK_TEXT, LOOK_ACCENT... Without the Rust edge,
@@ -41,28 +97,101 @@ look_load() {
             [ "${#LOOK_CORNERS}" -le 2 ] && [ "$LOOK_CORNERS" -le 28 ] || LOOK_CORNERS=28
             ;;
     esac
-    LOOK_CARD="${SURFACE_COLOR:-#1e2030}" LOOK_CARD_AA=f7
+    LOOK_SMALL_RADIUS=$(( (LOOK_CORNERS * 55 + 50) / 100 ))
+    LOOK_CARD="${SURFACE_COLOR:-#111317}" LOOK_CARD_AA=e6
     LOOK_EDGE="${BORDER_INACTIVE:-#333b54}" LOOK_EDGE_AA=e6
-    LOOK_TEXT="${TEXT_COLOR:-#e6e6e6}" LOOK_ACCENT="${BORDER_ACTIVE:-#7aa2f7}"
+    LOOK_TEXT="${TEXT_COLOR:-#eef2f8}" LOOK_TEXT_AA=ff
+    LOOK_ACCENT="${BORDER_ACTIVE:-#7aa2f7}" LOOK_ACCENT_AA=ff
+    LOOK_MUTED="" LOOK_MUTED_AA=ff
+    LOOK_ON_ACCENT="" LOOK_ON_ACCENT_AA=ff
+    LOOK_ACCENT_TEXT="" LOOK_ACCENT_TEXT_AA=ff
+    LOOK_TRACK="" LOOK_TRACK_AA=1f
+    LOOK_FONT="${FONT_NAME:-sans-serif}"
+
     # the edge EDGE_IMPL picked (its link), else the Rust one: the C edge prints no theme
     look_edge="$HOME/.local/bin/$(readlink "$HOME/.local/bin/infynitae-edge" 2>/dev/null || true)"
     case "$look_edge" in */infynitae-edge-rs | */infynitae-edge-apps) ;; *) look_edge="$HOME/.local/bin/infynitae-edge-rs" ;; esac
-    [ -x "$look_edge" ] || return 0
-    look_out=$("$look_edge" --print-theme 2>/dev/null) || return 0
-    while IFS= read -r look_line; do
-        case "$look_line" in
-            LOOK_[A-Z_]*=\"*\")
-                look_name=${look_line%%=*} look_val=${look_line#*=}
-                look_val=${look_val#\"} look_val=${look_val%\"}
-                case "$look_name$look_val" in
-                    *[!A-Za-z0-9_#]*) ;;
-                    *) eval "$look_name=\$look_val" ;;
-                esac
-                ;;
-        esac
-    done << LOOK_END
+    [ -x "$look_edge" ] || look_edge="$HOME/.local/bin/infynitae-edge-apps"
+
+    look_printed_font="" look_got_small=false look_got_card_aa=false
+    if [ -x "$look_edge" ] && look_out=$("$look_edge" --print-theme 2>/dev/null); then
+        while IFS= read -r look_line; do
+            case "$look_line" in
+                LOOK_[A-Z0-9_]*=\"*\")
+                    look_name=${look_line%%=*} look_val=${look_line#*=}
+                    look_val=${look_val#\"} look_val=${look_val%\"}
+                    case "$look_name" in
+                        LOOK_CARD|LOOK_CARD_AA|LOOK_EDGE|LOOK_EDGE_AA|LOOK_TEXT|LOOK_TEXT_AA|LOOK_MUTED|LOOK_MUTED_AA|LOOK_ACCENT|LOOK_ACCENT_AA|LOOK_ON_ACCENT|LOOK_ON_ACCENT_AA|LOOK_ACCENT_TEXT|LOOK_ACCENT_TEXT_AA|LOOK_TRACK|LOOK_TRACK_AA|LOOK_CORNERS|LOOK_SMALL_RADIUS)
+                            case "$look_val" in
+                                *[!A-Za-z0-9_#]*) ;;
+                                ?*)
+                                    eval "$look_name=\$look_val"
+                                    case "$look_name" in
+                                        LOOK_SMALL_RADIUS) look_got_small=true ;;
+                                        LOOK_CARD_AA) look_got_card_aa=true ;;
+                                    esac
+                                    ;;
+                            esac
+                            ;;
+                        LOOK_FONT)
+                            case "$look_val" in
+                                *[!A-Za-z0-9_.,+\ -]*) ;;
+                                ?*) look_printed_font="$look_val" ;;
+                            esac
+                            ;;
+                    esac
+                    ;;
+            esac
+        done << LOOK_END
 $look_out
 LOOK_END
+        [ "$look_got_small" = true ] || LOOK_SMALL_RADIUS=$(( (LOOK_CORNERS * 55 + 50) / 100 ))
+        # Keep the configured FONT_NAME until --print-theme reads FONT_NAME from config
+        if [ -n "$look_printed_font" ] && { [ "$look_printed_font" != "sans-serif" ] || [ "${FONT_NAME:-sans-serif}" = "sans-serif" ]; }; then
+            LOOK_FONT="$look_printed_font"
+        fi
+    fi
+
+    if [ -z "$LOOK_MUTED" ] || [ -z "$LOOK_ON_ACCENT" ] || [ -z "$LOOK_ACCENT_TEXT" ] || [ "$look_got_card_aa" != true ]; then
+        IFS=' ' read -r look_aa look_muted look_on_acc look_acc_text << EOF
+$(LC_ALL=C awk -v card="${LOOK_CARD#\#}" -v text="${LOOK_TEXT#\#}" -v acc="${LOOK_ACCENT#\#}" -v op="${CARD_OPACITY:-90}" '
+    function h(s, i) { return index("0123456789abcdef", tolower(substr(s, i, 1))) - 1 }
+    function c(s, i) { return h(s, i) * 16 + h(s, i + 1) }
+    function mix(a, b, t) {
+        return sprintf("%02x%02x%02x",
+            int(c(a, 1) * (1 - t) + c(b, 1) * t + 0.5),
+            int(c(a, 3) * (1 - t) + c(b, 3) * t + 0.5),
+            int(c(a, 5) * (1 - t) + c(b, 5) * t + 0.5))
+    }
+    function lin(v,   x) { x = v / 255.0; return (x <= 0.04045) ? x / 12.92 : ((x + 0.055) / 1.055) ^ 2.4 }
+    function lum(s) { return 0.2126 * lin(c(s, 1)) + 0.7152 * lin(c(s, 3)) + 0.0722 * lin(c(s, 5)) }
+    function contrast(a, b,   la, lb, hi, lo) {
+        la = lum(a); lb = lum(b)
+        hi = (la > lb) ? la : lb; lo = (la < lb) ? la : lb
+        return (hi + 0.05) / (lo + 0.05)
+    }
+    BEGIN {
+        if (op !~ /^[0-9]+(\.[0-9]+)?$/) op = 90
+        if (op < 0) op = 0
+        if (op > 100) op = 100
+        aa = sprintf("%02x", int(op * 255 / 100 + 0.5))
+        muted = mix(text, card, 0.32)
+        on_lum = 0.2126 * c(acc, 1) / 255.0 + 0.7152 * c(acc, 3) / 255.0 + 0.0722 * c(acc, 5) / 255.0
+        on_acc = (on_lum > 0.45) ? card : text
+        acc_text = text
+        for (i = 0; i <= 10; i++) {
+            cand = mix(acc, text, i / 10.0)
+            if (contrast(cand, card) >= 3.0) { acc_text = cand; break }
+        }
+        printf "%s #%s #%s #%s\n", aa, muted, on_acc, acc_text
+    }')
+EOF
+        [ "$look_got_card_aa" = true ] || LOOK_CARD_AA="$look_aa"
+        [ -n "$LOOK_MUTED" ] || LOOK_MUTED="$look_muted"
+        [ -n "$LOOK_ON_ACCENT" ] || LOOK_ON_ACCENT="$look_on_acc"
+        [ -n "$LOOK_ACCENT_TEXT" ] || LOOK_ACCENT_TEXT="$look_acc_text"
+    fi
+    [ -n "$LOOK_TRACK" ] || LOOK_TRACK="$LOOK_TEXT"
 }
 
 # The resolved look saved for the helpers that draw themselves (the lock screen): one file of
@@ -70,52 +199,32 @@ LOOK_END
 look_save() {
     look_file="${XDG_CACHE_HOME:-$HOME/.cache}/infynitae/look"
     mkdir -p "${look_file%/*}"
-    printf 'LOOK_CORNERS="%s"\nLOOK_CARD="%s"\nLOOK_EDGE="%s"\nLOOK_TEXT="%s"\nLOOK_ACCENT="%s"\n' \
-        "$LOOK_CORNERS" "$LOOK_CARD" "$LOOK_EDGE" "$LOOK_TEXT" "$LOOK_ACCENT" > "$look_file.new" \
-        && mv -f "$look_file.new" "$look_file"
+    put_file "$look_file" << EOF
+LOOK_CARD="${LOOK_CARD}"
+LOOK_CARD_AA="${LOOK_CARD_AA}"
+LOOK_EDGE="${LOOK_EDGE}"
+LOOK_EDGE_AA="${LOOK_EDGE_AA}"
+LOOK_TEXT="${LOOK_TEXT}"
+LOOK_TEXT_AA="${LOOK_TEXT_AA}"
+LOOK_MUTED="${LOOK_MUTED}"
+LOOK_MUTED_AA="${LOOK_MUTED_AA}"
+LOOK_ACCENT="${LOOK_ACCENT}"
+LOOK_ACCENT_AA="${LOOK_ACCENT_AA}"
+LOOK_ON_ACCENT="${LOOK_ON_ACCENT}"
+LOOK_ON_ACCENT_AA="${LOOK_ON_ACCENT_AA}"
+LOOK_ACCENT_TEXT="${LOOK_ACCENT_TEXT}"
+LOOK_ACCENT_TEXT_AA="${LOOK_ACCENT_TEXT_AA}"
+LOOK_TRACK="${LOOK_TRACK}"
+LOOK_TRACK_AA="${LOOK_TRACK_AA}"
+LOOK_CORNERS="${LOOK_CORNERS}"
+LOOK_SMALL_RADIUS="${LOOK_SMALL_RADIUS}"
+LOOK_FONT="${LOOK_FONT}"
+EOF
 }
 
-# Load current config if present
-if [ -f "$CONFIG_FILE" ]; then
-    . "$CONFIG_FILE"
-fi
-
-# Fallback defaults
-CURSOR_THEME="${CURSOR_THEME:-${XCURSOR_THEME:-Adwaita}}"
-CURSOR_SIZE="${CURSOR_SIZE:-${XCURSOR_SIZE:-24}}"
-FONT_NAME="${FONT_NAME:-sans-serif}"
-# Terminals' font: TERMINAL_FONT, else FONT_NAME when that is a monospace font (as before
-# 2026-11-06, when one font served both), else monospace
-if [ -z "${TERMINAL_FONT:-}" ]; then
-    case "$FONT_NAME" in
-        monospace|Monospace) TERMINAL_FONT="$FONT_NAME" ;;
-        sans-serif|sans|Sans|"Sans Serif"|serif|Serif) TERMINAL_FONT="monospace" ;;
-        *)
-            if command -v fc-list >/dev/null 2>&1 && [ -n "$(fc-list ":family=$FONT_NAME:spacing=100" family 2>/dev/null)" ]; then
-                TERMINAL_FONT="$FONT_NAME"
-            else
-                TERMINAL_FONT="monospace"
-            fi
-            ;;
-    esac
-fi
-FONT_SIZE="${FONT_SIZE:-10}"
-ICON_THEME="${ICON_THEME:-Adwaita}"
-COLOR_SCHEME="${COLOR_SCHEME:-prefer-dark}"
-CANVAS_COLOR="${CANVAS_COLOR:-#0b0f14}"
-SURFACE_COLOR="${SURFACE_COLOR:-#111317}"
-BORDER_ACTIVE="${BORDER_ACTIVE:-#7aa2f7}"
-BORDER_INACTIVE="${BORDER_INACTIVE:-#333b54}"
-TEXT_COLOR="${TEXT_COLOR:-#eef2f8}"
-MOUSE_ACCEL_PROFILE="${MOUSE_ACCEL_PROFILE:-flat}"
-MOUSE_ACCEL_SPEED="${MOUSE_ACCEL_SPEED:-0.0}"
-KEYBOARD_REPEAT_DELAY="${KEYBOARD_REPEAT_DELAY:-200}"
-KEYBOARD_REPEAT_RATE="${KEYBOARD_REPEAT_RATE:-35}"
-PAN_MODE="${PAN_MODE:-free}"
-SCALING_FILTER="${SCALING_FILTER:-nearest}"
-OUTPUT_SCALE="${OUTPUT_SCALE:-1.0}"
-XKB_DEFAULT_LAYOUT="${XKB_DEFAULT_LAYOUT:-us}"
-XKB_DEFAULT_OPTIONS="${XKB_DEFAULT_OPTIONS:-}"
+# Load current config and fill defaults
+load_config
+apply_defaults
 
 # Writes stdin to $1 only when it differs: an unchanged login touches no file, so the apps that
 # watch their config (kitty, alacritty, mako) are not reloaded for nothing. PUT_CHANGED says
@@ -213,7 +322,7 @@ folder_icon_theme() {
     for d in "$HOME/.local/share/icons/$ICON_THEME" /usr/share/icons/"$ICON_THEME"; do
         [ -f "$d/index.theme" ] && { src="$d"; break; }
     done
-    hex=$(printf '%s' "$BORDER_ACTIVE" | tr -d '#' | tr 'A-F' 'a-f')
+    hex=$(printf '%s' "${LOOK_ACCENT:-${BORDER_ACTIVE:-#7aa2f7}}" | tr -d '#' | tr 'A-F' 'a-f')
     case "$hex" in [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;; *) src="" ;; esac
     [ -n "$src" ] || { echo "$ICON_THEME"; return 0; }
     name="Infynitae-$ICON_THEME"
@@ -274,8 +383,8 @@ apply_settings() {
                 if [ "$(cat "$twf_stamp" 2>/dev/null)" != "$twf_now" ] && wallpaper_colors "$twf_wp" "$twf_what"; then
                     mkdir -p "$(dirname "$twf_stamp")"
                     printf '%s\n' "$twf_now" > "$twf_stamp"
-                    . "$CONFIG_FILE"
-                    SURFACE_COLOR="${SURFACE_COLOR:-#111317}" BORDER_ACTIVE="${BORDER_ACTIVE:-#7aa2f7}"
+                    load_config
+                    apply_defaults
                 fi
             fi
             ;;
@@ -323,8 +432,47 @@ EOF
     # colours. GTK 4 does not: libadwaita takes its look from the names and the Settings portal.
     look_load
     look_save
-    # GTK's widgets a little rounder than square, less than the cards (8 gives 6, as before)
-    gtk_radius=$((LOOK_CORNERS * 3 / 4))
+    case "${THEME_SYNC:-true}" in
+        0|false|no|off|FALSE|False) ;;
+        *)
+            # Derive solid border fallback (for translucent LOOK_EDGE), scheme canvas, terminal
+            # selection blend (30% accent into surface), and all Qt palette colours in one awk call.
+            IFS=' ' read -r edge_solid app_canvas sel_hex \
+                q_win q_base q_alt q_btn q_light q_mid_light q_mid q_dark q_shadow \
+                q_text q_dim q_off q_acc q_acc_off q_on_acc q_link q_visited << EOF
+$(LC_ALL=C awk \
+    -v card="${LOOK_CARD#\#}" \
+    -v text="${LOOK_TEXT#\#}" \
+    -v acc="${LOOK_ACCENT#\#}" \
+    -v on_acc="${LOOK_ON_ACCENT#\#}" \
+    -v edge="${LOOK_EDGE#\#}" \
+    -v edge_aa="${LOOK_EDGE_AA:-e6}" \
+    -v canvas="${CANVAS_COLOR#\#}" \
+    -v scheme="${THEME_SCHEME:-yours}" '
+    function h(s, i) { return index("0123456789abcdef", tolower(substr(s, i, 1))) - 1 }
+    function c(s, i) { return h(s, i) * 16 + h(s, i + 1) }
+    function mix(a, b, t) {
+        return sprintf("%02x%02x%02x",
+            int(c(a, 1) * (100 - t) / 100 + c(b, 1) * t / 100 + 0.5),
+            int(c(a, 3) * (100 - t) / 100 + c(b, 3) * t / 100 + 0.5),
+            int(c(a, 5) * (100 - t) / 100 + c(b, 5) * t / 100 + 0.5))
+    }
+    BEGIN {
+        ea = h(edge_aa, 1) * 16 + h(edge_aa, 2)
+        edge_sol = (ea < 128) ? mix(card, edge, ea * 100 / 255) : tolower(edge)
+        app_canv = (scheme == "" || scheme == "yours") ? tolower(canvas) : mix(card, "000000", 38)
+        sel = mix(card, acc, 30)
+        printf "#%s #%s %s #ff%s #ff%s #ff%s #ff%s #ff%s #ff%s #ff%s #ff%s #ff%s #ff%s #ff%s #ff%s #ff%s #ff%s #ff%s #ff%s #ff%s\n",
+            edge_sol, app_canv, sel,
+            tolower(card), mix(card, app_canv, 50), mix(card, text, 4), mix(card, text, 8),
+            mix(card, text, 22), mix(card, text, 14), edge_sol, mix(card, "000000", 45),
+            mix(card, "000000", 75), tolower(text), mix(text, card, 45), mix(text, card, 60),
+            tolower(acc), mix(acc, card, 55), tolower(on_acc), mix(acc, text, 25),
+            mix(acc, text, 55)
+    }')
+EOF
+            ;;
+    esac
     # (after the colours are known: the wallpaper may have just given them)
     ICON_THEME=$(folder_icon_theme)
     for gtk_dir in "$HOME/.config/gtk-3.0" "$HOME/.config/gtk-4.0"; do
@@ -333,10 +481,10 @@ EOF
 [Settings]
 gtk-cursor-theme-name=$CURSOR_THEME
 gtk-cursor-theme-size=$CURSOR_SIZE
-gtk-font-name=$FONT_NAME $FONT_SIZE
+gtk-font-name=$LOOK_FONT $FONT_SIZE
 gtk-icon-theme-name=$ICON_THEME
 gtk-application-prefer-dark-theme=$([ "$COLOR_SCHEME" = "prefer-dark" ] && echo 1 || echo 0)
-gtk-enable-animations=false
+gtk-enable-animations=true
 EOF
         gtk_css="$gtk_dir/gtk.css"
         case "${THEME_SYNC:-true}" in
@@ -346,31 +494,31 @@ EOF
         {
             cat << EOF
 /* managed by infynitae — delete this line to keep custom GTK CSS */
-@define-color theme_bg_color $SURFACE_COLOR;
-@define-color theme_fg_color $TEXT_COLOR;
-@define-color theme_base_color mix($SURFACE_COLOR, $CANVAS_COLOR, 0.5);
-@define-color theme_text_color $TEXT_COLOR;
-@define-color theme_selected_bg_color $BORDER_ACTIVE;
-@define-color theme_selected_fg_color $SURFACE_COLOR;
-@define-color borders $BORDER_INACTIVE;
-@define-color window_bg_color $SURFACE_COLOR;
-@define-color window_fg_color $TEXT_COLOR;
-@define-color view_bg_color mix($SURFACE_COLOR, $CANVAS_COLOR, 0.5);
-@define-color view_fg_color $TEXT_COLOR;
-@define-color headerbar_bg_color shade($SURFACE_COLOR, 1.15);
-@define-color headerbar_fg_color $TEXT_COLOR;
-@define-color headerbar_backdrop_color $SURFACE_COLOR;
-@define-color sidebar_bg_color shade($SURFACE_COLOR, 1.1);
-@define-color sidebar_fg_color $TEXT_COLOR;
-@define-color card_bg_color mix($SURFACE_COLOR, $TEXT_COLOR, 0.05);
-@define-color card_fg_color $TEXT_COLOR;
-@define-color popover_bg_color shade($SURFACE_COLOR, 1.2);
-@define-color popover_fg_color $TEXT_COLOR;
-@define-color dialog_bg_color shade($SURFACE_COLOR, 1.15);
-@define-color dialog_fg_color $TEXT_COLOR;
-@define-color accent_bg_color $BORDER_ACTIVE;
-@define-color accent_color $BORDER_ACTIVE;
-@define-color accent_fg_color $SURFACE_COLOR;
+@define-color theme_bg_color $LOOK_CARD;
+@define-color theme_fg_color $LOOK_TEXT;
+@define-color theme_base_color mix($LOOK_CARD, $app_canvas, 0.5);
+@define-color theme_text_color $LOOK_TEXT;
+@define-color theme_selected_bg_color $LOOK_ACCENT;
+@define-color theme_selected_fg_color $LOOK_ON_ACCENT;
+@define-color borders $edge_solid;
+@define-color window_bg_color $LOOK_CARD;
+@define-color window_fg_color $LOOK_TEXT;
+@define-color view_bg_color mix($LOOK_CARD, $app_canvas, 0.5);
+@define-color view_fg_color $LOOK_TEXT;
+@define-color headerbar_bg_color shade($LOOK_CARD, 1.15);
+@define-color headerbar_fg_color $LOOK_TEXT;
+@define-color headerbar_backdrop_color $LOOK_CARD;
+@define-color sidebar_bg_color shade($LOOK_CARD, 1.1);
+@define-color sidebar_fg_color $LOOK_TEXT;
+@define-color card_bg_color mix($LOOK_CARD, $LOOK_TEXT, 0.05);
+@define-color card_fg_color $LOOK_TEXT;
+@define-color popover_bg_color shade($LOOK_CARD, 1.2);
+@define-color popover_fg_color $LOOK_TEXT;
+@define-color dialog_bg_color shade($LOOK_CARD, 1.15);
+@define-color dialog_fg_color $LOOK_TEXT;
+@define-color accent_bg_color $LOOK_ACCENT;
+@define-color accent_color $LOOK_ACCENT_TEXT;
+@define-color accent_fg_color $LOOK_ON_ACCENT;
 EOF
             [ "$gtk_dir" = "$HOME/.config/gtk-4.0" ] || cat << EOF
 window, dialog, popover, menu, .background { background-color: @theme_bg_color; color: @theme_fg_color; }
@@ -384,18 +532,21 @@ headerbar:backdrop, .titlebar:backdrop { background: @headerbar_backdrop_color; 
 .sidebar, placessidebar, stacksidebar { background-color: @sidebar_bg_color; border-color: @borders; }
 button {
     background: mix(@theme_bg_color, @theme_fg_color, 0.08); color: @theme_fg_color;
-    border: 1px solid @borders; border-radius: ${gtk_radius}px; box-shadow: none; text-shadow: none;
+    border: 1px solid @borders; border-radius: ${LOOK_SMALL_RADIUS}px; box-shadow: none; text-shadow: none;
 }
-button:hover { background: mix(@theme_bg_color, @theme_fg_color, 0.14); }
+button:hover { background: mix(@theme_bg_color, @theme_fg_color, 0.08); }
 button:active, button:checked { background: mix(@theme_bg_color, @accent_bg_color, 0.35); }
 button.flat:not(:hover):not(:checked) { background: transparent; border-color: transparent; }
 entry, spinbutton {
     background: @theme_base_color; color: @theme_text_color;
-    border: 1px solid @borders; border-radius: ${gtk_radius}px; box-shadow: none;
+    border: 1px solid @borders; border-radius: ${LOOK_SMALL_RADIUS}px; box-shadow: none;
 }
 entry:focus, spinbutton:focus { border-color: @accent_bg_color; }
-*:selected, selection, .view:selected, treeview:selected, row:selected {
+*:selected, selection {
     background-color: @theme_selected_bg_color; color: @theme_selected_fg_color;
+}
+.view:selected, treeview:selected, row:selected {
+    background-color: alpha(@accent_bg_color, 0.16); color: @theme_fg_color;
 }
 scrollbar { background: transparent; border: none; }
 scrollbar slider { background: mix(@theme_bg_color, @theme_fg_color, 0.3); border: none; }
@@ -409,17 +560,12 @@ EOF
     case "${THEME_SYNC:-true}" in
         0|false|no|off|FALSE|False) ;;
         *)
-    s_hex="${SURFACE_COLOR#\#}"
-    c_hex="${CANVAS_COLOR#\#}"
-    ba_hex="${BORDER_ACTIVE#\#}"
-    bi_hex="${BORDER_INACTIVE#\#}"
-    t_hex="${TEXT_COLOR#\#}"
-    # one look with the edge and the lock screen (2026-11-06): sans-serif 13 px, the hairline
-    # outline, rounded by CORNERS
     # (the cards' corners and colours: look_load)
     radius=$LOOK_CORNERS
-    card_hex="${LOOK_CARD#\#}${LOOK_CARD_AA}" edge_hex="${LOOK_EDGE#\#}${LOOK_EDGE_AA}"
+    lc_hex="${LOOK_CARD#\#}"
+    card_hex="${lc_hex}${LOOK_CARD_AA}" edge_hex="${LOOK_EDGE#\#}${LOOK_EDGE_AA}"
     lt_hex="${LOOK_TEXT#\#}" la_hex="${LOOK_ACCENT#\#}"
+    on_acc_hex="${LOOK_ON_ACCENT#\#}"
 
     if command -v mako >/dev/null 2>&1 || [ -d "$HOME/.config/mako" ]; then
         mako_cfg="$HOME/.config/mako/config"
@@ -427,7 +573,7 @@ EOF
             mkdir -p "$HOME/.config/mako"
             put_file "$mako_cfg" << EOF
 # managed by infynitae — notifications: one border, gone after 5 s, kept in the history
-font=sans-serif 10
+font=${LOOK_FONT} 13px
 markup=1
 format=<b>%s</b>\n<span alpha="68%%" size="small">%b</span>
 background-color=#${card_hex}
@@ -437,8 +583,8 @@ border-size=1
 border-radius=${radius}
 width=360
 height=110
-margin=12
-padding=12,14
+margin=24
+padding=16,18
 default-timeout=5000
 ignore-timeout=1
 max-history=20
@@ -463,7 +609,7 @@ EOF
             put_file "$fuzzel_cfg" << EOF
 # managed by infynitae — delete this line to keep custom fuzzel settings
 [main]
-font=sans-serif:size=11
+font=${LOOK_FONT}:pixelsize=13
 prompt="› "
 terminal=$HOME/.local/bin/xdg-terminal-exec
 layer=overlay
@@ -476,7 +622,7 @@ inner-pad=4
 background=${card_hex}
 text=${lt_hex}ff
 match=${la_hex}ff
-selection=${la_hex}2e
+selection=${la_hex}29
 selection-text=${lt_hex}ff
 selection-match=${la_hex}ff
 border=${edge_hex}
@@ -500,13 +646,13 @@ pad=8x8
 
 [colors]
 alpha=0.97
-background=${s_hex}
-foreground=${t_hex}
+background=${lc_hex}
+foreground=${lt_hex}
 regular0=151820
 regular1=f7768e
 regular2=9ece6a
 regular3=e0af68
-regular4=${ba_hex}
+regular4=${la_hex}
 regular5=bb9af7
 regular6=7dcfff
 regular7=c0caf5
@@ -521,12 +667,12 @@ EOF
 # managed by infynitae
 font_family      $TERMINAL_FONT
 font_size        $FONT_SIZE
-background       #$s_hex
-foreground       #$t_hex
-cursor           #$ba_hex
-selection_background #262b38
-selection_foreground #$t_hex
-window_padding_width 6
+background       #$lc_hex
+foreground       #$lt_hex
+cursor           #$la_hex
+selection_background #$sel_hex
+selection_foreground #$lt_hex
+window_padding_width 8
 EOF
         kitty_cfg="$HOME/.config/kitty/kitty.conf"
         if [ ! -f "$kitty_cfg" ] || grep -q 'managed by infynitae' "$kitty_cfg" 2>/dev/null; then
@@ -551,16 +697,16 @@ size = $(case "$FONT_SIZE" in *.*) echo "$FONT_SIZE" ;; *) echo "$FONT_SIZE.0" ;
 normal = { family = "$TERMINAL_FONT", style = "Regular" }
 
 [colors.primary]
-background = "#$s_hex"
-foreground = "#$t_hex"
+background = "#$lc_hex"
+foreground = "#$lt_hex"
 
 [colors.cursor]
-text = "#$s_hex"
-cursor = "#$ba_hex"
+text = "#$on_acc_hex"
+cursor = "#$la_hex"
 
 [colors.selection]
-text = "#$t_hex"
-background = "#262b38"
+text = "#$lt_hex"
+background = "#$sel_hex"
 EOF
         alacritty_cfg="$HOME/.config/alacritty/alacritty.toml"
         if [ ! -f "$alacritty_cfg" ] || grep -q 'managed by infynitae' "$alacritty_cfg" 2>/dev/null; then
@@ -601,30 +747,30 @@ EOF
                 put_file "$ff_css" << EOF
 /* managed by infynitae — delete this line to keep your own colours here */
 :root {
-  --toolbox-bgcolor: color-mix(in srgb, $SURFACE_COLOR 88%, $CANVAS_COLOR) !important;
-  --toolbox-non-lwt-bgcolor: color-mix(in srgb, $SURFACE_COLOR 88%, $CANVAS_COLOR) !important;
-  --toolbox-textcolor: $TEXT_COLOR !important;
-  --toolbar-bgcolor: color-mix(in srgb, $SURFACE_COLOR 92%, $TEXT_COLOR) !important;
-  --toolbar-color: $TEXT_COLOR !important;
-  --tab-selected-bgcolor: color-mix(in srgb, $SURFACE_COLOR 85%, $TEXT_COLOR) !important;
-  --tab-selected-textcolor: $TEXT_COLOR !important;
-  --toolbar-field-background-color: color-mix(in srgb, $SURFACE_COLOR 70%, $CANVAS_COLOR) !important;
-  --toolbar-field-focus-background-color: color-mix(in srgb, $SURFACE_COLOR 70%, $CANVAS_COLOR) !important;
-  --toolbar-field-color: $TEXT_COLOR !important;
-  --toolbar-field-focus-color: $TEXT_COLOR !important;
-  --toolbar-field-focus-border-color: $BORDER_ACTIVE !important;
-  --focus-outline-color: $BORDER_ACTIVE !important;
-  --arrowpanel-background: color-mix(in srgb, $SURFACE_COLOR 95%, $TEXT_COLOR) !important;
-  --arrowpanel-color: $TEXT_COLOR !important;
-  --arrowpanel-border-color: $BORDER_INACTIVE !important;
-  --urlbarView-highlight-background: color-mix(in srgb, $BORDER_ACTIVE 35%, $SURFACE_COLOR) !important;
-  --sidebar-background-color: $SURFACE_COLOR !important;
-  --chrome-content-separator-color: $BORDER_INACTIVE !important;
-  accent-color: $BORDER_ACTIVE !important;
+  --toolbox-bgcolor: color-mix(in srgb, $LOOK_CARD 88%, $app_canvas) !important;
+  --toolbox-non-lwt-bgcolor: color-mix(in srgb, $LOOK_CARD 88%, $app_canvas) !important;
+  --toolbox-textcolor: $LOOK_TEXT !important;
+  --toolbar-bgcolor: color-mix(in srgb, $LOOK_CARD 92%, $LOOK_TEXT) !important;
+  --toolbar-color: $LOOK_TEXT !important;
+  --tab-selected-bgcolor: color-mix(in srgb, $LOOK_CARD 85%, $LOOK_TEXT) !important;
+  --tab-selected-textcolor: $LOOK_TEXT !important;
+  --toolbar-field-background-color: color-mix(in srgb, $LOOK_CARD 70%, $app_canvas) !important;
+  --toolbar-field-focus-background-color: color-mix(in srgb, $LOOK_CARD 70%, $app_canvas) !important;
+  --toolbar-field-color: $LOOK_TEXT !important;
+  --toolbar-field-focus-color: $LOOK_TEXT !important;
+  --toolbar-field-focus-border-color: $LOOK_ACCENT !important;
+  --focus-outline-color: $LOOK_ACCENT !important;
+  --arrowpanel-background: color-mix(in srgb, $LOOK_CARD 95%, $LOOK_TEXT) !important;
+  --arrowpanel-color: $LOOK_TEXT !important;
+  --arrowpanel-border-color: $edge_solid !important;
+  --urlbarView-highlight-background: color-mix(in srgb, $LOOK_ACCENT 35%, $LOOK_CARD) !important;
+  --sidebar-background-color: $LOOK_CARD !important;
+  --chrome-content-separator-color: $edge_solid !important;
+  accent-color: $LOOK_ACCENT !important;
 }
 #TabsToolbar, #titlebar, #navigator-toolbox { background-color: var(--toolbox-bgcolor) !important; }
 .tab-background:is([selected], [multiselected]) { background-color: var(--tab-selected-bgcolor) !important; }
-.tab-background[selected] { box-shadow: inset 0 -2px 0 $BORDER_ACTIVE !important; }
+.tab-background[selected] { box-shadow: inset 0 -2px 0 $LOOK_ACCENT !important; }
 EOF
             fi
             ff_uc="$ff_dir/chrome/userChrome.css"
@@ -659,36 +805,13 @@ EOF
     fi
 
     # 4a. Qt apps in the system's colours (owner, 2026-11-06: "i want all the apps to take the theme
-    # from the system"): a qt6ct / qt5ct palette from SURFACE_COLOR, TEXT_COLOR, BORDER_ACTIVE and
-    # CANVAS_COLOR, the Fusion style, ICON_THEME and the font. env.sh makes Qt load qt6ct when it is
-    # installed. Each qt*ct.conf is written while it is ours (infynitae_managed); qt6ct's own window
-    # saving it drops that key, and then it is the user's.
+    # from the system"): a qt6ct / qt5ct palette from the resolved LOOK_* palette, the Fusion style,
+    # ICON_THEME and the font. env.sh makes Qt load qt6ct when it is installed. Each qt*ct.conf is
+    # written while it is ours (infynitae_managed); qt6ct's own window saving it drops that key, and
+    # then it is the user's.
     case "${THEME_SYNC:-true}" in
         0|false|no|off|FALSE|False) ;;
         *)
-    # mix A B T: A and B (#rrggbb) blended, T percent of B; printed as #ffrrggbb
-    qt_mix() {
-        awk -v a="${1#\#}" -v b="${2#\#}" -v t="$3" 'function h(s, i) { return index("0123456789abcdef", tolower(substr(s, i, 1))) - 1 }
-            function c(s, i) { return h(s, i) * 16 + h(s, i + 1) }
-            BEGIN { printf "#ff"; for (i = 1; i <= 5; i += 2) printf "%02x", int(c(a, i) * (100 - t) / 100 + c(b, i) * t / 100 + 0.5); print "" }'
-    }
-    q_win=$(qt_mix "$SURFACE_COLOR" "$SURFACE_COLOR" 0)
-    q_base=$(qt_mix "$SURFACE_COLOR" "$CANVAS_COLOR" 50)
-    q_alt=$(qt_mix "$SURFACE_COLOR" "$TEXT_COLOR" 4)
-    q_btn=$(qt_mix "$SURFACE_COLOR" "$TEXT_COLOR" 8)
-    q_light=$(qt_mix "$SURFACE_COLOR" "$TEXT_COLOR" 22)
-    q_mid_light=$(qt_mix "$SURFACE_COLOR" "$TEXT_COLOR" 14)
-    q_mid=$(qt_mix "$SURFACE_COLOR" "$BORDER_INACTIVE" 100)
-    q_dark=$(qt_mix "$SURFACE_COLOR" "#000000" 45)
-    q_shadow=$(qt_mix "$SURFACE_COLOR" "#000000" 75)
-    q_text=$(qt_mix "$TEXT_COLOR" "$TEXT_COLOR" 0)
-    q_dim=$(qt_mix "$TEXT_COLOR" "$SURFACE_COLOR" 45)
-    q_off=$(qt_mix "$TEXT_COLOR" "$SURFACE_COLOR" 60)
-    q_acc=$(qt_mix "$BORDER_ACTIVE" "$BORDER_ACTIVE" 0)
-    q_acc_off=$(qt_mix "$BORDER_ACTIVE" "$SURFACE_COLOR" 55)
-    q_on_acc=$(qt_mix "$SURFACE_COLOR" "#000000" 20)
-    q_link=$(qt_mix "$BORDER_ACTIVE" "$TEXT_COLOR" 25)
-    q_visited=$(qt_mix "$BORDER_ACTIVE" "$TEXT_COLOR" 55)
     # QPalette roles in order: WindowText Button Light Midlight Dark Mid Text BrightText ButtonText
     # Base Window Shadow Highlight HighlightedText Link LinkVisited AlternateBase NoRole ToolTipBase
     # ToolTipText PlaceholderText Accent
@@ -716,7 +839,7 @@ style=Fusion
 
 [Fonts]
 fixed="$TERMINAL_FONT,$FONT_SIZE,-1,5,400,0,0,0,0,0,0,0,0,0,0,1"
-general="$FONT_NAME,$FONT_SIZE,-1,5,400,0,0,0,0,0,0,0,0,0,0,1"
+general="$LOOK_FONT,$FONT_SIZE,-1,5,400,0,0,0,0,0,0,0,0,0,0,1"
 
 [Interface]
 activate_item_on_single_click=0
@@ -775,7 +898,7 @@ EOF
     if command -v gsettings >/dev/null 2>&1; then
         gsettings set org.gnome.desktop.interface cursor-theme "$CURSOR_THEME" 2>/dev/null || true
         gsettings set org.gnome.desktop.interface cursor-size "$CURSOR_SIZE" 2>/dev/null || true
-        gsettings set org.gnome.desktop.interface font-name "$FONT_NAME $FONT_SIZE" 2>/dev/null || true
+        gsettings set org.gnome.desktop.interface font-name "$LOOK_FONT $FONT_SIZE" 2>/dev/null || true
         gsettings set org.gnome.desktop.interface monospace-font-name "$TERMINAL_FONT $FONT_SIZE" 2>/dev/null || true
         gsettings set org.gnome.desktop.interface icon-theme "$ICON_THEME" 2>/dev/null || true
         gsettings set org.gnome.desktop.interface color-scheme "$COLOR_SCHEME" 2>/dev/null || true
@@ -801,13 +924,30 @@ EOF
     printf '%s %s\n' "$cfg_stamp" "$self_stamp" > "$stamp_file"
 }
 
+# Keys whose changes reach GTK/Qt/apps/terminals/mako/fuzzel/Firefox or ~/.cache/infynitae/look.
+# Other keys (e.g. TOUCHPAD_TAP) do not rewrite app themes until the next login.
+key_needs_apply() {
+    case "${1:-}" in
+        CURSOR_THEME|XCURSOR_THEME|CURSOR_SIZE|XCURSOR_SIZE|\
+        FONT_NAME|TERMINAL_FONT|FONT_SIZE|ICON_THEME|FOLDER_COLOR|\
+        COLOR_SCHEME|THEME_SCHEME|THEME_SYNC|THEME_FROM_WALLPAPER|WALLPAPER|\
+        CANVAS_COLOR|SURFACE_COLOR|BORDER_ACTIVE|ACCENT|BORDER_INACTIVE|TEXT_COLOR|\
+        CORNERS|WINDOW_CORNERS|CARD_OPACITY)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
 cmd_set() {
     KEY="${1:-}"
     VAL="${2:-}"
     # an empty value is allowed when given (set KEY ""): it puts a key like WALLPAPER back to its
     # default; a missing one is a mistake
     if [ -z "$KEY" ] || [ $# -lt 2 ]; then
-        echo "Usage: infynitae-settings set <KEY> <VALUE>" >&2
+        echo "Usage: infynitae-settings set <KEY> <VALUE> [OLD]" >&2
         exit 1
     fi
 
@@ -847,10 +987,17 @@ cmd_set() {
     ' "$CONFIG_FILE" > "$tmp" && mv -f "$tmp" "$CONFIG_FILE"
     trap - EXIT INT TERM
 
+    if [ $# -ge 3 ]; then
+        cmd_log "$KEY" "$3"
+    fi
+
     echo "==> Updated $KEY in $CONFIG_FILE"
-    . "$CONFIG_FILE"
-    apply_settings --force
-    echo "==> Applied."
+    if key_needs_apply "$KEY"; then
+        load_config
+        apply_defaults
+        apply_settings --force
+        echo "==> Applied."
+    fi
 }
 
 cmd_get() {
@@ -967,17 +1114,18 @@ case "$1" in
             fi
             wc_pick=$(printf '%s\n' "$wc_avail" | pick_random_line)
             cp -f "$CONFIG_FILE" "$CONFIG_FILE.bak-colors"
-            cmd_log BORDER_ACTIVE "$wc_old"
-            cmd_set BORDER_ACTIVE "$wc_pick"
+            cmd_set BORDER_ACTIVE "$wc_pick" "$wc_old"
         else
             cp -f "$CONFIG_FILE" "$CONFIG_FILE.bak-colors"
             if ! wallpaper_colors "$wc_img" "$wc_what"; then
                 echo "Could not read colours from $wc_img (is infynitae-wallpaper up to date?)" >&2
                 exit 1
             fi
+            load_config
+            apply_defaults
             apply_settings --force
         fi
-        . "$CONFIG_FILE"
+        load_config
         grep -E '^(BORDER_ACTIVE|SURFACE_COLOR|CANVAS_COLOR|BORDER_INACTIVE)=' "$CONFIG_FILE" || true
         echo "==> Colours from $wc_img (before: $CONFIG_FILE.bak-colors). Panels follow at once; apps on their next start."
         ;;
@@ -1003,7 +1151,12 @@ case "$1" in
         if grep -q "^$1=" "$CONFIG_FILE" 2>/dev/null; then
             tmp=$(mktemp "${CONFIG_FILE}.tmp.XXXXXX")
             sed "s/^$1=/# $1=/" "$CONFIG_FILE" > "$tmp" && mv -f "$tmp" "$CONFIG_FILE"
-            apply_settings --force
+            eval "unset $1"
+            if key_needs_apply "$1"; then
+                load_config
+                apply_defaults
+                apply_settings --force
+            fi
         fi
         ;;
     list)
@@ -1049,7 +1202,8 @@ case "$1" in
         echo "                       Take, list, or shuffle theme colours from the wallpaper (or IMAGE)"
         echo "  update               Pull updates and rebuild the release binary"
         echo "  restore              Reset the canvas zoom to 100%"
-        echo "  set <KEY> <VALUE>    Save a setting and apply it (e.g. set CURSOR_THEME Bibata-Modern-Classic)"
+        echo "  set <KEY> <VALUE> [OLD]"
+        echo "                       Save a setting, optionally log OLD, and apply look changes"
         echo "  get <KEY>            Print a setting's value"
         echo "  list cursors         List installed cursor themes"
         echo "  list fonts           List monospace and system fonts"
