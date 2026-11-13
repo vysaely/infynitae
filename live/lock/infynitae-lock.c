@@ -1,7 +1,6 @@
 /*
  * infynitae-lock - the lock screen (and the start screen after login)
- * 
- * Part of the Infynitae Compositor ecosystem.
+ *
  * It draws in the theme colors from the config (CANVAS_COLOR, SURFACE_COLOR, …),
  * standard Linux PAM authentication, ext-session-lock-v1: the compositor shows only this
  * client's surfaces and gives them every key until it unlocks, even if this client dies.
@@ -1566,6 +1565,6 @@ int main(int argc, char **argv) {
         execlp(app.session_cmd, app.session_cmd, NULL);
     }
 
-    printf("[infynitae-lock] Unlocked successfully.\n");
+    printf("[infynitae-lock] Unlocked.\n");
     return 0;
 }

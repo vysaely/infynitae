@@ -1,6 +1,6 @@
 /*
- * Infynitae Screen Capture & Rolling Replay Engine
- * Pure C + Wayland screencopy: raw frames to stdout for the recorder's ffmpeg encoder.
+ * infynitae-record-stream: captures frames with wlr-screencopy and writes raw video to stdout
+ * for infynitae-recorder's ffmpeg pipeline.
  */
 
 #define _GNU_SOURCE

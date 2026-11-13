@@ -359,7 +359,7 @@ PORTAL
     mkdir -p "$HOME/.config/systemd/user"
     cat > "$HOME/.config/systemd/user/infynitae-shutdown-guard.service" <<'GUARD'
 [Unit]
-Description=Stop Infynitae session cleanly and show status screen on shutdown or reboot
+Description=Stop Infynitae session and show status screen on shutdown or reboot
 DefaultDependencies=no
 Before=shutdown.target exit.target
 

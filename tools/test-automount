@@ -140,7 +140,7 @@ wait_for() {
     return 1
 }
 
-echo "=== Test 1: Hotplug signals (4 required cases + drive removable + removal) ==="
+echo "Test 1: Hotplug signals (4 required cases + drive removable + removal)"
 
 # Real gdbus monitor signal line format from org.freedesktop.UDisks2 ObjectManager
 SIGNALS="$TMP/signals.txt"
@@ -279,7 +279,7 @@ if grep -q "ALREADY_MOUNTED" "$NOTIFY_LOG"; then
 fi
 echo "PASS: no notification for already mounted disk"
 
-echo "=== Test 2: Startup scan of pre-plugged drive ==="
+echo "Test 2: Startup scan of pre-plugged drive"
 
 # Clean state/logs for test 2
 rm -f "$CALLS_LOG" "$NOTIFY_LOG" "$LOG_FILE"
@@ -322,7 +322,7 @@ if ! wait_for "$NOTIFY_LOG" "START_STICK mounted at /run/media/testuser/START_ST
 fi
 echo "PASS: notification sent for pre-plugged drive"
 
-echo "=== Test 3: An encrypted drive asks for its passphrase, then mounts ==="
+echo "Test 3: An encrypted drive asks for its passphrase, then mounts"
 rm -f "$CALLS_LOG" "$NOTIFY_LOG" "$LOG_FILE" "$DUMP"
 ENC="$TMP/enc-signals.txt"
 cat > "$ENC" <<'EOF'
@@ -356,7 +356,7 @@ if ! wait_for "$NOTIFY_LOG" "Wrong passphrase for /dev/sdi1"; then
 fi
 echo "PASS: a wrong passphrase is said"
 
-echo "=== Test 4: eject unmounts, locks and powers off ==="
+echo "Test 4: eject unmounts, locks and powers off"
 rm -f "$CALLS_LOG" "$NOTIFY_LOG"
 PATH="$BIN_DIR:$PATH" \
 XDG_STATE_HOME="$STATE_DIR" \
@@ -415,7 +415,7 @@ if ! grep -q -- "unmount --no-user-interaction -b /dev/sdd1" "$CALLS_LOG"; then
 fi
 echo "PASS: eject only unmounts current user's drives"
 
-echo "=== Test 5: a label cannot forge udisks lines, and shows as plain text ==="
+echo "Test 5: a label cannot forge udisks lines, and shows as plain text"
 rm -f "$CALLS_LOG" "$NOTIFY_LOG" "$LOG_FILE"
 # sdh1's label holds a line break and lines that look like udisks' own: a second entry for the
 # system disk sda2, marked as not a system disk, after the real one (udisks lists objects in
@@ -498,5 +498,5 @@ if ! wait_for "$NOTIFY_LOG" "&lt;b&gt;START&lt;/b&gt;&amp; mounted at"; then
 fi
 echo "PASS: a label is shown as plain text"
 
-echo "=== ALL AUTOMOUNT TESTS PASSED ==="
+echo "test-automount: all tests passed"
 exit 0
