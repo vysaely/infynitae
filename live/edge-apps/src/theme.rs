@@ -100,13 +100,17 @@ pub struct Theme {
     pub switch_look: String,
 }
 
+/// `true` when `fg` has at least 3:1 WCAG contrast on opaque `bg` (`Theme`'s readable check).
+pub fn is_readable(fg: Rgba, bg: Rgba) -> bool {
+    fg.contrast(bg.alpha(1.0)) >= 3.0
+}
+
 /// `fg` as it reads on `bg`: itself at 3:1 contrast or more, else mixed toward `toward` in tenths
 /// until it does.
 fn readable(fg: Rgba, bg: Rgba, toward: Rgba) -> Rgba {
-    let bg = bg.alpha(1.0);
     (0..=10)
         .map(|i| fg.mix(toward, i as f64 / 10.0))
-        .find(|c| c.contrast(bg) >= 3.0)
+        .find(|c| is_readable(*c, bg))
         .unwrap_or(toward)
 }
 
