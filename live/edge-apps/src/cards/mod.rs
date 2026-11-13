@@ -10,3 +10,4 @@ pub mod settings;
 pub mod simple;
 pub mod sound;
 pub mod steam;
+pub mod windows;
