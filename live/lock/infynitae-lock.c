@@ -795,9 +795,12 @@ static void draw_scene(cairo_t *cr, LockApp *app, const LockOutput *output, int 
         shake_offset = sin(app->shake_frame * 1.5) * 16.0 * decay;
     }
     double cx = w / 2.0;
-    double clock_y = h * 0.30;
+    /* one group: clock, date, avatar, name, field (owner 2026-11-14: they sat too far apart, 0.30 h and
+       0.56 h); the avatar a fixed step below the clock, the group centred a little above the middle */
     double avatar_r = 48.0;
-    double avatar_y = h * 0.56;
+    double group_h = 48.0 + 190.0 + avatar_r + 16 + 26 + 16 + 44; /* clock top to field bottom */
+    double clock_y = h * 0.47 - group_h / 2.0 + 48.0;
+    double avatar_y = clock_y + 190.0;
     if (app->osk_visible) {
         /* the password stays above the keyboard: everything moves up together */
         OskKey keys[OSK_MAX_KEYS];
