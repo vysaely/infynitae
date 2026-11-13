@@ -49,7 +49,7 @@ static void format_hex(const double c[3], char buf[8]) {
              (int)(tc_clamp(c[2], 0, 1) * 255 + 0.5));
 }
 
-static void check_common(GdkPixbuf *pb, double out[][3], int n, int expect_clamped_sv) {
+static void check_common(GdkPixbuf *pb, double out[][3], double pos[][2], int n, int expect_clamped_sv) {
     ThemeColors tc;
     assert(theme_colors_from(pb, &tc) == 0);
     assert(n >= 1 && n <= 6);
@@ -62,6 +62,8 @@ static void check_common(GdkPixbuf *pb, double out[][3], int n, int expect_clamp
         assert(fabs(out[0][k] - tc.accent[k]) < 1e-9);
 
     for (int i = 0; i < n; i++) {
+        assert(pos[i][0] >= 0.0 && pos[i][0] <= 1.0);
+        assert(pos[i][1] >= 0.0 && pos[i][1] <= 1.0);
         double h, s, v;
         tc_rgb_to_hsv(out[i], &h, &s, &v);
         if (expect_clamped_sv) {
@@ -73,11 +75,12 @@ static void check_common(GdkPixbuf *pb, double out[][3], int n, int expect_clamp
 
 static void test_invalid_args(void) {
     GdkPixbuf *pb = make_pixbuf(4, 4);
-    double out[6][3];
-    assert(theme_accents_from(NULL, out, 6) == -1);
-    assert(theme_accents_from(pb, NULL, 6) == -1);
-    assert(theme_accents_from(pb, out, 0) == -1);
-    assert(theme_accents_from(pb, out, -2) == -1);
+    double out[6][3], pos[6][2];
+    assert(theme_accents_from(NULL, out, pos, 6) == -1);
+    assert(theme_accents_from(pb, NULL, pos, 6) == -1);
+    assert(theme_accents_from(pb, out, NULL, 6) == -1);
+    assert(theme_accents_from(pb, out, pos, 0) == -1);
+    assert(theme_accents_from(pb, out, pos, -2) == -1);
     g_object_unref(pb);
 }
 
@@ -85,10 +88,12 @@ static void test_one_hue_and_clamps(void) {
     /* dark low-saturation green: must clamp up to S=0.45, V=0.80 */
     GdkPixbuf *dark = make_pixbuf(24, 16);
     fill_hsv_cols(dark, 0, 24, 120.0, 0.30, 0.30);
-    double out[6][3];
-    int n = theme_accents_from(dark, out, 6);
+    double out[6][3], pos[6][2];
+    int n = theme_accents_from(dark, out, pos, 6);
     assert(n == 1);
-    check_common(dark, out, n, 1);
+    check_common(dark, out, pos, n, 1);
+    assert(fabs(pos[0][0] - 0.5) < 0.05);
+    assert(fabs(pos[0][1] - 0.5) < 0.05);
     double h, s, v;
     tc_rgb_to_hsv(out[0], &h, &s, &v);
     assert(hue_diff(h, 120.0) < 2.0);
@@ -99,9 +104,9 @@ static void test_one_hue_and_clamps(void) {
     /* neon pure red: must clamp down to S=0.85, V=0.95 */
     GdkPixbuf *neon = make_pixbuf(24, 16);
     fill_hsv_cols(neon, 0, 24, 0.0, 1.0, 1.0);
-    n = theme_accents_from(neon, out, 6);
+    n = theme_accents_from(neon, out, pos, 6);
     assert(n == 1);
-    check_common(neon, out, n, 1);
+    check_common(neon, out, pos, n, 1);
     tc_rgb_to_hsv(out[0], &h, &s, &v);
     assert(hue_diff(h, 0.0) < 2.0);
     assert(fabs(s - 0.85) < 0.02);
@@ -116,10 +121,10 @@ static void test_three_hues(void) {
     fill_hsv_cols(pb, 33, 51, 220.0, 0.80, 0.90);
     fill_hsv_cols(pb, 51, 60, 125.0, 0.80, 0.90);
 
-    double out[6][3];
-    int n = theme_accents_from(pb, out, 6);
+    double out[6][3], pos[6][2];
+    int n = theme_accents_from(pb, out, pos, 6);
     assert(n == 3);
-    check_common(pb, out, n, 1);
+    check_common(pb, out, pos, n, 1);
 
     double h[3], s, v;
     for (int i = 0; i < 3; i++)
@@ -127,22 +132,31 @@ static void test_three_hues(void) {
     assert(hue_diff(h[0], 10.0) < 5.0);
     assert(hue_diff(h[1], 220.0) < 5.0);
     assert(hue_diff(h[2], 125.0) < 5.0);
+    assert(fabs(pos[0][0] - (16.5 / 60.0)) < 0.04);
+    assert(fabs(pos[1][0] - (42.0 / 60.0)) < 0.04);
+    assert(fabs(pos[2][0] - (55.5 / 60.0)) < 0.04);
+    for (int i = 0; i < 3; i++)
+        assert(fabs(pos[i][1] - 0.5) < 0.05);
 
-    /* also verify print helpers match candidate 0 */
+    /* also verify print helpers match candidate 0 and write #rrggbb x y (3 decimals) */
     ThemeColors tc;
     assert(theme_colors_from(pb, &tc) == 0);
     FILE *fa = tmpfile(), *fc = tmpfile();
     assert(fa != NULL && fc != NULL);
-    theme_accents_print(out, n, fa);
+    theme_accents_print(out, pos, n, fa);
     theme_colors_print(&tc, fc);
     rewind(fa);
     rewind(fc);
-    char line_a[64] = {0}, line_c[64] = {0}, expected_c[80];
+    char line_a[64] = {0}, line_c[64] = {0}, expected_c[80], hex_a[16] = {0};
+    double px = -1, py = -1;
     assert(fgets(line_a, sizeof(line_a), fa) != NULL);
     assert(fgets(line_c, sizeof(line_c), fc) != NULL);
     line_a[strcspn(line_a, "\n")] = '\0';
     line_c[strcspn(line_c, "\n")] = '\0';
-    snprintf(expected_c, sizeof(expected_c), "BORDER_ACTIVE=\"%s\"", line_a);
+    assert(sscanf(line_a, "%15s %lf %lf", hex_a, &px, &py) == 3);
+    assert(fabs(px - pos[0][0]) < 0.002);
+    assert(fabs(py - pos[0][1]) < 0.002);
+    snprintf(expected_c, sizeof(expected_c), "BORDER_ACTIVE=\"%s\"", hex_a);
     assert(strcmp(line_c, expected_c) == 0);
     fclose(fa);
     fclose(fc);
@@ -154,10 +168,12 @@ static void test_grey_image(void) {
     fill_rgb_rect(pb, 0, 0, 12, 16, 128, 128, 128);
     fill_rgb_rect(pb, 12, 0, 24, 16, 30, 30, 30);
 
-    double out[6][3];
-    int n = theme_accents_from(pb, out, 6);
+    double out[6][3], pos[6][2];
+    int n = theme_accents_from(pb, out, pos, 6);
     assert(n == 1);
-    check_common(pb, out, n, 0);
+    check_common(pb, out, pos, n, 0);
+    assert(fabs(pos[0][0] - 0.5) < 1e-6);
+    assert(fabs(pos[0][1] - 0.5) < 1e-6);
 
     char hex[8];
     format_hex(out[0], hex);
@@ -170,19 +186,19 @@ static void test_bin_spacing_and_max(void) {
     GdkPixbuf *close_pb = make_pixbuf(50, 16);
     fill_hsv_cols(close_pb, 0, 30, 22.0, 0.80, 0.90);
     fill_hsv_cols(close_pb, 30, 50, 37.0, 0.80, 0.90);
-    double out[10][3];
-    int n = theme_accents_from(close_pb, out, 10);
+    double out[10][3], pos[10][2];
+    int n = theme_accents_from(close_pb, out, pos, 10);
     assert(n == 1);
-    check_common(close_pb, out, n, 1);
+    check_common(close_pb, out, pos, n, 1);
     g_object_unref(close_pb);
 
     /* 8 hues 45 degrees apart (bin distance >= 3) -> capped at 6 even when max=10 */
     GdkPixbuf *many = make_pixbuf(80, 16);
     for (int i = 0; i < 8; i++)
         fill_hsv_cols(many, i * 10, (i + 1) * 10, 7.5 + i * 45.0, 0.80, 0.90);
-    n = theme_accents_from(many, out, 10);
+    n = theme_accents_from(many, out, pos, 10);
     assert(n == 6);
-    check_common(many, out, n, 1);
+    check_common(many, out, pos, n, 1);
 
     double hues[6], s, v;
     for (int i = 0; i < 6; i++)
@@ -202,10 +218,10 @@ static void test_noisy_image(void) {
     fill_hsv_cols(pb, 94, 96, 260.0, 0.75, 0.90); /* ~2% weight */
     fill_rgb_rect(pb, 0, 0, 96, 2, 110, 110, 110); /* grey noise strip */
 
-    double out[6][3];
-    int n = theme_accents_from(pb, out, 6);
+    double out[6][3], pos[6][2];
+    int n = theme_accents_from(pb, out, pos, 6);
     assert(n == 2);
-    check_common(pb, out, n, 1);
+    check_common(pb, out, pos, n, 1);
     double h0, h1, s, v;
     tc_rgb_to_hsv(out[0], &h0, &s, &v);
     tc_rgb_to_hsv(out[1], &h1, &s, &v);
@@ -236,10 +252,55 @@ static void test_noisy_image(void) {
                     (guchar)(rgb[2] * 255 + 0.5));
         }
     }
-    n = theme_accents_from(rand_pb, out, 6);
+    n = theme_accents_from(rand_pb, out, pos, 6);
     assert(n == 6);
-    check_common(rand_pb, out, n, 1);
+    check_common(rand_pb, out, pos, n, 1);
     g_object_unref(rand_pb);
+}
+
+static void fill_hsv_rect(GdkPixbuf *pb, int x0, int y0, int x1, int y1, double h, double s, double v) {
+    double rgb[3];
+    tc_hsv_to_rgb(h, s, v, rgb);
+    fill_rgb_rect(
+        pb, x0, y0, x1, y1,
+        (guchar)(tc_clamp(rgb[0], 0, 1) * 255 + 0.5),
+        (guchar)(tc_clamp(rgb[1], 0, 1) * 255 + 0.5),
+        (guchar)(tc_clamp(rgb[2], 0, 1) * 255 + 0.5));
+}
+
+static void test_patch_centres(void) {
+    /* A single-colour patch in a known corner on a neutral background gives a centre in that corner */
+    struct { int x0, y0, x1, y1; double ex, ey; } corners[4] = {
+        {  0,  0,  24, 16, 0.125, 0.125 }, /* top-left */
+        { 72,  0,  96, 16, 0.875, 0.125 }, /* top-right */
+        {  0, 48,  24, 64, 0.125, 0.875 }, /* bottom-left */
+        { 72, 48,  96, 64, 0.875, 0.875 }, /* bottom-right */
+    };
+    for (int i = 0; i < 4; i++) {
+        GdkPixbuf *pb = make_pixbuf(96, 64);
+        fill_rgb_rect(pb, 0, 0, 96, 64, 90, 90, 90);
+        fill_hsv_rect(pb, corners[i].x0, corners[i].y0, corners[i].x1, corners[i].y1, 210.0, 0.80, 0.90);
+        double out[6][3], pos[6][2];
+        int n = theme_accents_from(pb, out, pos, 6);
+        assert(n == 1);
+        check_common(pb, out, pos, n, 1);
+        assert(fabs(pos[0][0] - corners[i].ex) < 0.03);
+        assert(fabs(pos[0][1] - corners[i].ey) < 0.03);
+        g_object_unref(pb);
+    }
+
+    /* Two patches in opposite corners: each candidate carries its own corner centre */
+    GdkPixbuf *dual = make_pixbuf(96, 64);
+    fill_rgb_rect(dual, 0, 0, 96, 64, 60, 60, 60);
+    fill_hsv_rect(dual, 0, 0, 32, 20, 10.0, 0.85, 0.90);   /* larger: top-left */
+    fill_hsv_rect(dual, 72, 48, 96, 64, 215.0, 0.85, 0.90); /* smaller: bottom-right */
+    double out[6][3], pos[6][2];
+    int n = theme_accents_from(dual, out, pos, 6);
+    assert(n == 2);
+    check_common(dual, out, pos, n, 1);
+    assert(pos[0][0] < 0.25 && pos[0][1] < 0.25);
+    assert(pos[1][0] > 0.75 && pos[1][1] > 0.75);
+    g_object_unref(dual);
 }
 
 int main(void) {
@@ -249,6 +310,7 @@ int main(void) {
     test_grey_image();
     test_bin_spacing_and_max();
     test_noisy_image();
+    test_patch_centres();
     printf("test-wallpaper-accents.c: all assertions passed\n");
     return 0;
 }

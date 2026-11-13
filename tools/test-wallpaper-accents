@@ -90,6 +90,18 @@ int main(int argc, char **argv) {
                 guchar *p = px + y * rs + x * nch;
                 p[0] = p[1] = p[2] = 128;
             }
+    } else if (!strcmp(kind, "corner")) {
+        int rs = gdk_pixbuf_get_rowstride(pb), nch = gdk_pixbuf_get_n_channels(pb);
+        guchar *px = gdk_pixbuf_get_pixels(pb);
+        double rgb[3];
+        tc_hsv_to_rgb(200.0, 0.80, 0.90, rgb);
+        guchar r = (guchar)(rgb[0] * 255 + 0.5), g = (guchar)(rgb[1] * 255 + 0.5), b = (guchar)(rgb[2] * 255 + 0.5);
+        for (int y = 0; y < 20; y++)
+            for (int x = 0; x < 60; x++) {
+                guchar *p = px + y * rs + x * nch;
+                if (x >= 45 && y >= 15) { p[0] = r; p[1] = g; p[2] = b; }
+                else { p[0] = p[1] = p[2] = 100; }
+            }
     } else {
         return 1;
     }
@@ -102,14 +114,19 @@ gcc -O2 $CFLAGS_PIXBUF -I"$ROOT/live/wallpaper" "$TMP/gen_wp.c" -o "$TMP/gen_wp"
 "$TMP/gen_wp" wp3 "$TMP/wp3.png"
 "$TMP/gen_wp" wp3b "$TMP/wp3b.png"
 "$TMP/gen_wp" grey "$TMP/grey.png"
+"$TMP/gen_wp" corner "$TMP/corner.png"
 
 # 4. CLI --accents vs --colors
 "$WPBIN" --accents "$TMP/wp3.png" > "$TMP/acc3"
-first_accent=$(head -n 1 "$TMP/acc3")
+awk '{ print $1 }' "$TMP/acc3" > "$TMP/hex3"
+first_accent=$(head -n 1 "$TMP/hex3")
 colors_first=$("$WPBIN" --colors "$TMP/wp3.png" | awk -F= '$1 == "BORDER_ACTIVE" { gsub(/"/, "", $2); print $2 }')
 check "--accents returns 3 lines" test "$(wc -l < "$TMP/acc3")" -eq 3
+check "--accents format is #rrggbb x y (3 decimals)" sh -c "grep -Eq '^#[0-9a-f]{6} [0-9]+\\.[0-9]{3} [0-9]+\\.[0-9]{3}$' '$TMP/acc3' && test \"\$(grep -Ec '^#[0-9a-f]{6} [0-9]+\\.[0-9]{3} [0-9]+\\.[0-9]{3}$' '$TMP/acc3')\" -eq 3"
 check "--accents line 1 equals --colors BORDER_ACTIVE" test "$first_accent" = "$colors_first"
-check "--accents grey returns #7aa2f7" test "$("$WPBIN" --accents "$TMP/grey.png")" = "#7aa2f7"
+check "--accents grey returns #7aa2f7 0.500 0.500" test "$("$WPBIN" --accents "$TMP/grey.png")" = "#7aa2f7 0.500 0.500"
+corner_line=$("$WPBIN" --accents "$TMP/corner.png")
+check "--accents corner patch gives bottom-right centre" sh -c "printf '%s\n' '$corner_line' | awk 'NR == 1 && NF == 3 && \$2 > 0.75 && \$3 > 0.75 { ok=1 } END { exit !ok }'"
 check "--accents missing file fails" sh -c "! '$WPBIN' --accents '$TMP/nope.png' 2>/dev/null"
 check "--accents missing arg fails" sh -c "! '$WPBIN' --accents 2>/dev/null"
 
@@ -122,7 +139,7 @@ cp "$ROOT/config/config" "$CONFIG_FILE"
 SH="$ROOT/live/settings.sh"
 LOG="$H/.local/state/infynitae/settings-changes"
 
-# 5. settings.sh wallpaper-colors accents (with arg and via WALLPAPER, read-only on config)
+# 5. settings.sh wallpaper-colors accents (with arg and via WALLPAPER, read-only on config, malformed filtered)
 sh "$SH" set WALLPAPER "$TMP/wp3.png" >/dev/null
 before_cfg=$(cat "$CONFIG_FILE")
 sh "$SH" wallpaper-colors accents "$TMP/wp3.png" > "$TMP/sh_acc"
@@ -132,13 +149,28 @@ sh "$SH" wallpaper-colors accents > "$TMP/sh_acc_default"
 check "settings wallpaper-colors accents uses WALLPAPER default" cmp -s "$TMP/acc3" "$TMP/sh_acc_default"
 check "settings wallpaper-colors accents missing image fails" sh -c "! sh '$SH' wallpaper-colors accents '$TMP/nope.png' 2>/dev/null"
 
+# Keep #rrggbb check on field 1 and drop malformed lines from helper output
+mv "$WPBIN" "$TMP/wpbin.real"
+cat > "$WPBIN" << 'MOCK'
+#!/bin/sh
+printf '#112233 0.125 0.875\n'
+printf 'not-a-colour 0.500 0.500\n'
+printf '#445566 bad 0.500\n'
+printf '#778899 1.500 0.500\n'
+printf '#aabbcc 0.500 0.500\n'
+MOCK
+chmod +x "$WPBIN"
+sh "$SH" wallpaper-colors accents "$TMP/wp3.png" > "$TMP/sh_acc_filtered"
+mv "$TMP/wpbin.real" "$WPBIN"
+check "settings wallpaper-colors accents drops malformed lines" test "$(printf '%s\n' "$(cat "$TMP/sh_acc_filtered")" | tr '\n' '|')" = "#112233 0.125 0.875|#aabbcc 0.500 0.500|"
+
 # 6. settings.sh wallpaper-colors shuffle:
 # 6a. When BORDER_ACTIVE line does not exist in config, logs '-' before set
 sed -i '/^BORDER_ACTIVE=/d' "$CONFIG_FILE"
 : > "$LOG"
 sh "$SH" wallpaper-colors shuffle "$TMP/wp3.png" >/dev/null
 got=$(sh "$SH" get BORDER_ACTIVE)
-check "shuffle picks candidate when BORDER_ACTIVE was unset" in_list "$got" "$TMP/acc3"
+check "shuffle picks candidate when BORDER_ACTIVE was unset" in_list "$got" "$TMP/hex3"
 last_log=$(tail -n 1 "$LOG")
 check "shuffle logs KEY and '-' before set" sh -c "printf '%s' '$last_log' | awk -F '\t' '\$2 == \"BORDER_ACTIVE\" && \$3 == \"-\" { ok=1 } END { exit !ok }'"
 
@@ -157,7 +189,7 @@ prev="$first_accent"
 for i in 1 2 3 4 5; do
     sh "$SH" wallpaper-colors shuffle "$TMP/wp3.png" >/dev/null
     cur=$(sh "$SH" get BORDER_ACTIVE)
-    check "shuffle $i in candidate list" in_list "$cur" "$TMP/acc3"
+    check "shuffle $i in candidate list" in_list "$cur" "$TMP/hex3"
     check "shuffle $i differs from previous" test "$cur" != "$prev"
     last_log=$(tail -n 1 "$LOG")
     check "shuffle $i logged previous BORDER_ACTIVE" sh -c "printf '%s' '$last_log' | awk -F '\t' -v p='$prev' '\$2 == \"BORDER_ACTIVE\" && \$3 == p { ok=1 } END { exit !ok }'"
@@ -187,7 +219,7 @@ check "set/get THEME_FROM_WALLPAPER shuffle" test "$(sh "$SH" get THEME_FROM_WAL
 sh "$SH" apply >/dev/null
 picked=$(sh "$SH" get BORDER_ACTIVE)
 exp_surface=$("$WPBIN" --colors "$TMP/wp3.png" | awk -F= '$1 == "SURFACE_COLOR" { gsub(/"/, "", $2); print $2 }')
-check "THEME_FROM_WALLPAPER=shuffle picks candidate accent" in_list "$picked" "$TMP/acc3"
+check "THEME_FROM_WALLPAPER=shuffle picks candidate accent" in_list "$picked" "$TMP/hex3"
 check "THEME_FROM_WALLPAPER=shuffle updates SURFACE_COLOR" test "$(sh "$SH" get SURFACE_COLOR)" = "$exp_surface"
 
 # Repeated login/apply with unchanged wallpaper never changes BORDER_ACTIVE
@@ -205,7 +237,7 @@ while [ "$i" -lt 24 ]; do
     sed -i "s|^WALLPAPER=.*|WALLPAPER='$TMP/wp3.png'|" "$CONFIG_FILE"
     sh "$SH" apply >/dev/null
     cur=$(sh "$SH" get BORDER_ACTIVE)
-    in_list "$cur" "$TMP/acc3" || { echo "FAIL: unexpected $cur on change $i" >&2; fail=$((fail + 1)); }
+    in_list "$cur" "$TMP/hex3" || { echo "FAIL: unexpected $cur on change $i" >&2; fail=$((fail + 1)); }
     printf '%s\n' "$cur" >> "$TMP/seen"
     i=$((i + 1))
 done

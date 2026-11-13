@@ -149,7 +149,15 @@ wallpaper_accents() {
     wa_bin="$HOME/.local/bin/infynitae-wallpaper"
     [ -x "$wa_bin" ] && [ -n "${1:-}" ] || return 1
     wa_out=$("$wa_bin" --accents "$1" 2>/dev/null) || return 1
-    printf '%s\n' "$wa_out" | grep -E '^#[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]$'
+    printf '%s\n' "$wa_out" | LC_ALL=C awk '
+        $1 ~ /^#[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]$/ {
+            if (NF == 1 || (NF == 3 && $2 ~ /^[0-9]+(\.[0-9]+)?$/ && $3 ~ /^[0-9]+(\.[0-9]+)?$/ && ($2 + 0) >= 0 && ($2 + 0) <= 1 && ($3 + 0) >= 0 && ($3 + 0) <= 1)) {
+                ok = 1
+                print
+            }
+        }
+        END { exit !ok }
+    '
 }
 
 pick_random_line() {
@@ -181,7 +189,7 @@ wallpaper_colors() {
     wc_out=$("$wc_bin" --colors "$wc_image" 2>/dev/null) || return 1
     wc_pick=""
     if [ "$wc_what" = shuffle ]; then
-        wc_pick=$(wallpaper_accents "$wc_image" | pick_random_line) || wc_pick=""
+        wc_pick=$(wallpaper_accents "$wc_image" | awk '{print $1}' | pick_random_line) || wc_pick=""
     fi
     printf '%s\n' "$wc_out" | while IFS='=' read -r wc_key wc_val; do
         wc_val=$(printf '%s' "$wc_val" | tr -d '"')
@@ -943,6 +951,7 @@ case "$1" in
                 echo "Could not read accents from $wc_img (is infynitae-wallpaper up to date?)" >&2
                 exit 1
             fi
+            wc_all=$(printf '%s\n' "$wc_all" | awk '{print $1}')
             wc_old="-"
             if grep -q '^BORDER_ACTIVE=' "$CONFIG_FILE" 2>/dev/null; then
                 wc_old=$(cmd_get BORDER_ACTIVE)

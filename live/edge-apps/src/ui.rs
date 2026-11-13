@@ -527,16 +527,24 @@ impl List {
     }
     /// Its height now for `rows` rows: add it to `Card::height`.
     pub fn height(&self, rows: usize) -> f64 {
+        self.height_for(rows.max(1) as f64 * LIST_ROW_H + 8.0)
+    }
+    /// Its animated height now for a custom content height `full_h`.
+    pub fn height_for(&self, full_h: f64) -> f64 {
         if self.reveal <= 0.0 {
             return 0.0;
         }
-        (rows.max(1) as f64 * LIST_ROW_H + 8.0) * ease(self.reveal)
+        full_h * ease(self.reveal)
     }
     /// The row and the list inside `r` (the row's place with the list's height added): the list
     /// under the row, or over it when `above`, so the row stays under the pointer in a panel at the
     /// bottom of the screen.
     pub fn split(&self, r: Rect, rows: usize, above: bool) -> (Rect, Rect) {
-        let lh = self.height(rows);
+        self.split_for(r, rows.max(1) as f64 * LIST_ROW_H + 8.0, above)
+    }
+    /// Same as `split`, for a custom list body height `full_h`.
+    pub fn split_for(&self, r: Rect, full_h: f64, above: bool) -> (Rect, Rect) {
+        let lh = self.height_for(full_h);
         if above {
             ((r.0, r.1 + lh, r.2, r.3 - lh), (r.0, r.1, r.2, lh))
         } else {

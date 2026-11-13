@@ -872,14 +872,14 @@ int main(int argc, char *argv[]) {
                 }
                 theme_colors_print(&tc, stdout);
             } else {
-                double accents[6][3];
-                int n = theme_accents_from(img, accents, 6);
+                double accents[6][3], pos[6][2];
+                int n = theme_accents_from(img, accents, pos, 6);
                 if (img) g_object_unref(img);
                 if (n <= 0) {
                     fprintf(stderr, "[infynitae-wallpaper] --accents: cannot read %s\n", argv[i + 1]);
                     return 1;
                 }
-                theme_accents_print(accents, n, stdout);
+                theme_accents_print(accents, pos, n, stdout);
             }
             return 0;
         } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
@@ -892,7 +892,7 @@ int main(int argc, char *argv[]) {
             printf("                     foreground, leaving the wallpaper running\n");
             printf("  --output NAME      Only on the output NAME (e.g. DP-1)\n");
             printf("  --colors IMAGE     Print theme colours taken from IMAGE (config lines)\n");
-            printf("  --accents IMAGE    Print candidate accent colours from IMAGE (#rrggbb)\n");
+            printf("  --accents IMAGE    Print candidate accents and centres from IMAGE (#rrggbb x y)\n");
             printf("  -h, --help         Show this help message\n");
             return 0;
         } else if (target[0] == '\0') {

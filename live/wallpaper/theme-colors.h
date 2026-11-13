@@ -42,7 +42,7 @@ static void tc_hsv_to_rgb(double h, double s, double v, double out[3]) {
 static double tc_clamp(double x, double lo, double hi) { return x < lo ? lo : x > hi ? hi : x; }
 
 static int tc_sample_bins(GdkPixbuf *image, double bin_w[24], double bin_rgb[24][3],
-                          double *sum_x, double *sum_y, double *sum_w) {
+                          double bin_xy[24][2], double *sum_x, double *sum_y, double *sum_w) {
     if (!image) return -1;
     int w = gdk_pixbuf_get_width(image), h = gdk_pixbuf_get_height(image);
     if (w <= 0 || h <= 0) return -1;
@@ -55,6 +55,7 @@ static int tc_sample_bins(GdkPixbuf *image, double bin_w[24], double bin_rgb[24]
     int rs = gdk_pixbuf_get_rowstride(small), nch = gdk_pixbuf_get_n_channels(small);
     memset(bin_w, 0, 24 * sizeof(bin_w[0]));
     memset(bin_rgb, 0, 24 * sizeof(bin_rgb[0]));
+    memset(bin_xy, 0, 24 * sizeof(bin_xy[0]));
     *sum_x = *sum_y = *sum_w = 0; /* the average hue, as a vector */
     for (int y = 0; y < sh; y++)
         for (int x = 0; x < sw; x++) {
@@ -71,6 +72,8 @@ static int tc_sample_bins(GdkPixbuf *image, double bin_w[24], double bin_rgb[24]
             wt *= s * v; /* vivid pixels count more */
             bin_w[b] += wt;
             for (int k = 0; k < 3; k++) bin_rgb[b][k] += c[k] * wt;
+            bin_xy[b][0] += ((x + 0.5) / sw) * wt;
+            bin_xy[b][1] += ((y + 0.5) / sh) * wt;
         }
     g_object_unref(small);
     return 0;
@@ -92,7 +95,8 @@ static void tc_bin_accent(double bin_w, const double bin_rgb[3], double out[3]) 
 }
 
 static int tc_accents_from_bins(const double bin_w[24], double bin_rgb[24][3],
-                                double out[][3], int max) {
+                                const double bin_xy[24][2], double out[][3],
+                                double pos[][2], int max) {
     if (!out || max <= 0) return -1;
     int cap = max < 6 ? max : 6; /* up to 6 distinct candidates */
     double total_w = 0, score[24] = {0};
@@ -120,32 +124,41 @@ static int tc_accents_from_bins(const double bin_w[24], double bin_rgb[24][3],
         if (best < 0) break;
         picked[count] = best;
         tc_bin_accent(bin_w[best], bin_rgb[best], out[count]);
+        if (pos) {
+            pos[count][0] = tc_clamp(bin_xy[best][0] / bin_w[best], 0.0, 1.0);
+            pos[count][1] = tc_clamp(bin_xy[best][1] / bin_w[best], 0.0, 1.0);
+        }
         count++;
     }
 
     if (count == 0) {
         /* a grey image: Infynitae's own blue (#7aa2f7) */
         out[0][0] = 0x7a / 255.0; out[0][1] = 0xa2 / 255.0; out[0][2] = 0xf7 / 255.0;
+        if (pos) {
+            pos[0][0] = 0.5;
+            pos[0][1] = 0.5;
+        }
         count = 1;
     }
     return count;
 }
 
-/* Up to 6 distinct candidate accents, best first, bins at least 30 degrees apart.
+/* Up to 6 distinct candidate accents, best first, bins at least 30 degrees apart,
+ * plus the weighted pixel centre (x, y in 0..1) of each candidate's hue bin.
  * Returns candidate count (>= 1), or -1 on invalid arguments or unreadable image. */
-static int theme_accents_from(GdkPixbuf *image, double out[][3], int max) {
-    if (!out || max <= 0) return -1;
-    double bin_w[24], bin_rgb[24][3], sum_x, sum_y, sum_w;
-    if (tc_sample_bins(image, bin_w, bin_rgb, &sum_x, &sum_y, &sum_w) != 0) return -1;
-    return tc_accents_from_bins(bin_w, bin_rgb, out, max);
+static int theme_accents_from(GdkPixbuf *image, double out[][3], double pos[][2], int max) {
+    if (!out || !pos || max <= 0) return -1;
+    double bin_w[24], bin_rgb[24][3], bin_xy[24][2], sum_x, sum_y, sum_w;
+    if (tc_sample_bins(image, bin_w, bin_rgb, bin_xy, &sum_x, &sum_y, &sum_w) != 0) return -1;
+    return tc_accents_from_bins(bin_w, bin_rgb, bin_xy, out, pos, max);
 }
 
 /* Returns 0, or -1 for an image it cannot read. */
 static int theme_colors_from(GdkPixbuf *image, ThemeColors *out) {
     if (!out) return -1;
-    double bin_w[24], bin_rgb[24][3], sum_x, sum_y, sum_w;
-    if (tc_sample_bins(image, bin_w, bin_rgb, &sum_x, &sum_y, &sum_w) != 0) return -1;
-    if (tc_accents_from_bins(bin_w, bin_rgb, &out->accent, 1) <= 0) return -1;
+    double bin_w[24], bin_rgb[24][3], bin_xy[24][2], sum_x, sum_y, sum_w;
+    if (tc_sample_bins(image, bin_w, bin_rgb, bin_xy, &sum_x, &sum_y, &sum_w) != 0) return -1;
+    if (tc_accents_from_bins(bin_w, bin_rgb, bin_xy, &out->accent, NULL, 1) <= 0) return -1;
 
     double ah = 0;
     if (sum_w <= 0) {
@@ -178,10 +191,10 @@ static void theme_colors_print(const ThemeColors *t, FILE *f) {
     }
 }
 
-static void theme_accents_print(double accents[][3], int count, FILE *f) {
+static void theme_accents_print(double accents[][3], double pos[][2], int count, FILE *f) {
     for (int i = 0; i < count; i++) {
         tc_print_hex(f, accents[i]);
-        fputc('\n', f);
+        fprintf(f, " %.3f %.3f\n", tc_clamp(pos[i][0], 0.0, 1.0), tc_clamp(pos[i][1], 0.0, 1.0));
     }
 }
 
