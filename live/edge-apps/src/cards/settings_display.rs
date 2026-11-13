@@ -1585,7 +1585,6 @@ impl Card for DisplayCard {
                             row_r,
                             row_r.0 + row_r.2 - 8.0,
                             &row.value_text,
-                            row.changed,
                             lit,
                             self.open.as_ref() == Some(&row.id) && self.list.shown(),
                         );

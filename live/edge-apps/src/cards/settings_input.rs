@@ -548,7 +548,7 @@ impl Card for InputCard {
                         value_at_right(cr, cx, r, right, &word, changed);
                     } else {
                         let open = self.pick == Some(i) && self.list.shown();
-                        ui::value_box(cr, cx, r, right, &word, changed, lit, open);
+                        ui::value_box(cr, cx, r, right, &word, lit, open);
                     }
                     if !locked && self.pick == Some(i) && self.list.shown() {
                         let lh = self.list.height(opts.len());

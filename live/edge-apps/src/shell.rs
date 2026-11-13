@@ -317,11 +317,6 @@ impl Shell {
         ((ox, oy, pw, ph), out, content_h)
     }
 
-    pub fn clamped_scroll(&self, idx: usize, w: f64, h: f64) -> f64 {
-        let (pbox, _, content_h) = self.layout_local(idx, w, h);
-        self.panel_scroll.clamp(0.0, (content_h - pbox.3).max(0.0))
-    }
-
     /// Panel `idx` on a screen of `w x h`: its box, and each shown card's screen rectangle (halves
     /// side by side), top to bottom.
     pub fn layout(&self, idx: usize, w: f64, h: f64) -> (Rect, Vec<(usize, Rect)>) {
@@ -541,7 +536,6 @@ impl Shell {
         p.words = cards.iter().map(CardRef::word).collect();
         let panel_clone = p.clone();
         let panel_name = panel_clone.name.clone();
-        let new_line = crate::panel::line(&panel_clone);
 
         self.edit = Default::default();
         self.panel_scroll = 0.0;
@@ -583,7 +577,6 @@ impl Shell {
             .iter()
             .position(|ps| ps.panel.name == panel_name);
         self.fetch_needed = true;
-        let _ = new_line;
         true
     }
 
@@ -1304,11 +1297,6 @@ impl Shell {
         changed
     }
 
-    /// Escape closes the open panel. True when it did.
-    pub fn escape(&mut self) -> bool {
-        self.key(Key::Escape)
-    }
-
     /// What was typed, as if typed now (renders and tests).
     pub fn type_text(&mut self, q: &str) {
         if let Some(idx) = self.open {
@@ -1895,7 +1883,7 @@ fn union_rect(a: Rect, b: Rect) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cards::settings::{parse_power, PowerData};
+    use crate::cards::settings::parse_power;
 
     fn shell(line: &str) -> Shell {
         Shell::new(
@@ -2123,7 +2111,6 @@ mod tests {
             "outside: closes"
         );
         assert!(sh.open.is_none());
-        let _ = PowerData::default();
     }
 
     #[test]

@@ -513,19 +513,11 @@ struct InfoRow {
     hay: String,
 }
 
-enum ActKind {
-    Update,
-    Edit,
-    Undo,
-}
-
 struct ActButton {
     id: u32,
-    kind: ActKind,
     label: String,
     x: f64,
     y: f64,
-    w: f64,
 }
 
 impl AboutCard {
@@ -605,20 +597,20 @@ impl AboutCard {
         }
     }
 
-    fn visible_buttons(&self, cr: &Context, th: &Theme, max_w: f64) -> Vec<(u32, ActKind, String)> {
+    fn visible_buttons(&self, cr: &Context, th: &Theme, max_w: f64) -> Vec<(u32, String)> {
         let mut out = Vec::new();
         if self.matches("check for updates update") {
-            out.push((HIT_UPDATE, ActKind::Update, "Check for updates".to_string()));
+            out.push((HIT_UPDATE, "Check for updates".to_string()));
         }
         if self.matches("open the config file edit settings") {
-            out.push((HIT_EDIT, ActKind::Edit, "Open the config file".to_string()));
+            out.push((HIT_EDIT, "Open the config file".to_string()));
         }
         if let Some(entry) = &self.info.undo {
             let old_word = undo_old_word(&entry.old);
             let hay = format!("undo {} {} {old_word}", entry.key, entry.old);
             if self.matches(&hay) {
                 let label = undo_button_label(cr, th, max_w, entry);
-                out.push((HIT_UNDO, ActKind::Undo, label));
+                out.push((HIT_UNDO, label));
             }
         }
         out
@@ -640,7 +632,7 @@ impl AboutCard {
         let mut placed = Vec::with_capacity(items.len());
         let mut x = left;
         let mut y = start_y;
-        for (id, kind, label) in items {
+        for (id, label) in items {
             let bw = draw::measure(
                 cr,
                 &Text {
@@ -655,14 +647,7 @@ impl AboutCard {
                 x = left;
                 y += BTN_H + BTN_GAP_Y;
             }
-            placed.push(ActButton {
-                id,
-                kind,
-                label,
-                x,
-                y,
-                w: bw,
-            });
+            placed.push(ActButton { id, label, x, y });
             x += bw + BTN_GAP_X;
         }
         (placed, y + BTN_H)

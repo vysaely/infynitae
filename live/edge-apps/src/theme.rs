@@ -97,6 +97,7 @@ pub struct Theme {
     pub track: Rgba,
     pub corners: f64,
     /// SWITCH_LOOK: rows, icons, tiles
+    #[allow(dead_code)] // Read once SWITCH_LOOK styling is wired (docs/POLISH_PLAN.md Wave 2).
     pub switch_look: String,
 }
 

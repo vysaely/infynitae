@@ -54,6 +54,7 @@ impl Provider for Simple {
     }
 }
 
+#[cfg(test)]
 /// The provider that owns `app`, falling back to `Simple` when no claim matched.
 pub fn owner_of(app: &App) -> &'static dyn Provider {
     crate::provider::owner_of(app).unwrap_or(&Simple)
@@ -159,15 +160,6 @@ fn note_groups<'a>(cx: &'a Cx, app: &App) -> Vec<NoteGroup<'a>> {
         }
     }
     groups
-}
-
-fn app_initial(name: &str) -> String {
-    name.chars()
-        .find(|c| c.is_alphanumeric())
-        .or_else(|| name.chars().next())
-        .unwrap_or('?')
-        .to_uppercase()
-        .collect()
 }
 
 fn draw_app_tile(cr: &Context, cx: &Cx, app: &App, x: f64, y: f64) {

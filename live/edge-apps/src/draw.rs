@@ -138,6 +138,7 @@ pub fn title(cr: &Context, th: &Theme, x: f64, y: f64, s: &str) -> f64 {
     20.0
 }
 
+#[cfg(test)]
 /// A quiet hint in 12 px muted text, right-aligned on the title line (docs/design/EDGE_DESIGN.md).
 /// Dropped if it would overlap `title` on the left when the card is narrow.
 pub fn title_hint(

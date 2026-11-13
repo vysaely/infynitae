@@ -177,10 +177,6 @@ fn draw_tile(
     draw::text_center(cr, x + size / 2.0, y + (size - th_h) / 2.0, &t);
 }
 
-fn draw_app_tile(cr: &Context, th: &Theme, app: &App, x: f64, y: f64, size: f64) {
-    draw_tile(cr, th, &app.name, &app.id, (x, y, size), false);
-}
-
 fn draw_subhead(cr: &Context, th: &Theme, body: Rect, y: f64, label: &str) {
     draw::text_max(
         cr,

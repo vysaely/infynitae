@@ -206,6 +206,7 @@ impl Panel {
         }
     }
 
+    #[cfg(test)]
     pub fn has(&self, m: Module) -> bool {
         self.items.iter().any(|i| i.module == m)
     }
@@ -219,80 +220,6 @@ impl Panel {
         p.desktop = true;
         p.placed = true;
         (!p.items.is_empty()).then_some(p)
-    }
-
-    /// The panel as the edge lays it out and edits it: modules in order, as wide as the panel or
-    /// half of it, as tall as what they show. A line placed by hand (`module@x,y,wxh`) keeps its
-    /// modules from top to bottom, left to right; two that sat side by side become halves; the
-    /// places and the panel's height are dropped. The line itself changes only when the panel is
-    /// edited and saved. The desktop's widgets keep their places.
-    pub fn flowed(&self) -> Panel {
-        let mut p = self.clone();
-        if p.desktop || !p.placed {
-            return p;
-        }
-        // the width the line was arranged at (a line without one: the panels' default)
-        let pw = if p.width > 0 { p.width } else { 380 };
-        // rows first (modules whose tops are within half the smaller height), then left to
-        // right in each: a right module a few pixels higher stays the right half
-        let mut placed: Vec<Item> = p
-            .items
-            .iter()
-            .filter(|i| i.rect.is_some())
-            .cloned()
-            .collect();
-        let unplaced: Vec<Item> = p
-            .items
-            .iter()
-            .filter(|i| i.rect.is_none())
-            .cloned()
-            .collect();
-        placed.sort_by_key(|i| i.rect.map(|r| (r.1, r.0)));
-        let same_row = |a: &Item, b: &Item| match (a.rect, b.rect) {
-            (Some(ra), Some(rb)) => (ra.1 - rb.1).abs() * 2 < ra.3.min(rb.3),
-            _ => false,
-        };
-        let mut rows: Vec<Vec<Item>> = Vec::new();
-        for it in placed {
-            match rows.last_mut() {
-                Some(row) if same_row(&row[0], &it) => row.push(it),
-                _ => rows.push(vec![it]),
-            }
-        }
-        let narrow = |it: &Item| it.rect.is_some_and(|r| r.2 * 10 < pw * 6);
-        let mut out: Vec<Item> = Vec::with_capacity(p.items.len());
-        for mut row in rows {
-            row.sort_by_key(|i| i.rect.map(|r| r.0));
-            let mut k = 0;
-            while k < row.len() {
-                let pair = k + 1 < row.len()
-                    && !row[k].module.is_switch()
-                    && !row[k + 1].module.is_switch()
-                    && narrow(&row[k])
-                    && narrow(&row[k + 1]);
-                let n = if pair { 2 } else { 1 };
-                for it in &row[k..k + n] {
-                    let mut it = it.clone();
-                    it.rect = None;
-                    it.half = pair;
-                    out.push(it);
-                }
-                k += n;
-            }
-        }
-        out.extend(unplaced);
-        p.items = out;
-        p.placed = false;
-        p.height = 0;
-        p
-    }
-
-    /// The desktop with no widgets (to add some to).
-    pub fn no_widgets() -> Panel {
-        let mut p = Panel::new("widgets", Side::Top, -1, None, false, &[]);
-        p.desktop = true;
-        p.placed = true;
-        p
     }
 
     /// The panel as its PANEL_ line value (the C edge's panel_value); the desktop's widgets as
@@ -562,6 +489,7 @@ pub fn with_value(text: &str, key: &str, value: &str) -> String {
     out
 }
 
+#[cfg(test)]
 /// A value the edge may write into the config: only what its settings use (module words,
 /// places, true/false, app ids). The config is read by the shell at the session's start: a
 /// quote, a $ or a backtick in a value could run there, so such a value is never written.
@@ -569,20 +497,6 @@ pub fn writable(value: &str) -> bool {
     value
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || " +:_@,.-".contains(c))
-}
-
-/// Sets `key` to `value` in the config file, in this process: read, replace, write a temporary
-/// file, rename (one writer: the shell commands it replaced could lose one of two writes made
-/// close together). Nothing without a config file, or for a value `writable` refuses.
-pub fn write_value(key: &str, value: &str) -> std::io::Result<()> {
-    if !writable(key) || !writable(value) || key.contains(' ') {
-        return Err(std::io::Error::other("not a value the edge writes"));
-    }
-    let path = config_path();
-    let text = std::fs::read_to_string(&path)?;
-    let tmp = path.with_extension(format!("edge-tmp.{}", std::process::id()));
-    std::fs::write(&tmp, with_value(&text, key, value))?;
-    std::fs::rename(&tmp, &path)
 }
 
 /// A config value without its quotes and what follows them (the C edge's config_text).
@@ -643,11 +557,6 @@ pub fn parse_hex(v: &str) -> Option<[u8; 3]> {
     }
     let n = u32::from_str_radix(h, 16).ok()?;
     Some([(n >> 16) as u8, (n >> 8) as u8, n as u8])
-}
-
-/// Formats an optional shortcut key char as `"Super+<Key>"` (e.g. `'w'` -> `"Super+W"`).
-pub fn format_key(key: Option<char>) -> Option<String> {
-    key.map(|c| format!("Super+{}", c.to_ascii_uppercase()))
 }
 
 impl Config {
@@ -842,22 +751,6 @@ impl Config {
             c.panels.push(settings);
         }
         c
-    }
-
-    /// The shortcut key configured for a panel containing `m` (or named after it), if any.
-    pub fn key_for_module(&self, m: Module) -> Option<char> {
-        self.panels
-            .iter()
-            .find(|p| p.has(m) || p.name.eq_ignore_ascii_case(m.word()))
-            .and_then(|p| p.key)
-    }
-
-    /// The shortcut key configured for panel `name`, if any.
-    pub fn key_for_panel(&self, name: &str) -> Option<char> {
-        self.panels
-            .iter()
-            .find(|p| p.name.eq_ignore_ascii_case(name))
-            .and_then(|p| p.key)
     }
 }
 

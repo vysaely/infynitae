@@ -351,14 +351,12 @@ pub fn button(cr: &Context, cx: &Cx, hits: &mut Hits, id: u32, x: f64, y: f64, w
 /// soft accent block with a chevron, so pressing it reads as that option opening into the list.
 /// While the list is open only the muted word and upward chevron are drawn. `lit` deepens the
 /// block. Returns the block's width, to keep the row's name clear of it.
-#[allow(clippy::too_many_arguments)]
 pub fn value_box(
     cr: &Context,
     cx: &Cx,
     row: Rect,
     x_right: f64,
     word: &str,
-    _changed: bool,
     lit: bool,
     open: bool,
 ) -> f64 {

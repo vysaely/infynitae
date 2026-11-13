@@ -14,6 +14,7 @@ pub struct World {
     pub actions: Vec<String>,
 }
 
+#[cfg(test)]
 impl World {
     pub fn now() -> World {
         World::default()
@@ -752,18 +753,6 @@ impl AskState {
             None
         }
     }
-}
-
-pub fn apply(ask: &mut AskState, key: &str, out: &str) -> bool {
-    if key != "ask" {
-        return false;
-    }
-    let trimmed = out.trim();
-    if trimmed.is_empty() {
-        return false;
-    }
-    *ask = AskState::from_render_spec(trimmed, None, None);
-    true
 }
 
 /// Sends `ans` (`None` when cancelled) through `world.ask.reply` or `world.ask.conn_fd`, records the

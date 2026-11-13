@@ -375,16 +375,7 @@ impl Card for DefaultsCard {
                     right: tw + 40.0,
                 },
             );
-            ui::value_box(
-                cr,
-                cx,
-                r,
-                right,
-                &label,
-                !self.found_is_default(i),
-                lit,
-                open == Some(i),
-            );
+            ui::value_box(cr, cx, r, right, &label, lit, open == Some(i));
 
             if open == Some(i) {
                 let apps = self.matching_apps(i, cx);

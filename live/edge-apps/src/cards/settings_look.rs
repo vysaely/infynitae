@@ -3,7 +3,9 @@
 //! `CLIP_TO_GEOMETRY`, `WINE_TRANSPARENCY`, `FORCE_TRANSPARENT_APPS`, `SWITCH_LOOK`.
 
 use super::settings::sq;
-use super::settings_rows::{change_command, After, ConfigData, Control};
+#[cfg(test)]
+use super::settings_rows::Control;
+use super::settings_rows::{change_command, After, ConfigData};
 use crate::card::{
     render_value, run_sh, Action, Button, Card, Cx, Data, Event, Hits, Rect, Source, Status,
 };
@@ -704,6 +706,7 @@ pub enum LookControl {
         off: &'static str,
     },
     Pick(&'static [(&'static str, &'static str)]),
+    #[allow(dead_code)] // Variant kept until word-button controls are added in Look.
     Words(&'static [(&'static str, &'static str)]),
     Slide {
         min: f64,
@@ -747,6 +750,7 @@ pub struct LookRow {
 
 impl LookRow {
     /// Converts standard controls into `settings_rows::Control` for config verification tests.
+    #[cfg(test)]
     pub fn as_control(&self) -> Option<Control> {
         match self.control {
             LookControl::Switch { on, off } => Some(Control::Switch { on, off }),
@@ -1988,17 +1992,7 @@ impl LookCard {
             let mode_r = (mx, sy, mw, 32.0);
             let lit = hits.add(H_WP_MODE_BOX, mode_r) || hits.selected(H_WP_MODE_BOX);
             let word = self.display_word(WP_MODE_ROW);
-            let changed = !self.is_default(WP_MODE_ROW);
-            let vbox_w = ui::value_box(
-                cr,
-                cx,
-                mode_r,
-                ix + iw,
-                &word,
-                changed,
-                lit,
-                self.wp_mode_open,
-            );
+            let vbox_w = ui::value_box(cr, cx, mode_r, ix + iw, &word, lit, self.wp_mode_open);
             draw::text_max(
                 cr,
                 mx,
@@ -2992,7 +2986,7 @@ impl Card for LookCard {
                         },
                     );
                     let open = self.pick == Some(i) && self.list.shown();
-                    ui::value_box(cr, cx, row_r, right, &word, changed, lit, open);
+                    ui::value_box(cr, cx, row_r, right, &word, lit, open);
                     if self.pick == Some(i) && self.list.shown() {
                         self.draw_list(cr, cx, hits, list_r, &entries);
                     }
@@ -3118,7 +3112,7 @@ impl Card for LookCard {
                             right: reserve,
                         },
                     );
-                    let box_w = ui::value_box(cr, cx, row_r, right, &shown, changed, lit, open);
+                    let box_w = ui::value_box(cr, cx, row_r, right, &shown, lit, open);
                     if let Some(rgb) = rgb {
                         draw_swatch(cr, cx, right - box_w - 8.0 - SWATCH, row_r, rgb);
                     }

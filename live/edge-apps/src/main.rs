@@ -1,8 +1,6 @@
 //! Infynitae's panels, where each card comes from an app (`docs/EDGE_APPS.md`). Runs the Wayland
 //! edge or one-shot subcommands (`ask`, `stop`, `--print-panels`, `--print-theme`, `--render`).
 
-#![allow(dead_code)]
-
 mod app;
 mod ask;
 mod boxes;

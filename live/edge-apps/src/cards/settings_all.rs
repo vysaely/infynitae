@@ -459,7 +459,6 @@ impl SettingsAllCard {
                 } else {
                     custom
                 };
-                let _ = cx;
                 apps
             }
             "games" => {
