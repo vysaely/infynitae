@@ -260,8 +260,15 @@ GM_ARGS
         SHOT_DIR="${SCREENSHOT_DIR:-$HOME/Pictures/Screenshots}"
         mkdir -p "$SHOT_DIR"
         SHOT_FILE="$SHOT_DIR/shot-$(date +%Y%m%d-%H%M%S).png"
+        SHOT_BIN="$HOME/.local/bin/infynitae-shot"
         if [ -n "$SCREENSHOT_CMD" ]; then
             exec sh -c "$SCREENSHOT_CMD \"\$1\"" -- "$SHOT_FILE"
+        elif [ -x "$SHOT_BIN" ]; then
+            if "$SHOT_BIN" screen "$SHOT_FILE" >/dev/null && [ -f "$SHOT_FILE" ]; then
+                if command -v notify-send >/dev/null 2>&1; then
+                    notify-send -a Infynitae "Screenshot Saved" "$SHOT_FILE"
+                fi
+            fi
         elif command -v grim >/dev/null 2>&1; then
             grim "$SHOT_FILE"
             if [ -f "$SHOT_FILE" ] && command -v wl-copy >/dev/null 2>&1; then
@@ -283,12 +290,23 @@ GM_ARGS
         "$HOME/.local/bin/infynitae-xkill" "$2" "$3"
         ;;
     region-screenshot)
-        # Super+S (Super+Shift+R too): Interactive region screenshot (slurp + grim) of the moment
-        # the key was pressed
+        # Super+S (Super+Shift+R too): Interactive region screenshot of the moment the key was
+        # pressed
         SHOT_DIR="${SCREENSHOT_DIR:-$HOME/Pictures/Screenshots}"
         mkdir -p "$SHOT_DIR"
         SHOT_FILE="$SHOT_DIR/region-$(date +%Y%m%d-%H%M%S).png"
-        if command -v slurp >/dev/null 2>&1 && command -v grim >/dev/null 2>&1; then
+        SHOT_BIN="$HOME/.local/bin/infynitae-shot"
+        if [ -x "$SHOT_BIN" ]; then
+            LIVE_FLAG=""
+            if [ "${FREEZE_SCREENSHOT:-true}" != true ]; then
+                LIVE_FLAG="--live"
+            fi
+            if "$SHOT_BIN" region $LIVE_FLAG "$SHOT_FILE" >/dev/null && [ -f "$SHOT_FILE" ]; then
+                if command -v notify-send >/dev/null 2>&1; then
+                    notify-send -a Infynitae "Region Screenshot Saved" "$SHOT_FILE"
+                fi
+            fi
+        elif command -v slurp >/dev/null 2>&1 && command -v grim >/dev/null 2>&1; then
             # the moment of the key press (FREEZE_SCREENSHOT): each screen is captured first and
             # shown frozen above every window while the region is chosen, then cut from it
             FREEZE_DIR=""
