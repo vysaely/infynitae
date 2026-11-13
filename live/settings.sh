@@ -250,7 +250,7 @@ apply_settings() {
             --force|-f) force_apply=true ;;
         esac
     done
-    case "$(cat /proc/$PPID/comm 2>/dev/null) $(cat /proc/$PPID/cmdline 2>/dev/null)" in
+    case "$(cat /proc/$PPID/comm 2>/dev/null) $(tr '\0' ' ' < /proc/$PPID/cmdline 2>/dev/null)" in
         *reload*) force_apply=true ;;
     esac
 
