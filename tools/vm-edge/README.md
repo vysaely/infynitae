@@ -9,6 +9,9 @@ VM's helper scripts in ~/g (feat.py, everyday.py) and the edge installed as ~/.l
     sudo -E python3 pfeel.py      everyday use start to end, with timings and screenshots
     sudo -E python3 pchild.py     the cards that open beside a panel (7 checks)
     sudo -E python3 pwidgets.py   the desktop's widgets (12 checks)
+    sudo -E python3 pfluid.py     More on hover, lists in place, the keyboard's selection, nothing left
+                                  after closing (20 checks; z-* shots compared on the host with z-base)
+    sudo -E python3 ptime.py      key to first frame and Escape to closed, in ms
 
 Each prints PASS or FAIL per check and a SUMMARY line. They read the edge's INFYNITAE_EDGE_BOXES
 dump (the panel's, each module's and the edit bar's boxes after every drawing).

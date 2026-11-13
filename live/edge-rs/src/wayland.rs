@@ -687,7 +687,17 @@ impl OutputSurface {
                 if shell.edit.active {
                     None
                 } else {
-                    child_draw_rect
+                    // a list open in place counts as the card (its rows are where clicks go)
+                    child_draw_rect.or_else(|| {
+                        modules::child::inplace_rect(
+                            panel,
+                            &rects,
+                            &shell.world.child,
+                            &shell.theme.switch_look,
+                            (ox, oy - shell.world.panel_scroll),
+                            pw,
+                        )
+                    })
                 },
                 (shell.edit.active && shell.edit.adding).then_some(shell.edit.add_rect),
                 shell.world.panel_scroll,

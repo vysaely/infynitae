@@ -692,6 +692,12 @@ pub fn child_height(kind: ChildKind, item_count: usize) -> f64 {
     }
 }
 
+/// A list in place opens over its switch's row in a panel at the bottom of the screen (it grows
+/// upward: the row, its More / Less button under the pointer, stays put), under it elsewhere.
+pub fn list_above(panel: &Panel) -> bool {
+    panel.side == crate::config::Side::Bottom
+}
+
 /// Whether `kind`'s list opens inside `panel` under its switch: a stacked panel with switches as
 /// rows (the default look), and the switch in it.
 pub fn in_place_here(
@@ -726,7 +732,12 @@ pub fn inplace_rect(
         return None;
     }
     let r = find_parent_rect(panel, rects, kind)?;
-    Some((origin.0, origin.1 + r.1 + 40.0, pw, h))
+    let y = if list_above(panel) {
+        r.1 - h
+    } else {
+        r.1 + 40.0
+    };
+    Some((origin.0, origin.1 + y, pw, h))
 }
 
 /// The card beside the panel for an open list that does not open in place (the sound outputs,
@@ -840,7 +851,8 @@ pub fn draw_child_card(
             cx + PAD_X - 8.0,
             cy,
             cw - 2.0 * PAD_X + 16.0,
-            list_height(state.items.len()),
+            // a little room between the box and the switch's row (above or under it)
+            list_height(state.items.len()) - 4.0,
             th.small_radius(),
         );
         draw::set(cr, th.text.alpha(0.04));

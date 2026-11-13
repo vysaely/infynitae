@@ -224,6 +224,7 @@ pub fn block_rects(
                 &th.switch_look,
                 pw,
                 y + strip,
+                crate::modules::child::list_above(p),
             );
             if card_h > 0.0 {
                 out.push((b, (0.0, y + strip, pw, card_h)));

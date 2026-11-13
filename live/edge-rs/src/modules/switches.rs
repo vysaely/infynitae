@@ -538,6 +538,7 @@ pub fn layout_run(
     switch_look: &str,
     pw: f64,
     y0: f64,
+    above: bool,
 ) -> (Vec<Rect>, f64) {
     let mut rects = vec![(0.0, y0, 0.0, 0.0); items.len()];
     if items.is_empty() {
@@ -595,7 +596,9 @@ pub fn layout_run(
             for (idx, &k) in vis.iter().enumerate() {
                 let col = idx % 2;
                 let row = idx / 2;
-                let below = if open_row.is_some_and(|r| row > r) {
+                // `above` (a panel at the bottom): the list goes over its row, so the row and
+                // what is under it stay where they were on screen as the panel grows upward
+                let below = if open_row.is_some_and(|r| if above { row >= r } else { row > r }) {
                     extra
                 } else {
                     0.0
@@ -1172,7 +1175,7 @@ Controller AC:36:1B:F9:5D:AF (public)
         let pw = 380.0;
         let y0 = 10.0;
 
-        let (rects, card_h) = layout_run(&items, &world, "pairs", pw, y0);
+        let (rects, card_h) = layout_run(&items, &world, "pairs", pw, y0, false);
         assert!(card_h > 0.0);
         assert_eq!(rects.len(), 3);
         for (i, r) in rects.iter().enumerate() {

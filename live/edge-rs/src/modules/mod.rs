@@ -1182,9 +1182,15 @@ pub fn draw(cr: &Context, th: &Theme, it: &Item, world: &World, rect: Rect) {
         .is_switch()
         .then(|| switches::more_shown(it, world, rect))
         .flatten();
-    if let Some((_, mr, _)) = more {
+    if let Some((_, mr, open)) = more {
         // its More button first: under the pointer it is lit, not the whole switch
         hot(cr, th, world, mr.0, mr.1, mr.2, mr.3, th.small_radius());
+        if open {
+            // the switch whose list is open stays lit, so the list reads as its own
+            draw::round_rect(cr, x - 6.0, y - 4.0, w + 12.0, h + 8.0, th.small_radius());
+            draw::set(cr, th.text.alpha(0.06));
+            let _ = cr.fill();
+        }
     }
     if it.module.is_switch() {
         // a switch is pressed anywhere in its cell: light a little more than the cell (the module
@@ -1411,8 +1417,14 @@ pub fn draw_panel(
                 while j < panel.items.len() && panel.items[j].module.is_switch() {
                     j += 1;
                 }
-                let (_, card_h) =
-                    switches::layout_run(&panel.items[i..j], world, &th.switch_look, pw, y + strip);
+                let (_, card_h) = switches::layout_run(
+                    &panel.items[i..j],
+                    world,
+                    &th.switch_look,
+                    pw,
+                    y + strip,
+                    child::list_above(panel),
+                );
                 if card_h > 0.0 {
                     runs.push((y + strip, y + strip + card_h));
                     arriving(cr, world, y + strip + card_h, content_bottom, || {

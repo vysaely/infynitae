@@ -157,8 +157,14 @@ pub fn layout_in(
             while j < p.items.len() && p.items[j].module.is_switch() {
                 j += 1;
             }
-            let (run_rects, card_h) =
-                modules::switches::layout_run(&p.items[i..j], world, &th.switch_look, pw, y);
+            let (run_rects, card_h) = modules::switches::layout_run(
+                &p.items[i..j],
+                world,
+                &th.switch_look,
+                pw,
+                y,
+                modules::child::list_above(p),
+            );
             rects.extend(run_rects);
             if card_h > 0.0 {
                 y += card_h + draw::GAP;
@@ -469,8 +475,14 @@ impl Shell {
     pub fn hover_closes(&self) -> bool {
         self.opened_by_hover
             && !self.edit.active
-            && !self.world.child.open
+            && !self.side_card_open()
             && self.world.tray.open_menu.is_none()
+    }
+
+    /// A list is open in a card beside the panel (not one open in place, which is inside it: the
+    /// pointer leaving the panel then leaves it too).
+    pub fn side_card_open(&self) -> bool {
+        self.world.child.open && self.world.child.shown != self.world.child.kind
     }
 
     /// reload_if_changed, saying whether the config was read again.
@@ -1684,6 +1696,18 @@ impl Shell {
         // the keyboard's selection shows from now on (until the pointer moves)
         let shown_before = self.world.keyboard;
         self.world.keyboard = true;
+        // the first arrow or Tab while the selection is hidden shows it where it is (the first
+        // item): moving it at once skipped the first app
+        let moves = matches!(
+            k,
+            Key::Sym {
+                keysym: 0xff54 | 0xff09 | 0xff53 | 0xff52 | 0xfe20 | 0xff51,
+                ..
+            }
+        );
+        if moves && !shown_before && self.open.is_some() && !self.edit.active {
+            return true;
+        }
         self.key_inner(k) || !shown_before
     }
 
@@ -2207,7 +2231,7 @@ impl Shell {
         self.edit.drop_at = None;
         if self.world.ask.on
             || self.edit.active
-            || self.world.child.open
+            || self.side_card_open()
             || self.world.tray.open_menu.is_some()
         {
             return lit;
@@ -3229,8 +3253,9 @@ mod tests {
         let (_, _, _, ph) = panel_rect_in(&panel, w, h, &sh.world, &sh.theme);
         assert_eq!(ph, h - 2.0 * PANEL_MARGIN);
 
-        // Arrow Down past the 8 visible rows of Apps scrolls the Apps card and the panel
-        for _ in 0..16 {
+        // Arrow Down past the 8 visible rows of Apps scrolls the Apps card and the panel (the
+        // first press only shows the selection)
+        for _ in 0..17 {
             assert!(sh.key(Key::Sym {
                 keysym: 0xff54,
                 ch: None,
@@ -3499,11 +3524,16 @@ mod tests {
         let mut sh = Shell::from_config(Config::from_text(line));
         assert!(sh.toggle_named("apps"));
         assert!(!sh.world.keyboard, "not on opening");
+        let before = sh.world.selected;
         sh.key(Key::Sym {
             keysym: 0xff54,
             ch: None,
         });
         assert!(sh.world.keyboard);
+        assert_eq!(
+            sh.world.selected, before,
+            "the first Down shows the first item"
+        );
         let (w, h) = (1920.0, 1080.0);
         sh.pointer_motion(w, h, w / 2.0, h - 100.0);
         assert!(!sh.world.keyboard, "the pointer moved");
