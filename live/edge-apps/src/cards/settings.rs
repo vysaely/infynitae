@@ -45,6 +45,7 @@ const KINDS: &[CardKind] = &[
     crate::cards::settings_look::KIND_APPEARANCE,
     crate::cards::settings_look::KIND_WALLPAPER,
     crate::cards::settings_look::KIND_FONTS,
+    crate::cards::settings_input::KIND,
 ];
 
 impl Provider for Settings {
@@ -74,6 +75,9 @@ impl Provider for Settings {
             "appearance" => Some(Box::new(crate::cards::settings_look::LookCard::appearance())),
             "wallpaper" => Some(Box::new(crate::cards::settings_look::LookCard::wallpaper())),
             "fonts" => Some(Box::new(crate::cards::settings_look::LookCard::fonts())),
+            "input" if argument.is_none() => {
+                Some(Box::new(crate::cards::settings_input::InputCard::default()))
+            }
             "network" => Some(Box::new(NetworkCard::default())),
             "bluetooth" => Some(Box::new(BluetoothCard::default())),
             "power" => Some(Box::new(PowerCard::default())),
@@ -98,6 +102,9 @@ impl Provider for Settings {
                 crate::cards::settings_look::CursorsSource::system(),
             )),
             "screens" => Some(Box::new(crate::cards::settings_display::ScreensSource)),
+            "touchpad" => Some(Box::new(
+                crate::cards::settings_input::TouchpadSource::system(),
+            )),
             _ => None,
         }
     }
