@@ -40,6 +40,7 @@ const KINDS: &[CardKind] = &[
     },
     crate::cards::quick::KIND,
     crate::cards::session::KIND,
+    crate::cards::settings_display::KIND,
     crate::cards::settings_games::KIND,
     crate::cards::settings_look::KIND_APPEARANCE,
     crate::cards::settings_look::KIND_WALLPAPER,
@@ -66,6 +67,7 @@ impl Provider for Settings {
         match kind {
             "quick" => Some(Box::new(crate::cards::quick::QuickCard::new(argument))),
             "session" if argument.is_none() => Some(Box::new(crate::cards::session::new())),
+            "display" => Some(Box::new(crate::cards::settings_display::DisplayCard::new())),
             "games" => Some(Box::new(crate::cards::settings_rows::TableCard::new(
                 crate::cards::settings_games::TABLE,
             ))),
@@ -95,6 +97,7 @@ impl Provider for Settings {
             "cursors" => Some(Box::new(
                 crate::cards::settings_look::CursorsSource::system(),
             )),
+            "screens" => Some(Box::new(crate::cards::settings_display::ScreensSource)),
             _ => None,
         }
     }
