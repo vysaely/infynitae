@@ -1,0 +1,380 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>System cards, three versions</title>
+<style>
+:root {
+  /* the owner's theme (LOOK_* of ~/.cache/infynitae/look); the running edge reads these, never fixed values */
+  --card-rgb: 23 16 19;              /* #171013 */
+  --card: rgb(var(--card-rgb) / .92);
+  --edge: #452e3c;
+  --text: #eef2f8;
+  --muted: #a9aaaf;
+  --accent: #cc70a9;
+  --track: rgb(238 242 248 / .12);
+  --light: rgb(238 242 248 / .07);   /* the light under the pointer */
+  --r: 8px;
+  --rs: 4px;
+  --page: #0e0a0c;
+  --wall: color-mix(in srgb, var(--accent) 16%, #0b0809);
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--page); color: var(--text);
+  font: 13px/1.4 system-ui, "Segoe UI", "Noto Sans", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; text-align: left; }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.page { max-width: 1180px; margin: 0 auto; padding: 24px 16px 48px; }
+h1 { font-size: 20px; font-weight: 600; margin: 0 0 4px; }
+.lead { color: var(--muted); margin: 0 0 20px; max-width: 78ch; }
+
+.bar { display: flex; flex-wrap: wrap; gap: 8px 24px; align-items: center; margin-bottom: 12px; }
+.group { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.group > span { color: var(--muted); margin-right: 6px; }
+.pick { padding: 6px 12px; border: 1px solid var(--edge); border-radius: var(--rs); color: var(--muted); }
+.pick:hover { background: var(--light); color: var(--text); }
+.pick[aria-pressed="true"], .pick[aria-selected="true"] { color: var(--accent); border-color: var(--accent); }
+
+/* the desktop */
+.desk {
+  position: relative; min-height: 700px; background: var(--wall);
+  border: 1px solid var(--edge); border-radius: var(--r); overflow: hidden;
+}
+.win { position: absolute; border: 1px solid var(--edge); border-radius: var(--r); background: rgb(var(--card-rgb)); }
+.win i { display: block; height: 30px; border-bottom: 1px solid var(--edge); font-style: normal; color: var(--muted); padding: 6px 12px; font-size: 12px; }
+.win.a { left: 4%; top: 9%; width: 52%; height: 62%; }
+.win.b { left: 34%; top: 38%; width: 44%; height: 52%; }
+.panel {
+  position: absolute; top: 24px; right: 24px; width: min(380px, calc(100% - 32px));
+  display: flex; flex-direction: column; gap: 12px;
+}
+.panel.tight { gap: 4px; }
+
+/* one card */
+.card { background: var(--card); border: 1px solid var(--edge); border-radius: var(--r); padding: 14px 18px 12px; }
+.panel.arrive .card { animation: rise .2s cubic-bezier(.2,.8,.2,1) both; animation-delay: calc(var(--i) * 28ms); }
+@keyframes rise { from { opacity: 0; transform: translateY(14px); } }
+.head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
+.head b { font-size: 15px; font-weight: 600; }
+.head span { font-size: 12px; color: var(--muted); }
+
+.ico { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.on { color: var(--accent); }
+.dim { opacity: .3; }
+
+/* rows: the light under the pointer on everything clickable */
+.row {
+  display: flex; align-items: center; gap: 10px; width: calc(100% + 16px); margin: 0 -8px;
+  padding: 0 8px; min-height: 40px; border-radius: var(--rs); position: relative;
+}
+.row.click:hover, .row:has(> .cover:hover), .row:has(> .cover:focus-visible) { background: var(--light); }
+.cover { position: absolute; inset: 0; border-radius: var(--rs); }
+.row > :not(.cover) { position: relative; pointer-events: none; }
+.row > button:not(.cover), .row > input { pointer-events: auto; }
+.txt { flex: 1; min-width: 0; }
+.txt b { display: block; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.txt small { display: block; font-size: 11px; color: var(--muted); }
+.state { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.state.on { color: var(--accent); }
+
+/* More appears with the pointer, Less stays while the list is open */
+.more { font-size: 12px; color: var(--muted); padding: 4px 8px; border-radius: var(--rs); opacity: 0; }
+.row:hover .more, .more:focus-visible, .more.open { opacity: 1; }
+.more:hover { background: var(--light); color: var(--text); }
+
+.sw { width: 30px; height: 16px; border-radius: 8px; background: var(--track); flex: none; position: relative; }
+.sw::after { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--text); transition: transform .15s; }
+.sw[aria-checked="true"] { background: var(--accent); }
+.sw[aria-checked="true"]::after { transform: translateX(14px); background: rgb(var(--card-rgb)); }
+.sw:hover { box-shadow: 0 0 0 4px var(--light); }
+
+/* a list in place */
+.list { display: grid; grid-template-rows: 1fr; }
+.list.opening { animation: grow .22s cubic-bezier(.2,.8,.2,1); }
+.list.closing { animation: fold .22s cubic-bezier(.2,.8,.2,1) both; }
+@keyframes grow { from { grid-template-rows: 0fr; opacity: 0; } }
+@keyframes fold { to { grid-template-rows: 0fr; opacity: 0; } }
+.list > div { overflow: hidden; min-height: 0; }
+.list .inner { padding: 6px 0 2px; }
+.list .row { min-height: 32px; }
+.note { color: var(--muted); font-size: 12px; padding: 7px 0; }
+.act { font-size: 12px; color: var(--muted); padding: 4px 8px; border-radius: var(--rs); border: 1px solid var(--edge); }
+.act:hover { background: var(--light); color: var(--text); }
+.field { flex: 1; min-width: 0; background: none; border: 1px solid var(--edge); border-radius: var(--rs); color: var(--text); font: inherit; padding: 4px 8px; }
+
+/* a choice of words (power mode) */
+.choice { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.choice button { text-align: center; padding: 7px 4px; border: 1px solid var(--edge); border-radius: var(--rs); color: var(--muted); }
+.choice button:hover { background: var(--light); color: var(--text); }
+.choice button[aria-checked="true"] { color: var(--accent); border-color: var(--accent); }
+.says { font-size: 11px; color: var(--muted); margin-top: 8px; }
+
+/* version 2: status first */
+.status { display: flex; align-items: center; gap: 14px; padding: 4px 0 10px; }
+.status .ico { width: 28px; height: 28px; stroke-width: 1.3; }
+.status b { display: block; font-size: 18px; font-weight: 600; letter-spacing: -.01em; }
+.status small { font-size: 12px; color: var(--muted); }
+.foot { display: flex; justify-content: space-between; border-top: 1px solid var(--edge); margin: 0 -18px -12px; padding: 4px 10px; }
+.foot button { font-size: 12px; color: var(--muted); padding: 6px 8px; border-radius: var(--rs); }
+.foot button:hover { background: var(--light); color: var(--text); }
+.cols { display: grid; grid-template-columns: repeat(3, 1fr); margin: 2px -8px 0; }
+.cols button { padding: 8px; border-top: 2px solid var(--track); border-radius: 0 0 var(--rs) var(--rs); }
+.cols button:hover { background: var(--light); }
+.cols b { display: block; font-weight: 500; }
+.cols small { display: block; font-size: 11px; color: var(--muted); }
+.cols button[aria-checked="true"] { border-top-color: var(--accent); }
+.cols button[aria-checked="true"] b { color: var(--accent); }
+
+/* version 3: one line each */
+.line { padding: 2px 18px; }
+.line .row { min-height: 40px; }
+.line .txt b { font-size: 13px; }
+
+.about { margin-top: 20px; max-width: 78ch; }
+.about h2 { font-size: 15px; font-weight: 600; margin: 0 0 6px; }
+.about p { margin: 0 0 4px; color: var(--muted); }
+.fine { color: var(--muted); font-size: 12px; margin-top: 16px; max-width: 78ch; }
+
+@media (max-width: 640px) {
+  .desk { min-height: 760px; }
+  .panel { right: 16px; top: 16px; }
+  .win.a { width: 80%; } .win.b { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .panel.arrive .card, .list.opening, .list.closing { animation: none; }
+  .sw::after { transition: none; }
+}
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>System cards: Network, Bluetooth, Power mode</h1>
+  <p class="lead">Three versions of the same three cards from Settings, in a panel at the right edge. They work: hover a row, open a list with More, flip a switch, find a new Bluetooth device. Names and numbers are examples; the running edge shows the PC's own.</p>
+
+  <div class="bar">
+    <div class="group" role="tablist" aria-label="Version" id="tabs"></div>
+    <div class="group" id="scenes"><span>Network is</span></div>
+  </div>
+
+  <div class="desk">
+    <div class="win a"><i>A window</i></div>
+    <div class="win b"><i>Another window</i></div>
+    <div class="panel" id="panel"></div>
+  </div>
+
+  <div class="about" id="about"></div>
+  <p class="fine">Colours are the theme's: card #171013 at 92%, outline #452e3c, text #eef2f8, muted #a9aaaf, accent #cc70a9, tracks the text colour at 12%. Corners 8 px, small parts 4 px. A panel at the bottom edge opens its lists over the row, not under it, so the More / Less button stays under the pointer; that case is not drawn on this page.</p>
+</div>
+
+<script>
+const VERSIONS = [
+  { name: "1. Rows and switches", about: [
+    "Each card has a header (its title, and the app it comes from at the right) and one row: what is connected now, a switch, and a More button that appears under the pointer.",
+    "Lists open in place under the row and the button says Less while they are open, as chosen for today's edge.",
+    "Power mode is three words side by side with one line under them saying what the chosen mode does."] },
+  { name: "2. Status first", about: [
+    "The state is the largest thing on the card (the network's name, the connected device) with a line of detail under it, so it can be read from further away.",
+    "The actions are words in a line at the bottom of the card that are always there, so nothing appears on hover; the cards are about 40 px taller each.",
+    "Power mode is three columns, each with its own line of explanation, the chosen one marked by a bar in the accent."] },
+  { name: "3. One line each", about: [
+    "No headers: each card is a single line with its name at the left and its state at the right, and the three sit close together, so they take about a third of the height of version 2.",
+    "A click on the line flips it (Power mode steps to the next mode), More opens the list in place.",
+    "The app a card comes from is not shown here; it would appear only while the panel is edited."] },
+];
+
+const NETS = [
+  { name: "HomeNet", level: 3, lock: true, saved: true },
+  { name: "Guest", level: 2, lock: true, saved: false },
+  { name: "Cafe", level: 1, lock: false, saved: false },
+];
+const SCENES = {
+  "Wired": { cable: true, wifi: true, joined: null },
+  "Wi-Fi joined": { cable: false, wifi: true, joined: "HomeNet" },
+  "Not connected": { cable: false, wifi: true, joined: null },
+  "Off": { cable: false, wifi: false, joined: null },
+};
+const MODES = [
+  ["power-saver", "Saver", "Quieter and cooler, slower"],
+  ["balanced", "Balanced", "Speed when it is needed"],
+  ["performance", "Performance", "Full speed, more heat and noise"],
+];
+
+const S = {
+  v: 0, scene: "Wi-Fi joined", cable: false, wifi: true, joined: "HomeNet", joining: null,
+  scanning: false, hidden: false,
+  bt: true, find: "idle",
+  devices: [{ name: "Headphones", on: true }, { name: "Controller", on: false }],
+  power: "balanced", open: {}, arrive: true,
+};
+
+const svg = (d, cls = "") => `<svg class="ico ${cls}" viewBox="0 0 16 16" aria-hidden="true">${d}</svg>`;
+const I = {
+  wifi: (level, cls) => svg(`<circle cx="8" cy="12.6" r=".9" fill="currentColor" stroke="none"/>
+    <path d="M5.3 10a3.9 3.9 0 0 1 5.4 0" ${level < 1 ? 'class="dim"' : ""}/>
+    <path d="M3.1 7.7a7 7 0 0 1 9.8 0" ${level < 2 ? 'class="dim"' : ""}/>
+    <path d="M1 5.4a10 10 0 0 1 14 0" ${level < 3 ? 'class="dim"' : ""}/>`, cls),
+  wifiOff: cls => svg(`<circle cx="8" cy="12.6" r=".9" fill="currentColor" stroke="none"/><path d="M5.3 10a3.9 3.9 0 0 1 5.4 0M3.1 7.7a7 7 0 0 1 9.8 0M1 5.4a10 10 0 0 1 14 0" class="dim"/><path d="M2.5 2.5l11 11"/>`, cls),
+  wired: cls => svg(`<path d="M3 3.5h10v6h-2v2.5H5V9.5H3zM6 3.5v2M8 3.5v2M10 3.5v2"/>`, cls),
+  bt: cls => svg(`<path d="M4.5 4.8l7 6.4L8 14.5v-13l3.5 3.3-7 6.4"/>`, cls),
+  lock: svg(`<rect x="4" y="7.2" width="8" height="6" rx="1"/><path d="M5.6 7.2V5.6a2.4 2.4 0 0 1 4.8 0v1.6"/>`),
+  power: cls => svg(`<path d="M9 1.5L3.5 9H8l-1 5.5L12.5 7H8z"/>`, cls),
+};
+
+const net = () => {
+  if (S.cable) return { word: "Wired", detail: "Cable connected", on: true, icon: c => I.wired(c) };
+  if (!S.wifi) return { word: "Off", detail: "Wi-Fi is off", on: false, icon: c => I.wifiOff(c) };
+  if (S.joining) return { word: S.joining, detail: "Connecting", on: false, icon: c => I.wifi(0, c) };
+  if (S.joined) { const n = NETS.find(n => n.name === S.joined); return { word: S.joined, detail: `Wi-Fi, signal ${[0, 40, 55, 72][n ? n.level : 3]}%`, on: true, icon: c => I.wifi(n ? n.level : 3, c) }; }
+  return { word: "Not connected", detail: "Wi-Fi is on", on: false, icon: c => I.wifi(0, c) };
+};
+const bt = () => {
+  const on = S.devices.filter(d => d.on);
+  if (!S.bt) return { word: "Off", detail: "Bluetooth is off", on: false };
+  if (S.find === "pairing") return { word: "Keyboard", detail: "Pairing", on: false };
+  if (on.length) return { word: on.map(d => d.name).join(", "), detail: `${on.length} connected, ${S.devices.length - on.length} saved`, on: true };
+  return { word: "No device connected", detail: `${S.devices.length} saved`, on: false };
+};
+
+/* the lists: the same rows in every version */
+function netRows() {
+  if (!S.wifi) return `<div class="note">Turn Wi-Fi on to see networks.</div>`;
+  let h = "";
+  if (S.cable) h += `<div class="row">${I.wired("on")}<span class="txt"><b>Wired</b></span><span class="state on">Connected</span></div>`;
+  const list = [...NETS].sort((a, b) => (b.name === S.joined) - (a.name === S.joined) || b.level - a.level);
+  for (const n of list) {
+    const me = n.name === S.joined, going = n.name === S.joining;
+    h += `<div class="row click"><button class="cover" data-a="join" data-n="${n.name}" aria-label="${me ? "Disconnect from" : "Connect to"} ${n.name}"></button>
+      ${I.wifi(n.level, me ? "on" : "")}<span class="txt"><b>${n.name}</b></span>
+      ${n.lock && !me && !going ? I.lock : ""}<span class="state ${me ? "on" : ""}">${going ? "Connecting" : me ? "Connected" : n.saved ? "Saved" : n.lock ? "Locked" : "Open"}</span></div>`;
+  }
+  h += S.hidden
+    ? `<div class="row"><input class="field" id="hid" placeholder="Network name" aria-label="Network name"><button class="act" data-a="hidden-join">Join</button><button class="act" data-a="hidden">Cancel</button></div>`
+    : `<div class="row click"><button class="cover" data-a="hidden" aria-label="Hidden network"></button><span class="txt"><b>Hidden network</b></span></div>`;
+  h += `<div class="row click"><button class="cover" data-a="scan" aria-label="Search again"></button><span class="txt"><b>${S.scanning ? "Searching" : "Search again"}</b></span></div>`;
+  return h;
+}
+function btRows() {
+  if (!S.bt) return `<div class="note">Turn Bluetooth on to see devices.</div>`;
+  let h = "";
+  S.devices.forEach((d, i) => {
+    h += `<div class="row click"><button class="cover" data-a="dev" data-n="${i}" aria-label="${d.on ? "Disconnect" : "Connect"} ${d.name}"></button>
+      ${I.bt(d.on ? "on" : "")}<span class="txt"><b>${d.name}</b></span><span class="state ${d.on ? "on" : ""}">${d.on ? "Connected" : "Saved"}</span></div>`;
+  });
+  if (S.find === "none") h += `<div class="note">No new device found</div>`;
+  if (S.find === "idle" || S.find === "none") h += `<div class="row click"><button class="cover" data-a="find" aria-label="Find new devices"></button><span class="txt"><b>Find new devices</b></span></div>`;
+  if (S.find === "scan") h += `<div class="note">Searching for devices nearby</div>`;
+  if (S.find === "found") h += `<div class="row">${I.bt()}<span class="txt"><b>Keyboard</b></span><button class="act" data-a="pair">Pair</button></div>`;
+  if (S.find === "pairing") h += `<div class="row">${I.bt()}<span class="txt"><b>Keyboard</b></span><span class="state">Pairing</span></div>`;
+  return h;
+}
+function powerRows() {
+  return MODES.map(([id, word, says]) => `<div class="row click"><button class="cover" data-a="power" data-n="${id}" aria-label="${word}"></button>
+    <span class="txt"><b>${word}</b></span><span class="state ${S.power === id ? "on" : ""}">${S.power === id ? "Chosen" : says}</span></div>`).join("");
+}
+const list = (key, rows) => S.open[key] ? `<div class="list ${S.open[key]}"><div><div class="inner">${rows}</div></div></div>` : "";
+const more = key => `<button class="more ${S.open[key] && S.open[key] !== "closing" ? "open" : ""}" data-a="more" data-n="${key}">${S.open[key] && S.open[key] !== "closing" ? "Less" : "More"}</button>`;
+const sw = (act, on, label) => `<button class="sw" role="switch" aria-checked="${on}" aria-label="${label}" data-a="${act}"></button>`;
+const head = (title) => `<div class="head"><b>${title}</b><span>Settings</span></div>`;
+const mode = () => MODES.find(m => m[0] === S.power);
+
+const DRAW = [
+  /* 1: rows and switches */
+  () => {
+    const n = net(), b = bt();
+    return `
+    <section class="card" style="--i:0">${head("Network")}
+      <div class="row">${n.icon(n.on ? "on" : "")}<span class="txt"><b>${n.word}</b><small>${n.detail}</small></span>${more("net")}${sw("wifi", S.wifi, "Wi-Fi")}</div>
+      ${list("net", netRows())}</section>
+    <section class="card" style="--i:1">${head("Bluetooth")}
+      <div class="row">${I.bt(b.on ? "on" : "")}<span class="txt"><b>${b.word}</b><small>${b.detail}</small></span>${more("bt")}${sw("bt", S.bt, "Bluetooth")}</div>
+      ${list("bt", btRows())}</section>
+    <section class="card" style="--i:2">${head("Power mode")}
+      <div class="choice" role="radiogroup" aria-label="Power mode">${MODES.map(([id, word]) => `<button role="radio" aria-checked="${S.power === id}" data-a="power" data-n="${id}">${word}</button>`).join("")}</div>
+      <div class="says">${mode()[2]}</div></section>`;
+  },
+  /* 2: status first */
+  () => {
+    const n = net(), b = bt(), o = k => S.open[k] && S.open[k] !== "closing";
+    return `
+    <section class="card" style="--i:0">${head("Network")}
+      <div class="status">${n.icon(n.on ? "on" : "")}<div><b>${n.word}</b><small>${n.detail}</small></div></div>
+      ${list("net", netRows())}
+      <div class="foot"><button data-a="wifi">${S.wifi ? "Turn Wi-Fi off" : "Turn Wi-Fi on"}</button><button data-a="more" data-n="net">${o("net") ? "Hide networks" : "Networks"}</button></div></section>
+    <section class="card" style="--i:1">${head("Bluetooth")}
+      <div class="status">${I.bt(b.on ? "on" : "")}<div><b>${b.word}</b><small>${b.detail}</small></div></div>
+      ${list("bt", btRows())}
+      <div class="foot"><button data-a="bt">${S.bt ? "Turn off" : "Turn on"}</button><button data-a="more" data-n="bt">${o("bt") ? "Hide devices" : "Devices"}</button></div></section>
+    <section class="card" style="--i:2">${head("Power mode")}
+      <div class="cols" role="radiogroup" aria-label="Power mode">${MODES.map(([id, word, says]) => `<button role="radio" aria-checked="${S.power === id}" data-a="power" data-n="${id}"><b>${word}</b><small>${says}</small></button>`).join("")}</div></section>`;
+  },
+  /* 3: one line each */
+  () => {
+    const n = net(), b = bt();
+    const line = (i, act, label, icon, name, st, key, rows) => `
+    <section class="card line" style="--i:${i}">
+      <div class="row click"><button class="cover" data-a="${act}" aria-label="${label}"></button>${icon}<span class="txt"><b>${name}</b></span>${more(key)}<span class="state ${st.on ? "on" : ""}">${st.word}</span></div>
+      ${list(key, rows)}</section>`;
+    return line(0, "wifi", "Wi-Fi on or off", n.icon(n.on ? "on" : ""), "Network", n, "net", netRows())
+      + line(1, "bt", "Bluetooth on or off", I.bt(b.on ? "on" : ""), "Bluetooth", b, "bt", btRows())
+      + line(2, "step", "Next power mode", I.power(S.power === "balanced" ? "" : "on"), "Power mode", { word: mode()[1], on: S.power !== "balanced" }, "pw", powerRows());
+  },
+];
+
+const $ = id => document.getElementById(id);
+function render() {
+  $("tabs").innerHTML = VERSIONS.map((v, i) => `<button class="pick" role="tab" aria-selected="${S.v === i}" data-a="tab" data-n="${i}">${v.name}</button>`).join("");
+  $("scenes").innerHTML = `<span>Network is</span>` + Object.keys(SCENES).map(k => `<button class="pick" aria-pressed="${S.scene === k}" data-a="scene" data-n="${k}">${k}</button>`).join("");
+  const p = $("panel");
+  p.className = "panel" + (S.v === 2 ? " tight" : "") + (S.arrive ? " arrive" : "");
+  p.innerHTML = DRAW[S.v]();
+  $("about").innerHTML = `<h2>${VERSIONS[S.v].name}</h2>` + VERSIONS[S.v].about.map(t => `<p>${t}</p>`).join("");
+  S.arrive = false;
+  for (const k in S.open) if (S.open[k] === "opening") S.open[k] = "open";   // the growing plays once
+}
+function toggle(key) {
+  if (S.open[key] && S.open[key] !== "closing") {
+    S.open[key] = "closing"; render();
+    setTimeout(() => { if (S.open[key] === "closing") { delete S.open[key]; render(); } }, 220);
+  } else { S.open[key] = "opening"; render(); }
+}
+const later = (ms, f) => setTimeout(() => { f(); render(); }, ms);
+
+document.addEventListener("click", e => {
+  const t = e.target.closest("[data-a]"); if (!t) return;
+  const a = t.dataset.a, n = t.dataset.n;
+  if (a === "tab") { S.v = +n; S.open = {}; S.arrive = true; }
+  else if (a === "scene") { Object.assign(S, SCENES[n], { scene: n, joining: null, hidden: false }); }
+  else if (a === "more") { toggle(n); return; }
+  else if (a === "wifi") { S.wifi = !S.wifi; if (!S.wifi) { S.joined = S.joining = null; } S.scene = sceneNow(); }
+  else if (a === "join") {
+    if (S.joined === n) S.joined = null;
+    else { S.joining = n; S.joined = null; later(900, () => { if (S.joining === n) { S.joined = n; S.joining = null; S.scene = sceneNow(); } }); }
+    S.scene = sceneNow();
+  }
+  else if (a === "hidden") { S.hidden = !S.hidden; render(); if (S.hidden) $("hid").focus(); return; }
+  else if (a === "hidden-join") {
+    const name = $("hid").value.trim(); if (!name) { $("hid").focus(); return; }
+    if (!NETS.some(x => x.name === name)) NETS.push({ name, level: 2, lock: true, saved: true });
+    S.hidden = false; S.joining = name; S.joined = null;
+    later(900, () => { if (S.joining === name) { S.joined = name; S.joining = null; S.scene = sceneNow(); } });
+  }
+  else if (a === "scan") { if (S.scanning) return; S.scanning = true; later(1200, () => { S.scanning = false; }); }
+  else if (a === "bt") { S.bt = !S.bt; S.find = "idle"; }
+  else if (a === "dev") { S.devices[+n].on = !S.devices[+n].on; }
+  else if (a === "find") { S.find = "scan"; later(1500, () => { if (S.find === "scan") S.find = S.devices.some(d => d.name === "Keyboard") ? "none" : "found"; }); }
+  else if (a === "pair") { S.find = "pairing"; later(1300, () => { if (S.find === "pairing") { S.devices.push({ name: "Keyboard", on: true }); S.find = "idle"; } }); }
+  else if (a === "power") { S.power = n; }
+  else if (a === "step") { S.power = MODES[(MODES.findIndex(m => m[0] === S.power) + 1) % 3][0]; }
+  render();
+});
+document.addEventListener("keydown", e => { if (e.key === "Enter" && e.target.id === "hid") document.querySelector('[data-a="hidden-join"]').click(); });
+function sceneNow() { return S.cable ? "Wired" : !S.wifi ? "Off" : S.joined ? "Wi-Fi joined" : "Not connected"; }
+render();
+</script>
+</body>
+</html>
