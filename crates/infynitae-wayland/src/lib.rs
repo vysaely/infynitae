@@ -1230,6 +1230,8 @@ impl WaylandState {
                 // PANEL_SETTINGS line says otherwise
                 let mut settings_panel_line = false;
                 let mut edge_from_apps = false;
+                let mut accent_color = None;
+                let mut border_active_color = None;
                 for line in content.lines() {
                     if let Some((key, val)) = config_line(line) {
                         let (key, val) = (key.as_str(), val.as_str());
@@ -1430,9 +1432,14 @@ impl WaylandState {
                             "BORDER_IGNORE_CSD" => {
                                 self.border_ignore_csd = parse_bool(val).unwrap_or(true);
                             }
+                            "ACCENT" => {
+                                if let Some(c) = crate::parse_color_hex(val) {
+                                    accent_color = Some(c);
+                                }
+                            }
                             "BORDER_ACTIVE" => {
                                 if let Some(c) = crate::parse_color_hex(val) {
-                                    self.border_active = c;
+                                    border_active_color = Some(c);
                                 }
                             }
                             "BORDER_INACTIVE" => {
@@ -1565,6 +1572,9 @@ impl WaylandState {
                     window_corners = c.clamp(0.0, 24.0);
                 }
                 self.window_corners = window_corners;
+                if let Some(c) = accent_color.or(border_active_color) {
+                    self.border_active = c;
+                }
                 if !background_priority {
                     self.background_restore_all();
                 }
@@ -2648,6 +2658,43 @@ mod key_binding_config_tests {
         std::fs::write(&cfg, "BORDER_WIDTH=\"1\"\n").unwrap();
         state.reload_config();
         assert_eq!(state.scaling_filter, super::ZoomFilter::Sharp);
+    }
+
+    #[test]
+    fn reload_config_prefers_accent_over_border_active_and_falls_back() {
+        use smithay::reexports::wayland_server::Display;
+        let temp = super::cursor::TestTempDir::new("wl_accent_reload");
+        let cfg_dir = temp.path().join(".config/infynitae");
+        std::fs::create_dir_all(&cfg_dir).unwrap();
+        let cfg = cfg_dir.join("config");
+
+        let (core, _, _, _) =
+            infynitae_core::Core::new(infynitae_core::navigation::PersistedCameras::default());
+        let display: Display<super::WaylandState> = Display::new().unwrap();
+        let mut state = super::WaylandState::new(&display.handle(), core);
+        state.set_config_home(temp.path().to_path_buf());
+
+        let old_col = super::parse_color_hex("#cc70a9").unwrap();
+        let new_col = super::parse_color_hex("#1188ee").unwrap();
+
+        // Old key alone behaves identically.
+        std::fs::write(&cfg, "BORDER_ACTIVE=\"#cc70a9\"\n").unwrap();
+        state.reload_config();
+        assert_eq!(state.border_active, old_col);
+
+        // Both present (ACCENT first or BORDER_ACTIVE first): ACCENT wins.
+        std::fs::write(&cfg, "ACCENT=\"#1188ee\"\nBORDER_ACTIVE=\"#cc70a9\"\n").unwrap();
+        state.reload_config();
+        assert_eq!(state.border_active, new_col);
+
+        std::fs::write(&cfg, "BORDER_ACTIVE=\"#cc70a9\"\nACCENT=\"#1188ee\"\n").unwrap();
+        state.reload_config();
+        assert_eq!(state.border_active, new_col);
+
+        // Empty ACCENT falls back to BORDER_ACTIVE.
+        std::fs::write(&cfg, "ACCENT=\"\"\nBORDER_ACTIVE=\"#cc70a9\"\n").unwrap();
+        state.reload_config();
+        assert_eq!(state.border_active, old_col);
     }
 }
 

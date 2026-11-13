@@ -272,3 +272,82 @@ fn a_closed_windows_border_is_repainted_in_the_next_frame() {
         }
     }
 }
+
+#[test]
+fn old_border_active_and_unified_accent_draw_identical_focused_borders() {
+    use smithay::backend::renderer::element::solid::SolidColorRenderElement;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    struct TempHome(std::path::PathBuf);
+    impl TempHome {
+        fn new() -> Self {
+            static N: AtomicU64 = AtomicU64::new(0);
+            let p = std::env::temp_dir().join(format!(
+                "infynitae-border-test-{}-{}",
+                std::process::id(),
+                N.fetch_add(1, Ordering::Relaxed)
+            ));
+            std::fs::create_dir_all(p.join(".config/infynitae")).unwrap();
+            Self(p)
+        }
+        fn write_cfg(&self, text: &str) {
+            std::fs::write(self.0.join(".config/infynitae/config"), text).unwrap();
+        }
+    }
+    impl Drop for TempHome {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    let focused_borders = |cfg_text: &str| {
+        let home = TempHome::new();
+        home.write_cfg(cfg_text);
+        let mut r = Rig::x8();
+        r.ls.state.set_config_home(home.0.clone());
+        r.ls.state.reload_config();
+        let w = *r.ls.state.core().stage().mapped_elements().last().unwrap();
+        infynitae_backend_headless::set_focus(&mut r.ls.state, &mut r.ls.input, Some(w)).unwrap();
+        let o = r.ls.output();
+        let mut renderer = PixmanRenderer::new().expect("pixman");
+        let (elements, k) =
+            convert::output_elements(&mut r.ls.state, &mut renderer, o).expect("elements");
+        elements
+            .iter()
+            .filter_map(|e| match e {
+                OutputElement::Solid(s) => {
+                    let g = SolidColorRenderElement::geometry(s, Scale::from(k));
+                    Some((g.loc.x, g.loc.y, g.size.w, g.size.h, s.color()))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let base: String = include_str!("../../../config/config")
+        .lines()
+        .filter(|l| {
+            let t = l.trim_start();
+            !t.starts_with("ACCENT=") && !t.starts_with("LOCK_WHEN_AWAY=")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let old_cfg = format!(
+        "{base}\nBORDER_WIDTH=\"1\"\nBORDER_ACTIVE=\"#cc70a9\"\nBORDER_INACTIVE=\"#452e3c\"\n"
+    );
+    let new_cfg =
+        format!("{base}\nBORDER_WIDTH=\"1\"\nACCENT=\"#cc70a9\"\nBORDER_INACTIVE=\"#452e3c\"\n");
+    let both_cfg = format!(
+        "{base}\nBORDER_WIDTH=\"1\"\nACCENT=\"#1188ee\"\nBORDER_ACTIVE=\"#cc70a9\"\nBORDER_INACTIVE=\"#452e3c\"\n"
+    );
+
+    let old_b = focused_borders(&old_cfg);
+    let new_b = focused_borders(&new_cfg);
+    assert_eq!(old_b.len(), 4);
+    assert_eq!(old_b, new_b);
+
+    let both_b = focused_borders(&both_cfg);
+    let win_color = infynitae_wayland::parse_color_hex("#1188ee").unwrap();
+    assert_eq!(both_b.len(), 4);
+    assert!(both_b.iter().all(|b| b.4 == win_color));
+}

@@ -1227,6 +1227,7 @@ pub fn run_console_with(
     if let Ok(home) = std::env::var("HOME") {
         let config_path = format!("{home}/.config/infynitae/config");
         if let Ok(content) = std::fs::read_to_string(&config_path) {
+            idle_auto_lock = parse_lock_when_away(&content);
             for (k, v) in content.lines().filter_map(infynitae_wayland::config_line) {
                 let key = k.trim();
                 let val = v.trim();
@@ -1238,8 +1239,6 @@ pub fn run_console_with(
                     if let Ok(m) = val.parse::<u32>() {
                         idle_timeout_min = m;
                     }
-                } else if key == "IDLE_AUTO_LOCK" {
-                    idle_auto_lock = infynitae_wayland::parse_bool(val).unwrap_or(true);
                 } else if key.starts_with("OUTPUT_") && key.ends_with("_SCALE") {
                     let conn_name = key
                         .trim_start_matches("OUTPUT_")
@@ -1729,16 +1728,14 @@ pub fn run_console_with(
                         data.direct_scanout = ds;
                     }
                     if let Ok(content) = std::fs::read_to_string(path) {
+                        data.idle_auto_lock = parse_lock_when_away(&content);
                         for (k, v) in content.lines().filter_map(infynitae_wayland::config_line) {
                             let key = k.trim();
                             let val = v.trim();
-                            if key == "IDLE_SLEEP_TIMEOUT_MIN" {
-                                if let Ok(m) = val.parse::<u32>() {
-                                    data.idle_sleep_timeout_min = m;
-                                }
-                            } else if key == "IDLE_AUTO_LOCK" {
-                                data.idle_auto_lock =
-                                    infynitae_wayland::parse_bool(val).unwrap_or(true);
+                            if key == "IDLE_SLEEP_TIMEOUT_MIN"
+                                && let Ok(m) = val.parse::<u32>()
+                            {
+                                data.idle_sleep_timeout_min = m;
                             }
                         }
                     }
@@ -3633,6 +3630,27 @@ pub fn calculate_abs_pointer_delta(
 
 /// Resolves whether touchpad tap-to-click should be enabled.
 /// Unset defaults to true (TOUCHPAD_TAP="true").
+pub fn parse_lock_when_away(content: &str) -> bool {
+    let mut lock_when_away = None;
+    let mut legacy_idle = None;
+    for (k, v) in content.lines().filter_map(infynitae_wayland::config_line) {
+        match k.trim() {
+            "LOCK_WHEN_AWAY" => {
+                if let Some(b) = infynitae_wayland::parse_bool(v.trim()) {
+                    lock_when_away = Some(b);
+                }
+            }
+            "IDLE_AUTO_LOCK" => {
+                if let Some(b) = infynitae_wayland::parse_bool(v.trim()) {
+                    legacy_idle = Some(b);
+                }
+            }
+            _ => {}
+        }
+    }
+    lock_when_away.or(legacy_idle).unwrap_or(true)
+}
+
 pub fn resolve_touchpad_tap(configured: Option<bool>, env_val: Option<&str>) -> bool {
     configured
         .or_else(|| env_val.map(|t| infynitae_wayland::parse_bool(t).unwrap_or(false)))
@@ -4189,5 +4207,23 @@ mod tests {
         let fallback =
             choose_mode_custom(&modes, Some((3840, 2160)), None).or_else(|| choose_mode(&modes));
         assert_eq!(fallback, Some(1));
+    }
+
+    #[test]
+    fn parse_lock_when_away_prefers_unified_key_and_falls_back_to_idle_auto_lock() {
+        use super::parse_lock_when_away;
+        assert!(parse_lock_when_away(""));
+        assert!(parse_lock_when_away("IDLE_AUTO_LOCK=\"true\"\n"));
+        assert!(!parse_lock_when_away("IDLE_AUTO_LOCK=\"false\"\n"));
+        assert!(!parse_lock_when_away(
+            "LOCK_WHEN_AWAY=\"false\"\nIDLE_AUTO_LOCK=\"true\"\n"
+        ));
+        assert!(!parse_lock_when_away(
+            "IDLE_AUTO_LOCK=\"true\"\nLOCK_WHEN_AWAY=\"false\"\n"
+        ));
+        assert!(!parse_lock_when_away(
+            "LOCK_WHEN_AWAY=\"\"\nIDLE_AUTO_LOCK=\"false\"\n"
+        ));
+        assert!(parse_lock_when_away("IDLE_AUTO_LOCK=\"not-a-bool\"\n"));
     }
 }
