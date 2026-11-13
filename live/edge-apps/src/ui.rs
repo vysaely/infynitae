@@ -575,13 +575,24 @@ pub fn list_row(
 ) -> bool {
     let th = cx.theme;
     let lit = hits.add(id, r) || hits.selected(id);
-    if active {
-        draw::round_rect(cr, r.0, r.1, r.2, r.3, th.small_radius());
-        draw::set(cr, th.accent.alpha(0.16));
-        let _ = cr.fill();
-    } else if lit {
+    // the pointer: a light fill; the chosen one: its word in the accent and a small check at the
+    // right (owner, 2026-11-13: the filled accent block looked like a button)
+    if lit {
         light(cr, cx, r);
     }
+    let check_w = if active {
+        let (x, y) = (r.0 + r.2 - 18.0, r.1 + r.3 / 2.0);
+        cr.move_to(x - 4.5, y);
+        cr.line_to(x - 1.5, y + 3.0);
+        cr.line_to(x + 4.5, y - 3.5);
+        draw::set(cr, th.accent_text);
+        cr.set_line_width(1.6);
+        let _ = cr.stroke();
+        18.0
+    } else {
+        0.0
+    };
+    let r = (r.0, r.1, r.2 - check_w, r.3);
     let note_w = if note.is_empty() {
         0.0
     } else {
@@ -616,7 +627,7 @@ pub fn list_row(
         (r.2 - 20.0 - note_w - icon_w).max(20.0),
         &Text {
             size: 13.0,
-            bold: active,
+            bold: false,
             color: if active { th.accent_text } else { th.text },
             text,
         },
