@@ -68,6 +68,38 @@ jobs:
       - run: sh tools/test-install-lib
       - run: sh tools/test-log-caps
 
+  # The two old edges are frozen (owner, 2026-11-13: archived, look only; tags edge-c-final and
+  # edge-rs-final). The Rust one keeps running until live/edge-apps replaces it, so a real bug fix can
+  # still go in: give its pull request the label "edge-fix". Anything else touching them fails here.
+  old-edges-frozen:
+    name: Old edges frozen
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: No change under live/edge or live/edge-rs without the edge-fix label
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          PR: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          changed=$(git diff --name-only "$BASE...$HEAD" -- live/edge live/edge-rs)
+          if [ -z "$changed" ]; then echo "old edges untouched"; exit 0; fi
+          echo "$changed"
+          # the labels as they are now (a rerun after labelling sees the label; the event's copy is old)
+          if gh pr view "$PR" --json labels -q '.labels[].name' | grep -qx edge-fix; then
+            echo "allowed: labelled edge-fix"; exit 0
+          fi
+          echo "live/edge and live/edge-rs are frozen; label the pull request edge-fix for a bug fix"
+          exit 1
+
   # The edge in Rust (docs/EDGE_RUST.md): its own crate in live/edge-rs, built, tested, and compared
   # with the C edge.
   edge-rs:
