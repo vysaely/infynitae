@@ -16,6 +16,7 @@
 #include <gdk-pixbuf/gdk-pixbuf.h>
 #include <math.h>
 #include <stdio.h>
+#include <string.h>
 
 typedef struct {
     double accent[3], surface[3], canvas[3], border[3]; /* 0..1 */
@@ -40,8 +41,8 @@ static void tc_hsv_to_rgb(double h, double s, double v, double out[3]) {
 
 static double tc_clamp(double x, double lo, double hi) { return x < lo ? lo : x > hi ? hi : x; }
 
-/* Returns 0, or -1 for an image it cannot read. */
-static int theme_colors_from(GdkPixbuf *image, ThemeColors *out) {
+static int tc_sample_bins(GdkPixbuf *image, double bin_w[24], double bin_rgb[24][3],
+                          double *sum_x, double *sum_y, double *sum_w) {
     if (!image) return -1;
     int w = gdk_pixbuf_get_width(image), h = gdk_pixbuf_get_height(image);
     if (w <= 0 || h <= 0) return -1;
@@ -52,8 +53,9 @@ static int theme_colors_from(GdkPixbuf *image, ThemeColors *out) {
     if (!small) return -1;
     const guchar *px = gdk_pixbuf_get_pixels(small);
     int rs = gdk_pixbuf_get_rowstride(small), nch = gdk_pixbuf_get_n_channels(small);
-    double bin_w[24] = {0}, bin_rgb[24][3] = {{0}};
-    double sum_x = 0, sum_y = 0, sum_w = 0; /* the average hue, as a vector */
+    memset(bin_w, 0, 24 * sizeof(bin_w[0]));
+    memset(bin_rgb, 0, 24 * sizeof(bin_rgb[0]));
+    *sum_x = *sum_y = *sum_w = 0; /* the average hue, as a vector */
     for (int y = 0; y < sh; y++)
         for (int x = 0; x < sw; x++) {
             const guchar *p = px + y * rs + x * nch;
@@ -61,9 +63,9 @@ static int theme_colors_from(GdkPixbuf *image, ThemeColors *out) {
             double c[3] = {p[0] / 255.0, p[1] / 255.0, p[2] / 255.0}, hu, s, v;
             tc_rgb_to_hsv(c, &hu, &s, &v);
             double wt = s * v;
-            sum_x += cos(hu * M_PI / 180.0) * wt;
-            sum_y += sin(hu * M_PI / 180.0) * wt;
-            sum_w += wt;
+            *sum_x += cos(hu * M_PI / 180.0) * wt;
+            *sum_y += sin(hu * M_PI / 180.0) * wt;
+            *sum_w += wt;
             if (s < 0.25 || v < 0.25) continue; /* greys and shadows say nothing about the accent */
             int b = (int)(hu / 15.0) % 24;
             wt *= s * v; /* vivid pixels count more */
@@ -71,28 +73,85 @@ static int theme_colors_from(GdkPixbuf *image, ThemeColors *out) {
             for (int k = 0; k < 3; k++) bin_rgb[b][k] += c[k] * wt;
         }
     g_object_unref(small);
+    return 0;
+}
 
-    /* the best bin, with its neighbours: a hue split across a bin edge is one colour */
-    int best = -1;
-    double best_w = 0;
+static int tc_bin_dist(int a, int b) {
+    int d = a - b;
+    if (d < 0) d = -d;
+    return d > 12 ? 24 - d : d;
+}
+
+static void tc_bin_accent(double bin_w, const double bin_rgb[3], double out[3]) {
+    double c[3], ah, as, av;
+    for (int k = 0; k < 3; k++) c[k] = bin_rgb[k] / bin_w;
+    tc_rgb_to_hsv(c, &ah, &as, &av);
+    as = tc_clamp(as, 0.45, 0.85);
+    av = tc_clamp(av, 0.80, 0.95);
+    tc_hsv_to_rgb(ah, as, av, out);
+}
+
+static int tc_accents_from_bins(const double bin_w[24], double bin_rgb[24][3],
+                                double out[][3], int max) {
+    if (!out || max <= 0) return -1;
+    int cap = max < 6 ? max : 6; /* up to 6 distinct candidates */
+    double total_w = 0, score[24] = {0};
     for (int b = 0; b < 24; b++) {
-        double wsum = bin_w[b] + 0.5 * (bin_w[(b + 23) % 24] + bin_w[(b + 1) % 24]);
-        if (wsum > best_w) { best_w = wsum; best = b; }
-    }
-    double ah, as, av;
-    if (best < 0 || bin_w[best] <= 0) {
-        /* a grey image: Infynitae's own blue (#7aa2f7) */
-        out->accent[0] = 0x7a / 255.0; out->accent[1] = 0xa2 / 255.0; out->accent[2] = 0xf7 / 255.0;
-        tc_rgb_to_hsv(out->accent, &ah, &as, &av);
-    } else {
-        double c[3];
-        for (int k = 0; k < 3; k++) c[k] = bin_rgb[best][k] / bin_w[best];
-        tc_rgb_to_hsv(c, &ah, &as, &av);
-        as = tc_clamp(as, 0.45, 0.85);
-        av = tc_clamp(av, 0.80, 0.95);
-        tc_hsv_to_rgb(ah, as, av, out->accent);
+        total_w += bin_w[b];
+        /* a hue split across a bin edge is one colour */
+        score[b] = bin_w[b] + 0.5 * (bin_w[(b + 23) % 24] + bin_w[(b + 1) % 24]);
     }
 
+    int picked[6], count = 0;
+    for (int n = 0; n < cap; n++) {
+        int best = -1;
+        double best_w = 0;
+        for (int b = 0; b < 24; b++) {
+            if (bin_w[b] <= 0) continue;
+            if (n > 0) {
+                if (bin_w[b] < 0.04 * total_w) continue;
+                int close = 0;
+                for (int j = 0; j < count; j++)
+                    if (tc_bin_dist(b, picked[j]) < 2) { close = 1; break; }
+                if (close) continue;
+            }
+            if (score[b] > best_w) { best_w = score[b]; best = b; }
+        }
+        if (best < 0) break;
+        picked[count] = best;
+        tc_bin_accent(bin_w[best], bin_rgb[best], out[count]);
+        count++;
+    }
+
+    if (count == 0) {
+        /* a grey image: Infynitae's own blue (#7aa2f7) */
+        out[0][0] = 0x7a / 255.0; out[0][1] = 0xa2 / 255.0; out[0][2] = 0xf7 / 255.0;
+        count = 1;
+    }
+    return count;
+}
+
+/* Up to 6 distinct candidate accents, best first, bins at least 30 degrees apart.
+ * Returns candidate count (>= 1), or -1 on invalid arguments or unreadable image. */
+static int theme_accents_from(GdkPixbuf *image, double out[][3], int max) {
+    if (!out || max <= 0) return -1;
+    double bin_w[24], bin_rgb[24][3], sum_x, sum_y, sum_w;
+    if (tc_sample_bins(image, bin_w, bin_rgb, &sum_x, &sum_y, &sum_w) != 0) return -1;
+    return tc_accents_from_bins(bin_w, bin_rgb, out, max);
+}
+
+/* Returns 0, or -1 for an image it cannot read. */
+static int theme_colors_from(GdkPixbuf *image, ThemeColors *out) {
+    if (!out) return -1;
+    double bin_w[24], bin_rgb[24][3], sum_x, sum_y, sum_w;
+    if (tc_sample_bins(image, bin_w, bin_rgb, &sum_x, &sum_y, &sum_w) != 0) return -1;
+    if (tc_accents_from_bins(bin_w, bin_rgb, &out->accent, 1) <= 0) return -1;
+
+    double ah = 0;
+    if (sum_w <= 0) {
+        double as, av;
+        tc_rgb_to_hsv(out->accent, &ah, &as, &av);
+    }
     double mh = sum_w > 0 ? atan2(sum_y, sum_x) * 180.0 / M_PI : ah;
     if (mh < 0) mh += 360.0;
     double tint = sum_w > 0 ? tc_clamp(hypot(sum_x, sum_y) / sum_w, 0.0, 1.0) : 0.0;
@@ -102,14 +161,28 @@ static int theme_colors_from(GdkPixbuf *image, ThemeColors *out) {
     return 0;
 }
 
+static void tc_print_hex(FILE *f, const double c[3]) {
+    fprintf(f, "#%02x%02x%02x",
+            (int)(tc_clamp(c[0], 0, 1) * 255 + 0.5),
+            (int)(tc_clamp(c[1], 0, 1) * 255 + 0.5),
+            (int)(tc_clamp(c[2], 0, 1) * 255 + 0.5));
+}
+
 static void theme_colors_print(const ThemeColors *t, FILE *f) {
-#define TC_HEX(name, c) fprintf(f, name "=\"#%02x%02x%02x\"\n", (int)(tc_clamp((c)[0], 0, 1) * 255 + 0.5), \
-                                (int)(tc_clamp((c)[1], 0, 1) * 255 + 0.5), (int)(tc_clamp((c)[2], 0, 1) * 255 + 0.5))
-    TC_HEX("BORDER_ACTIVE", t->accent);
-    TC_HEX("SURFACE_COLOR", t->surface);
-    TC_HEX("CANVAS_COLOR", t->canvas);
-    TC_HEX("BORDER_INACTIVE", t->border);
-#undef TC_HEX
+    const char *names[4] = {"BORDER_ACTIVE", "SURFACE_COLOR", "CANVAS_COLOR", "BORDER_INACTIVE"};
+    const double *cols[4] = {t->accent, t->surface, t->canvas, t->border};
+    for (int i = 0; i < 4; i++) {
+        fprintf(f, "%s=\"", names[i]);
+        tc_print_hex(f, cols[i]);
+        fputs("\"\n", f);
+    }
+}
+
+static void theme_accents_print(double accents[][3], int count, FILE *f) {
+    for (int i = 0; i < count; i++) {
+        tc_print_hex(f, accents[i]);
+        fputc('\n', f);
+    }
 }
 
 #endif
