@@ -266,6 +266,12 @@ static void apply_css(void) {
         if (lf) {
             char line[128];
             while (fgets(line, sizeof(line), lf)) {
+                /* the colours as everything else shows them (a colour scheme resolved), over the
+                 * config's own */
+                read_cfg_val(line, "LOOK_CARD", surface, sizeof(surface));
+                read_cfg_val(line, "LOOK_EDGE", border_inact, sizeof(border_inact));
+                read_cfg_val(line, "LOOK_TEXT", text_col, sizeof(text_col));
+                read_cfg_val(line, "LOOK_ACCENT", border_act, sizeof(border_act));
                 if (strncmp(line, "LOOK_CORNERS=", 13) == 0) {
                     const char *v = line + 13;
                     while (*v == '"') v++;
@@ -292,11 +298,11 @@ static void apply_css(void) {
         "    font-weight: 600;\n"
         "}\n"
         "label.action {\n"
-        "    color: #9aa5b8;\n"
+        "    color: alpha(%s, 0.62);\n"
         "    font-size: 11px;\n"
         "}\n"
         "label.error {\n"
-        "    color: #f7768e;\n"
+        "    color: %s;\n"
         "    font-size: 11px;\n"
         "    font-weight: 600;\n"
         "}\n"
@@ -312,7 +318,7 @@ static void apply_css(void) {
         "    border: 1px solid %s;\n"
         "}\n"
         "button.btn-auth {\n"
-        "    background-color: #262b38;\n"
+        "    background-color: alpha(%s, 0.08);\n"
         "    color: %s;\n"
         "    font-weight: 600;\n"
         "    border-radius: %dpx;\n"
@@ -320,21 +326,29 @@ static void apply_css(void) {
         "    border: 1px solid %s;\n"
         "}\n"
         "button.btn-auth:hover {\n"
-        "    background-color: #303748;\n"
+        "    background-color: alpha(%s, 0.14);\n"
         "}\n"
         "button.btn-cancel {\n"
         "    background-color: %s;\n"
-        "    color: #9aa5b8;\n"
+        "    color: alpha(%s, 0.62);\n"
         "    border-radius: %dpx;\n"
         "    padding: 6px 14px;\n"
         "    border: 1px solid %s;\n"
         "}\n"
         "button.btn-cancel:hover {\n"
-        "    background-color: #1c2028;\n"
+        "    background-color: alpha(%s, 0.08);\n"
         "    color: %s;\n"
         "}\n",
-        surface, border_inact, radius, text_col, canvas, text_col, border_inact, small,
-        border_act, text_col, small, border_act, surface, small, border_inact, text_col);
+        surface, border_inact, radius,          /* the dialog */
+        text_col,                                /* title */
+        text_col,                                /* the action's name, quieter */
+        border_act,                              /* an error, in the accent */
+        canvas, text_col, border_inact, small,   /* the password field */
+        border_act,                              /* the field focused */
+        text_col, text_col, small, border_act,   /* Authenticate */
+        text_col,                                /* Authenticate pointed at */
+        surface, text_col, small, border_inact,  /* Cancel */
+        text_col, text_col);                     /* Cancel pointed at */
 
     gtk_css_provider_load_from_data(provider, css, -1, NULL);
     g_free(css);
