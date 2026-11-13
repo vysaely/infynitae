@@ -830,6 +830,15 @@ impl Config {
             };
             c.panels[idx].apply(&value_text(&value));
         }
+        // Settings (docs/EDGE_SETTINGS.md section 5), after the owner's panels: what it holds
+        // without a PANEL_SETTINGS line (the compositor binds a panel's key from its line)
+        if !c.panels.iter().any(|p| p.name == "settings") && c.panels.len() < 12 {
+            let mut settings = Panel::new("settings", side, 0, Some('i'), false, &[]);
+            settings.apply(
+                "SUPER+I top center 440 apps/search settings/games settings/quick settings/power",
+            );
+            c.panels.push(settings);
+        }
         c
     }
 

@@ -918,6 +918,27 @@ case "$1" in
         shift
         cmd_get "$@"
         ;;
+    log)
+        # log KEY OLD: a change from a Settings card, for its Undo ("-": the key had no line);
+        # the last 50 kept in ~/.local/state/infynitae/settings-changes
+        shift
+        case "${1:-}" in *[!A-Za-z0-9_]*|"") echo "Usage: infynitae-settings log <KEY> <OLD>" >&2; exit 1 ;; esac
+        log_file="$HOME/.local/state/infynitae/settings-changes"
+        mkdir -p "$(dirname "$log_file")"
+        printf '%s\t%s\t%s\n' "$(date +%s)" "$1" "$(printf '%s' "${2:-}" | tr '\t\n' '  ')" >> "$log_file"
+        tail -n 50 "$log_file" > "$log_file.new" && mv -f "$log_file.new" "$log_file"
+        ;;
+    unset)
+        # unset KEY: its line commented out, so the default applies again (Undo of a key that had
+        # no line); applied like set
+        shift
+        case "${1:-}" in *[!A-Za-z0-9_]*|"") echo "Usage: infynitae-settings unset <KEY>" >&2; exit 1 ;; esac
+        if grep -q "^$1=" "$CONFIG_FILE" 2>/dev/null; then
+            tmp=$(mktemp "${CONFIG_FILE}.tmp.XXXXXX")
+            sed "s/^$1=/# $1=/" "$CONFIG_FILE" > "$tmp" && mv -f "$tmp" "$CONFIG_FILE"
+            apply_settings --force
+        fi
+        ;;
     list)
         shift
         cmd_list "$@"

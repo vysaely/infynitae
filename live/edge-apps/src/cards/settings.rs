@@ -40,6 +40,7 @@ const KINDS: &[CardKind] = &[
     },
     crate::cards::quick::KIND,
     crate::cards::session::KIND,
+    crate::cards::settings_games::KIND,
 ];
 
 impl Provider for Settings {
@@ -62,6 +63,9 @@ impl Provider for Settings {
         match kind {
             "quick" => Some(Box::new(crate::cards::quick::QuickCard::new(argument))),
             "session" if argument.is_none() => Some(Box::new(crate::cards::session::new())),
+            "games" => Some(Box::new(crate::cards::settings_rows::TableCard::new(
+                crate::cards::settings_games::TABLE,
+            ))),
             "network" => Some(Box::new(NetworkCard::default())),
             "bluetooth" => Some(Box::new(BluetoothCard::default())),
             "power" => Some(Box::new(PowerCard::default())),
@@ -74,6 +78,7 @@ impl Provider for Settings {
             "bluetooth" => Some(Box::new(BluetoothSource)),
             "power" => Some(Box::new(PowerSource)),
             "quick" => Some(Box::new(crate::cards::quick::QuickSource)),
+            "config" => Some(Box::new(crate::cards::settings_rows::ConfigSource::system())),
             _ => None,
         }
     }
