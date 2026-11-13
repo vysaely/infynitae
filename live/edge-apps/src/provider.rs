@@ -92,6 +92,14 @@ pub fn providers() -> &'static [&'static dyn Provider] {
     &[
         &crate::cards::settings::Settings,
         &crate::cards::sound::Sound,
+        &crate::cards::calendar::Calendar,
+        &crate::cards::monitor::Monitor,
+        &crate::cards::music::Music,
+        &crate::cards::steam::Steam,
+        &crate::cards::chat::Chat,
+        &crate::cards::files::Files,
+        // last: it claims every app no one above claimed (an empty category list matches any)
+        &crate::cards::simple::Simple,
     ]
 }
 
@@ -100,7 +108,7 @@ pub fn by_id(id: &str) -> Option<&'static dyn Provider> {
 }
 
 /// The provider that owns `app`: claims by id and id prefix over every provider first, then by
-/// categories (an app claimed by name is never taken by a category). None: the simple card's.
+/// categories (an app claimed by name is never taken by a category). Simple, last, takes the rest.
 pub fn owner_of(app: &App) -> Option<&'static dyn Provider> {
     let named = providers().iter().copied().find(|p| {
         p.claims().iter().any(|c| match c {
