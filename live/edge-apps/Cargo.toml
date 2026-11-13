@@ -1,0 +1,31 @@
+# The edge from apps (docs/EDGE_APPS.md): every card in a panel comes from an app. Its own crate and
+# lockfile, outside the compositor workspace, like live/edge-rs.
+[package]
+name = "infynitae-edge-apps"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Infynitae's panels, every card from an app (docs/EDGE_APPS.md)"
+
+[[bin]]
+name = "infynitae-edge-apps"
+path = "src/main.rs"
+
+[dependencies]
+cairo-rs = { version = "0.20", features = ["png"] }
+pango = "0.20"
+pangocairo = "0.20"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+smithay-client-toolkit = "0.20"
+signal-hook-registry = "1.4"
+libc = "0.2"
+zbus = { version = "5.19", features = ["blocking-api"] }
+
+[profile.release]
+opt-level = "s"
+lto = "thin"
+codegen-units = 1
+strip = true
+
+# not a member of the compositor's workspace
+[workspace]

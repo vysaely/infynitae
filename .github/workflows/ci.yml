@@ -94,6 +94,30 @@ jobs:
           path: live/edge-rs/target/debug/infynitae-edge-rs
           retention-days: 7
 
+  # The edge from apps (docs/EDGE_APPS.md): its own crate in live/edge-apps
+  edge-apps:
+    name: Edge (apps)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libglib2.0-dev libwayland-dev libxkbcommon-dev libcairo2-dev libpango1.0-dev fonts-dejavu-core
+      - name: Toolchain pinned by rust-toolchain.toml
+        run: |
+          channel=$(python3 -c 'import tomllib; print(tomllib.load(open("rust-toolchain.toml", "rb"))["toolchain"]["channel"])')
+          rustup toolchain install "$channel" --profile minimal --component rustfmt,clippy
+      - uses: Swatinem/rust-cache@v2.7.8
+        with:
+          workspaces: live/edge-apps
+      - run: cd live/edge-apps && cargo fmt -- --check
+      - run: cd live/edge-apps && cargo clippy --locked --all-targets -- -D warnings
+      - run: cd live/edge-apps && cargo test --locked
+      - run: cd live/edge-apps && cargo build --locked
+      - uses: actions/upload-artifact@v4
+        with:
+          name: infynitae-edge-apps
+          path: live/edge-apps/target/debug/infynitae-edge-apps
+          retention-days: 7
+
   # OB-19: production architecture enforcement.
   verify-architecture:
     name: Architecture
