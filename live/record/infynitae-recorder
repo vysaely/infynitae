@@ -337,12 +337,12 @@ save_replay_clip() {
     engine=$(cat "$REPLAY_PID_FILE" 2>/dev/null)
     if [ -n "$engine" ] && [ "$(cat "/proc/$engine/comm" 2>/dev/null)" = "gpu-screen-reco" ]; then
         kill -USR1 "$engine"
-        notify_toast "Clip Saved" "Saved to ${CLIPS_DIR##*/}"
+        notify_toast "Clip saved" "Saved to ${CLIPS_DIR##*/}"
         echo "[infynitae-recorder] Asked gpu-screen-recorder (PID $engine) to save its buffer into $CLIPS_DIR"
         return 0
     fi
     if [ ! -d "$REPLAY_DIR" ]; then
-        notify_toast "Replay Buffer Inactive" "No replay buffer directory found."
+        notify_toast "The replay is off" "Turn it on in Settings, Screenshots and recording"
         echo "Error: Replay directory $REPLAY_DIR does not exist" >&2
         return 1
     fi
@@ -355,7 +355,7 @@ save_replay_clip() {
     # Find chunks sorted chronologically by modification time
     CHUNKS=$(command ls -tr "$REPLAY_DIR"/chunk*.mkv 2>/dev/null || true)
     if [ -z "$CHUNKS" ]; then
-        notify_toast "Replay Buffer Empty" "Still buffering first segment, try again in a few seconds."
+        notify_toast "Nothing to save yet" "The replay started a moment ago. Try again in a few seconds."
         echo "Error: No chunks found in $REPLAY_DIR" >&2
         return 1
     fi
@@ -370,7 +370,7 @@ save_replay_clip() {
 
     COUNT=$(wc -l < "$CONCAT_LIST" 2>/dev/null || echo 0)
     if [ "$COUNT" -eq 0 ]; then
-        notify_toast "Replay Buffer Empty" "Waiting for segments..."
+        notify_toast "Nothing to save yet" "The replay started a moment ago. Try again in a few seconds."
         return 1
     fi
 
@@ -385,7 +385,7 @@ save_replay_clip() {
     ffmpeg -loglevel error -y -f concat -safe 0 -i "$CONCAT_LIST" -c copy "$OUT_FILE"
     rm -f "$CONCAT_LIST"
 
-    notify_toast "Clip Saved (${DURATION_STR})" "Saved to ${OUT_FILE##*/}"
+    notify_toast "Clip saved (${DURATION_STR})" "Saved to ${OUT_FILE##*/}"
     echo "[infynitae-recorder] Saved $DURATION_STR clip to $OUT_FILE"
 }
 
@@ -420,7 +420,7 @@ start_recording() {
 
     REC_PID=$!
     echo $REC_PID > "$PID_FILE"
-    notify_toast "Recording Started" "Writing to ${OUT_FILE##*/}"
+    notify_toast "Recording" "Writing to ${OUT_FILE##*/}"
     echo "[infynitae-recorder] Started recording to $OUT_FILE (PID $REC_PID)"
 }
 
@@ -433,7 +433,7 @@ stop_recording() {
             pkill -P "$REC_PID" 2>/dev/null || true
             pkill -f "$STREAM_BIN" 2>/dev/null || true
             sleep 1
-            notify_toast "Recording Saved" "Saved to $RECORDINGS_DIR"
+            notify_toast "Recording saved" "Saved to $RECORDINGS_DIR"
             echo "[infynitae-recorder] Recording stopped (PID $REC_PID)"
         fi
         rm -f "$PID_FILE"
