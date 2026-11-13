@@ -274,7 +274,7 @@ def main(content_only=False):
         print("\nRESULT: FAILED")
         sys.exit(1)
     else:
-        print(f"All {len(record_files)} knowledge records validated successfully.")
+        print(f"All {len(record_files)} knowledge records passed validation.")
         print(f"Unique IDs: {len(seen_ids)}")
         print("RESULT: PASS")
         sys.exit(0)

@@ -390,7 +390,6 @@ static void render_output(struct wallpaper_output *out) {
         return;
     }
 
-    // Deep black base canvas
     cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
     cairo_paint(cr);
 
@@ -772,7 +771,6 @@ static void autodetect_wallpaper(char *target, size_t target_sz) {
     DIR *d;
 
     // Only folders meant for wallpapers: never a random picture from ~/Pictures
-    // Standard wallpaper directories
     const char *subdirs[] = {"Pictures/Wallpapers", ".local/share/wallpapers", NULL};
     for (int i = 0; subdirs[i]; i++) {
         char dir_path[512];
@@ -793,7 +791,6 @@ static void autodetect_wallpaper(char *target, size_t target_sz) {
         }
     }
 
-    // 4. System wallpapers
     const char *sys_dirs[] = {"/usr/share/backgrounds", "/usr/share/wallpapers", NULL};
     for (int i = 0; sys_dirs[i]; i++) {
         d = opendir(sys_dirs[i]);
@@ -931,7 +928,6 @@ int main(int argc, char *argv[]) {
         snprintf(mode, sizeof(mode), "fill");
     }
 
-    // Handle live animated video wallpaper via mpvpaper
     if (is_video_file(target)) {
         kill_other_wallpapers();
         lock_cache_remove("lock-background.png");
@@ -1035,7 +1031,6 @@ int main(int argc, char *argv[]) {
     parallax_connect(&app);
     if (app.ipc_fd < 0) {
         while (wl_display_dispatch(app.display) != -1) {
-            // Sleep on events; consumes 0% CPU
         }
     } else {
         /* the display and the compositor's events: asleep between them */
@@ -1062,9 +1057,9 @@ int main(int argc, char *argv[]) {
     done:;
     }
 
-    // Clean up
     if (!overlay) {
-        if (get_pid_file_path()) unlink(get_pid_file_path());
+        const char *pid_path = get_pid_file_path();
+        if (pid_path) unlink(pid_path);
     }
 
     struct wallpaper_output *curr = app.outputs;

@@ -850,7 +850,7 @@ cmd_set() {
     echo "==> Updated $KEY in $CONFIG_FILE"
     . "$CONFIG_FILE"
     apply_settings --force
-    echo "==> Settings synchronized successfully across all toolkits."
+    echo "==> Applied."
 }
 
 cmd_get() {
@@ -891,7 +891,7 @@ cmd_list() {
     WHAT="$1"
     case "$WHAT" in
         cursors|cursor)
-            echo "Installed Cursor Themes:"
+            echo "Cursor themes:"
             find /usr/share/icons "$HOME/.icons" "$HOME/.local/share/icons" \
                 -maxdepth 2 -type d -name "cursors" 2>/dev/null \
                 | sed 's|/cursors$||' | xargs -r -d '\n' -n1 basename | sort -u \
@@ -904,7 +904,7 @@ cmd_list() {
                 done
             ;;
         fonts|font)
-            echo "Installed Monospace & System Fonts:"
+            echo "Monospace and system fonts:"
             if command -v fc-list >/dev/null 2>&1; then
                 fc-list : family | tr ',' '\n' | sed 's/^[ \t]*//' | sort -u | grep -iE 'mono|code|hack|jetbrains|nerd|dejavu|inter|noto' | head -40
             else
@@ -1030,7 +1030,7 @@ case "$1" in
         ;;
     restore|reset-zoom)
         infynitae msg restore
-        echo "==> Canvas viewport restored to default 100% scale (zoom 1.0)."
+        echo "==> Canvas reset to 100% (zoom 1.0)."
         ;;
     update)
         if command -v infynitae-update >/dev/null 2>&1; then
@@ -1044,16 +1044,16 @@ case "$1" in
         echo "Usage: infynitae-settings <command>"
         echo ""
         echo "Commands:"
-        echo "  apply [--force]      Sync current ~/.config/infynitae/config across all toolkits"
+        echo "  apply [--force]      Apply ~/.config/infynitae/config to apps"
         echo "  wallpaper-colors [accent|all|accents|shuffle] [IMAGE]"
         echo "                       Take, list, or shuffle theme colours from the wallpaper (or IMAGE)"
-        echo "  update               Pull latest changes and recompile release binary"
-        echo "  restore              Reset canvas zoom/viewport back to default 100% native scale"
-        echo "  set <KEY> <VALUE>    Update setting and sync immediately (e.g. set CURSOR_THEME Bibata-Modern-Classic)"
-        echo "  get <KEY>            Print current setting value"
-        echo "  list cursors         List all installed cursor themes"
-        echo "  list fonts           List recommended monospace/system fonts"
-        echo "  edit                 Open ~/.config/infynitae/config in editor"
+        echo "  update               Pull updates and rebuild the release binary"
+        echo "  restore              Reset the canvas zoom to 100%"
+        echo "  set <KEY> <VALUE>    Save a setting and apply it (e.g. set CURSOR_THEME Bibata-Modern-Classic)"
+        echo "  get <KEY>            Print a setting's value"
+        echo "  list cursors         List installed cursor themes"
+        echo "  list fonts           List monospace and system fonts"
+        echo "  edit                 Open ~/.config/infynitae/config in your editor"
         echo "  reload               Restart the helpers in place (edge, wallpaper, portal…)"
         ;;
 esac

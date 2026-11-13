@@ -5,7 +5,6 @@
 # A, S, C, V), rare on the right (Super+Shift+L, Shift+O, Shift+P, Shift+I, Alt+P, Shift+BackSpace).
 ACTION="$1"
 
-# Initialize decoupled standalone desktop environment
 if [ -f "$HOME/infynitae/live/env.sh" ]; then
     . "$HOME/infynitae/live/env.sh"
 fi
@@ -245,11 +244,9 @@ GM_ARGS
         fi
         ;;
     reload|reload-shell|restart-shell)
-        # Super+Shift+BackSpace: Live reload settings, shell UI, and desktop environment
-        # 1. Re-apply settings and reload all configured helpers (infynitae-reload; windows stay open)
+        # Re-apply settings and reload all configured helpers (windows stay open)
         "$HOME/infynitae/live/infynitae-reload" all >/dev/null 2>&1 || true
 
-        # 2. Reload third-party bars/daemons if running
         if pidof waybar >/dev/null 2>&1; then
             killall -SIGUSR2 waybar 2>/dev/null || true
         fi
@@ -257,7 +254,6 @@ GM_ARGS
             makoctl reload 2>/dev/null || true
         fi
 
-        # 5. Notify user if notification service is present
         if command -v notify-send >/dev/null 2>&1; then
             notify-send -a Infynitae -u low "Settings reloaded" 2>/dev/null || true
         fi
@@ -578,13 +574,13 @@ GM_ARGS
         fi
         ;;
     mute|toggle-mute)
-        # Trigger Discord / App Global Shortcuts portal (in-app mute only, zero OS hardware muting)
+        # Discord / App Global Shortcuts portal (in-app mute only, without muting OS hardware)
         if [ -S "$XDG_RUNTIME_DIR/infynitae/shortcuts.sock" ]; then
             "$INFYNITAE_BIN" msg shortcut mute 2>/dev/null || true
         fi
         ;;
     deafen|toggle-deafen)
-        # Trigger Discord / App Global Shortcuts portal (in-app deafen only, zero OS hardware muting)
+        # Discord / App Global Shortcuts portal (in-app deafen only, without muting OS hardware)
         if [ -S "$XDG_RUNTIME_DIR/infynitae/shortcuts.sock" ]; then
             "$INFYNITAE_BIN" msg shortcut deafen 2>/dev/null || true
         fi
@@ -622,13 +618,11 @@ GM_ARGS
             END { if (!done && on) print k "=\"" app "\"" }' "$cfg" > "$tmp" && mv -f "$tmp" "$cfg" || rm -f "$tmp"
         ;;
     notify-privacy-on)
-        # OSD Toast: Privacy Mode Enabled
         if command -v notify-send >/dev/null 2>&1; then
             notify-send -a "Infynitae" -i security-high -h string:x-canonical-private-synchronous:privacy -t 1500 "This window is hidden from captures" 2>/dev/null || true
         fi
         ;;
     notify-privacy-off)
-        # OSD Toast: Privacy Mode Disabled
         if command -v notify-send >/dev/null 2>&1; then
             notify-send -a "Infynitae" -i security-low -h string:x-canonical-private-synchronous:privacy -t 1500 "This window shows in captures again" 2>/dev/null || true
         fi
@@ -651,31 +645,29 @@ GM_ARGS
         fi
         ;;
     notify-idle-inhibit-on)
-        # OSD Toast: Idle Sleep Inhibited
         if command -v notify-send >/dev/null 2>&1; then
             notify-send -a "Infynitae" -i display -h string:x-canonical-private-synchronous:idle -t 1500 "Stay awake is on" "The screens stay on until you turn it off" 2>/dev/null || true
         fi
         ;;
     notify-idle-inhibit-off)
-        # OSD Toast: Idle Sleep Normal
         if command -v notify-send >/dev/null 2>&1; then
             notify-send -a "Infynitae" -i display -h string:x-canonical-private-synchronous:idle -t 1500 "Stay awake is off" "The screens turn off after the usual time" 2>/dev/null || true
         fi
         ;;
     toggle-idle-inhibit|inhibit-idle)
-        # Send keypress or signal to compositor to toggle idle inhibit
+        # Ask compositor to toggle idle inhibit
         if [ -S "$XDG_RUNTIME_DIR/infynitae/shortcuts.sock" ]; then
             "$INFYNITAE_BIN" msg shortcut idle_inhibit 2>/dev/null || true
         fi
         ;;
     toggle-privacy|privacy)
-        # Send keypress or signal to compositor to toggle privacy
+        # Ask compositor to toggle privacy
         if [ -S "$XDG_RUNTIME_DIR/infynitae/shortcuts.sock" ]; then
             "$INFYNITAE_BIN" msg shortcut privacy 2>/dev/null || true
         fi
         ;;
     save-replay|clip-save|clip)
-        # Super+Alt+C: Save rolling 20-minute hardware replay clip (zero game FPS hit)
+        # Super+Alt+C: Save rolling 20-minute replay clip
         if [ -x "$HOME/.local/bin/infynitae-recorder" ]; then
             exec "$HOME/.local/bin/infynitae-recorder" save-replay
         elif [ -x "$HOME/infynitae/live/record/infynitae-recorder" ]; then

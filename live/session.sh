@@ -213,7 +213,7 @@ Report: $CRASH_REPORT") &
     fi
 fi
 
-# 6c2. Settings the config has that Infynitae skipped (unknown, misspelled, unreadable): each keeps
+# 6c3. Settings the config has that Infynitae skipped (unknown, misspelled, unreadable): each keeps
 # its default, and a notification names them once the daemon is up
 if [ -x "$HOME/infynitae/live/config-check" ]; then
     rm -f "$HOME/.local/state/infynitae/config-problems"
@@ -262,7 +262,7 @@ case "${BATTERY_LIMIT:-off}" in
     *) sh "$HOME/infynitae/live/battery-limit" "$BATTERY_LIMIT" >/dev/null 2>&1 || true ;;
 esac
 
-# 6e2. The screen locks before the machine sleeps (the lid, the power button): it wakes locked (SLEEP_LOCK)
+# 6e4. The screen locks before the machine sleeps (the lid, the power button): it wakes locked (SLEEP_LOCK)
 if infy_on "${SLEEP_LOCK:-true}"; then
     SLEEP_LOCK_BIN=$(infy_bin infynitae-sleep-lock || true)
     if [ -n "$SLEEP_LOCK_BIN" ]; then
@@ -295,7 +295,7 @@ if systemctl is-active --quiet rustdesk.service 2>/dev/null; then
     fi
 fi
 
-# 7. User autostart script (blank canvas for user's future ricing)
+# 7. User autostart script
 if [ -x "$HOME/.config/infynitae/autostart.sh" ]; then
     "$HOME/.config/infynitae/autostart.sh" &
 fi

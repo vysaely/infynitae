@@ -1,7 +1,6 @@
 /*
  * infynitae-lock - the lock screen (and the start screen after login)
- * 
- * Part of the Infynitae Compositor ecosystem.
+ *
  * It draws in the theme colors from the config (CANVAS_COLOR, SURFACE_COLOR, …),
  * standard Linux PAM authentication, ext-session-lock-v1: the compositor shows only this
  * client's surfaces and gives them every key until it unlocks, even if this client dies.
@@ -137,16 +136,10 @@ typedef struct LockOutput {
     struct LockOutput *next;
 } LockOutput;
 
-/* ========================================================================== */
-/* Forward Declarations                                                       */
-/* ========================================================================== */
 static void render_output(LockOutput *output);
 static void request_frame(LockOutput *output);
 static void damage_all_outputs(LockApp *app);
 
-/* ========================================================================== */
-/* Shared Memory Buffer Allocation                                            */
-/* ========================================================================== */
 static int create_shm_file(off_t size) {
     int fd = memfd_create("infynitae-lock-shm", MFD_CLOEXEC | MFD_ALLOW_SEALING);
     if (fd < 0) {
@@ -205,9 +198,6 @@ static bool allocate_output_buffer(LockOutput *output) {
     return true;
 }
 
-/* ========================================================================== */
-/* PAM Authentication Worker Thread                                           */
-/* ========================================================================== */
 typedef struct {
     char username[128];
     char password[PASSWORD_MAX_LEN];
@@ -274,7 +264,6 @@ static void *pam_worker_thread(void *arg) {
         pam_end(pamh, rc);
     }
 
-    // Securely shred sensitive memory
     explicit_bzero(data->password, sizeof(data->password));
 
     if (rc == PAM_SUCCESS) {
@@ -308,7 +297,6 @@ static void trigger_auth(LockApp *app) {
     data->password[sizeof(data->password) - 1] = '\0';
     data->app = app;
 
-    // Clear local buffer immediately
     explicit_bzero(app->password, sizeof(app->password));
     app->password_len = 0;
 
@@ -391,9 +379,6 @@ static void load_theme_config(LockApp *app) {
     read_look(app, home);
 }
 
-/* ========================================================================== */
-/* UI Rendering (Cairo & Pango)                                               */
-/* ========================================================================== */
 static void draw_sharp_rect(cairo_t *cr, double x, double y, double w, double h) {
     cairo_rectangle(cr, round(x) + 0.5, round(y) + 0.5, round(w) - 1.0, round(h) - 1.0);
 }
@@ -432,14 +417,9 @@ static void draw_text_centered(cairo_t *cr, PangoLayout *layout, const char *fon
     pango_cairo_show_layout(cr, layout);
 }
 
-/* ========================================================================== */
-/* On-screen keyboard (touchscreens, tablet mode)                             */
-/* ========================================================================== */
-/* A key grid drawn on the lock surface itself: the compositor gives the lock surface the taps
- * on its screen and nothing else sees them, so the password never leaves this program (no
- * input method or virtual keyboard reaches a lock screen). It appears at the first tap and
- * types characters directly, whatever the keyboard layout. A key acts when the finger lifts
- * on it. */
+/* On-screen keyboard (touchscreens, tablet mode): a key grid drawn on the lock surface itself, so
+ * the compositor gives it the taps directly and nothing else (no input method or external virtual
+ * keyboard) ever sees the password. A key acts when the finger lifts on it. */
 typedef enum { OSK_CHAR, OSK_SHIFT, OSK_BACKSPACE, OSK_SYMBOLS, OSK_SPACE, OSK_HIDE, OSK_ENTER } OskKind;
 
 typedef struct {
@@ -970,9 +950,6 @@ static void damage_all_outputs(LockApp *app) {
     }
 }
 
-/* ========================================================================== */
-/* Session Lock (ext-session-lock-v1)                                         */
-/* ========================================================================== */
 static void lock_surface_configure(void *data, struct ext_session_lock_surface_v1 *lock_surface,
                                    uint32_t serial, uint32_t width, uint32_t height) {
     LockOutput *output = (LockOutput *)data;
@@ -1035,9 +1012,6 @@ static const struct ext_session_lock_v1_listener lock_listener = {
     .finished = lock_finished,
 };
 
-/* ========================================================================== */
-/* Keyboard Input (XKB)                                                       */
-/* ========================================================================== */
 static void keyboard_keymap(void *data, struct wl_keyboard *keyboard,
                             uint32_t format, int32_t fd, uint32_t size) {
     (void)keyboard;
@@ -1190,9 +1164,6 @@ static const struct wl_seat_listener seat_listener = {
     .name = seat_name,
 };
 
-/* ========================================================================== */
-/* Registry Listener                                                          */
-/* ========================================================================== */
 static void registry_global(void *data, struct wl_registry *registry,
                             uint32_t name, const char *interface, uint32_t version) {
     (void)version;
@@ -1252,9 +1223,6 @@ static const struct wl_registry_listener registry_listener = {
     .global_remove = registry_global_remove,
 };
 
-/* ========================================================================== */
-/* Main Loop & Lifecycle                                                      */
-/* ========================================================================== */
 /* The name the screen shows and up to two initials (UTF-8 aware): the account's full name (GECOS
  * up to the first comma), else the login. */
 static void resolve_display_name(LockApp *app) {
@@ -1361,7 +1329,6 @@ int main(int argc, char **argv) {
     const char *render_size = NULL, *render_out = NULL;
     (void)mlock(app.password, sizeof(app.password));
 
-    // Parse options
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "--greeter") == 0) {
             app.greeter_mode = true;
@@ -1465,7 +1432,6 @@ int main(int argc, char **argv) {
     load_lock_pictures(&app);
     damage_all_outputs(&app);
 
-    // Event poll loop
     time_t last_clock_tick = time(NULL);
 
     while (app.running) {
@@ -1489,7 +1455,7 @@ int main(int argc, char **argv) {
             .revents = 0
         };
 
-        // Poll every 250ms for clock update and state transition
+        /* 16 ms while animating shake/verifying/status, 250 ms idle so clock/auth ticks still wake promptly */
         int poll_timeout = (app.shake_frame > 0 || app.auth_state == AUTH_STATE_VERIFYING || app.status_msg[0] != '\0') ? 16 : 250;
         int ret = poll(&pfd, 1, poll_timeout);
 
@@ -1507,7 +1473,6 @@ int main(int argc, char **argv) {
             }
         }
 
-        // Check auth status
         if (app.auth_state == AUTH_STATE_SUCCESS) {
             damage_all_outputs(&app);
             wl_display_roundtrip(app.display);
@@ -1519,7 +1484,6 @@ int main(int argc, char **argv) {
             return 1;
         }
 
-        // Update clock every minute
         time_t cur = time(NULL);
         if (cur / 60 != last_clock_tick / 60) {
             last_clock_tick = cur;
@@ -1527,7 +1491,7 @@ int main(int argc, char **argv) {
         }
     }
 
-    // Unlock (only after authentication), then destroy the lock surfaces
+    /* ext-session-lock-v1 requires unlocking before destroying the lock surfaces */
     if (app.lock && app.auth_state == AUTH_STATE_SUCCESS) {
         ext_session_lock_v1_unlock_and_destroy(app.lock);
         app.lock = NULL;
@@ -1564,8 +1528,10 @@ int main(int argc, char **argv) {
     if (app.greeter_mode && app.auth_state == AUTH_STATE_SUCCESS) {
         printf("[infynitae-lock] Launching session: %s\n", app.session_cmd);
         execlp(app.session_cmd, app.session_cmd, NULL);
+        perror("[infynitae-lock] execlp");
+        return 1;
     }
 
-    printf("[infynitae-lock] Unlocked successfully.\n");
+    printf("[infynitae-lock] Unlocked.\n");
     return 0;
 }

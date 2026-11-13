@@ -1,5 +1,5 @@
 #!/bin/sh
-# Infynitae Standalone Desktop Environment Setup
+# env.sh: session environment setup and Wayland/X11 socket resolution
 # Decouples Wayland clients from host desktop environments (e.g. KDE Plasma, GNOME)
 
 # 0. Infynitae's own programs live in ~/.local/bin. The session may start with a minimal PATH
@@ -56,7 +56,7 @@ if [ -e "/dev/nvidia0" ] || [ -d "/sys/module/nvidia" ]; then
     export __GLX_VENDOR_LIBRARY_NAME="nvidia"
 fi
 
-# 4b. Programs that open links run $BROWSER as one program name (Claude Code, gh, git, Python's
+# 4c. Programs that open links run $BROWSER as one program name (Claude Code, gh, git, Python's
 # webbrowser): it must not contain a space. xdg-open is Infynitae's non-blocking opener
 # (live/xdg-open, installed to ~/.local/bin), which hands the link to the default browser.
 export BROWSER="xdg-open"
@@ -134,7 +134,7 @@ if [ "${INFYNITAE_SETTINGS_APPLIED:-0}" != "1" ] && [ -f "$HOME/infynitae/live/s
     sh "$HOME/infynitae/live/settings.sh" apply >/dev/null 2>&1 || true
 fi
 
-# 6. Isolated D-Bus/dconf database profile (prevents inheriting host desktop defaults)
+# 6b. Isolated D-Bus/dconf database profile (prevents inheriting host desktop defaults)
 INFYNITAE_CFG_DIR="$HOME/.config/infynitae"
 mkdir -p "$INFYNITAE_CFG_DIR"
 if [ ! -f "$INFYNITAE_CFG_DIR/dconf-profile" ]; then
@@ -211,7 +211,7 @@ if [ -x "$PORTAL_BIN" ] && [ "$_infy_portal_up" = false ]; then
 fi
 unset _infy_portal_pid _infy_portal_up _infy_p _infy_c
 
-# 8. Resolve WAYLAND_DISPLAY, DISPLAY, and XAUTHORITY with auto-healing
+# 8. Resolve WAYLAND_DISPLAY, DISPLAY and XAUTHORITY
 # WAYLAND_DISPLAY when unset: the socket the newest compositor start announced, else the first
 # real socket (not a symlink some other tool left).
 if [ -z "$WAYLAND_DISPLAY" ] && [ -n "$XDG_RUNTIME_DIR" ]; then
@@ -242,8 +242,7 @@ if [ -z "$DISPLAY" ] || [ ! -S "$_infy_x11/X${DISPLAY#*:}" ] || [ ! -O "$_infy_x
 fi
 
 
-# Auto-heal XAUTHORITY:
-# If XAUTHORITY is unset, points to a dead file, or points to an older session file when a newer one exists:
+# Update XAUTHORITY if unset, pointing to a missing file, or superseded by a newer session file:
 LATEST_XAUTH=""
 if [ -n "$XDG_RUNTIME_DIR" ]; then
     if [ -f "$XDG_RUNTIME_DIR/infynitae-xauth" ]; then

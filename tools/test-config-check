@@ -1,11 +1,6 @@
 #!/bin/sh
-# tools/test-config-check: tests live/config-check with various valid and invalid settings.
-# Verifies that:
-# 1. Setting families read by the code (OUTPUT_<NAME>_*, PANEL_<NAME>, BIND_<ACTION>, EXEC_<NAME>)
-#    are accepted as valid configuration.
-# 2. Known settings from config/config and config-renames are accepted.
-# 3. Truly unknown or misspelled settings are flagged and reported.
-# 4. Unclosed quotes or invalid syntax are caught and reported.
+# tools/test-config-check: tests live/config-check with valid setting families,
+# known/unknown keys, unclosed quotes, and conflicting layout options.
 set -u
 
 REPO=$(pwd)

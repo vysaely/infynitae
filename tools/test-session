@@ -20,9 +20,7 @@ exit 0
 EOF
 chmod +x "$MOCK_BIN/renice"
 
-# ----------------------------------------------------------------------
-# 1. Finding 13: State directory created at startup on fresh install
-# ----------------------------------------------------------------------
+# ---- 1. Finding 13: State directory created at startup on fresh install
 HOME1="$TMP/home1"
 mkdir -p "$HOME1"
 (
@@ -41,9 +39,7 @@ if [ ! -d "$HOME1/.local/state/infynitae" ]; then
 fi
 echo "ok Finding 13: state directory created at session start"
 
-# ----------------------------------------------------------------------
-# 2. Finding 14: Screen locker verification race on fast-exiting locker
-# ----------------------------------------------------------------------
+# ---- 2. Finding 14: Screen locker verification race on fast-exiting locker
 # If a locker writes "Screen locked" and exits immediately (or daemonizes),
 # kill -0 $LOCK_PID breaks out of the loop. session.sh must do a final log
 # check to avoid falsely aborting the session.
@@ -86,9 +82,7 @@ if [ $rc -ne 0 ]; then
 fi
 echo "ok Finding 14: session.sh does not abort when locker writes confirmation before exit"
 
-# ----------------------------------------------------------------------
-# 3. Finding 21: Paths with spaces or compound commands in NOTIFICATIONS and TERMINAL
-# ----------------------------------------------------------------------
+# ---- 3. Finding 21: Paths with spaces or compound commands in NOTIFICATIONS and TERMINAL
 HOME3="$TMP/home3"
 mkdir -p "$HOME3"
 SPACED_DIR="$TMP/dir with spaces"
@@ -133,9 +127,7 @@ if [ ! -f "$TERM_MARKER" ]; then
 fi
 echo "ok Finding 21: spaced paths and commands in NOTIFICATIONS and TERMINAL execute cleanly"
 
-# ----------------------------------------------------------------------
-# 4. infy_on accepts 1 true yes on TRUE True and nothing else
-# ----------------------------------------------------------------------
+# ---- 4. infy_on accepts 1 true yes on TRUE True and nothing else
 (
     . "$REPO_DIR/live/config.sh"
     for val in 1 true yes on TRUE True; do

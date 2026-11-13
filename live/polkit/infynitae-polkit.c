@@ -1,10 +1,6 @@
 /*
- * Infynitae Native Modular Polkit Authentication Agent
- * The PolicyKit authentication dialog (password prompts for system actions) on Wayland.
- *
- * Implements PolkitAgentListener, registers with org.freedesktop.PolicyKit1.Authority,
- * and creates transient GTK3 Wayland dialogs upon challenge.
- * Zero-cost idle: 0 Wayland surfaces when dormant (<10MB RAM).
+ * infynitae-polkit: the password prompt for system actions on Wayland.
+ * Registers with org.freedesktop.PolicyKit1.Authority and opens a GTK3 dialog when challenged.
  */
 
 #define POLKIT_AGENT_I_KNOW_API_IS_SUBJECT_TO_CHANGE 1
@@ -41,8 +37,6 @@ typedef struct {
     GtkWidget *btn_cancel;
     GtkWidget *lbl_error;
     GtkWidget *lbl_prompt;
-
-    gboolean authenticated;
 } AuthDialogData;
 
 static void free_auth_dialog(AuthDialogData *data) {
@@ -124,7 +118,7 @@ static void on_session_show_error(PolkitAgentSession *session,
     (void)session;
     AuthDialogData *data = (AuthDialogData *)user_data;
     if (data->lbl_error) {
-        gtk_label_set_text(GTK_LABEL(data->lbl_error), text ? text : "Authentication failed");
+        gtk_label_set_text(GTK_LABEL(data->lbl_error), text ? text : "Wrong password");
         gtk_widget_show(data->lbl_error);
     }
 }
@@ -182,7 +176,6 @@ static void on_session_completed(PolkitAgentSession *session,
                                  gpointer user_data) {
     (void)session;
     AuthDialogData *data = (AuthDialogData *)user_data;
-    data->authenticated = gained_authorization;
 
     if (gained_authorization) {
         if (data->task && !g_task_get_completed(data->task)) {
@@ -191,7 +184,7 @@ static void on_session_completed(PolkitAgentSession *session,
         free_auth_dialog(data);
     } else {
         if (data->lbl_error) {
-            gtk_label_set_text(GTK_LABEL(data->lbl_error), "Authentication failed. Try again.");
+            gtk_label_set_text(GTK_LABEL(data->lbl_error), "Wrong password, try again");
             gtk_widget_show(data->lbl_error);
         }
         if (data->entry) {
@@ -437,9 +430,8 @@ static void infynitae_agent_listener_initiate_authentication(
         return;
     }
 
-    // Build GUI Window
     data->window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
-    gtk_window_set_title(GTK_WINDOW(data->window), "Authentication Required — Infynitae");
+    gtk_window_set_title(GTK_WINDOW(data->window), "Password needed");
     gtk_window_set_position(GTK_WINDOW(data->window), GTK_WIN_POS_CENTER);
     gtk_window_set_resizable(GTK_WINDOW(data->window), FALSE);
     gtk_window_set_keep_above(GTK_WINDOW(data->window), TRUE);
@@ -455,12 +447,12 @@ static void infynitae_agent_listener_initiate_authentication(
     gtk_container_set_border_width(GTK_CONTAINER(vbox), 24);
     gtk_container_add(GTK_CONTAINER(data->window), vbox);
 
-    GtkWidget *lbl_title = gtk_label_new("Authentication required");
+    GtkWidget *lbl_title = gtk_label_new("Password needed");
     gtk_widget_set_halign(lbl_title, GTK_ALIGN_START);
     gtk_style_context_add_class(gtk_widget_get_style_context(lbl_title), "title");
     gtk_box_pack_start(GTK_BOX(vbox), lbl_title, FALSE, FALSE, 0);
 
-    gchar *action_desc = g_strdup_printf("%s\nAction: %s", message ? message : "Privilege escalation requested.", action_id ? action_id : "");
+    gchar *action_desc = g_strdup_printf("%s\n%s", message ? message : "A program asks to change the system.", action_id ? action_id : "");
     GtkWidget *lbl_action = gtk_label_new(action_desc);
     g_free(action_desc);
     gtk_label_set_line_wrap(GTK_LABEL(lbl_action), TRUE);
@@ -504,7 +496,7 @@ static void infynitae_agent_listener_initiate_authentication(
     g_signal_connect(data->btn_cancel, "clicked", G_CALLBACK(on_cancel_clicked), data);
     gtk_box_pack_start(GTK_BOX(btn_box), data->btn_cancel, FALSE, FALSE, 0);
 
-    data->btn_auth = gtk_button_new_with_label("Authenticate");
+    data->btn_auth = gtk_button_new_with_label("Allow");
     gtk_style_context_add_class(gtk_widget_get_style_context(data->btn_auth), "btn-auth");
     g_signal_connect(data->btn_auth, "clicked", G_CALLBACK(on_submit_clicked), data);
     gtk_box_pack_start(GTK_BOX(btn_box), data->btn_auth, FALSE, FALSE, 0);
@@ -561,7 +553,7 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    g_print("[infynitae-polkit] PolicyKit Authentication Agent registered successfully on D-Bus.\n");
+    g_print("[infynitae-polkit] Agent registered on D-Bus.\n");
     /* GTK's events run in this loop too, once a prompt started it (the default main context) */
     GMainLoop *loop = g_main_loop_new(NULL, FALSE);
     g_main_loop_run(loop);
