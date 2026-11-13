@@ -6234,47 +6234,6 @@ mod tests {
     }
 
     #[test]
-    fn camera_set_jump_records_changed_camera_and_skips_noops() {
-        use super::authority::Authorized;
-        use crate::navigation::{CameraSet, CameraValue};
-        let mut set = CameraSet::empty();
-        let cam = set.bind_on_connect(
-            Authorized::mint(),
-            &crate::output::tests::key("A"),
-            OutputId::for_test(1),
-            &PersistedCameras::default(),
-        );
-        let origin = CameraValue {
-            center: crate::geom::CanvasPos { x: 0, y: 0 },
-            zoom: 1.0,
-        };
-        let target = CameraValue {
-            center: crate::geom::CanvasPos {
-                x: 400 << 16,
-                y: -200 << 16,
-            },
-            zoom: 1.5,
-        };
-
-        set.jump(Authorized::mint(), cam, origin);
-        assert_eq!(set.history(cam).unwrap().len(), 0);
-
-        set.jump(Authorized::mint(), cam, target);
-        assert_eq!(set.center(cam), Some(target.center));
-        assert_eq!(set.zoom(cam), Some(target.zoom));
-        assert_eq!(set.history(cam).unwrap().len(), 1);
-
-        // Repeating the identical jump must not add a duplicate back target.
-        set.jump(Authorized::mint(), cam, target);
-        assert_eq!(set.history(cam).unwrap().len(), 1);
-
-        assert!(set.restore(Authorized::mint(), cam));
-        assert_eq!(set.center(cam), Some(origin.center));
-        assert_eq!(set.zoom(cam), Some(origin.zoom));
-        assert_eq!(set.history(cam).unwrap().len(), 0);
-    }
-
-    #[test]
     fn shell_navigate_element_records_history_for_atomic_and_stream_begin() {
         use crate::stage::ElementRef;
         use crate::{NavigateTo, ShellCommand, ShellStream};

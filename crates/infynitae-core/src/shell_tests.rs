@@ -553,3 +553,49 @@ fn toplevel_metadata_is_kept_and_bounded() {
     assert_eq!(m.title.as_deref().map(str::len), Some(4095));
     assert_eq!(m.app_id.as_deref(), Some("org.example.App"));
 }
+
+/// A jump records one step of history only when it moves the camera: a jump to where the camera
+/// already is records nothing, the same jump twice records one step, and Back returns to the start.
+/// (Through the shell's entry point: proofs are minted only there, tools/verify-architecture.)
+#[test]
+fn a_jump_records_history_only_when_the_camera_moves() {
+    let mut f = fixture();
+    let start = (f.c.cameras().center(0), f.c.cameras().zoom(0));
+    let here = start.0.unwrap();
+    let go = |f: &mut Fixture, x: f64, y: f64, zoom: f64| {
+        f.c.shell_command(
+            &mut f.s,
+            ShellCommand::Navigate {
+                output: f.o,
+                to: NavigateTo::Canvas(x, y),
+                zoom: Some(zoom),
+                stream: ShellStream::Atomic,
+            },
+        )
+        .unwrap();
+    };
+    let q = Q as f64;
+    go(
+        &mut f,
+        here.x as f64 / q,
+        here.y as f64 / q,
+        start.1.unwrap(),
+    );
+    assert_eq!(
+        f.c.cameras().history(0).map(|h| h.len()),
+        Some(0),
+        "no move, no step"
+    );
+    go(&mut f, 400.0, -200.0, 1.5);
+    assert_eq!(f.c.cameras().history(0).map(|h| h.len()), Some(1));
+    go(&mut f, 400.0, -200.0, 1.5);
+    assert_eq!(
+        f.c.cameras().history(0).map(|h| h.len()),
+        Some(1),
+        "the same jump twice is one step"
+    );
+    f.c.shell_command(&mut f.s, ShellCommand::ViewportRestore { output: f.o })
+        .unwrap();
+    assert_eq!((f.c.cameras().center(0), f.c.cameras().zoom(0)), start);
+    assert_eq!(f.c.cameras().history(0).map(|h| h.len()), Some(0));
+}
