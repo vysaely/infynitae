@@ -13,6 +13,7 @@ pub mod quick;
 pub mod session;
 pub mod settings;
 pub mod settings_games;
+pub mod settings_look;
 pub mod settings_rows;
 pub mod simple;
 pub mod sound;

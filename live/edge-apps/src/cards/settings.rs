@@ -41,6 +41,9 @@ const KINDS: &[CardKind] = &[
     crate::cards::quick::KIND,
     crate::cards::session::KIND,
     crate::cards::settings_games::KIND,
+    crate::cards::settings_look::KIND_APPEARANCE,
+    crate::cards::settings_look::KIND_WALLPAPER,
+    crate::cards::settings_look::KIND_FONTS,
 ];
 
 impl Provider for Settings {
@@ -66,6 +69,9 @@ impl Provider for Settings {
             "games" => Some(Box::new(crate::cards::settings_rows::TableCard::new(
                 crate::cards::settings_games::TABLE,
             ))),
+            "appearance" => Some(Box::new(crate::cards::settings_look::LookCard::appearance())),
+            "wallpaper" => Some(Box::new(crate::cards::settings_look::LookCard::wallpaper())),
+            "fonts" => Some(Box::new(crate::cards::settings_look::LookCard::fonts())),
             "network" => Some(Box::new(NetworkCard::default())),
             "bluetooth" => Some(Box::new(BluetoothCard::default())),
             "power" => Some(Box::new(PowerCard::default())),
@@ -79,6 +85,16 @@ impl Provider for Settings {
             "power" => Some(Box::new(PowerSource)),
             "quick" => Some(Box::new(crate::cards::quick::QuickSource)),
             "config" => Some(Box::new(crate::cards::settings_rows::ConfigSource::system())),
+            "look" => Some(Box::new(crate::cards::settings_look::LookSource::system())),
+            "wallpapers" => Some(Box::new(
+                crate::cards::settings_look::WallpapersSource::system(),
+            )),
+            "fonts" => Some(Box::new(crate::cards::settings_look::FontsSource::all())),
+            "fonts-mono" => Some(Box::new(crate::cards::settings_look::FontsSource::mono())),
+            "icons" => Some(Box::new(crate::cards::settings_look::IconsSource::system())),
+            "cursors" => Some(Box::new(
+                crate::cards::settings_look::CursorsSource::system(),
+            )),
             _ => None,
         }
     }
