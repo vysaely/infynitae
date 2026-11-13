@@ -592,6 +592,6 @@ pub fn run_headless_with(
     session.shutdown_with(&mut state);
     let _ = disconnect(&mut state, &mut output_token, output_id);
     session.flush();
-    println!("[infynitae] Headless compositor exited cleanly.");
+    println!("[infynitae] Headless compositor exited.");
     Ok(())
 }

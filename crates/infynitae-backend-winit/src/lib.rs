@@ -482,7 +482,7 @@ pub fn run_nested_with(
     }
     data.session.flush();
 
-    log_line!("[infynitae] Compositor exited cleanly.");
+    log_line!("[infynitae] Compositor exited.");
     Ok(())
 }
 

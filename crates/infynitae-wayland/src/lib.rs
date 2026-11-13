@@ -1629,7 +1629,7 @@ impl WaylandState {
             if let Some(app) = &app {
                 self.privacy_apps.retain(|p| !app.contains(p.as_str()));
             }
-            log_line!("[infynitae] Privacy capture exemption DISABLED for window {focused:?}");
+            log_line!("[infynitae] Privacy capture exemption disabled for window {focused:?}");
             self.spawn_action("notify-privacy-off");
             self.remember_for_app(focused, "PRIVACY_APPS", false);
         } else {
@@ -1637,9 +1637,7 @@ impl WaylandState {
             if let Some(app) = &app {
                 self.privacy_apps.push(app.clone());
             }
-            log_line!(
-                "[infynitae] Privacy capture exemption ENABLED for window {focused:?} (hidden from screenshots and screenshare)"
-            );
+            log_line!("[infynitae] Privacy capture exemption enabled for window {focused:?}");
             self.spawn_action("notify-privacy-on");
             self.remember_for_app(focused, "PRIVACY_APPS", true);
         }
@@ -1671,10 +1669,10 @@ impl WaylandState {
     pub fn toggle_idle_inhibit(&mut self) {
         self.manual_idle_inhibit = !self.manual_idle_inhibit;
         if self.manual_idle_inhibit {
-            log_line!("[infynitae] Idle sleep & auto-lock INHIBITED (Stay Awake mode)");
+            log_line!("[infynitae] Idle sleep and auto-lock inhibited");
             self.spawn_action("notify-idle-inhibit-on");
         } else {
-            log_line!("[infynitae] Idle sleep & auto-lock RESTORED to normal timeout");
+            log_line!("[infynitae] Idle sleep and auto-lock restored");
             self.spawn_action("notify-idle-inhibit-off");
         }
     }

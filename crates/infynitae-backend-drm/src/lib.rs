@@ -2060,7 +2060,7 @@ pub fn run_console_with(
         }
     }
     data.session.flush();
-    log_line!("[infynitae] Compositor exited cleanly.");
+    log_line!("[infynitae] Compositor exited.");
     Ok(())
 }
 
