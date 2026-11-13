@@ -70,7 +70,7 @@ these by date, e.g. "(owner, 2026-10-24)".
   as used only after 0.3 s (or a click), so one the pointer just passed is not the "last window".
 - **Super+Q / W / E** start the terminal, launcher and file manager through one dispatcher
   (`live/launch.sh`), so each is a config setting.
-- **Super+Shift+C closes, Super+Delete force-closes** (owner, 2026-11-01; Super+C and Super+Shift+C from 2026-10-25, Super+Delete for closing before). Force close
+- **Super+Shift+C closes, Super+Shift+Delete force-closes** (owner, 2026-11-13: Super+Delete moved to Super+Shift+Delete; 2026-11-01; Super+C and Super+Shift+C from 2026-10-25, Super+Delete for closing before). Force close
   ends the window's client process, pinned by a pidfd so a reused pid is never killed.
 - **Super+Enter maximizes** (the shipped setting): the window takes the screen's size where it
   covers no other window (2026-11-10). `SUPER_ENTER_ACTION="fit"`, the default of a config

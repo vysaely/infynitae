@@ -844,7 +844,7 @@ UPDATE_SIGNING_KEY=""
 #           Super+A  control menu
 #           Super+S  region screenshot    Super+Shift+S  whole screen    Super+V  clipboard
 #           Super+Shift+C  close    Super+Space  centre    Super+1..9  window slots
-#   Rare:   Super+Delete  force close    Super+L  open windows    Super+Shift+L  lock    Super+Shift+Escape  system monitor
+#   Rare:   Super+Shift+Delete  force close    Super+L  open windows    Super+Shift+L  lock    Super+Shift+Escape  system monitor
 #           Super+Shift+O  tearing    Super+Shift+P  privacy
 #           Super+Shift+I  stay awake    Super+Alt+P  record    Super+Alt+C  replay clip
 #           Super+Shift+BackSpace  reload

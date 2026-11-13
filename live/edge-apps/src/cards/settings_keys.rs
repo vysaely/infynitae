@@ -129,7 +129,7 @@ const ACTIONS: &[BuiltinAction] = &[
     BuiltinAction {
         action: "FORCE_CLOSE",
         name: "Force close window",
-        defaults: &["SUPER+DELETE"],
+        defaults: &["SUPER+SHIFT+DELETE"],
         more: true,
     },
     BuiltinAction {

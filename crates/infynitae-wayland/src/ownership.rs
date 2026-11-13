@@ -295,7 +295,7 @@ fn exited(fd: &OwnedFd) -> bool {
     matches!(poll(&mut fds, Some(&Default::default())), Ok(n) if n > 0)
 }
 
-/// Super+Delete (owner; Super+Shift+C from 2026-10-21), first step: pins a client's process by a pidfd, while
+/// Super+Shift+Delete (owner; Super+Shift+C from 2026-10-21), first step: pins a client's process by a pidfd, while
 /// its connection still stands (so a pid reused after it died can never be signalled). Only a
 /// process running as this user and other than this one is pinned (a client in this process — a
 /// test's probe — is only disconnected).
@@ -378,7 +378,7 @@ mod tests {
         );
     }
 
-    /// Super+Delete's kill: a process of this user is pinned and killed; this process and a
+    /// Super+Shift+Delete's kill: a process of this user is pinned and killed; this process and a
     /// process of another uid are never pinned (a client in this process is only disconnected).
     #[test]
     fn a_client_process_is_pinned_then_killed_and_this_process_never() {

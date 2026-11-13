@@ -146,7 +146,7 @@ pub enum KeyAction {
     /// Super+Shift+K (2026-11-07): the focused window is kept on top of the others and keeps its
     /// place on the screen when the view moves, or no longer (picture-in-picture is from the start)
     ToggleKeepOnTop,
-    /// Super+Delete (owner, 2026-11-01; Super+Shift+C before, Shift+Delete until 2026-10-25): the focused window's
+    /// Super+Shift+Delete (owner, 2026-11-13; Super+Delete from 2026-11-01, Super+Shift+C before, Shift+Delete until 2026-10-25): the focused window's
     /// client is ended now — its connection is cut and its process killed — for an app that does
     /// not answer a close. The adapter falls back to a close request for an X11 window (all of
     /// them share one client).
@@ -469,14 +469,14 @@ pub fn resolve_key_binding(
         }
         return Some(KeyAction::FocusNext);
     }
-    // Logo+Shift+C closes the focused window, Logo+Delete ends its app (owner, 2026-11-01); the
+    // Logo+Shift+C closes the focused window, Logo+Shift+Delete ends its app (owner, 2026-11-13); the
     // modifiers match exactly
     if key == KEY_C && mods.logo && mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
         return Some(KeyAction::CloseFocused);
     }
     if key == KEY_DELETE
         && mods.logo
-        && !mods.shift
+        && mods.shift
         && !mods.ctrl
         && !mods.alt
         && !interaction_active
@@ -818,9 +818,9 @@ mod tests {
             Some(KeyAction::CloseFocused)
         );
         assert_eq!(
-            resolve_key_binding(KEY_DELETE, m(true, false, false, false), false),
+            resolve_key_binding(KEY_DELETE, m(true, false, false, true), false),
             Some(KeyAction::ForceCloseFocused),
-            "Super+Delete ends the app"
+            "Super+Shift+Delete ends the app"
         );
         assert_eq!(
             resolve_key_binding(KEY_C, m(true, false, true, false), false),
@@ -829,17 +829,17 @@ mod tests {
         );
         for mods in [
             m(false, false, false, false),
-            m(true, false, false, true),
-            m(true, true, false, false),
+            m(true, false, false, false),
+            m(true, true, false, true),
         ] {
             assert_eq!(
                 resolve_key_binding(KEY_DELETE, mods, false),
                 None,
-                "only Super alone: {mods:?}"
+                "only Super+Shift: {mods:?}"
             );
         }
         assert_eq!(
-            resolve_key_binding(KEY_DELETE, m(true, false, false, false), true),
+            resolve_key_binding(KEY_DELETE, m(true, false, false, true), true),
             None,
             "not while an interaction owns the pointer"
         );
