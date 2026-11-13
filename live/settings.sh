@@ -145,18 +145,49 @@ config_write() {
     trap - EXIT INT TERM
 }
 
+wallpaper_accents() {
+    wa_bin="$HOME/.local/bin/infynitae-wallpaper"
+    [ -x "$wa_bin" ] && [ -n "${1:-}" ] || return 1
+    wa_out=$("$wa_bin" --accents "$1" 2>/dev/null) || return 1
+    printf '%s\n' "$wa_out" | grep -E '^#[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]$'
+}
+
+pick_random_line() {
+    pr_lines=$(cat)
+    [ -n "$pr_lines" ] || return 1
+    pr_count=$(printf '%s\n' "$pr_lines" | wc -l | tr -d ' \t\n')
+    [ "$pr_count" -gt 0 ] || return 1
+    pr_rnd=$(od -An -tu2 -N2 /dev/urandom | tr -d ' \t\n')
+    pr_idx=$((pr_rnd % pr_count + 1))
+    printf '%s\n' "$pr_lines" | sed -n "${pr_idx}p"
+}
+
+cmd_log() {
+    case "${1:-}" in *[!A-Za-z0-9_]*|"") echo "Usage: infynitae-settings log <KEY> <OLD>" >&2; exit 1 ;; esac
+    log_file="$HOME/.local/state/infynitae/settings-changes"
+    mkdir -p "$(dirname "$log_file")"
+    printf '%s\t%s\t%s\n' "$(date +%s)" "$1" "$(printf '%s' "${2:-}" | tr '\t\n' '  ')" >> "$log_file"
+    tail -n 50 "$log_file" > "$log_file.new" && mv -f "$log_file.new" "$log_file"
+}
+
 # The theme colours from an image (infynitae-wallpaper --colors) into the config: the accent alone
-# ("accent") or the accent, surface, canvas and borders ("all"). Returns 1 when the image cannot be
-# read or the helper is missing; the config is then unchanged.
+# ("accent"), a random candidate accent with backgrounds and borders ("shuffle"), or the first
+# candidate with backgrounds and borders ("all"). Returns 1 when the image cannot be read or the
+# helper is missing; the config is then unchanged.
 wallpaper_colors() {
     wc_image="$1" wc_what="${2:-all}"
     wc_bin="$HOME/.local/bin/infynitae-wallpaper"
     [ -x "$wc_bin" ] && [ -n "$wc_image" ] || return 1
     wc_out=$("$wc_bin" --colors "$wc_image" 2>/dev/null) || return 1
+    wc_pick=""
+    if [ "$wc_what" = shuffle ]; then
+        wc_pick=$(wallpaper_accents "$wc_image" | pick_random_line) || wc_pick=""
+    fi
     printf '%s\n' "$wc_out" | while IFS='=' read -r wc_key wc_val; do
         wc_val=$(printf '%s' "$wc_val" | tr -d '"')
         case "$wc_val" in \#[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]) ;; *) continue ;; esac
-        [ "$wc_what" = accent ] && [ "$wc_key" != BORDER_ACTIVE ] && continue
+        if [ "$wc_what" = accent ] && [ "$wc_key" != BORDER_ACTIVE ]; then continue; fi
+        if [ "$wc_key" = BORDER_ACTIVE ] && [ -n "$wc_pick" ]; then wc_val="$wc_pick"; fi
         config_write "$wc_key" "$wc_val"
     done
     return 0
@@ -225,9 +256,9 @@ apply_settings() {
 
     # THEME_FROM_WALLPAPER: a new wallpaper (path or file changed) gives the theme its colours
     case "${THEME_FROM_WALLPAPER:-false}" in
-        accent|all|true|1|yes|on)
+        accent|all|shuffle|true|1|yes|on)
             twf_what=all
-            [ "$THEME_FROM_WALLPAPER" = accent ] && twf_what=accent
+            case "$THEME_FROM_WALLPAPER" in accent|shuffle) twf_what="$THEME_FROM_WALLPAPER" ;; esac
             twf_wp=$(expand_path "${WALLPAPER:-}")
             if [ -f "$twf_wp" ]; then
                 twf_stamp="${XDG_CACHE_HOME:-$HOME/.cache}/infynitae/theme-from-wallpaper"
@@ -890,24 +921,55 @@ case "$1" in
         fi
         ;;
     wallpaper-colors)
-        # infynitae-settings wallpaper-colors [accent|all] [IMAGE]: the theme from the wallpaper
+        # infynitae-settings wallpaper-colors [accent|all|accents|shuffle] [IMAGE]: theme from the wallpaper
         wc_what=all wc_img=""
         for a in "${2:-}" "${3:-}"; do
-            case "$a" in "") ;; accent|all) wc_what="$a" ;; *) wc_img="$a" ;; esac
+            case "$a" in "") ;; accent|all|accents|shuffle) wc_what="$a" ;; *) wc_img="$a" ;; esac
         done
         [ -n "$wc_img" ] || wc_img=$(expand_path "${WALLPAPER:-}")
         if [ ! -f "$wc_img" ]; then
             echo "No image: set WALLPAPER, or name one (infynitae-settings wallpaper-colors IMAGE)" >&2
             exit 1
         fi
-        cp -f "$CONFIG_FILE" "$CONFIG_FILE.bak-colors"
-        if ! wallpaper_colors "$wc_img" "$wc_what"; then
-            echo "Could not read colours from $wc_img (is infynitae-wallpaper up to date?)" >&2
-            exit 1
+        if [ "$wc_what" = accents ]; then
+            if ! wallpaper_accents "$wc_img"; then
+                echo "Could not read accents from $wc_img (is infynitae-wallpaper up to date?)" >&2
+                exit 1
+            fi
+            exit 0
+        fi
+        if [ "$wc_what" = shuffle ]; then
+            if ! wc_all=$(wallpaper_accents "$wc_img"); then
+                echo "Could not read accents from $wc_img (is infynitae-wallpaper up to date?)" >&2
+                exit 1
+            fi
+            wc_old="-"
+            if grep -q '^BORDER_ACTIVE=' "$CONFIG_FILE" 2>/dev/null; then
+                wc_old=$(cmd_get BORDER_ACTIVE)
+                wc_cur="$wc_old"
+            else
+                wc_cur=$(cmd_get BORDER_ACTIVE 2>/dev/null || printf '%s' "${BORDER_ACTIVE:-}")
+            fi
+            wc_cur=$(printf '%s' "$wc_cur" | tr '[:upper:]' '[:lower:]')
+            wc_avail=$(printf '%s\n' "$wc_all" | grep -ivFx "$wc_cur" || true)
+            if [ -z "$wc_avail" ]; then
+                echo "No other accent candidate in $wc_img (keeping ${wc_cur:-current})."
+                exit 0
+            fi
+            wc_pick=$(printf '%s\n' "$wc_avail" | pick_random_line)
+            cp -f "$CONFIG_FILE" "$CONFIG_FILE.bak-colors"
+            cmd_log BORDER_ACTIVE "$wc_old"
+            cmd_set BORDER_ACTIVE "$wc_pick"
+        else
+            cp -f "$CONFIG_FILE" "$CONFIG_FILE.bak-colors"
+            if ! wallpaper_colors "$wc_img" "$wc_what"; then
+                echo "Could not read colours from $wc_img (is infynitae-wallpaper up to date?)" >&2
+                exit 1
+            fi
+            apply_settings --force
         fi
         . "$CONFIG_FILE"
-        grep -E '^(BORDER_ACTIVE|SURFACE_COLOR|CANVAS_COLOR|BORDER_INACTIVE)=' "$CONFIG_FILE"
-        apply_settings --force
+        grep -E '^(BORDER_ACTIVE|SURFACE_COLOR|CANVAS_COLOR|BORDER_INACTIVE)=' "$CONFIG_FILE" || true
         echo "==> Colours from $wc_img (before: $CONFIG_FILE.bak-colors). Panels follow at once; apps on their next start."
         ;;
     set)
@@ -922,11 +984,7 @@ case "$1" in
         # log KEY OLD: a change from a Settings card, for its Undo ("-": the key had no line);
         # the last 50 kept in ~/.local/state/infynitae/settings-changes
         shift
-        case "${1:-}" in *[!A-Za-z0-9_]*|"") echo "Usage: infynitae-settings log <KEY> <OLD>" >&2; exit 1 ;; esac
-        log_file="$HOME/.local/state/infynitae/settings-changes"
-        mkdir -p "$(dirname "$log_file")"
-        printf '%s\t%s\t%s\n' "$(date +%s)" "$1" "$(printf '%s' "${2:-}" | tr '\t\n' '  ')" >> "$log_file"
-        tail -n 50 "$log_file" > "$log_file.new" && mv -f "$log_file.new" "$log_file"
+        cmd_log "$@"
         ;;
     unset)
         # unset KEY: its line commented out, so the default applies again (Undo of a key that had
@@ -978,8 +1036,8 @@ case "$1" in
         echo ""
         echo "Commands:"
         echo "  apply [--force]      Sync current ~/.config/infynitae/config across all toolkits"
-        echo "  wallpaper-colors [accent|all] [IMAGE]"
-        echo "                       Take the theme's colours from the wallpaper (or IMAGE)"
+        echo "  wallpaper-colors [accent|all|accents|shuffle] [IMAGE]"
+        echo "                       Take, list, or shuffle theme colours from the wallpaper (or IMAGE)"
         echo "  update               Pull latest changes and recompile release binary"
         echo "  restore              Reset canvas zoom/viewport back to default 100% native scale"
         echo "  set <KEY> <VALUE>    Update setting and sync immediately (e.g. set CURSOR_THEME Bibata-Modern-Classic)"

@@ -369,10 +369,11 @@ THEME_SYNC="true"
 
 THEME_FROM_WALLPAPER="false"
     # Take the colours above from the wallpaper whenever it changes: the accent (BORDER_ACTIVE)
-    # alone, or the accent, backgrounds and borders. Once, by hand: infynitae-settings
-    # wallpaper-colors [reload]
+    # alone, the accent plus backgrounds and borders ("all"), or a random candidate accent from
+    # the wallpaper on each wallpaper change ("shuffle", never at login). Once, by hand:
+    # infynitae-settings wallpaper-colors [accent|all|accents|shuffle]
     # default: false
-    # options: false  · accent  · all
+    # options: false  · accent  · all  · shuffle
 
 WALLPAPER=""
     # Wallpaper image (PNG, JPG, WebP; "~/…" and "$HOME/…" work) [save]
