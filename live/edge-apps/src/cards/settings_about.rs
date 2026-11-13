@@ -492,8 +492,11 @@ fn undo_command(entry: &UndoEntry) -> String {
         let v = settings::sq(&entry.old);
         format!(r#"sh "$HOME/infynitae/live/settings.sh" set {k} {v} >/dev/null 2>&1"#)
     };
+    // only while the log's last line is still the change the button shows: data read when the panel
+    // opened can be a change behind, and undoing it would drop the record of a newer one
+    let (sk, so) = (settings::sq(&entry.key), settings::sq(&entry.old));
     format!(
-        r#"if {restore}; then p="$HOME/.local/state/infynitae/settings-changes"; t="$p.tmp.$$"; sed '$d' "$p" > "$t" && mv "$t" "$p" || rm -f "$t"; fi"#
+        r#"p="$HOME/.local/state/infynitae/settings-changes"; if [ "$(tail -n 1 "$p" | cut -f 2-)" = "$(printf '%s\t%s' {sk} {so})" ] && {restore}; then t="$p.tmp.$$"; sed '$d' "$p" > "$t" && mv "$t" "$p" || rm -f "$t"; fi"#
     )
 }
 
@@ -1201,7 +1204,7 @@ mod tests {
         assert_eq!(
             out,
             vec![Action::Run(
-                r#"if sh "$HOME/infynitae/live/settings.sh" set 'CURSOR_THEME' 'a'\''b $(touch /tmp/pwn)' >/dev/null 2>&1; then p="$HOME/.local/state/infynitae/settings-changes"; t="$p.tmp.$$"; sed '$d' "$p" > "$t" && mv "$t" "$p" || rm -f "$t"; fi"#.into()
+                r#"p="$HOME/.local/state/infynitae/settings-changes"; if [ "$(tail -n 1 "$p" | cut -f 2-)" = "$(printf '%s\t%s' 'CURSOR_THEME' 'a'\''b $(touch /tmp/pwn)')" ] && sh "$HOME/infynitae/live/settings.sh" set 'CURSOR_THEME' 'a'\''b $(touch /tmp/pwn)' >/dev/null 2>&1; then t="$p.tmp.$$"; sed '$d' "$p" > "$t" && mv "$t" "$p" || rm -f "$t"; fi"#.into()
             )]
         );
 
@@ -1211,7 +1214,7 @@ mod tests {
         });
         assert_eq!(
             unset_cmd,
-            r#"if sh "$HOME/infynitae/live/settings.sh" unset 'GAPS_IN' >/dev/null 2>&1; then p="$HOME/.local/state/infynitae/settings-changes"; t="$p.tmp.$$"; sed '$d' "$p" > "$t" && mv "$t" "$p" || rm -f "$t"; fi"#
+            r#"p="$HOME/.local/state/infynitae/settings-changes"; if [ "$(tail -n 1 "$p" | cut -f 2-)" = "$(printf '%s\t%s' 'GAPS_IN' '-')" ] && sh "$HOME/infynitae/live/settings.sh" unset 'GAPS_IN' >/dev/null 2>&1; then t="$p.tmp.$$"; sed '$d' "$p" > "$t" && mv "$t" "$p" || rm -f "$t"; fi"#
         );
 
         // Execute undo command against an isolated stub HOME to verify quoting and tail removal.
@@ -1285,6 +1288,26 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(h.join(".local/state/infynitae/settings-changes")).unwrap(),
             ""
+        );
+
+        // a stale button (read before a newer change) does nothing: no set, the newer line kept
+        let log = "300\tGAME_MODE\ttrue\n400\tSUPER_ENTER_ACTION\tmaximize\n";
+        std::fs::write(h.join(".local/state/infynitae/settings-changes"), log).unwrap();
+        std::fs::remove_file(h.join("args.log")).unwrap();
+        let stale = undo_command(&UndoEntry {
+            key: "GAME_MODE".into(),
+            old: "true".into(),
+        });
+        let status = Command::new("sh")
+            .args(["-c", &stale])
+            .env("HOME", h)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        assert!(!h.join("args.log").exists());
+        assert_eq!(
+            std::fs::read_to_string(h.join(".local/state/infynitae/settings-changes")).unwrap(),
+            log
         );
     }
 
