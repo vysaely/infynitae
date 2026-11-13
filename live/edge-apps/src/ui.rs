@@ -211,6 +211,19 @@ pub struct Row<'a> {
 
 /// A row: icon, name, state under it. Returns whether it is lit (pointed at or selected).
 pub fn row(cr: &Context, cx: &Cx, hits: &mut Hits, id: u32, r: Rect, row: &Row) -> bool {
+    row_alert(cr, cx, hits, id, r, row, false)
+}
+
+/// Same as `row`, drawing the state line (and icon, if any) in `th.alert` when `alert` is true.
+pub fn row_alert(
+    cr: &Context,
+    cx: &Cx,
+    hits: &mut Hits,
+    id: u32,
+    r: Rect,
+    row: &Row,
+    alert: bool,
+) -> bool {
     let lit = hits.add(id, r) || hits.selected(id);
     if lit {
         light(cr, cx, r);
@@ -218,13 +231,14 @@ pub fn row(cr: &Context, cx: &Cx, hits: &mut Hits, id: u32, r: Rect, row: &Row) 
     let th = cx.theme;
     let mut tx = r.0 + 8.0;
     if let Some(ic) = row.icon {
-        icon(
-            cr,
-            ic,
-            tx,
-            r.1 + (r.3 - ICON) / 2.0,
-            if row.on { th.accent_text } else { th.text },
-        );
+        let icon_color = if alert {
+            th.alert
+        } else if row.on {
+            th.accent_text
+        } else {
+            th.text
+        };
+        icon(cr, ic, tx, r.1 + (r.3 - ICON) / 2.0, icon_color);
         tx += ICON + 10.0;
     }
     let w = (r.0 + r.2 - row.right - 8.0 - tx).max(20.0);
@@ -247,6 +261,13 @@ pub fn row(cr: &Context, cx: &Cx, hits: &mut Hits, id: u32, r: Rect, row: &Row) 
         },
     );
     if two {
+        let state_color = if alert {
+            th.alert
+        } else if row.on {
+            th.accent_text
+        } else {
+            th.muted
+        };
         draw::text_max(
             cr,
             tx,
@@ -255,7 +276,7 @@ pub fn row(cr: &Context, cx: &Cx, hits: &mut Hits, id: u32, r: Rect, row: &Row) 
             &Text {
                 size: draw::SIZE_NOTE,
                 bold: false,
-                color: if row.on { th.accent_text } else { th.muted },
+                color: state_color,
                 text: row.state,
             },
         );
@@ -842,5 +863,67 @@ mod tests {
             (24, 12),
         );
         assert!(hovered_unchosen[3] > unchosen_in[3]);
+    }
+
+    #[test]
+    fn row_alert_draws_state_in_alert_colour_instead_of_accent() {
+        let th = crate::theme::Theme::from_config(&crate::config::Config::from_text(""));
+        let cx = test_cx(&th);
+        assert!(th.alert.0 > th.alert.2 && th.accent_text.2 > th.accent_text.0);
+
+        let max_rb = |alert: bool, on: bool| {
+            let mut surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 260, 44).unwrap();
+            {
+                let cr = Context::new(&surf).unwrap();
+                let mut hits = Hits::new(None, None);
+                let r = (0.0, 0.0, 260.0, ROW_H);
+                let data = Row {
+                    icon: None,
+                    name: "Accent",
+                    state: "Not a colour",
+                    on,
+                    right: 0.0,
+                };
+                row_alert(&cr, &cx, &mut hits, 1, r, &data, alert);
+            }
+            surf.flush();
+            let stride = surf.stride() as usize;
+            let data = surf.data().unwrap();
+            let (mut red_dom, mut blue_dom) = (0usize, 0usize);
+            for y in 22..44 {
+                for x in 0..260 {
+                    let off = y * stride + x * 4;
+                    let (b, _, r, a) = (data[off], data[off + 1], data[off + 2], data[off + 3]);
+                    if a > 40 {
+                        if r > b + 20 {
+                            red_dom += 1;
+                        } else if b > r + 20 {
+                            blue_dom += 1;
+                        }
+                    }
+                }
+            }
+            (red_dom, blue_dom)
+        };
+
+        let (alert_red, alert_blue) = max_rb(true, true);
+        assert!(
+            alert_red > 10,
+            "expected alert state pixels, got {alert_red}"
+        );
+        assert_eq!(
+            alert_blue, 0,
+            "expected no accent blue pixels on alert state"
+        );
+
+        let (accent_red, accent_blue) = max_rb(false, true);
+        assert!(
+            accent_blue > 10,
+            "expected accent state pixels, got {accent_blue}"
+        );
+        assert_eq!(
+            accent_red, 0,
+            "expected no red alert pixels on accent state"
+        );
     }
 }

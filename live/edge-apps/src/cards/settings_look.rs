@@ -878,18 +878,6 @@ pub const TABLE_APPEARANCE: &[LookRow] = &[
         more: true,
         hide: HideRule::PapirusIcons,
     },
-    LookRow {
-        key: "MOTION",
-        name: "Motion",
-        says: "Transitions and wallpaper settle",
-        control: LookControl::Switch {
-            on: "on",
-            off: "off",
-        },
-        after: After::Save,
-        more: true,
-        hide: HideRule::None,
-    },
 ];
 
 pub const TABLE_WALLPAPER: &[LookRow] = &[
@@ -1014,7 +1002,6 @@ pub const KEYS: &[&str] = &[
     TABLE_APPEARANCE[5].key,
     TABLE_APPEARANCE[6].key,
     TABLE_APPEARANCE[7].key,
-    TABLE_APPEARANCE[8].key,
     TABLE_WALLPAPER[0].key,
     TABLE_WALLPAPER[1].key,
     TABLE_WALLPAPER[2].key,
@@ -2812,7 +2799,7 @@ impl Card for LookCard {
             let id = ROW + 10 * i as u32;
             let h = self.row_h(cx, i, body.2);
             let r = (body.0, y, body.2, ui::ROW_H);
-            let (state, state_accent) = self.state(s);
+            let (state, state_alert) = self.state(s);
             let changed = !self.is_default(i);
             let name_w = draw::measure(
                 cr,
@@ -2831,7 +2818,7 @@ impl Card for LookCard {
                 }
                 LookControl::Switch { on, .. } => {
                     let is_on = self.value(i).eq_ignore_ascii_case(on);
-                    ui::row(
+                    ui::row_alert(
                         cr,
                         cx,
                         hits,
@@ -2841,9 +2828,10 @@ impl Card for LookCard {
                             icon: None,
                             name: s.name,
                             state,
-                            on: state_accent,
+                            on: false,
                             right: 46.0,
                         },
+                        state_alert,
                     );
                     ui::switch(cr, cx, hits, id + 1, r, right, is_on);
                 }
@@ -2872,7 +2860,7 @@ impl Card for LookCard {
                     .0
                     .min(max_val_w)
                         + 40.0;
-                    let lit = ui::row(
+                    let lit = ui::row_alert(
                         cr,
                         cx,
                         hits,
@@ -2882,9 +2870,10 @@ impl Card for LookCard {
                             icon: None,
                             name: s.name,
                             state,
-                            on: state_accent,
+                            on: false,
                             right: vw,
                         },
+                        state_alert,
                     );
                     let open = self.pick == Some(i) && self.list.shown();
                     ui::value_box(cr, cx, row_r, right, &word, lit, open);
@@ -2895,7 +2884,7 @@ impl Card for LookCard {
                 LookControl::Slide { min, max, unit, .. } => {
                     let v: f64 = self.value(i).parse().unwrap_or(min);
                     let label = format!("{}{unit}", fmt_number(v));
-                    ui::row(
+                    ui::row_alert(
                         cr,
                         cx,
                         hits,
@@ -2905,9 +2894,10 @@ impl Card for LookCard {
                             icon: None,
                             name: s.name,
                             state,
-                            on: state_accent,
+                            on: false,
                             right: 60.0,
                         },
+                        state_alert,
                     );
                     value_at_right_capped(cr, cx, r, right, 80.0, &label, changed);
                     let sr = (body.0 + 8.0, y + ui::ROW_H, body.2 - 16.0, SLIDE_H - 4.0);
@@ -2920,7 +2910,7 @@ impl Card for LookCard {
                     slides.insert(i, sr);
                 }
                 LookControl::Step { .. } => {
-                    ui::row(
+                    ui::row_alert(
                         cr,
                         cx,
                         hits,
@@ -2930,9 +2920,10 @@ impl Card for LookCard {
                             icon: None,
                             name: s.name,
                             state,
-                            on: state_accent,
+                            on: false,
                             right: 96.0,
                         },
+                        state_alert,
                     );
                     let v = self.value(i);
                     ui::button(cr, cx, hits, id + 2, right - 26.0, y + 7.0, "+");
@@ -2968,7 +2959,7 @@ impl Card for LookCard {
                     .0
                     .min(max_val_w);
                     let reserve = (text_w + swatch_space + 44.0).min(body.2 * 0.65);
-                    let lit = ui::row(
+                    let lit = ui::row_alert(
                         cr,
                         cx,
                         hits,
@@ -2978,9 +2969,10 @@ impl Card for LookCard {
                             icon: None,
                             name: s.name,
                             state,
-                            on: state_accent,
+                            on: false,
                             right: reserve,
                         },
+                        state_alert,
                     );
                     let box_w = ui::value_box(cr, cx, row_r, right, &shown, lit, open);
                     if let Some(rgb) = rgb {
@@ -3456,7 +3448,6 @@ mod tests {
             &[
                 ("COLOR_SCHEME", "prefer-dark"),
                 ("ACCENT", "#7aa2f7"),
-                ("BORDER_ACTIVE", ""),
                 ("THEME_FROM_WALLPAPER", "false"),
                 ("WINDOW_CORNERS", "8"),
                 ("THEME_SCHEME", "yours"),
@@ -3468,7 +3459,6 @@ mod tests {
                 ("CANVAS_COLOR", "#0b0f14"),
                 ("FOLDER_COLOR", "accent"),
                 ("THEME_SYNC", "true"),
-                ("MOTION", "on"),
                 ("WALLPAPER", ""),
                 ("WALLPAPER_MODE", "fill"),
                 ("WALLPAPER_PARALLAX", "off"),
@@ -3544,7 +3534,7 @@ mod tests {
     #[test]
     fn every_key_is_in_config_config_with_a_value_its_control_has() {
         let def = shipped_defaults();
-        assert_eq!(TABLE_APPEARANCE.len(), 9);
+        assert_eq!(TABLE_APPEARANCE.len(), 8);
         for table in [TABLE_APPEARANCE, TABLE_WALLPAPER, TABLE_FONTS] {
             for r in table {
                 let v = def
@@ -3781,14 +3771,14 @@ mod tests {
         assert!(!keys1.contains(&"THEME_FROM_WALLPAPER"));
         assert!(!keys1.contains(&"FOLDER_COLOR"));
 
-        // With wallpaper bin + Papirus-Dark, all 9 Appearance rows appear at size M
+        // With wallpaper bin + Papirus-Dark, all 8 Appearance rows appear at size M
         let c2 = init_appearance(&[("ICON_THEME", "Papirus-Dark")], true, &[]);
         let (rows2, _) = c2.shown(&cx_m);
         let keys2: Vec<&str> = rows2.iter().map(|&i| c2.table[i].key).collect();
         assert!(keys2.contains(&"ACCENT"));
         assert!(keys2.contains(&"THEME_FROM_WALLPAPER"));
         assert!(keys2.contains(&"FOLDER_COLOR"));
-        assert!(keys2.contains(&"MOTION"));
+        assert!(!keys2.contains(&"MOTION"));
         for file_only_key in [
             "BORDER_ACTIVE",
             "SURFACE_COLOR",
@@ -3854,18 +3844,18 @@ mod tests {
         );
         assert_eq!(c.value(0), "prefer-light");
 
-        // 2. Switch: MOTION (row 8) on -> off
+        // 2. Switch: FOLDER_COLOR (row 7) accent -> theme
         out.clear();
-        assert!(c.event(&press(ROW + 8 * 10 + 1), &cx_m, &mut out));
+        assert!(c.event(&press(ROW + 7 * 10 + 1), &cx_m, &mut out));
         assert_eq!(
             out,
             vec![Action::Run(
-                "sh \"$HOME/infynitae/live/settings.sh\" log MOTION - && \
-                 sh \"$HOME/infynitae/live/settings.sh\" set MOTION 'off' >/dev/null 2>&1"
+                "sh \"$HOME/infynitae/live/settings.sh\" log FOLDER_COLOR - && \
+                 sh \"$HOME/infynitae/live/settings.sh\" set FOLDER_COLOR 'theme' >/dev/null 2>&1"
                     .to_string()
             )]
         );
-        assert_eq!(c.value(8), "off");
+        assert_eq!(c.value(7), "theme");
 
         // 3. Pick: THEME_SCHEME (row 4) -> Tonal (index 3)
         out.clear();
@@ -4721,5 +4711,53 @@ mod tests {
         };
 
         assert_ne!(render(&th1), render(&th2));
+    }
+
+    #[test]
+    fn closed_bad_accent_row_renders_state_in_theme_alert_not_accent() {
+        let th = Theme::from_config(&crate::config::Config::from_text(""));
+        assert!(th.alert.0 > th.alert.2 && th.accent_text.2 > th.accent_text.0);
+        let cx = Cx {
+            size: Size::M,
+            ..test_cx(&th)
+        };
+        let c = init_appearance(&[], true, &["ACCENT"]);
+        assert!(!c.accent_picker_open());
+
+        let h = c.height(&cx, 404.0).ceil() as i32 + 10;
+        let mut surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 420, h).unwrap();
+        let mut hits = Hits::new(None, None);
+        {
+            let cr = Context::new(&surf).unwrap();
+            c.draw(&cr, &cx, (0.0, 0.0, 404.0, h as f64), &mut hits);
+        }
+        surf.flush();
+        let stride = surf.stride() as usize;
+        let data = surf.data().unwrap();
+        // ACCENT is row 1: scan the lower half of row 1 on the left where "Not a colour" sits.
+        let y0 = ui::ROW_H as usize + 22;
+        let y1 = (2.0 * ui::ROW_H) as usize;
+        let (mut red_dom, mut blue_dom) = (0usize, 0usize);
+        for y in y0..y1 {
+            for x in 0..200 {
+                let off = y * stride + x * 4;
+                let (b, _, r, a) = (data[off], data[off + 1], data[off + 2], data[off + 3]);
+                if a > 40 {
+                    if r > b + 20 {
+                        red_dom += 1;
+                    } else if b > r + 20 {
+                        blue_dom += 1;
+                    }
+                }
+            }
+        }
+        assert!(
+            red_dom > 10,
+            "expected alert pixels on Not a colour row, got {red_dom}"
+        );
+        assert_eq!(
+            blue_dom, 0,
+            "expected no accent blue pixels on Not a colour row"
+        );
     }
 }

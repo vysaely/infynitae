@@ -318,9 +318,10 @@ mod tests {
                 _ => {}
             }
         }
+        let cfg = include_str!("../../../../config/config");
         assert!(def.contains_key("SCREEN_LOCKER"));
-        assert!(def.contains_key("IDLE_AUTO_LOCK"));
-        assert!(def.contains_key("SLEEP_LOCK"));
+        assert!(cfg.contains("#IDLE_AUTO_LOCK="));
+        assert!(cfg.contains("#SLEEP_LOCK="));
         assert!(!TABLE
             .iter()
             .any(|s| matches!(s.key, "SCREEN_LOCKER" | "IDLE_AUTO_LOCK" | "SLEEP_LOCK")));

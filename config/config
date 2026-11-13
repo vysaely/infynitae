@@ -164,10 +164,10 @@ ACCENT="#7aa2f7"
     # default: "#7aa2f7"
     # options: "#7aa2f7"  · any "#rrggbb"
 
-BORDER_ACTIVE=""
-    # Override the focused window border when it differs from ACCENT
-    # default: "" (same as ACCENT)
-    # options: ""  · any "#rrggbb"
+#BORDER_ACTIVE="#7aa2f7"
+    # Override the focused window border when it differs from ACCENT; unset, it follows ACCENT [reload]
+    # default: unset (same as ACCENT)
+    # options: unset (commented)  · any "#rrggbb"
 
 BORDER_INACTIVE="#333b54"
     # Border of the other windows (used with THEME_SCHEME="yours"; built schemes derive it)
@@ -400,11 +400,6 @@ WALLPAPER_PARALLAX="off"
     # larger than the screen: subtle 3%, strong 6%) [save]
     # default: off
     # options: off  · subtle  · strong
-
-MOTION="on"
-    # Interface transitions and wallpaper settle [save]
-    # default: on
-    # options: on  · off
 
 
 # ═══ Displays & sharpness ══════════════════════════════════════════════════════════ [restart] ═══
@@ -686,15 +681,15 @@ LOCK_WHEN_AWAY="true"
     # default: true
     # options: true  · false
 
-IDLE_AUTO_LOCK=""
-    # Override lock when idle screens go off (Super+Shift+I: stay awake)
-    # default: "" (follows LOCK_WHEN_AWAY)
-    # options: ""  · true  · false
+#IDLE_AUTO_LOCK="true"
+    # Override lock when idle screens go off (Super+Shift+I: stay awake); unset, it follows LOCK_WHEN_AWAY
+    # default: unset (follows LOCK_WHEN_AWAY)
+    # options: unset (commented)  · true  · false
 
-SLEEP_LOCK=""
-    # Override lock before sleep or lid close [reload]
-    # default: "" (follows LOCK_WHEN_AWAY)
-    # options: ""  · true  · false
+#SLEEP_LOCK="true"
+    # Override lock before sleep or lid close; unset, it follows LOCK_WHEN_AWAY [reload]
+    # default: unset (follows LOCK_WHEN_AWAY)
+    # options: unset (commented)  · true  · false
 
 SHUTDOWN_SCREEN="true"
     # Show the "Rebooting…" / "Shutting down…" screen on reboot or power off [use]

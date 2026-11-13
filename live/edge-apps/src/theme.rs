@@ -351,15 +351,13 @@ mod tests {
 
     #[test]
     fn an_old_config_gives_the_same_look_lines_as_before() {
-        // Copy of config/config as it looked before ACCENT / MOTION / LOCK_WHEN_AWAY, with
+        // Copy of config/config as it looked before ACCENT / LOCK_WHEN_AWAY, with
         // owner-style values appended.
         let base: String = include_str!("../../../config/config")
             .lines()
             .filter(|l| {
                 let t = l.trim_start();
-                !t.starts_with("ACCENT=")
-                    && !t.starts_with("MOTION=")
-                    && !t.starts_with("LOCK_WHEN_AWAY=")
+                !t.starts_with("ACCENT=") && !t.starts_with("LOCK_WHEN_AWAY=")
             })
             .collect::<Vec<_>>()
             .join("\n");

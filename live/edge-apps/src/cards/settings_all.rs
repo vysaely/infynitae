@@ -287,21 +287,7 @@ impl SettingsAllCard {
         };
         if GROUPS[g].children.len() > 1 {
             let child_cx = self.child_cx(cx);
-            let look = match cfg.value("COLOR_SCHEME").trim() {
-                "prefer-light" => "Light".to_string(),
-                "prefer-dark" => "Dark".to_string(),
-                "default" | "" => "System look".to_string(),
-                other => other.to_string(),
-            };
-            let theme_mode = cfg.value("THEME_FROM_WALLPAPER").trim();
-            let accent = if theme_mode.eq_ignore_ascii_case("true")
-                || theme_mode.eq_ignore_ascii_case("accent")
-                || theme_mode.eq_ignore_ascii_case("all")
-            {
-                "from wallpaper".to_string()
-            } else {
-                non_empty(cfg.value("BORDER_ACTIVE"))
-            };
+            let (look, accent) = appearance_look_and_accent(cfg);
             let wallpaper = if !matches!(self.children[1].status(&child_cx), Status::Hidden) {
                 let raw = cfg.value("WALLPAPER").trim();
                 if raw.is_empty() {
@@ -330,21 +316,7 @@ impl SettingsAllCard {
         let i = GROUPS[g].children[0];
         let parts: Vec<String> = match CHILD_KINDS[i].id {
             "appearance" => {
-                let look = match cfg.value("COLOR_SCHEME").trim() {
-                    "prefer-light" => "Light".to_string(),
-                    "prefer-dark" => "Dark".to_string(),
-                    "default" | "" => "System look".to_string(),
-                    other => other.to_string(),
-                };
-                let accent = if cfg
-                    .value("THEME_FROM_WALLPAPER")
-                    .trim()
-                    .eq_ignore_ascii_case("true")
-                {
-                    "from wallpaper".to_string()
-                } else {
-                    non_empty(cfg.value("BORDER_ACTIVE"))
-                };
+                let (look, accent) = appearance_look_and_accent(cfg);
                 let corners = {
                     let c = cfg.value("WINDOW_CORNERS").trim();
                     if c.is_empty() {
@@ -484,8 +456,8 @@ impl SettingsAllCard {
                     "" | "0" => "Never sleeps".to_string(),
                     m => format!("{m} min sleep"),
                 };
-                let lock = if cfg.value("SLEEP_LOCK").trim().eq_ignore_ascii_case("true") {
-                    "lock on sleep".to_string()
+                let lock = if lock_when_away_on(cfg) {
+                    "lock when away".to_string()
                 } else {
                     String::new()
                 };
@@ -1326,6 +1298,53 @@ fn non_empty(s: &str) -> String {
     s.trim().to_string()
 }
 
+fn appearance_look_and_accent(cfg: &ConfigData) -> (String, String) {
+    let look = match cfg.value("COLOR_SCHEME").trim() {
+        "prefer-light" => "Light".to_string(),
+        "prefer-dark" => "Dark".to_string(),
+        "default" | "" => "System look".to_string(),
+        other => other.to_string(),
+    };
+    let theme_mode = cfg.value("THEME_FROM_WALLPAPER").trim();
+    let accent = if theme_mode.eq_ignore_ascii_case("true")
+        || theme_mode.eq_ignore_ascii_case("accent")
+        || theme_mode.eq_ignore_ascii_case("all")
+        || theme_mode.eq_ignore_ascii_case("shuffle")
+    {
+        "from wallpaper".to_string()
+    } else {
+        // Explicit ACCENT wins; when only BORDER_ACTIVE is in the user's file, let it
+        // win over config/config's default ACCENT (same migration rule as LookCard::apply).
+        let now_or = |k: &str| {
+            cfg.now
+                .get(k)
+                .map(|v| non_empty(v))
+                .filter(|v| !v.is_empty())
+        };
+        now_or("ACCENT")
+            .or_else(|| now_or("BORDER_ACTIVE"))
+            .unwrap_or_else(|| non_empty(cfg.value("ACCENT")))
+    };
+    (look, accent)
+}
+
+fn lock_when_away_on(cfg: &ConfigData) -> bool {
+    let now_val = |k: &str| cfg.now.get(k).map(|v| v.trim()).filter(|v| !v.is_empty());
+    if let Some(v) = now_val("LOCK_WHEN_AWAY") {
+        return v.eq_ignore_ascii_case("true");
+    }
+    let legacy: Vec<&str> = ["IDLE_AUTO_LOCK", "SLEEP_LOCK"]
+        .into_iter()
+        .filter_map(now_val)
+        .collect();
+    if !legacy.is_empty() {
+        return legacy.iter().any(|v| v.eq_ignore_ascii_case("true"));
+    }
+    cfg.value("LOCK_WHEN_AWAY")
+        .trim()
+        .eq_ignore_ascii_case("true")
+}
+
 fn join_space(a: &str, b: &str) -> String {
     match (a.is_empty(), b.is_empty()) {
         (true, true) => String::new(),
@@ -2122,5 +2141,47 @@ mod tests {
         }
         seen.sort_unstable();
         assert_eq!(seen, (0..CHILD_KINDS.len()).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn summaries_follow_unified_accent_and_lock_when_away_with_legacy_fallback() {
+        let dir = temp_home("unified-summary");
+        let th = Theme::from_config(&Config::from_text(""));
+        let cx = test_cx(&th);
+
+        // ACCENT wins over BORDER_ACTIVE; shuffle counts as from wallpaper.
+        let mut cfg = full_config_data();
+        cfg.now.insert("ACCENT".into(), "#1188ee".into());
+        cfg.now.insert("BORDER_ACTIVE".into(), "#cc70a9".into());
+        let mut card = SettingsAllCard::with_paths(dir.join("missing"), dir.join("missing_cfg"));
+        apply_all_sources(&mut card, &dir, &cfg);
+        assert!(card.summary(0, &cx).contains("#1188ee"));
+        assert!(!card.summary(0, &cx).contains("#cc70a9"));
+
+        cfg.now
+            .insert("THEME_FROM_WALLPAPER".into(), "shuffle".into());
+        apply_all_sources(&mut card, &dir, &cfg);
+        assert!(card.summary(0, &cx).contains("from wallpaper"));
+
+        // Lock group (index 7): default on; LOCK_WHEN_AWAY=false overrides legacy true;
+        // legacy all-false without LOCK_WHEN_AWAY shows off; legacy true shows lock when away.
+        let mut lock_cfg = full_config_data();
+        apply_all_sources(&mut card, &dir, &lock_cfg);
+        assert!(card.summary(7, &cx).contains("lock when away"));
+
+        lock_cfg.now.insert("LOCK_WHEN_AWAY".into(), "false".into());
+        lock_cfg.now.insert("SLEEP_LOCK".into(), "true".into());
+        apply_all_sources(&mut card, &dir, &lock_cfg);
+        assert!(!card.summary(7, &cx).contains("lock when away"));
+
+        lock_cfg.now.remove("LOCK_WHEN_AWAY");
+        lock_cfg.now.insert("IDLE_AUTO_LOCK".into(), "false".into());
+        lock_cfg.now.insert("SLEEP_LOCK".into(), "false".into());
+        apply_all_sources(&mut card, &dir, &lock_cfg);
+        assert!(!card.summary(7, &cx).contains("lock when away"));
+
+        lock_cfg.now.insert("SLEEP_LOCK".into(), "true".into());
+        apply_all_sources(&mut card, &dir, &lock_cfg);
+        assert!(card.summary(7, &cx).contains("lock when away"));
     }
 }

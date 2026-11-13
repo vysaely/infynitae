@@ -173,7 +173,6 @@ const SLIDE_H: f64 = 22.0;
 pub const FILE_ONLY: &[&str] = &[
     "KEEP_ON_TOP",
     "CANVAS_COLOR",
-    "BORDER_ACTIVE",
     "BORDER_INACTIVE",
     "BORDER_IGNORE_CSD",
     "SQUARE_CORNERS",
@@ -213,8 +212,6 @@ pub const FILE_ONLY: &[&str] = &[
     "FAVORITES",
     "PANELS_SNAP",
     "PANELS_OVERLAP",
-    "IDLE_AUTO_LOCK",
-    "SLEEP_LOCK",
     "SCREEN_LOCKER",
     "PRIVACY_TITLES",
     "ALLOW_CAPTURE",

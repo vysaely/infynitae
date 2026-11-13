@@ -548,10 +548,6 @@ pub struct Config {
     pub opacity: f64,
     /// SWITCH_LOOK
     pub switch_look: String,
-    /// MOTION: Some(true) for on, Some(false) for off, None when absent
-    #[allow(dead_code)]
-    // Durations still stay enabled until motion wiring reads this (docs/POLISH_PLAN.md 2.E).
-    pub motion: Option<bool>,
 }
 
 pub fn config_path() -> PathBuf {
@@ -602,7 +598,6 @@ impl Config {
             tray_card: "menu".into(),
             opacity: 0.90, // 90 % until CARD_BLUR exists: 70 % without blur reads as see-through
             switch_look: "rows".into(),
-            motion: None,
         };
         let mut ctrl = vec![
             Module::Clock,
@@ -692,14 +687,6 @@ impl Config {
                     }
                 }
                 "SWITCH_LOOK" => c.switch_look = value_text(v).to_ascii_lowercase(),
-                "MOTION" => {
-                    let t = value_text(v).trim().to_ascii_lowercase();
-                    c.motion = match t.as_str() {
-                        "on" | "true" | "yes" | "1" => Some(true),
-                        "off" | "false" | "no" | "0" => Some(false),
-                        _ => None,
-                    };
-                }
                 "CONTROL_MODULES" => {
                     // the control panel's modules before PANEL_CONTROL; "apps" there was the tray
                     let t = value_text(v);
@@ -904,7 +891,7 @@ mod tests {
     }
 
     #[test]
-    fn accent_color_scheme_font_and_motion_parse_cleanly() {
+    fn accent_color_scheme_and_font_parse_cleanly() {
         // ACCENT wins over BORDER_ACTIVE in either order; empty ACCENT still falls back
         assert_eq!(
             Config::from_text("ACCENT=\"#7aa2f7\"\nBORDER_ACTIVE=\"#cc70a9\"\n").accent,
@@ -929,10 +916,6 @@ mod tests {
         assert_eq!(Config::from_text("").font, "sans-serif");
         assert_eq!(Config::from_text("FONT_NAME=\"\"\n").font, "sans-serif");
         assert_eq!(Config::from_text("FONT_NAME=\"Inter\"\n").font, "Inter");
-
-        assert_eq!(Config::from_text("").motion, None);
-        assert_eq!(Config::from_text("MOTION=\"on\"\n").motion, Some(true));
-        assert_eq!(Config::from_text("MOTION=\"off\"\n").motion, Some(false));
     }
 
     #[test]
