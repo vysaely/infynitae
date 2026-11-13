@@ -201,7 +201,7 @@ impl Core {
             }
             PhysicalEvent::RecenterElement { element } => {
                 let proof = authority::Authorized::mint();
-                self.recenter_on_element(proof, element, false, out);
+                self.recenter_on_element(proof, element, false, false, out);
                 Ok(())
             }
             PhysicalEvent::BringIntoView { element } => {
@@ -752,7 +752,7 @@ impl Core {
                 if (self.focus_cycle_navigate || attention)
                     && let Some(p) = proof
                 {
-                    self.recenter(p, false, out);
+                    self.recenter(p, false, true, out);
                 }
                 // what is under the pointer now is not a crossing: the camera moved, not the hand
                 self.hover_seen = self.hovered_window();
@@ -787,13 +787,13 @@ impl Core {
             }
             KeyAction::Recenter => {
                 if let Some(p) = proof {
-                    self.recenter(p, false, out);
+                    self.recenter(p, false, false, out);
                 }
                 return;
             }
             KeyAction::RecenterKeepZoom => {
                 if let Some(p) = proof {
-                    self.recenter(p, true, out);
+                    self.recenter(p, true, false, out);
                 }
                 return;
             }
@@ -1086,6 +1086,7 @@ impl Core {
         proof: authority::Authorized,
         element: crate::stage::ElementId,
         keep_zoom: bool,
+        record_history: bool,
         out: &mut Vec<Effect>,
     ) {
         let output = match self.pointer {
@@ -1093,7 +1094,7 @@ impl Core {
             PointerState::NoOutput => self.outputs.first().map(|o| o.id),
         };
         if let Some(output) = output {
-            self.recenter_on_element_at(proof, output, element, keep_zoom, out);
+            self.recenter_on_element_at(proof, output, element, keep_zoom, record_history, out);
         }
     }
 
@@ -1104,6 +1105,7 @@ impl Core {
         output: OutputId,
         element: crate::stage::ElementId,
         keep_zoom: bool,
+        record_history: bool,
         out: &mut Vec<Effect>,
     ) {
         if self.presentation(output).is_some() && !self.is_presentation_suppressed(output) {
@@ -1146,8 +1148,16 @@ impl Core {
         let Some(center) = crate::navigation::recenter_target(extent, area, target_zoom, g) else {
             return;
         };
-        self.cameras
-            .set_zoom_and_center(proof, camera, target_zoom, center);
+        let target = crate::navigation::CameraValue {
+            center,
+            zoom: target_zoom,
+        };
+        if record_history {
+            self.cameras.jump(proof, camera, target);
+        } else {
+            self.cameras
+                .set_zoom_and_center(proof, camera, target.zoom, target.center);
+        }
         self.camera_written(output, camera, out);
     }
 
@@ -1167,15 +1177,21 @@ impl Core {
         if let Some(hit) = self.hit_test(output, pt) {
             self.raise_by_user(hit.element);
             out.extend(self.focus.set_focus(Some(hit.element)));
-            self.recenter_on_element_at(proof, output, hit.element, false, out);
+            self.recenter_on_element_at(proof, output, hit.element, false, false, out);
         } else if let Some(camera) = self.cameras.camera_for_output(output) {
             self.zoom_reset(proof, output, camera, out);
         }
     }
 
-    fn recenter(&mut self, proof: authority::Authorized, keep_zoom: bool, out: &mut Vec<Effect>) {
+    fn recenter(
+        &mut self,
+        proof: authority::Authorized,
+        keep_zoom: bool,
+        record_history: bool,
+        out: &mut Vec<Effect>,
+    ) {
         if let Some(element) = self.focus.target() {
-            self.recenter_on_element(proof, element, keep_zoom, out);
+            self.recenter_on_element(proof, element, keep_zoom, record_history, out);
         } else if !keep_zoom {
             let output = match self.pointer {
                 PointerState::Located { output, .. } => Some(output),
@@ -1272,7 +1288,7 @@ impl Core {
             self.true_position_into(out);
         }
         if let Some(p) = proof {
-            self.recenter(p, false, out);
+            self.recenter(p, false, true, out);
         }
         // what is under the pointer now is not a crossing: the camera moved, not the hand
         self.hover_seen = self.hovered_window();
@@ -1841,6 +1857,7 @@ impl Core {
         if !self.cameras.restore(proof, camera) {
             return;
         }
+        self.overview_at.retain(|o| o.0 != output);
         self.camera_written(output, camera, out);
     }
 
@@ -2700,19 +2717,33 @@ impl Core {
                 let camera = self.shell_camera(output)?;
                 let center = self.navigate_center(camera, to)?;
                 self.shell_stream_step(stream);
-                match zoom {
-                    Some(z) => {
-                        let z = z.clamp(crate::geom::ZOOM_MIN, crate::geom::ZOOM_MAX);
-                        self.cameras.set_zoom_and_center(
-                            authority::Authorized::mint(),
-                            camera,
-                            z,
-                            center,
-                        );
-                    }
-                    None => {
-                        self.cameras
-                            .navigate(authority::Authorized::mint(), camera, center);
+                let record = matches!(to, NavigateTo::Element(_))
+                    && matches!(stream, ShellStream::Atomic | ShellStream::Begin);
+                if record {
+                    let zoom = match zoom {
+                        Some(z) => z.clamp(crate::geom::ZOOM_MIN, crate::geom::ZOOM_MAX),
+                        None => self.cameras.zoom(camera).unwrap_or(1.0),
+                    };
+                    self.cameras.jump(
+                        authority::Authorized::mint(),
+                        camera,
+                        crate::navigation::CameraValue { center, zoom },
+                    );
+                } else {
+                    match zoom {
+                        Some(z) => {
+                            let z = z.clamp(crate::geom::ZOOM_MIN, crate::geom::ZOOM_MAX);
+                            self.cameras.set_zoom_and_center(
+                                authority::Authorized::mint(),
+                                camera,
+                                z,
+                                center,
+                            );
+                        }
+                        None => {
+                            self.cameras
+                                .navigate(authority::Authorized::mint(), camera, center);
+                        }
                     }
                 }
                 self.camera_written(output, camera, &mut out);
@@ -2732,6 +2763,7 @@ impl Core {
                     return Err(ShellError::Refused);
                 }
                 if self.cameras.restore(authority::Authorized::mint(), camera) {
+                    self.overview_at.retain(|o| o.0 != output);
                     self.camera_written(output, camera, &mut out);
                 }
             }
@@ -6125,5 +6157,184 @@ mod tests {
         let _ = c.toplevel_destroyed(w2);
         c.opened_without_focus(w2);
         assert!(c.focus().attention().is_empty());
+    }
+
+    #[test]
+    fn jumps_record_history_and_bind_back_restores_while_recenter_does_not() {
+        use crate::input::keys::{
+            ACTION_NAMES, KEY_3, KEY_BACKSPACE, KEY_LEFT, KEY_LEFTMETA, KEY_SPACE, KEY_TAB,
+            UserBindings, parse_chord,
+        };
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        let ws = map_windows(&mut c, a, 3);
+        let mut fx = Vec::new();
+        for (idx, x) in [0, 3000, 6000].into_iter().enumerate() {
+            c.place_by_user(ws[idx], crate::geom::CanvasPoint { x, y: 0 }, &mut fx)
+                .unwrap();
+        }
+        c.render_list(a).unwrap();
+        c.pointer = PointerState::Located {
+            output: a,
+            p: (100.0, 100.0),
+        };
+        let back = ACTION_NAMES
+            .iter()
+            .find(|(name, _)| *name == "BACK")
+            .map(|(_, action)| *action);
+        c.set_key_bindings(UserBindings {
+            chords: vec![(parse_chord("SUPER+BACKSPACE").unwrap(), back)],
+            moved: Vec::new(),
+        });
+        c.set_focus(&mut i, Some(ws[0])).unwrap();
+        let cam = camera_of(&c, a);
+        let super_key = |c: &mut Core, i: &mut crate::InputPort, key: u32| {
+            press(c, i, KEY_LEFTMETA, true, true);
+            press(c, i, key, true, true);
+            press(c, i, key, false, true);
+            press(c, i, KEY_LEFTMETA, false, false);
+        };
+
+        // Super+Space recenters without pushing to navigation history.
+        super_key(&mut c, &mut i, KEY_SPACE);
+        assert_eq!(c.cameras().history(cam).unwrap().len(), 0);
+        let pos0 = c.cameras().center(cam).unwrap();
+
+        // Super+3 (FocusSlot) jumps to ws[2] and records pos0.
+        super_key(&mut c, &mut i, KEY_3);
+        assert_eq!(c.focus().target(), Some(ws[2]));
+        assert_eq!(c.cameras().history(cam).unwrap().len(), 1);
+        let pos_w2 = c.cameras().center(cam).unwrap();
+        assert_ne!(pos_w2, pos0);
+
+        // Super+Left (FocusDirection) jumps to ws[1] and records pos_w2.
+        super_key(&mut c, &mut i, KEY_LEFT);
+        assert_eq!(c.focus().target(), Some(ws[1]));
+        assert_eq!(c.cameras().history(cam).unwrap().len(), 2);
+        let pos_w1 = c.cameras().center(cam).unwrap();
+
+        // Super+Tab with FOCUS_CYCLE_NAVIGATE moves back to ws[2] and records pos_w1.
+        c.set_focus_cycle_navigate(true);
+        super_key(&mut c, &mut i, KEY_TAB);
+        assert_eq!(c.focus().target(), Some(ws[2]));
+        assert_eq!(c.cameras().history(cam).unwrap().len(), 3);
+
+        // BIND_BACK walks backwards through recorded jump positions.
+        super_key(&mut c, &mut i, KEY_BACKSPACE);
+        assert_eq!(c.cameras().center(cam), Some(pos_w1));
+        super_key(&mut c, &mut i, KEY_BACKSPACE);
+        assert_eq!(c.cameras().center(cam), Some(pos_w2));
+        super_key(&mut c, &mut i, KEY_BACKSPACE);
+        assert_eq!(c.cameras().center(cam), Some(pos0));
+        assert_eq!(c.cameras().history(cam).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn camera_set_jump_records_changed_camera_and_skips_noops() {
+        use super::authority::Authorized;
+        use crate::navigation::{CameraSet, CameraValue};
+        let mut set = CameraSet::empty();
+        let cam = set.bind_on_connect(
+            Authorized::mint(),
+            &crate::output::tests::key("A"),
+            OutputId::for_test(1),
+            &PersistedCameras::default(),
+        );
+        let origin = CameraValue {
+            center: crate::geom::CanvasPos { x: 0, y: 0 },
+            zoom: 1.0,
+        };
+        let target = CameraValue {
+            center: crate::geom::CanvasPos {
+                x: 400 << 16,
+                y: -200 << 16,
+            },
+            zoom: 1.5,
+        };
+
+        set.jump(Authorized::mint(), cam, origin);
+        assert_eq!(set.history(cam).unwrap().len(), 0);
+
+        set.jump(Authorized::mint(), cam, target);
+        assert_eq!(set.center(cam), Some(target.center));
+        assert_eq!(set.zoom(cam), Some(target.zoom));
+        assert_eq!(set.history(cam).unwrap().len(), 1);
+
+        // Repeating the identical jump must not add a duplicate back target.
+        set.jump(Authorized::mint(), cam, target);
+        assert_eq!(set.history(cam).unwrap().len(), 1);
+
+        assert!(set.restore(Authorized::mint(), cam));
+        assert_eq!(set.center(cam), Some(origin.center));
+        assert_eq!(set.zoom(cam), Some(origin.zoom));
+        assert_eq!(set.history(cam).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn shell_navigate_element_records_history_for_atomic_and_stream_begin() {
+        use crate::stage::ElementRef;
+        use crate::{NavigateTo, ShellCommand, ShellStream};
+        let (mut c, _, mut s, mut t) = Core::new(PersistedCameras::default());
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        let ws = map_windows(&mut c, a, 2);
+        let mut fx = Vec::new();
+        c.place_by_user(ws[0], crate::geom::CanvasPoint { x: 0, y: 0 }, &mut fx)
+            .unwrap();
+        c.place_by_user(ws[1], crate::geom::CanvasPoint { x: 5000, y: 0 }, &mut fx)
+            .unwrap();
+        c.render_list(a).unwrap();
+        let cam = camera_of(&c, a);
+        let origin = (
+            c.cameras().center(cam).unwrap(),
+            c.cameras().zoom(cam).unwrap(),
+        );
+        let cref = |c: &Core, element| ElementRef {
+            instance: c.stage().instance(),
+            element,
+        };
+
+        c.shell_command(
+            &mut s,
+            ShellCommand::Navigate {
+                output: a,
+                to: NavigateTo::Element(cref(&c, ws[1])),
+                zoom: Some(1.5),
+                stream: ShellStream::Atomic,
+            },
+        )
+        .unwrap();
+        assert_eq!(c.cameras().zoom(cam), Some(1.5));
+        assert_eq!(c.cameras().history(cam).unwrap().len(), 1);
+        let after_atomic = (
+            c.cameras().center(cam).unwrap(),
+            c.cameras().zoom(cam).unwrap(),
+        );
+
+        for stream in [ShellStream::Begin, ShellStream::Step, ShellStream::End] {
+            c.shell_command(
+                &mut s,
+                ShellCommand::Navigate {
+                    output: a,
+                    to: NavigateTo::Element(cref(&c, ws[0])),
+                    zoom: None,
+                    stream,
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                c.cameras().history(cam).unwrap().len(),
+                2,
+                "stream {stream:?} must only push at Begin"
+            );
+        }
+
+        c.shell_command(&mut s, ShellCommand::ViewportRestore { output: a })
+            .unwrap();
+        assert_eq!(c.cameras().center(cam), Some(after_atomic.0));
+        assert_eq!(c.cameras().zoom(cam), Some(after_atomic.1));
+        c.shell_command(&mut s, ShellCommand::ViewportRestore { output: a })
+            .unwrap();
+        assert_eq!(c.cameras().center(cam), Some(origin.0));
+        assert_eq!(c.cameras().zoom(cam), Some(origin.1));
     }
 }

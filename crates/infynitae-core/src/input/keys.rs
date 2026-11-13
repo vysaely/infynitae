@@ -134,7 +134,7 @@ pub enum KeyAction {
     Cancel,
     /// F-FIT-1 on the pointer's output, for the element under the pointer.
     FitViewport,
-    /// Restore (M8, OBJ-30) on the pointer's output.
+    /// Restore the previous viewport from navigation history on the active output (`BIND_BACK`).
     ViewportRestore,
     /// Super+Enter (owner decision 2026-10-21): fit the element under the pointer, or, when the
     /// camera already shows exactly that fit, restore the previous camera. Stateless: decided by
@@ -381,6 +381,7 @@ pub const ACTION_NAMES: &[(&str, KeyAction)] = &[
     ("FORCE_CLOSE", KeyAction::ForceCloseFocused),
     ("RECENTER", KeyAction::Recenter),
     ("RECENTER_KEEP_ZOOM", KeyAction::RecenterKeepZoom),
+    ("BACK", KeyAction::ViewportRestore),
 ];
 
 /// [`resolve_key_binding`] with the user's bindings first: a chord of theirs wins (also over a
@@ -1378,5 +1379,23 @@ mod tests {
         assert!(is_modifier_key(KEY_RIGHTALT));
         assert!(!is_modifier_key(KEY_Q));
         assert!(!is_modifier_key(KEY_ESC));
+    }
+
+    #[test]
+    fn back_action_name_resolves_to_viewport_restore() {
+        assert!(ACTION_NAMES.contains(&("BACK", KeyAction::ViewportRestore)));
+        let chord = parse_chord("SUPER+BACKSPACE").unwrap();
+        let action = ACTION_NAMES
+            .iter()
+            .find(|(name, _)| *name == "BACK")
+            .map(|(_, action)| *action);
+        let user = UserBindings {
+            chords: vec![(chord, action)],
+            moved: vec![],
+        };
+        assert_eq!(
+            resolve_key_binding_with(&user, chord.key, chord.mods, false),
+            Some(KeyAction::ViewportRestore)
+        );
     }
 }

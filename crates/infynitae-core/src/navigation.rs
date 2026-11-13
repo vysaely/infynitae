@@ -418,6 +418,22 @@ impl CameraSet {
         self.set_center(proof, camera, pan_target_mode(start, sum, mode));
     }
 
+    /// Record the camera's value as the newest history entry before jumping to `target` if either
+    /// center or zoom changes. Consumes a proof (INV-CAMERA-1).
+    pub(crate) fn jump(&mut self, _proof: Authorized, camera: usize, target: CameraValue) {
+        if let Some(c) = self.cameras.get_mut(camera) {
+            debug_assert!(crate::geom::zoom_in_domain(target.zoom));
+            if c.center != target.center || c.zoom.to_bits() != target.zoom.to_bits() {
+                c.history.push(CameraValue {
+                    center: c.center,
+                    zoom: c.zoom,
+                });
+            }
+            c.center = target.center;
+            c.zoom = target.zoom;
+        }
+    }
+
     /// A shell `Navigate` (C7.2): the camera's centre becomes `center`, its zoom unchanged;
     /// no history entry (OBJ-30 records fits). Consumes a proof (INV-CAMERA-1).
     pub(crate) fn navigate(&mut self, proof: Authorized, camera: usize, center: CanvasPos) {
