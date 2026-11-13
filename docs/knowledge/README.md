@@ -63,9 +63,9 @@ Every record must contain the following six level-2 markdown sections:
 
 ---
 
-## Verification & Tooling
+## Verification
 
-The integrity of the knowledge system is enforced automatically by:
+Run:
 ```bash
 tools/verify-knowledge
 ```

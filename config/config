@@ -237,7 +237,7 @@ LATENCY="direct"
     #   direct      balanced while a fullscreen game is shown directly (the compositor only flips
     #               then, so drawing late costs no refreshes), off otherwise
     #    off        at once (the most forgiving under heavy GPU load)
-    #    balanced   just in time for the refresh: about a frame less delay (experimental;
+    #    balanced   right before the refresh: about a frame less delay (experimental;
     #               misses more refreshes while the GPU is busy, e.g. a game or AI training)
     #    lowest     tighter still
 
@@ -276,8 +276,9 @@ GAME_MODE="true"
     # options: true  · false
 
 GAME_QUIET="true"
-    # While game mode is on, notifications wait (mako's do-not-disturb) and show when the game
-    # ends: one drawn over a game takes it off its direct path to the screen and stops tearing
+    # While game mode is on, notifications wait (held by the edge, or mako's do-not-disturb)
+    # and show when the game ends: one drawn over a game takes it off its direct path to the
+    # screen and stops tearing
     # default: true
     # options: true  · false
 
@@ -330,7 +331,7 @@ TERMINAL_FONT=""
     # options: ""  · monospace  · any installed family
 
 FONT_SIZE="10"
-    # Font size
+    # Font size in points (apps and terminals)
     # default: 10
     # options: 10  · any number
 
@@ -357,13 +358,13 @@ SURFACE_COLOR="#111317"
     # options: "#111317"  · any "#rrggbb"
 
 TEXT_COLOR="#eef2f8"
-    # Primary text color across panels, menus, notifications, and managed apps
+    # Primary text colour across panels, menus, notifications, and managed apps
     # default: "#eef2f8"
     # options: "#eef2f8"  · any "#rrggbb"
 
 THEME_SYNC="true"
-    # Synchronize the palette above to Mako, Fuzzel, GTK 3/4, Qt (with qt6ct installed), Foot,
-    # Kitty, and Alacritty [reload]
+    # Apply the colours above to Mako, Fuzzel, GTK 3/4, Qt (with qt6ct installed), Foot,
+    # Kitty, Alacritty, and Firefox [reload]
     # default: true
     # options: true  · false
 
@@ -619,7 +620,7 @@ FAVORITES=""
 #   MODULES stacked in the order written; one with nothing to show hides itself:
 #           search  favorites  apps  windows  clipboard  clock  volume  media  wifi  bluetooth
 #           dnd  nightlight  keyboard  osk  power  replay  tray  notifications  session
-#           calendar  memory  system  (these three: the Rust edge only)
+#           calendar  memory  system  (these three: not in the C edge)
 #           (clock: a click shows the month; media: the player playing, hidden when none;
 #           nightlight: warmer colours, NIGHT_LIGHT_TEMP; keyboard: the next layout, shown with
 #           more than one in XKB_DEFAULT_LAYOUT; osk: the on-screen keyboard, shown with squeekboard
@@ -677,7 +678,7 @@ SLEEP_LOCK="true"
     # options: true  · false
 
 SHUTDOWN_SCREEN="true"
-    # Show the clean "Rebooting…" / "Shutting down…" screen on reboot or power off [use]
+    # Show the "Rebooting…" / "Shutting down…" screen on reboot or power off [use]
     # default: true
     # options: true  · false
 

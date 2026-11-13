@@ -11,7 +11,7 @@
 | `crates/infynitae-backend-headless` | An off-screen backend. Its `tests/` are the bulk of the test suite: real Wayland clients against a real compositor. |
 | `crates/infynitae-ipc` | The shell socket (`$XDG_RUNTIME_DIR/infynitae/shell.sock`, JSON lines). |
 | `crates/infynitae` | The binary: command line, picks a backend. |
-| `live/` | The desktop around the compositor: session scripts, environment, shortcut dispatcher, settings sync, and the helpers: C (lock, wallpaper, portal, polkit, recorder, the old edge) and Rust (`live/edge-rs`, its own crate and lockfile; CI job "Edge (Rust)"). |
+| `live/` | The desktop around the compositor: session scripts, environment, shortcut dispatcher, settings sync, and the helpers: C (lock, wallpaper, portal, polkit, recorder, frozen `live/edge`) and Rust (frozen `live/edge-rs`, `live/edge-apps`, `live/shot-rs`; each its own crate and lockfile; CI jobs "Edge (Rust)", "Edge (apps)", "Shot (Rust)"). |
 | `config/config` | The config template, installed as `~/.config/infynitae/config`. |
 | `vendor/smithay-0.7.0` | Smithay, vendored with four authorized patches (`patches/`). |
 | `patches/xwayland-satellite-*` | Our patch to xwayland-satellite; `live/build-satellite.sh` builds it at install. |
@@ -49,7 +49,7 @@ tools/verify-test-efficacy               # hours: CI, or single controls by hand
 | Check | What it guards |
 | :--- | :--- |
 | `verify-architecture` | The crate graph (Core depends on nothing), the exact Smithay pin and its files' hashes, the unsafe inventory (`docs/foundation/UNSAFE_INVENTORY.md`: every `unsafe` listed with its reasoning), source rules, compile probes that must fail. Each check has seeded defects it must detect. |
-| `verify-test-efficacy` | 519 controls: each injects one bug into the product code and requires a named test to fail. A control whose test already fails on clean code, or times out, is reported as broken. |
+| `verify-test-efficacy` | 543 controls: each injects one bug into the product code and requires a named test to fail. A control whose test already fails on clean code, or times out, is reported as broken. |
 | `check-foundation-docs` | The design spec is consistent: one home per namespace, the invariant set and its wording, the formulas. |
 | `verify-knowledge` | Knowledge records have their fields, unique IDs, working links, and an `INDEX.md` entry. |
 

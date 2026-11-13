@@ -1,11 +1,12 @@
 # The edge from apps (2026-11-13)
 
-State (2026-11-13): stage 1 is built in `live/edge-apps` except editing a panel ("Add a card"), and
-tried in the VM with real input: `tools/vm-edge/papps.py` (the system cards, 13 of 13), `papps2.py` (the
-launcher's search and Enter, the windows panel, the clipboard, the notification server and its card,
-Quick settings, the keyboard, the ask prompt: 23 of 23), `pask.py` (the ask prompt end to end, 7 of 7).
-The stage 2 app cards (calendar, monitor, music, Steam, chat, files, simple) are built and reviewed.
-`EDGE_IMPL="apps"` picks it; the Rust edge stays the default until editing works.
+State (2026-11-13): stage 1 (panels, system cards, launcher, windows, clipboard, notification server,
+ask prompt, panel editing and Add a card in `edit.rs`), stage 2 app cards (calendar, monitor, music,
+Steam, chat, files, simple), and the Settings cards (`docs/EDGE_SETTINGS.md`, including
+`settings/keys`) are built in `live/edge-apps` with VM scripts in `tools/vm-edge/` (`papps.py`,
+`papps2.py`, `pask.py`, `pedit.py`, `psettings.py`, `pkeys.py`); desktop widgets (`WIDGETS`) are not
+yet built there. `EDGE_IMPL="apps"` picks it; `live/edge-rs` stays the default until it switches
+over.
 
 The rest of this document is the plan as written before building. The owner asked for the edge to be reworked from zero: first map the
 apps, then every card in a panel comes from an app. You add an app, then pick one of its cards. Known

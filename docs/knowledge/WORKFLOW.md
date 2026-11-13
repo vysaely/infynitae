@@ -32,13 +32,12 @@ When a finding or design is rendered obsolete by a superior architecture:
 2. Add the metadata field `superseded_by: KNOW-XXX-YYY` pointing to the replacement record.
 3. In `## Verified Facts`, summarize what was replaced and link to the new record.
 4. Record the supersession in `docs/knowledge/CONTRADICTIONS_AND_SUPERSEDED.md`.
-5. Run `tools/verify-knowledge` to ensure the supersession link resolves bidirectionally.
+5. Run `tools/verify-knowledge` to check that the supersession link resolves both ways.
 
 ---
 
-## Fast-Path for Routine Development
+## Routine updates
 
-To maintain engineering velocity and keep documentation overhead low:
-- **Batching:** Knowledge records may be authored at the conclusion of an increment or research milestone rather than per-commit.
-- **Verification Automation:** Running `tools/verify-knowledge` . Run it prior to committing documentation changes.
-- **Minimal Template:** Copy an existing record from the target category as a starting template.
+- **Batching:** Write records at the end of an increment or research milestone rather than on every commit.
+- **Verification:** Run `tools/verify-knowledge` before committing changes to `docs/knowledge/`.
+- **Template:** Copy an existing record from the target directory as a template.

@@ -1,6 +1,10 @@
 # Settings in the edge (2026-11-13)
 
-A plan, nothing here is built. Infynitae has no settings window: the settings are lines in
+State (2026-11-13): all 13 Settings cards below plus `settings/keys`
+(`live/edge-apps/src/cards/settings_keys.rs`, VM script `tools/vm-edge/pkeys.py`) are built in
+`live/edge-apps/src/cards/settings*.rs`.
+
+The rest of this document is the plan as written before building. Infynitae has no settings window: the settings are lines in
 `~/.config/infynitae/config` (defaults and comments in `config/config`) and `live/settings.sh` changes
 one from a terminal. This document adds cards to the `settings` provider of the new edge
 (`docs/EDGE_APPS.md`, `live/edge-apps/src/cards/settings.rs:13`) so the settings people change are
