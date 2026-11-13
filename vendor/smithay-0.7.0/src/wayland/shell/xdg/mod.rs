@@ -209,6 +209,8 @@ macro_rules! xdg_role {
                 pub current_serial: Option<Serial>,
                 /// Does the surface have a buffer (updated on every commit)
                 has_buffer: bool,
+                /// Base `xdg_surface` handle used for pre-commit protocol error reporting
+                xdg_surface: Option<xdg_surface::XdgSurface>,
 
                 $(
                     $(#[$attributes_field_meta])*
@@ -307,6 +309,7 @@ macro_rules! xdg_role {
                     current: Default::default(),
                     current_serial: None,
                     has_buffer: false,
+                    xdg_surface: None,
 
                     $(
                         $attributes_field_name: Default::default(),
@@ -1086,6 +1089,82 @@ impl Cacheable for SurfaceCachedState {
     }
 }
 
+/// Tracks the last acknowledged configure and buffer-mapped state through `MultiCache`
+/// so pre-commit checks and committed state stay synchronized across transactions and unmaps.
+#[derive(Debug)]
+pub(super) struct RoleLastAcked<S> {
+    pub(super) last_acked: Option<(Serial, S)>,
+    pub(super) has_buffer: bool,
+}
+
+impl<S> Default for RoleLastAcked<S> {
+    fn default() -> Self {
+        Self {
+            last_acked: None,
+            has_buffer: false,
+        }
+    }
+}
+
+impl<S: Clone + Send + 'static> Cacheable for RoleLastAcked<S> {
+    fn commit(&mut self, _dh: &DisplayHandle) -> Self {
+        Self {
+            last_acked: self.last_acked.clone(),
+            has_buffer: self.has_buffer,
+        }
+    }
+
+    fn merge_into(self, into: &mut Self, _dh: &DisplayHandle) {
+        *into = self;
+    }
+}
+
+/// Checks pending buffer attachment against `RoleLastAcked`.
+/// Returns `true` when attaching a new buffer to an unconfigured surface.
+fn pre_commit_last_acked<S: Clone + Send + 'static>(states: &compositor::SurfaceData) -> bool {
+    let buffer_action = {
+        let mut guard = states.cached_state.get::<compositor::SurfaceAttributes>();
+        match guard.pending().buffer.as_ref() {
+            Some(compositor::BufferAssignment::NewBuffer(_)) => Some(true),
+            Some(compositor::BufferAssignment::Removed) => Some(false),
+            None => None,
+        }
+    };
+
+    let mut last_acked = states.cached_state.get::<RoleLastAcked<S>>();
+    let pending = last_acked.pending();
+    let configured = pending.last_acked.is_some();
+    match buffer_action {
+        Some(true) => {
+            if configured {
+                pending.has_buffer = true;
+                false
+            } else {
+                true
+            }
+        }
+        Some(false) => {
+            if pending.has_buffer {
+                pending.has_buffer = false;
+                pending.last_acked = None;
+            }
+            false
+        }
+        None => false,
+    }
+}
+
+fn is_last_acked_configured<S: Clone + Send + 'static>(surface: &wl_surface::WlSurface) -> bool {
+    compositor::with_states(surface, |states| {
+        states
+            .cached_state
+            .get::<RoleLastAcked<S>>()
+            .current()
+            .last_acked
+            .is_some()
+    })
+}
+
 /// Xdg Shell handler type
 #[allow(unused_variables)]
 pub trait XdgShellHandler {
@@ -1601,6 +1680,37 @@ impl ToplevelSurface {
         });
     }
 
+    /// Handles the role specific commit error checking
+    ///
+    /// This should be called when the underlying WlSurface
+    /// handles a wl_surface.commit request.
+    pub(crate) fn pre_commit_hook<D: 'static>(
+        _state: &mut D,
+        _dh: &DisplayHandle,
+        surface: &wl_surface::WlSurface,
+    ) {
+        let send_error_to = compositor::with_states(surface, |states| {
+            if pre_commit_last_acked::<ToplevelState>(states) {
+                states
+                    .data_map
+                    .get::<XdgToplevelSurfaceData>()
+                    .unwrap()
+                    .lock()
+                    .unwrap()
+                    .xdg_surface
+                    .clone()
+            } else {
+                None
+            }
+        });
+        if let Some(xdg_surface) = send_error_to {
+            xdg_surface.post_error(
+                xdg_surface::Error::UnconfiguredBuffer,
+                "Attaching a buffer to an unconfigured surface.",
+            );
+        }
+    }
+
     /// Handles the role specific commit logic
     ///
     /// This should be called when the underlying WlSurface
@@ -1615,6 +1725,11 @@ impl ToplevelSurface {
         });
 
         compositor::with_states(surface, |states| {
+            let current_last_acked = {
+                let mut cache = states.cached_state.get::<RoleLastAcked<ToplevelState>>();
+                cache.current().last_acked.clone()
+            };
+
             let mut guard = states
                 .data_map
                 .get::<XdgToplevelSurfaceData>()
@@ -1634,42 +1749,20 @@ impl ToplevelSurface {
                 guard.has_buffer = has_buffer;
             }
 
-            if let Some(state) = guard.last_acked.clone() {
+            if let Some((serial, state)) = current_last_acked {
                 guard.current = state;
-                guard.current_serial = guard.configure_serial;
+                guard.current_serial = Some(serial);
             }
         });
     }
 
-    /// Make sure this surface was configured
+    /// Returns whether a committed configure has been acknowledged on this surface.
     ///
-    /// Returns `true` if it was, if not, returns `false` and raise
-    /// a protocol error to the associated client. Also returns `false`
-    /// if the surface is already destroyed.
-    ///
-    /// `xdg_shell` mandates that a client acks a configure before committing
-    /// anything.
+    /// `pre_commit_hook` already enforces `xdg_surface::Error::UnconfiguredBuffer`;
+    /// this compatibility helper avoids posting a second protocol error while existing
+    /// callers migrate off `ensure_configured`.
     pub fn ensure_configured(&self) -> bool {
-        let configured = compositor::with_states(&self.wl_surface, |states| {
-            states
-                .data_map
-                .get::<XdgToplevelSurfaceData>()
-                .unwrap()
-                .lock()
-                .unwrap()
-                .configured
-        });
-        if !configured {
-            let data = self
-                .shell_surface
-                .data::<self::handlers::XdgShellSurfaceUserData>()
-                .unwrap();
-            data.xdg_surface.post_error(
-                xdg_surface::Error::NotConstructed,
-                "Surface has not been configured yet.",
-            );
-        }
-        configured
+        is_last_acked_configured::<ToplevelState>(&self.wl_surface)
     }
 
     /// Send a "close" event to the client
@@ -1970,25 +2063,56 @@ impl PopupSurface {
         _dh: &DisplayHandle,
         surface: &wl_surface::WlSurface,
     ) {
-        let send_error_to = compositor::with_states(surface, |states| {
-            let attributes = states
-                .data_map
-                .get::<XdgPopupSurfaceData>()
-                .unwrap()
-                .lock()
-                .unwrap();
-            if attributes.parent.is_none() {
-                attributes.popup_handle.clone()
-            } else {
-                None
+        let error = compositor::with_states(surface, |states| {
+            let parent_missing_target = {
+                let attributes = states
+                    .data_map
+                    .get::<XdgPopupSurfaceData>()
+                    .unwrap()
+                    .lock()
+                    .unwrap();
+                if attributes.parent.is_none() {
+                    attributes.xdg_surface.clone().or_else(|| {
+                        attributes.popup_handle.as_ref().map(|handle| {
+                            handle
+                                .data::<self::handlers::XdgShellSurfaceUserData>()
+                                .unwrap()
+                                .xdg_surface
+                                .clone()
+                        })
+                    })
+                } else {
+                    None
+                }
+            };
+            if let Some(xdg_surface) = parent_missing_target {
+                return Some((
+                    xdg_surface,
+                    xdg_surface::Error::NotConstructed,
+                    "Surface has not been configured yet.",
+                ));
             }
+            if pre_commit_last_acked::<PopupState>(states) {
+                let xdg_surface = states
+                    .data_map
+                    .get::<XdgPopupSurfaceData>()
+                    .unwrap()
+                    .lock()
+                    .unwrap()
+                    .xdg_surface
+                    .clone();
+                if let Some(xdg_surface) = xdg_surface {
+                    return Some((
+                        xdg_surface,
+                        xdg_surface::Error::UnconfiguredBuffer,
+                        "Attaching a buffer to an unconfigured surface.",
+                    ));
+                }
+            }
+            None
         });
-        if let Some(handle) = send_error_to {
-            let data = handle.data::<self::handlers::XdgShellSurfaceUserData>().unwrap();
-            data.xdg_surface.post_error(
-                xdg_surface::Error::NotConstructed,
-                "Surface has not been configured yet.",
-            );
+        if let Some((xdg_surface, code, msg)) = error {
+            xdg_surface.post_error(code, msg);
         }
     }
 
@@ -2006,6 +2130,11 @@ impl PopupSurface {
         });
 
         compositor::with_states(surface, |states| {
+            let current_last_acked = {
+                let mut cache = states.cached_state.get::<RoleLastAcked<PopupState>>();
+                cache.current().last_acked
+            };
+
             let mut attributes = states
                 .data_map
                 .get::<XdgPopupSurfaceData>()
@@ -2026,43 +2155,21 @@ impl PopupSurface {
             }
 
             if attributes.initial_configure_sent {
-                if let Some(state) = attributes.last_acked {
+                if let Some((serial, state)) = current_last_acked {
                     attributes.current = state;
-                    attributes.current_serial = attributes.configure_serial;
+                    attributes.current_serial = Some(serial);
                 }
             }
         });
     }
 
-    /// Make sure this surface was configured
+    /// Returns whether a committed configure has been acknowledged on this surface.
     ///
-    /// Returns `true` if it was, if not, returns `false` and raise
-    /// a protocol error to the associated client. Also returns `false`
-    /// if the surface is already destroyed.
-    ///
-    /// xdg_shell mandates that a client acks a configure before committing
-    /// anything.
+    /// `pre_commit_hook` already enforces `xdg_surface::Error::UnconfiguredBuffer`;
+    /// this compatibility helper avoids posting a second protocol error while existing
+    /// callers migrate off `ensure_configured`.
     pub fn ensure_configured(&self) -> bool {
-        let configured = compositor::with_states(&self.wl_surface, |states| {
-            states
-                .data_map
-                .get::<XdgPopupSurfaceData>()
-                .unwrap()
-                .lock()
-                .unwrap()
-                .configured
-        });
-        if !configured {
-            let data = self
-                .shell_surface
-                .data::<self::handlers::XdgShellSurfaceUserData>()
-                .unwrap();
-            data.xdg_surface.post_error(
-                xdg_surface::Error::NotConstructed,
-                "Surface has not been configured yet.",
-            );
-        }
-        configured
+        is_last_acked_configured::<PopupState>(&self.wl_surface)
     }
 
     /// Send a `popup_done` event to the popup surface

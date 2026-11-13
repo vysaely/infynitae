@@ -107,20 +107,33 @@ where
 
                     // Initialize the toplevel capabilities from the default capabilities
                     let default_capabilities = &state.xdg_shell_state().default_capabilities;
-                    let current_capabilties = &mut states
-                        .data_map
-                        .get::<Mutex<XdgToplevelSurfaceRoleAttributes>>()
-                        .unwrap()
-                        .lock()
-                        .unwrap()
-                        .current
-                        .capabilities;
-                    current_capabilties.replace(default_capabilities.capabilities.iter().copied());
+                    {
+                        let mut guard = states
+                            .data_map
+                            .get::<Mutex<XdgToplevelSurfaceRoleAttributes>>()
+                            .unwrap()
+                            .lock()
+                            .unwrap();
+                        guard.xdg_surface = Some(xdg_surface.clone());
+                        guard
+                            .current
+                            .capabilities
+                            .replace(default_capabilities.capabilities.iter().copied());
+                    }
+
+                    *states
+                        .cached_state
+                        .get::<super::super::RoleLastAcked<super::super::ToplevelState>>()
+                        .pending() = Default::default();
 
                     initial
                 });
 
                 if initial {
+                    compositor::add_pre_commit_hook::<D, _>(
+                        surface,
+                        super::super::ToplevelSurface::pre_commit_hook,
+                    );
                     compositor::add_post_commit_hook::<D, _>(
                         surface,
                         super::super::ToplevelSurface::commit_hook,
@@ -176,6 +189,7 @@ where
                         geometry: positioner_data.get_geometry(),
                         positioner: positioner_data,
                     }),
+                    xdg_surface: Some(xdg_surface.clone()),
                     ..Default::default()
                 };
                 if compositor::give_role(surface, XDG_POPUP_ROLE).is_err() {
@@ -195,6 +209,10 @@ where
                         .unwrap()
                         .lock()
                         .unwrap() = attributes;
+                    *states
+                        .cached_state
+                        .get::<super::super::RoleLastAcked<super::super::PopupState>>()
+                        .pending() = Default::default();
                     inserted
                 });
 
@@ -287,21 +305,37 @@ where
                 // This can be used to integrate custom protocol extensions
                 let found_configure = compositor::with_states(surface, |states| {
                     if states.role == Some(XDG_TOPLEVEL_ROLE) {
-                        Ok(states
+                        let configure = states
                             .data_map
                             .get::<XdgToplevelSurfaceData>()
                             .unwrap()
                             .lock()
                             .unwrap()
-                            .ack_configure(serial))
+                            .ack_configure(serial);
+                        if let Some(crate::wayland::shell::xdg::Configure::Toplevel(ref cfg)) = configure {
+                            states
+                                .cached_state
+                                .get::<crate::wayland::shell::xdg::RoleLastAcked<crate::wayland::shell::xdg::ToplevelState>>()
+                                .pending()
+                                .last_acked = Some((cfg.serial, cfg.state.clone()));
+                        }
+                        Ok(configure)
                     } else if states.role == Some(XDG_POPUP_ROLE) {
-                        Ok(states
+                        let configure = states
                             .data_map
                             .get::<XdgPopupSurfaceData>()
                             .unwrap()
                             .lock()
                             .unwrap()
-                            .ack_configure(serial))
+                            .ack_configure(serial);
+                        if let Some(crate::wayland::shell::xdg::Configure::Popup(ref cfg)) = configure {
+                            states
+                                .cached_state
+                                .get::<crate::wayland::shell::xdg::RoleLastAcked<crate::wayland::shell::xdg::PopupState>>()
+                                .pending()
+                                .last_acked = Some((cfg.serial, cfg.state));
+                        }
+                        Ok(configure)
                     } else {
                         Err(())
                     }
