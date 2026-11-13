@@ -274,6 +274,10 @@ impl Core {
                 self.touch_resize_settle(out);
                 Ok(())
             }
+            PhysicalEvent::JumpToWindow { element } => {
+                self.jump_to_window(element, Some(authority::Authorized::mint()), out);
+                Ok(())
+            }
         }
     }
 
@@ -2717,7 +2721,7 @@ impl Core {
                 let camera = self.shell_camera(output)?;
                 let center = self.navigate_center(camera, to)?;
                 self.shell_stream_step(stream);
-                let record = matches!(to, NavigateTo::Element(_))
+                let record = matches!(to, NavigateTo::Element(_) | NavigateTo::Canvas(_, _))
                     && matches!(stream, ShellStream::Atomic | ShellStream::Begin);
                 if record {
                     let zoom = match zoom {

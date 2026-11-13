@@ -44,8 +44,8 @@ problems=$(
         if [ -n "$key" ]; then
             if [ -n "$known" ]; then
                 case "$key" in
-                    # named by the user: keys, commands, edge panels, per-output displays
-                    BIND_*|EXEC_*|PANEL_*|OUTPUT_*) ;;
+                    # named by the user: keys, commands, edge panels, per-output displays, saved places
+                    BIND_*|EXEC_*|PANEL_*|OUTPUT_*|PLACE_*) ;;
                     *)
                         case "$known" in
                             *" $key "*) ;;

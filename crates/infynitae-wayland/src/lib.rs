@@ -1184,6 +1184,12 @@ impl WaylandState {
                             }
                             continue;
                         }
+                        if let Some(name) = key.strip_prefix("PLACE_") {
+                            if let Some((line, command)) = place_key(name, val) {
+                                exec_lines.push((line, command));
+                            }
+                            continue;
+                        }
                         if key == "EDGE_IMPL" {
                             edge_from_apps = val.trim().eq_ignore_ascii_case("apps");
                         }
@@ -2042,6 +2048,43 @@ pub fn panel_key(name: &str, value: &str) -> Option<PanelKey> {
     }
 }
 
+/// One `PLACE_<NAME>="x,y,zoom [CHORD]"` line from the config: its optional chord bound to jump
+/// to that place via `infynitae msg navigate`.
+pub fn place_key(name: &str, value: &str) -> Option<(String, String)> {
+    let upper = name.to_ascii_uppercase();
+    if upper.is_empty() || !upper.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return None;
+    }
+    let mut tokens = value.split_whitespace();
+    let coords = tokens.next()?;
+    let mut parts = coords.split(',');
+    let parse_f = |s: &str| s.parse::<f64>().ok().filter(|v| v.is_finite());
+    let x = parse_f(parts.next()?)?;
+    let y = parse_f(parts.next()?)?;
+    let zoom = parse_f(parts.next()?).filter(|z| *z > 0.0)?;
+    if parts.next().is_some() {
+        return None;
+    }
+    let chord: Vec<&str> = tokens.collect();
+    if chord.is_empty() {
+        return None;
+    }
+    let chord = chord.join(" ");
+    if chord.eq_ignore_ascii_case("none") {
+        return None;
+    }
+    let norm = |v: f64| if v == 0.0 { 0.0 } else { v };
+    Some((
+        format!("PLACE_{upper}"),
+        format!(
+            "{chord}:\"$HOME/.local/bin/infynitae\" msg navigate {} {} {}",
+            norm(x),
+            norm(y),
+            norm(zoom),
+        ),
+    ))
+}
+
 /// The Settings panel of the edge from apps (EDGE_IMPL="apps") is built into that edge, so no
 /// PANEL_SETTINGS line names its key: Super+I opens it unless such a line exists (then that line
 /// decides, as for any panel). Added after the user's lines, so a key they bound wins. Pure.
@@ -2265,6 +2308,42 @@ mod key_binding_config_tests {
         );
         assert_eq!(panel_key("MINE", "top volume"), None);
         assert_eq!(panel_key("BAD;NAME", "SUPER+X volume"), None);
+    }
+
+    #[test]
+    fn place_lines_bind_chords_and_report_conflicts() {
+        use super::place_key;
+        let line = place_key("work", "-200,150,1.25 SUPER+F1").unwrap();
+        assert_eq!(
+            line,
+            (
+                "PLACE_WORK".into(),
+                "SUPER+F1:\"$HOME/.local/bin/infynitae\" msg navigate -200 150 1.25".into(),
+            )
+        );
+        assert_eq!(place_key("NOTES", "800,-40,1"), None);
+        assert_eq!(place_key("NOTES", "800,-40,1 none"), None);
+        assert_eq!(place_key("BAD", "nan,0,1 SUPER+F2"), None);
+        assert_eq!(place_key("ZERO", "0,0,0 SUPER+F2"), None);
+        assert_eq!(place_key("", "0,0,1 SUPER+F2"), None);
+        assert_eq!(place_key("BAD;NAME", "0,0,1 SUPER+F2"), None);
+
+        let (b, cmds, problems) = user_key_bindings(&[], &[line]);
+        assert_eq!(
+            b.chords,
+            vec![(parse_chord("SUPER+F1").unwrap(), Some(KeyAction::Exec(0)))]
+        );
+        assert_eq!(
+            cmds,
+            vec!["\"$HOME/.local/bin/infynitae\" msg navigate -200 150 1.25".to_string()]
+        );
+        assert!(problems.is_empty(), "{problems:?}");
+
+        let taken = place_key("OTHER", "10,20,1 SUPER+Q").unwrap();
+        let (_, cmds, problems) = user_key_bindings(&kv(&[("CLOSE", "SUPER+Q")]), &[taken]);
+        assert!(cmds.is_empty());
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(problems[0].contains("PLACE_OTHER") && problems[0].contains("BIND_CLOSE"));
     }
 
     #[test]
