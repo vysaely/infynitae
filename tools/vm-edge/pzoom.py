@@ -885,10 +885,13 @@ class ShellClient:
 
 
 def _find_xdg_shell_proto(build_dir: Path) -> Path:
-    repo_proto = Path(__file__).resolve().parents[1] / "frame-probe" / "xdg-shell-protocol.c"
-    if repo_proto.exists():
-        # Header sits alongside frame-probe/xdg-shell-protocol.c.
-        return repo_proto
+    # the repository's one copy (live/wallpaper), from a checkout or the installed ~/infynitae
+    here = Path(__file__).resolve()
+    for root in (here.parents[2] if len(here.parents) > 2 else here.parent, Path.home() / "infynitae"):
+        repo_proto = root / "live" / "wallpaper" / "xdg-shell-protocol.c"
+        if repo_proto.exists():
+            # its header sits beside it
+            return repo_proto
     xml = Path("/usr/share/wayland-protocols/stable/xdg-shell/xdg-shell.xml")
     if xml.exists() and shutil.which("wayland-scanner"):
         hdr = build_dir / "xdg-shell-protocol.h"
@@ -896,7 +899,7 @@ def _find_xdg_shell_proto(build_dir: Path) -> Path:
         subprocess.run(["wayland-scanner", "client-header", str(xml), str(hdr)], check=True)
         subprocess.run(["wayland-scanner", "private-code", str(xml), str(src)], check=True)
         return src
-    raise RuntimeError("xdg-shell-protocol.c not found in tools/frame-probe and wayland-protocols unavailable")
+    raise RuntimeError("xdg-shell-protocol.c not found in live/wallpaper and wayland-protocols unavailable")
 
 
 def compile_test_window() -> Path:
