@@ -1,12 +1,9 @@
 #!/bin/sh
-# tools/test-lock-render: the lock screen's look, without a compositor. It builds infynitae-lock
-# and the wallpaper helper's lock cache (live/wallpaper/lock-cache.h), makes the lock pictures from
-# a generated wallpaper and a ~/.face, and renders frames with `infynitae-lock --render` (which
-# connects to nothing and locks nothing). It checks: the background and avatar are written
-# (avatar 192 x 192); every state renders at two sizes and is not blank; with no picture the
-# initials come out; a broken, a truncated and an oversized cache file are ignored (the lock
-# draws its own background instead of failing). RENDER_OUT=dir keeps the PNGs. Run from the
-# repository root.
+# tools/test-lock-render: the lock screen's and password prompt's look, without a compositor.
+# Builds infynitae-lock, the lock cache (live/wallpaper/lock-cache.h), and infynitae-polkit;
+# checks look-file resolution and fallbacks, renders every state including the on-screen keyboard,
+# checks flat canvas background, field corner radius, accent/muted colours and font changes, and
+# validates the prompt's GTK CSS. RENDER_OUT=dir keeps the PNGs. Run from the repository root.
 set -eu
 
 REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
@@ -16,7 +13,7 @@ OUT="${RENDER_OUT:-$TMP/out}"
 mkdir -p "$OUT" "$TMP/home/.config/infynitae"
 LIVE="$REPO_DIR/live"
 
-cc -O1 -o "$TMP/infynitae-lock" "$LIVE/lock/infynitae-lock.c" "$LIVE/lock/ext-session-lock-v1-protocol.c" \
+cc -O1 -Wall -Wextra -Werror -o "$TMP/infynitae-lock" "$LIVE/lock/infynitae-lock.c" "$LIVE/lock/ext-session-lock-v1-protocol.c" \
     $(pkg-config --cflags --libs wayland-client cairo pangocairo xkbcommon) -lpam -lm -lpthread
 cat > "$TMP/cache.c" <<'C'
 #include "lock-cache.h"
@@ -72,7 +69,7 @@ check "the avatar is 192 x 192" "$(png_info "$TMP/home/.cache/infynitae/avatar.p
 check "the background is 640 wide" "$(png_info "$TMP/home/.cache/infynitae/lock-background.png" | cut -d' ' -f1)" "640"
 
 for size in 1920x1080 1280x800; do
-    for state in idle typing failed caps verifying; do
+    for state in idle typing failed caps verifying osk; do
         f="$OUT/lock-$state-$size.png"
         render "$size" "$state" "$f"
         check "$state at $size renders, not blank" "$(png_info "$f")" "$(echo "$size" | tr x ' ') 1"
@@ -95,5 +92,235 @@ raw = b''.join(b'\0' + b'\x80' * (w * 3) for _ in range(h))
 def chunk(t, d): return struct.pack('>I', len(d)) + t + d + struct.pack('>I', zlib.crc32(t + d))
 open('$bg', 'wb').write(b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, 2, 0, 0, 0)) + chunk(b'IDAT', zlib.compress(raw)) + chunk(b'IEND', b''))"
 check "an oversized background is ignored" "$(render 1280x800 idle "$OUT/lock-oversized.png"; echo $?)" "0"
+
+# Look-file parsing and fallbacks (with and without config or the new LOOK_* lines)
+H2="$TMP/home2"
+mkdir -p "$H2/.cache/infynitae"
+got=$(HOME="$H2" XDG_CACHE_HOME= "$TMP/infynitae-lock" --print-look | tr '\n' '|')
+check "lock default look without config or look file" "$got" \
+    "card=#111317|edge=#333b54|edge_alpha=0.90|text=#eef2f8|muted=#a7abb0|accent=#7aa2f7|accent_text=#7aa2f7|corners=8|small_corners=4|font=sans-serif|"
+
+printf 'LOOK_CARD="#000000"\nLOOK_EDGE="#404040"\nLOOK_TEXT="#ffffff"\nLOOK_ACCENT="#cc70a9"\nLOOK_CORNERS="12"\n' \
+    > "$H2/.cache/infynitae/look"
+got=$(HOME="$H2" XDG_CACHE_HOME= "$TMP/infynitae-lock" --print-look | tr '\n' '|')
+check "lock partial look without config computes muted, small corner and accent fallback" "$got" \
+    "card=#000000|edge=#404040|edge_alpha=0.90|text=#ffffff|muted=#adadad|accent=#cc70a9|accent_text=#cc70a9|corners=12|small_corners=7|font=sans-serif|"
+
+cat > "$H2/.cache/infynitae/look" <<'LOOK'
+LOOK_CARD="#201010"
+LOOK_EDGE="#eef2f8"
+LOOK_EDGE_AA="1a"
+LOOK_TEXT="#eef2f8"
+LOOK_MUTED="#3377bb"
+LOOK_ACCENT="#cc70a9"
+LOOK_ACCENT_TEXT="#22cc44"
+LOOK_CORNERS="24"
+LOOK_SMALL_RADIUS="0"
+LOOK_FONT="DejaVu Sans"
+LOOK
+got=$(HOME="$H2" XDG_CACHE_HOME= "$TMP/infynitae-lock" --print-look | tr '\n' '|')
+check "lock full look uses muted, accent_text, small_corners, edge_alpha and font" "$got" \
+    "card=#201010|edge=#eef2f8|edge_alpha=0.10|text=#eef2f8|muted=#3377bb|accent=#cc70a9|accent_text=#22cc44|corners=24|small_corners=0|font=DejaVu Sans|"
+
+printf 'LOOK_FONT="Bad; color: red"\nLOOK_CARD="not-a-color"\n' >> "$H2/.cache/infynitae/look"
+got=$(HOME="$H2" XDG_CACHE_HOME= "$TMP/infynitae-lock" --print-look | tr '\n' '|')
+check "lock ignores invalid font and colour lines" "$got" \
+    "card=#201010|edge=#eef2f8|edge_alpha=0.10|text=#eef2f8|muted=#3377bb|accent=#cc70a9|accent_text=#22cc44|corners=24|small_corners=0|font=DejaVu Sans|"
+
+# Rendered pixel checks without wallpaper
+mkdir -p "$H2/.config/infynitae"
+printf 'CANVAS_COLOR="#102030"\n' > "$H2/.config/infynitae/config"
+cat > "$H2/.cache/infynitae/look" <<'LOOK'
+LOOK_CARD="#201010"
+LOOK_EDGE="#404040"
+LOOK_EDGE_AA="e6"
+LOOK_TEXT="#eef2f8"
+LOOK_MUTED="#3377bb"
+LOOK_ACCENT="#cc70a9"
+LOOK_ACCENT_TEXT="#22cc44"
+LOOK_CORNERS="24"
+LOOK_SMALL_RADIUS="0"
+LOOK_FONT="DejaVu Sans"
+LOOK
+render2() { HOME="$H2" XDG_CACHE_HOME= INFYNITAE_LOCK_RENDER_STATE="$2" "$TMP/infynitae-lock" --render "$1" "$3"; }
+render2 1280x800 idle "$OUT/t-idle-sq.png"
+render2 1280x800 failed "$OUT/t-failed.png"
+render2 1280x800 caps "$OUT/t-caps.png"
+render2 1280x800 osk "$OUT/t-osk-sans.png"
+
+sed -e 's/LOOK_SMALL_RADIUS="0"/LOOK_SMALL_RADIUS="18"/' -e 's/LOOK_FONT="DejaVu Sans"/LOOK_FONT="DejaVu Serif"/' \
+    "$H2/.cache/infynitae/look" > "$H2/.cache/infynitae/look.2"
+mv "$H2/.cache/infynitae/look.2" "$H2/.cache/infynitae/look"
+render2 1280x800 idle "$OUT/t-idle-rd.png"
+render2 1280x800 osk "$OUT/t-osk-serif.png"
+
+px_check=$(python3 - "$OUT/t-idle-sq.png" "$OUT/t-idle-rd.png" "$OUT/t-failed.png" "$OUT/t-caps.png" "$OUT/t-osk-sans.png" "$OUT/t-osk-serif.png" <<'PY'
+import struct, sys, zlib
+
+def decode(path):
+    d = open(path, 'rb').read()
+    w, h, _, ct = struct.unpack('>IIBB', d[16:26])
+    bpp = 4 if ct == 6 else 3
+    i, raw = 8, b''
+    while i < len(d):
+        n = struct.unpack('>I', d[i:i+4])[0]; t = d[i+4:i+8]
+        if t == b'IDAT': raw += d[i+8:i+8+n]
+        i += 12 + n
+    data = zlib.decompress(raw)
+    stride = w * bpp
+    out = bytearray(h * stride)
+    for y in range(h):
+        f = data[y * (stride + 1)]
+        row = data[y * (stride + 1) + 1 : (y + 1) * (stride + 1)]
+        base, prev = y * stride, (y - 1) * stride
+        for x in range(stride):
+            a = out[base + x - bpp] if x >= bpp else 0
+            b = out[prev + x] if y > 0 else 0
+            c = out[prev + x - bpp] if (y > 0 and x >= bpp) else 0
+            if f == 0: v = row[x]
+            elif f == 1: v = (row[x] + a) & 0xff
+            elif f == 2: v = (row[x] + b) & 0xff
+            elif f == 3: v = (row[x] + ((a + b) >> 1)) & 0xff
+            else:
+                p = a + b - c
+                pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+                v = (row[x] + (a if (pa <= pb and pa <= pc) else (b if pb <= pc else c))) & 0xff
+            out[base + x] = v
+    return w, h, bpp, out
+
+def px(img, x, y):
+    w, _, bpp, buf = img
+    off = (y * w + x) * bpp
+    return tuple(buf[off:off+3])
+
+def count_box(img, target, tol, x0=0, y0=0, x1=None, y1=None):
+    w, h, bpp, buf = img
+    x1 = w if x1 is None else x1
+    y1 = h if y1 is None else y1
+    cnt = 0
+    for y in range(y0, y1):
+        for x in range(x0, x1):
+            off = (y * w + x) * bpp
+            if all(abs(buf[off+k] - target[k]) <= tol for k in range(3)):
+                cnt += 1
+    return cnt
+
+idle_sq = decode(sys.argv[1])
+idle_rd = decode(sys.argv[2])
+failed = decode(sys.argv[3])
+caps = decode(sys.argv[4])
+osk_sans = decode(sys.argv[5])
+osk_serif = decode(sys.argv[6])
+
+res = []
+res.append("flat_bg=" + str(px(idle_sq, 10, 10) == (16, 32, 48) and px(idle_sq, 200, 350) == (16, 32, 48) and px(idle_sq, 1260, 780) == (16, 32, 48)))
+res.append("small_corner=" + str(px(idle_sq, 481, 555) != (16, 32, 48) and px(idle_rd, 481, 555) == (16, 32, 48)))
+res.append("muted=" + str(count_box(idle_sq, (0x33, 0x77, 0xbb), 15) > 20))
+res.append("failed_accent=" + str(count_box(failed, (0x22, 0xcc, 0x44), 25) > 50 and count_box(failed, (247, 118, 142), 15) == 0))
+res.append("caps_accent=" + str(count_box(caps, (0x22, 0xcc, 0x44), 25) > 20 and count_box(caps, (224, 175, 104), 15) == 0))
+# OSK shift key (top-left of row 3: x=264..368, y=652..706 at 1280x800): card #201010 + 16% #cc70a9, not grey-blue (41, 48, 64)
+shift_px = px(osk_sans, 275, 660)
+res.append("osk_key=" + str(shift_px[0] > shift_px[2] and count_box(osk_sans, (41, 48, 64), 4, 264, 652, 368, 706) == 0))
+top_end = 400 * idle_sq[0] * idle_sq[2]
+res.append("font_idle=" + str(idle_sq[3][:top_end] != idle_rd[3][:top_end]))
+res.append("font_osk=" + str(osk_sans[3] != osk_serif[3]))
+print(" ".join(res))
+PY
+)
+check "rendered look: flat bg, small corner, muted, accent, OSK key and font" "$px_check" \
+    "flat_bg=True small_corner=True muted=True failed_accent=True caps_accent=True osk_key=True font_idle=True font_osk=True"
+
+# Password prompt CSS (infynitae-polkit)
+if pkg-config --exists polkit-agent-1 gtk+-3.0 2>/dev/null; then
+    cc -O1 -Wall -Wextra -Werror -o "$TMP/infynitae-polkit" "$LIVE/polkit/infynitae-polkit.c" \
+        $(pkg-config --cflags --libs polkit-agent-1 gtk+-3.0)
+    H3="$TMP/home3"
+    mkdir -p "$H3/.cache/infynitae"
+    css_def=$(HOME="$H3" XDG_CACHE_HOME= "$TMP/infynitae-polkit" --print-css)
+    check "prompt default CSS uses sans-serif, muted, small radius, soft accent block and no button outline" \
+        "$(printf '%s' "$css_def" | python3 -c '
+import sys
+s = sys.stdin.read()
+btn = s.split("button.btn-auth {", 1)[1].split("}", 1)[0]
+ok = all(x in s for x in [
+    "font-family: sans-serif;",
+    "color: #a7abb0;",
+    "border-radius: 4px;",
+    "background-color: alpha(#7aa2f7, 0.16);",
+    "background-color: alpha(#7aa2f7, 0.22);",
+    "border: none;",
+]) and "border: 1px solid" not in btn and "border: none;" in btn
+print("yes" if ok else s)
+')" "yes"
+
+    printf 'LOOK_CARD="#000000"\nLOOK_EDGE="#404040"\nLOOK_TEXT="#ffffff"\nLOOK_ACCENT="#cc70a9"\nLOOK_CORNERS="12"\n' \
+        > "$H3/.cache/infynitae/look"
+    css_part=$(HOME="$H3" XDG_CACHE_HOME= "$TMP/infynitae-polkit" --print-css)
+    check "prompt partial look computes muted and small corner fallbacks" \
+        "$(printf '%s' "$css_part" | python3 -c '
+import sys
+s = sys.stdin.read()
+ok = all(x in s for x in [
+    "color: #adadad;",
+    "border-radius: 7px;",
+    "background-color: alpha(#cc70a9, 0.16);",
+    "font-family: sans-serif;",
+])
+print("yes" if ok else s)
+')" "yes"
+
+    cat > "$H3/.cache/infynitae/look" <<'LOOK'
+LOOK_CARD="#f5f5f5"
+LOOK_EDGE="#1a1a1a"
+LOOK_EDGE_AA="1a"
+LOOK_TEXT="#1a1a1a"
+LOOK_MUTED="#606060"
+LOOK_ACCENT="#cc70a9"
+LOOK_ACCENT_TEXT="#993073"
+LOOK_CORNERS="12"
+LOOK_SMALL_RADIUS="7"
+LOOK_FONT="DejaVu Sans"
+LOOK
+    printf 'LOOK_FONT="Bad; color: red"\nLOOK_CARD="not-a-color"\n' >> "$H3/.cache/infynitae/look"
+    css_full=$(HOME="$H3" LC_NUMERIC=de_DE.UTF-8 XDG_CACHE_HOME= "$TMP/infynitae-polkit" --print-css)
+    check "prompt full look uses LOOK_MUTED, LOOK_ACCENT_TEXT, LOOK_EDGE_AA, LOOK_FONT and dot decimals" \
+        "$(printf '%s' "$css_full" | python3 -c '
+import sys
+s = sys.stdin.read()
+ok = all(x in s for x in [
+    "background-color: #f5f5f5;",
+    "border: 1px solid alpha(#1a1a1a, 0.10);",
+    "font-family: \"DejaVu Sans\", sans-serif;",
+    "color: #606060;",
+    "color: #993073;",
+    "border-radius: 7px;",
+]) and "Bad;" not in s and "not-a-color" not in s
+print("yes" if ok else s)
+')" "yes"
+
+    cat > "$TMP/check_css.c" <<'C'
+#include <gtk/gtk.h>
+#include <stdio.h>
+static void on_err(GtkCssProvider *p, GtkCssSection *s, GError *e, gpointer d) {
+    (void)p; (void)s;
+    *(int *)d = 1;
+    fprintf(stderr, "CSS parse error: %s\n", e->message);
+}
+int main(void) {
+    char buf[8192];
+    size_t n = fread(buf, 1, sizeof(buf) - 1, stdin);
+    buf[n] = '\0';
+    int err = 0;
+    GtkCssProvider *p = gtk_css_provider_new();
+    g_signal_connect(p, "parsing-error", G_CALLBACK(on_err), &err);
+    gtk_css_provider_load_from_data(p, buf, (gssize)n, NULL);
+    g_object_unref(p);
+    return err;
+}
+C
+    cc -O1 $(pkg-config --cflags gtk+-3.0) -o "$TMP/check_css" "$TMP/check_css.c" $(pkg-config --libs gtk+-3.0)
+    check "prompt generated CSS parses cleanly in GTK 3" \
+        "$(printf '%s' "$css_full" | "$TMP/check_css" >/dev/null 2>&1; echo $?)" "0"
+fi
 
 exit $fail

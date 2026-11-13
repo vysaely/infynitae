@@ -204,12 +204,31 @@ static void on_cancellable_cancelled(GCancellable *cancellable, gpointer user_da
     on_cancel_clicked(NULL, data);
 }
 
-static void read_cfg_val(const char *line, const char *key, char *dst, size_t dst_sz) {
+static int hex_nibble(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+static gboolean parse_hex_bytes(const char *s, unsigned int rgb[3]) {
+    if (!s || s[0] != '#') return FALSE;
+    for (int i = 1; i <= 6; i++) {
+        if (hex_nibble(s[i]) < 0) return FALSE;
+    }
+    if (hex_nibble(s[7]) >= 0 || s[7] != '\0') return FALSE;
+    for (int i = 0; i < 3; i++) {
+        rgb[i] = (unsigned int)((hex_nibble(s[1 + i * 2]) << 4) | hex_nibble(s[2 + i * 2]));
+    }
+    return TRUE;
+}
+
+static gboolean read_cfg_val(const char *line, const char *key, char *dst, size_t dst_sz) {
     size_t klen = strlen(key);
-    if (strncmp(line, key, klen) != 0 || line[klen] != '=') return;
+    if (strncmp(line, key, klen) != 0 || line[klen] != '=') return FALSE;
     const char *p = line + klen + 1;
     while (*p == ' ' || *p == '\t' || *p == '"' || *p == '\'') p++;
-    /* a color only (#rrggbb or a name): anything else would end up in the CSS and break it all */
+    /* a #rrggbb color only: anything else would end up in the CSS and break it */
     char val[32];
     size_t j = 0;
     while ((g_ascii_isalnum(p[j]) || (j == 0 && p[j] == '#')) && j + 1 < sizeof(val)) {
@@ -217,28 +236,92 @@ static void read_cfg_val(const char *line, const char *key, char *dst, size_t ds
         j++;
     }
     val[j] = '\0';
-    if (j > 1 && j < dst_sz) memcpy(dst, val, j + 1);
+    unsigned int tmp[3];
+    if (val[0] != '#' || !parse_hex_bytes(val, tmp)) return FALSE;
+    if (j < dst_sz) {
+        memcpy(dst, val, j + 1);
+        return TRUE;
+    }
+    return FALSE;
 }
 
-static void apply_css(void) {
-    char surface[32] = "#111317";
-    char canvas[32] = "#0b0f14";
-    char border_act[32] = "#7aa2f7";
-    char border_inact[32] = "#333b54";
-    char text_col[32] = "#eef2f8";
+static gboolean read_hex_alpha(const char *line, const char *key, double *out) {
+    size_t klen = strlen(key);
+    if (strncmp(line, key, klen) != 0 || line[klen] != '=') return FALSE;
+    const char *p = line + klen + 1;
+    while (*p == ' ' || *p == '\t' || *p == '"' || *p == '\'') p++;
+    int hi = hex_nibble(p[0]), lo = hex_nibble(p[1]);
+    if (hi < 0 || lo < 0 || hex_nibble(p[2]) >= 0) return FALSE;
+    *out = (double)((hi << 4) | lo) / 255.0;
+    return TRUE;
+}
 
-    const char *home = g_get_home_dir();
+static gboolean read_radius_val(const char *line, const char *key, int *out) {
+    size_t klen = strlen(key);
+    if (strncmp(line, key, klen) != 0 || line[klen] != '=') return FALSE;
+    const char *p = line + klen + 1;
+    while (*p == ' ' || *p == '\t' || *p == '"' || *p == '\'') p++;
+    if (*p < '0' || *p > '9') return FALSE;
+    char *end = NULL;
+    long v = strtol(p, &end, 10);
+    if (end == p) return FALSE;
+    while (*end == ' ' || *end == '\t' || *end == '"' || *end == '\'' || *end == '\r' || *end == '\n') end++;
+    if (*end != '\0' && *end != '#') return FALSE;
+    if (v < 0) v = 0;
+    if (v > 28) v = 28;
+    *out = (int)v;
+    return TRUE;
+}
+
+static void read_font_val(const char *line, const char *key, char *dst, size_t dst_sz) {
+    size_t klen = strlen(key);
+    if (strncmp(line, key, klen) != 0 || line[klen] != '=') return;
+    const char *p = line + klen + 1;
+    while (*p == ' ' || *p == '\t') p++;
+    char quote = 0;
+    if (*p == '"' || *p == '\'') quote = *p++;
+    char val[128];
+    size_t j = 0;
+    while (*p && *p != '\n' && *p != '\r' && j + 1 < sizeof(val)) {
+        if (quote && *p == quote) break;
+        if (!quote && *p == '#') break;
+        unsigned char ch = (unsigned char)*p;
+        if (g_ascii_isalnum(ch) || ch == ' ' || ch == '-' || ch == '_' || ch == ',' || ch == '.') {
+            val[j++] = *p++;
+        } else {
+            return;
+        }
+    }
+    if (quote && *p != quote) return;
+    while (j > 0 && (val[j - 1] == ' ' || val[j - 1] == '\t')) j--;
+    val[j] = '\0';
+    if (j > 0 && j < dst_sz) memcpy(dst, val, j + 1);
+}
+
+static gchar *build_css(void) {
+    char surface[32] = "#111317";
+    char border_act[32] = "#7aa2f7";
+    char accent_text[32] = "";
+    char border_inact[32] = "#333b54";
+    double edge_alpha = 0.90;
+    char text_col[32] = "#eef2f8";
+    char muted[64] = "";
+    char font[128] = "sans-serif";
+    int radius = 8;
+    int small = -1;
+
+    const char *home = g_getenv("HOME");
+    if (!home || !*home) home = g_get_home_dir();
     if (home) {
         gchar *cfg_path = g_build_filename(home, ".config", "infynitae", "config", NULL);
         FILE *f = fopen(cfg_path, "r");
         if (f) {
             char line[256];
             while (fgets(line, sizeof(line), f)) {
-                char * s = line;
+                char *s = line;
                 while (*s == ' ' || *s == '\t') s++;
                 if (*s == '#') continue;
                 read_cfg_val(s, "SURFACE_COLOR", surface, sizeof(surface));
-                read_cfg_val(s, "CANVAS_COLOR", canvas, sizeof(canvas));
                 read_cfg_val(s, "BORDER_ACTIVE", border_act, sizeof(border_act));
                 read_cfg_val(s, "BORDER_INACTIVE", border_inact, sizeof(border_inact));
                 read_cfg_val(s, "TEXT_COLOR", text_col, sizeof(text_col));
@@ -248,50 +331,74 @@ static void apply_css(void) {
         g_free(cfg_path);
     }
 
-    /* the corners of windows and the edge (LOOK_CORNERS in the look file infynitae-settings
-     * writes): the dialog takes them, its field and buttons the smaller ones (0.55 x, as the edge) */
-    int radius = 8;
+    /* the resolved look (LOOK_* in ~/.cache/infynitae/look): muted, accent-as-text, small
+     * radius, edge opacity and font come from the file when present, falling back otherwise */
     {
         const char *cache = g_getenv("XDG_CACHE_HOME");
         gchar *look = (cache && *cache) ? g_build_filename(cache, "infynitae", "look", NULL)
                                         : g_build_filename(home ? home : "", ".cache", "infynitae", "look", NULL);
         FILE *lf = fopen(look, "r");
         if (lf) {
-            char line[128];
+            char line[256];
             while (fgets(line, sizeof(line), lf)) {
-                /* the colours as everything else shows them (a colour scheme resolved), over the
-                 * config's own */
                 read_cfg_val(line, "LOOK_CARD", surface, sizeof(surface));
                 read_cfg_val(line, "LOOK_EDGE", border_inact, sizeof(border_inact));
+                read_hex_alpha(line, "LOOK_EDGE_AA", &edge_alpha);
                 read_cfg_val(line, "LOOK_TEXT", text_col, sizeof(text_col));
+                read_cfg_val(line, "LOOK_MUTED", muted, sizeof(muted));
                 read_cfg_val(line, "LOOK_ACCENT", border_act, sizeof(border_act));
-                if (strncmp(line, "LOOK_CORNERS=", 13) == 0) {
-                    const char *v = line + 13;
-                    while (*v == '"') v++;
-                    if (*v >= '0' && *v <= '9') radius = atoi(v) > 28 ? 28 : atoi(v);
-                }
+                read_cfg_val(line, "LOOK_ACCENT_TEXT", accent_text, sizeof(accent_text));
+                read_radius_val(line, "LOOK_CORNERS", &radius);
+                read_radius_val(line, "LOOK_SMALL_RADIUS", &small);
+                read_font_val(line, "LOOK_FONT", font, sizeof(font));
             }
             fclose(lf);
         }
         g_free(look);
     }
-    int small = (radius * 55 + 50) / 100;
 
-    GtkCssProvider *provider = gtk_css_provider_new();
-    gchar *css = g_strdup_printf(
+    if (small < 0) small = (radius * 55 + 50) / 100;
+    if (accent_text[0] == '\0') g_strlcpy(accent_text, border_act, sizeof(accent_text));
+    if (muted[0] == '\0') {
+        unsigned int t_rgb[3], s_rgb[3];
+        if (parse_hex_bytes(text_col, t_rgb) && parse_hex_bytes(surface, s_rgb)) {
+            unsigned int r = (unsigned int)(t_rgb[0] + ((double)s_rgb[0] - (double)t_rgb[0]) * 0.32 + 0.5);
+            unsigned int g = (unsigned int)(t_rgb[1] + ((double)s_rgb[1] - (double)t_rgb[1]) * 0.32 + 0.5);
+            unsigned int b = (unsigned int)(t_rgb[2] + ((double)s_rgb[2] - (double)t_rgb[2]) * 0.32 + 0.5);
+            g_snprintf(muted, sizeof(muted), "#%02x%02x%02x", r, g, b);
+        } else {
+            g_snprintf(muted, sizeof(muted), "alpha(%s, 0.68)", text_col);
+        }
+    }
+
+    char font_css[160];
+    if (g_ascii_strcasecmp(font, "sans") == 0 || g_ascii_strcasecmp(font, "sans-serif") == 0) {
+        g_snprintf(font_css, sizeof(font_css), "sans-serif");
+    } else if (g_ascii_strcasecmp(font, "serif") == 0 || g_ascii_strcasecmp(font, "monospace") == 0) {
+        g_snprintf(font_css, sizeof(font_css), "%s", font);
+    } else {
+        g_snprintf(font_css, sizeof(font_css), "\"%s\", sans-serif", font);
+    }
+
+    char edge_alpha_str[G_ASCII_DTOSTR_BUF_SIZE];
+    g_ascii_formatd(edge_alpha_str, sizeof(edge_alpha_str), "%.2f", edge_alpha);
+
+    return g_strdup_printf(
         "window.infynitae-polkit {\n"
         "    background-color: %s;\n"
-        "    border: 1px solid %s;\n"
+        "    color: %s;\n"
+        "    border: 1px solid alpha(%s, %s);\n"
         "    border-radius: %dpx;\n"
-        "    font-family: Sans;\n"
+        "    font-family: %s;\n"
+        "    font-size: 13px;\n"
         "}\n"
         "label.title {\n"
         "    color: %s;\n"
-        "    font-size: 13px;\n"
+        "    font-size: 15px;\n"
         "    font-weight: 600;\n"
         "}\n"
         "label.action {\n"
-        "    color: alpha(%s, 0.62);\n"
+        "    color: %s;\n"
         "    font-size: 11px;\n"
         "}\n"
         "label.error {\n"
@@ -300,57 +407,73 @@ static void apply_css(void) {
         "    font-weight: 600;\n"
         "}\n"
         "entry.pass {\n"
-        "    background-color: %s;\n"
+        "    background-color: alpha(%s, 0.12);\n"
+        "    background-image: none;\n"
         "    color: %s;\n"
-        "    border: 1px solid %s;\n"
+        "    border: 1px solid alpha(%s, %s);\n"
         "    border-radius: %dpx;\n"
         "    padding: 6px 10px;\n"
-        "    font-size: 12px;\n"
+        "    font-size: 13px;\n"
+        "    box-shadow: none;\n"
         "}\n"
         "entry.pass:focus {\n"
         "    border: 1px solid %s;\n"
         "}\n"
         "button.btn-auth {\n"
-        "    background-color: alpha(%s, 0.08);\n"
+        "    background-color: alpha(%s, 0.16);\n"
+        "    background-image: none;\n"
         "    color: %s;\n"
+        "    font-size: 12px;\n"
         "    font-weight: 600;\n"
         "    border-radius: %dpx;\n"
         "    padding: 6px 14px;\n"
-        "    border: 1px solid %s;\n"
+        "    border: none;\n"
+        "    box-shadow: none;\n"
+        "    text-shadow: none;\n"
         "}\n"
         "button.btn-auth:hover {\n"
-        "    background-color: alpha(%s, 0.14);\n"
+        "    background-color: alpha(%s, 0.22);\n"
         "}\n"
         "button.btn-cancel {\n"
-        "    background-color: %s;\n"
-        "    color: alpha(%s, 0.62);\n"
+        "    background-color: alpha(%s, 0.08);\n"
+        "    background-image: none;\n"
+        "    color: %s;\n"
+        "    font-size: 12px;\n"
         "    border-radius: %dpx;\n"
         "    padding: 6px 14px;\n"
-        "    border: 1px solid %s;\n"
+        "    border: none;\n"
+        "    box-shadow: none;\n"
+        "    text-shadow: none;\n"
         "}\n"
         "button.btn-cancel:hover {\n"
-        "    background-color: alpha(%s, 0.08);\n"
+        "    background-color: alpha(%s, 0.14);\n"
         "    color: %s;\n"
         "}\n",
-        surface, border_inact, radius,          /* the dialog */
-        text_col,                                /* title */
-        text_col,                                /* the action's name, quieter */
-        border_act,                              /* an error, in the accent */
-        canvas, text_col, border_inact, small,   /* the password field */
-        border_act,                              /* the field focused */
-        text_col, text_col, small, border_act,   /* Authenticate */
-        text_col,                                /* Authenticate pointed at */
-        surface, text_col, small, border_inact,  /* Cancel */
-        text_col, text_col);                     /* Cancel pointed at */
+        surface, text_col, border_inact, edge_alpha_str, radius, font_css, /* the dialog */
+        text_col,                                                          /* title */
+        muted,                                                             /* action and prompt */
+        accent_text,                                                       /* error */
+        text_col, text_col, border_inact, edge_alpha_str, small,           /* the password field */
+        border_act,                                                        /* the field focused */
+        border_act, accent_text, small,                                    /* Allow */
+        border_act,                                                        /* Allow pointed at */
+        text_col, muted, small,                                            /* Cancel */
+        text_col, text_col);                                               /* Cancel pointed at */
+}
 
+static void apply_css(void) {
+    static GtkCssProvider *provider = NULL;
+    if (!provider) {
+        provider = gtk_css_provider_new();
+        gtk_style_context_add_provider_for_screen(
+            gdk_screen_get_default(),
+            GTK_STYLE_PROVIDER(provider),
+            GTK_STYLE_PROVIDER_PRIORITY_APPLICATION
+        );
+    }
+    gchar *css = build_css();
     gtk_css_provider_load_from_data(provider, css, -1, NULL);
     g_free(css);
-    gtk_style_context_add_provider_for_screen(
-        gdk_screen_get_default(),
-        GTK_STYLE_PROVIDER(provider),
-        GTK_STYLE_PROVIDER_PRIORITY_APPLICATION
-    );
-    g_object_unref(provider);
 }
 
 /* GTK starts with the first prompt, not with the session: until a program asks for a password,
@@ -359,9 +482,9 @@ static void apply_css(void) {
 static gboolean ensure_gtk(void) {
     static gboolean up;
     if (!up && gtk_init_check(NULL, NULL)) {
-        apply_css();
         up = TRUE;
     }
+    if (up) apply_css();
     return up;
 }
 
@@ -525,8 +648,12 @@ static void infynitae_agent_listener_init(InfynitaeAgentListener *listener) {
 }
 
 int main(int argc, char **argv) {
-    (void)argc;
-    (void)argv;
+    if (argc > 1 && strcmp(argv[1], "--print-css") == 0) {
+        gchar *css = build_css();
+        g_print("%s", css);
+        g_free(css);
+        return 0;
+    }
 
     GError *error = NULL;
     InfynitaeAgentListener *listener = g_object_new(INFYNITAE_TYPE_AGENT_LISTENER, NULL);
