@@ -7,6 +7,7 @@ pub mod files;
 pub mod monitor;
 pub mod music;
 pub mod notifications;
+pub mod quick;
 pub mod settings;
 pub mod simple;
 pub mod sound;

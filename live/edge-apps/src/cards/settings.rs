@@ -38,6 +38,7 @@ const KINDS: &[CardKind] = &[
         half: false,
         sources: &["power"],
     },
+    crate::cards::quick::KIND,
 ];
 
 impl Provider for Settings {
@@ -56,8 +57,9 @@ impl Provider for Settings {
     fn cards(&self) -> &'static [CardKind] {
         KINDS
     }
-    fn card(&self, kind: &str, _argument: Option<&str>) -> Option<Box<dyn Card>> {
+    fn card(&self, kind: &str, argument: Option<&str>) -> Option<Box<dyn Card>> {
         match kind {
+            "quick" => Some(Box::new(crate::cards::quick::QuickCard::new(argument))),
             "network" => Some(Box::new(NetworkCard::default())),
             "bluetooth" => Some(Box::new(BluetoothCard::default())),
             "power" => Some(Box::new(PowerCard::default())),
@@ -69,6 +71,7 @@ impl Provider for Settings {
             "network" => Some(Box::new(NetworkSource)),
             "bluetooth" => Some(Box::new(BluetoothSource)),
             "power" => Some(Box::new(PowerSource)),
+            "quick" => Some(Box::new(crate::cards::quick::QuickSource)),
             _ => None,
         }
     }

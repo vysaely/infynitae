@@ -44,9 +44,21 @@ pub enum Icon {
     Power,
     /// a padlock (a secured network)
     Lock,
+    /// a bell (do not disturb: crossed out while on)
+    Bell(bool),
+    /// a crescent moon (night light)
+    Moon,
+    /// a keyboard (the layout)
+    Keyboard,
+    /// a keyboard on a screen (the screen keyboard)
+    ScreenKeys,
+    /// a ring with a dot (replay: the recorder keeping the last minutes)
+    Record,
 }
 
 pub fn icon(cr: &Context, ic: Icon, x: f64, y: f64, color: Rgba) {
+    // text drawn before leaves a current point: an arc would join it with a line
+    cr.new_path();
     cr.set_line_width(1.6);
     cr.set_line_cap(cairo::LineCap::Round);
     cr.set_line_join(cairo::LineJoin::Round);
@@ -125,6 +137,58 @@ pub fn icon(cr: &Context, ic: Icon, x: f64, y: f64, color: Rgba) {
             cr.new_sub_path();
             cr.arc(cx, cy - 1.0, 2.4, PI, 2.0 * PI);
             let _ = cr.stroke();
+        }
+        Icon::Bell(crossed) => {
+            cr.move_to(cx - 5.0, cy + 3.5);
+            cr.line_to(cx - 4.0, cy + 1.5);
+            cr.line_to(cx - 4.0, cy - 1.5);
+            cr.arc(cx, cy - 1.5, 4.0, PI, 2.0 * PI);
+            cr.line_to(cx + 4.0, cy + 1.5);
+            cr.line_to(cx + 5.0, cy + 3.5);
+            cr.close_path();
+            let _ = cr.stroke();
+            cr.move_to(cx - 1.5, cy + 6.0);
+            cr.line_to(cx + 1.5, cy + 6.0);
+            let _ = cr.stroke();
+            if crossed {
+                cr.move_to(cx - 6.5, cy - 6.5);
+                cr.line_to(cx + 6.5, cy + 6.5);
+                let _ = cr.stroke();
+            }
+        }
+        Icon::Moon => {
+            cr.arc(cx, cy, 6.0, 0.35 * PI, 1.65 * PI);
+            cr.arc_negative(cx + 3.0, cy - 1.2, 4.6, 1.38 * PI, 0.62 * PI);
+            cr.close_path();
+            let _ = cr.stroke();
+        }
+        Icon::Keyboard | Icon::ScreenKeys => {
+            let (top, h) = if ic == Icon::ScreenKeys {
+                (cy - 6.5, 10.0)
+            } else {
+                (cy - 4.5, 9.0)
+            };
+            draw::round_rect(cr, cx - 7.0, top, 14.0, h, 1.5);
+            let _ = cr.stroke();
+            for i in 0..4 {
+                let kx = cx - 4.5 + i as f64 * 3.0;
+                cr.move_to(kx, top + 3.2);
+                cr.line_to(kx + 0.01, top + 3.2);
+            }
+            cr.move_to(cx - 3.0, top + h - 2.8);
+            cr.line_to(cx + 3.0, top + h - 2.8);
+            let _ = cr.stroke();
+            if ic == Icon::ScreenKeys {
+                cr.move_to(cx - 3.0, cy + 6.5);
+                cr.line_to(cx + 3.0, cy + 6.5);
+                let _ = cr.stroke();
+            }
+        }
+        Icon::Record => {
+            cr.arc(cx, cy, 6.0, 0.0, 2.0 * PI);
+            let _ = cr.stroke();
+            cr.arc(cx, cy, 2.4, 0.0, 2.0 * PI);
+            let _ = cr.fill();
         }
     }
 }
