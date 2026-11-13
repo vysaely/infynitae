@@ -118,10 +118,13 @@ impl Provider for Settings {
             "screens" => Some(Box::new(crate::cards::settings_display::ScreensSource)),
             "touchpad" => Some(Box::new(
                 crate::cards::settings_input::TouchpadSource::system(),
+            )),
             "recording" => Some(Box::new(
                 crate::cards::settings_recording::RecordingSource::system(),
+            )),
             "shares" => Some(Box::new(
                 crate::cards::settings_privacy::SharesSource::system(),
+            )),
             "battery_limit" => Some(Box::new(
                 crate::cards::settings_lock::BatteryLimitSource::system(),
             )),
