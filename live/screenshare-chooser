@@ -7,11 +7,12 @@
 #                                      asking for a window (Discord's window tab) gets the menu
 #   screenshare-chooser ask PICKER     always the menu
 #
-# PICKER is a dmenu-style command (MENU_PICKER, fuzzel --dmenu by default). Nothing printed:
-# the share is cancelled.
+# PICKER is a dmenu-style command (MENU_PICKER). Empty: the edge's own card (infynitae-edge ask,
+# in the system's look) when the edge runs and the list fits it (12 lines), else fuzzel --dmenu.
+# Nothing printed: the share is cancelled.
 
 mode="$1"
-picker="${2:-fuzzel --dmenu}"
+picker="${2:-}"
 sources=$(cat)
 log="${XDG_STATE_HOME:-$HOME/.local/state}/infynitae/screenshare.log"
 note() { { printf '%s %s\n' "$(date '+%F %T')" "$1" >> "$log"; } 2>/dev/null; }
@@ -28,6 +29,34 @@ if [ "$mode" = "first" ]; then
     fi
 fi
 
+edge="$HOME/.local/bin/infynitae-edge"
+if [ -z "$picker" ] && [ -x "$edge" ] && [ "$(printf '%s\n' "$sources" | grep -c .)" -le 12 ]; then
+    # the edge's card; it answers with the line as it showed it (a long one cut at 159 bytes), so
+    # the answer is matched back to the whole line the portal gave
+    answer=$(printf '%s\n' "$sources" | "$edge" ask "Share which screen or window?")
+    status=$?
+    if [ "$status" -eq 0 ] && [ -n "$answer" ]; then
+        # each line as the card shows it (control characters as spaces, at most 159 bytes, as
+        # ask_copy in live/edge-rs/src/modules/ask.rs), compared as bytes; the answer comes
+        # through the environment (awk -v would read backslashes in a title as escapes)
+        choice=$(printf '%s\n' "$sources" | ANSWER="$answer" LC_ALL=C awk '
+            { s = $0; gsub(/[\001-\037\177]/, " ", s); s = substr(s, 1, 159) }
+            s == ENVIRON["ANSWER"] { exact = $0; exit }
+            prefix == "" && index(s, ENVIRON["ANSWER"]) == 1 { prefix = $0 }
+            END { print (exact != "" ? exact : prefix) }')
+    elif [ "$status" -eq 3 ]; then
+        # the edge is not running: the menu below
+        picker="fuzzel --dmenu"
+    else
+        choice=""
+    fi
+    if [ "$status" -ne 3 ]; then
+        note "picked: $(what "$choice")"
+        [ -n "$choice" ] && printf '%s\n' "$choice"
+        exit 0
+    fi
+fi
+[ -z "$picker" ] && picker="fuzzel --dmenu"
 choice=$(printf '%s\n' "$sources" | $picker)
 note "picked: $(what "$choice")"
 [ -n "$choice" ] && printf '%s\n' "$choice"
