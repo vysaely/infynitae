@@ -66,12 +66,13 @@ check("Undo puts the last change back", get("SUPER_ENTER_ACTION") == before["SUP
 chord("esc"); wait(0.6); run_bg(f"{EDGE} settings"); wait(2.0); shot("set-4-index")
 rows = sorted(h for (c, h) in hits() if c == "settings/all" and h < 1000)
 check("the index lists the Settings cards", len(rows) >= 9, str(rows))
-# row 1 + i for CHILD_KINDS[i] (settings_all.rs); Games is i = 7, its own hits 8000 + id
-press("settings/all", 8); shot("set-5-games")
-inside = sorted(h for (c, h) in hits() if c == "settings/all" and h >= 1000)
+# group rows are 1 + group (settings_all.rs GROUPS): Games is group 6; its card is child 8, whose
+# own hits come as CHILD_STRIDE (100000) * (8 + 1) + id
+press("settings/all", 7); shot("set-5-games")
+inside = sorted(h for (c, h) in hits() if c == "settings/all" and h >= 100000)
 check("a row opens its card in place", len(inside) >= 3, str(inside[:10]))
 gm = get("GAME_MODE")
-press("settings/all", 8101)
+press("settings/all", 900101)
 check("a switch inside the index writes its key", get("GAME_MODE") != gm, f"{gm} -> {get('GAME_MODE')}")
 check("the edge is still running", sh(f"pgrep -f '^{EDGE}$' | head -1") != "")
 
