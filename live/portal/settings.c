@@ -100,9 +100,12 @@ void portal_appearance_read(const char *config_path, PortalAppearance *out) {
         else if (strcmp(v, "default") == 0 || strcmp(v, "none") == 0) out->color_scheme = 0;
         else out->color_scheme = 1;
     }
-    if (config_value(text, "BORDER_ACTIVE", v, sizeof(v))) {
-        double rgb[3];
-        if (parse_hex(v, rgb)) memcpy(out->accent, rgb, sizeof(rgb));
+    /* ACCENT drives apps; fall back to BORDER_ACTIVE for configs written before ACCENT existed */
+    double rgb[3];
+    if (config_value(text, "ACCENT", v, sizeof(v)) && parse_hex(v, rgb)) {
+        memcpy(out->accent, rgb, sizeof(rgb));
+    } else if (config_value(text, "BORDER_ACTIVE", v, sizeof(v)) && parse_hex(v, rgb)) {
+        memcpy(out->accent, rgb, sizeof(rgb));
     }
     g_free(text);
 }

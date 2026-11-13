@@ -1,6 +1,8 @@
 //! Settings: Look (`docs/EDGE_SETTINGS.md` section 4): `settings/appearance`, `settings/wallpaper`,
-//! and `settings/fonts`. Left to the file: `CORNERS`, `SQUARE_CORNERS`, `BORDER_IGNORE_CSD`,
-//! `CLIP_TO_GEOMETRY`, `WINE_TRANSPARENCY`, `FORCE_TRANSPARENT_APPS`, `SWITCH_LOOK`.
+//! and `settings/fonts`. Left to the file: `BORDER_ACTIVE`, `SURFACE_COLOR`, `TEXT_COLOR`,
+//! `BORDER_INACTIVE`, `CANVAS_COLOR`, `THEME_SYNC`, `CORNERS`, `SQUARE_CORNERS`,
+//! `BORDER_IGNORE_CSD`, `CLIP_TO_GEOMETRY`, `WINE_TRANSPARENCY`, `FORCE_TRANSPARENT_APPS`,
+//! `SWITCH_LOOK`.
 
 use super::settings::sq;
 #[cfg(test)]
@@ -286,8 +288,9 @@ pub fn parse_accent_lines(raw: &str) -> Vec<AccentCandidate> {
     out
 }
 
-/// Reads the last 8 distinct valid `#rrggbb` values logged for `BORDER_ACTIVE` in `settings-changes`,
-/// most recent first. Malformed lines and `-` markers are skipped.
+/// Reads the last 8 distinct valid `#rrggbb` values logged for `ACCENT` (or `BORDER_ACTIVE` from
+/// before `ACCENT` existed) in `settings-changes`, most recent first. Malformed lines and `-` markers
+/// are skipped.
 pub fn parse_recent_accents(log_text: &str) -> Vec<String> {
     let mut out = Vec::new();
     for line in log_text.lines().rev() {
@@ -297,7 +300,7 @@ pub fn parse_recent_accents(log_text: &str) -> Vec<String> {
         else {
             continue;
         };
-        if key != "BORDER_ACTIVE" {
+        if !matches!(key, "ACCENT" | "BORDER_ACTIVE") {
             continue;
         }
         let Some(hex) = normalize_hex(old) else {
@@ -715,7 +718,6 @@ pub enum LookControl {
         min: i64,
         max: i64,
     },
-    Color,
     Accent,
     Found {
         source: &'static str,
@@ -764,7 +766,7 @@ impl LookRow {
                 unit,
             }),
             LookControl::Step { min, max } => Some(Control::Step { min, max }),
-            LookControl::Color | LookControl::Accent => Some(Control::Text),
+            LookControl::Accent => Some(Control::Text),
             LookControl::Found { .. } | LookControl::Wallpapers => None,
         }
     }
@@ -793,7 +795,7 @@ const SCHEME_ROW: usize = 4;
 pub const TABLE_APPEARANCE: &[LookRow] = &[
     LookRow {
         key: "COLOR_SCHEME",
-        name: "Apps look",
+        name: "Dark or light",
         says: "",
         control: LookControl::Pick(&[("prefer-dark", "Dark"), ("prefer-light", "Light")]),
         after: After::Save,
@@ -801,7 +803,7 @@ pub const TABLE_APPEARANCE: &[LookRow] = &[
         hide: HideRule::None,
     },
     LookRow {
-        key: "BORDER_ACTIVE",
+        key: "ACCENT",
         name: "Accent",
         says: "",
         control: LookControl::Accent,
@@ -834,7 +836,7 @@ pub const TABLE_APPEARANCE: &[LookRow] = &[
     },
     LookRow {
         key: "THEME_SCHEME",
-        name: "Panels' colours",
+        name: "Colours",
         says: "",
         control: LookControl::Pick(SCHEME_OPTS),
         after: After::Save,
@@ -843,7 +845,7 @@ pub const TABLE_APPEARANCE: &[LookRow] = &[
     },
     LookRow {
         key: "CARD_OPACITY",
-        name: "Cards",
+        name: "Card opacity",
         says: "",
         control: LookControl::Slide {
             min: 20.0,
@@ -856,46 +858,10 @@ pub const TABLE_APPEARANCE: &[LookRow] = &[
         hide: HideRule::None,
     },
     LookRow {
-        key: "SURFACE_COLOR",
-        name: "Background",
-        says: "",
-        control: LookControl::Color,
-        after: After::Save,
-        more: true,
-        hide: HideRule::None,
-    },
-    LookRow {
-        key: "TEXT_COLOR",
-        name: "Text",
-        says: "",
-        control: LookControl::Color,
-        after: After::Save,
-        more: true,
-        hide: HideRule::None,
-    },
-    LookRow {
         key: "BORDER_WIDTH",
         name: "Window border",
         says: "",
         control: LookControl::Step { min: 0, max: 8 },
-        after: After::Save,
-        more: true,
-        hide: HideRule::None,
-    },
-    LookRow {
-        key: "BORDER_INACTIVE",
-        name: "Other windows' border",
-        says: "",
-        control: LookControl::Color,
-        after: After::Save,
-        more: true,
-        hide: HideRule::None,
-    },
-    LookRow {
-        key: "CANVAS_COLOR",
-        name: "Behind the windows",
-        says: "",
-        control: LookControl::Color,
         after: After::Save,
         more: true,
         hide: HideRule::None,
@@ -913,12 +879,12 @@ pub const TABLE_APPEARANCE: &[LookRow] = &[
         hide: HideRule::PapirusIcons,
     },
     LookRow {
-        key: "THEME_SYNC",
-        name: "Apps follow these colours",
-        says: "",
+        key: "MOTION",
+        name: "Motion",
+        says: "Transitions and wallpaper settle",
         control: LookControl::Switch {
-            on: "true",
-            off: "false",
+            on: "on",
+            off: "off",
         },
         after: After::Save,
         more: true,
@@ -1049,10 +1015,6 @@ pub const KEYS: &[&str] = &[
     TABLE_APPEARANCE[6].key,
     TABLE_APPEARANCE[7].key,
     TABLE_APPEARANCE[8].key,
-    TABLE_APPEARANCE[9].key,
-    TABLE_APPEARANCE[10].key,
-    TABLE_APPEARANCE[11].key,
-    TABLE_APPEARANCE[12].key,
     TABLE_WALLPAPER[0].key,
     TABLE_WALLPAPER[1].key,
     TABLE_WALLPAPER[2].key,
@@ -1082,13 +1044,6 @@ struct ListEntry {
     label: String,
     action: ListChoiceAction,
     active: bool,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum WallpaperColorLock {
-    Off,
-    Accent,
-    All,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1186,14 +1141,24 @@ impl LookCard {
         if let Some(v) = self.pending.get(key) {
             return v.clone();
         }
-        self.config
-            .as_ref()
-            .map_or(String::new(), |d| d.value(key).to_string())
+        let Some(cfg) = &self.config else {
+            return String::new();
+        };
+        if key == "ACCENT" {
+            if let Some(v) = cfg.now.get("ACCENT").filter(|v| !v.is_empty()) {
+                return v.clone();
+            }
+            // Configs saved before ACCENT existed only have BORDER_ACTIVE.
+            if let Some(v) = cfg.now.get("BORDER_ACTIVE").filter(|v| !v.is_empty()) {
+                return v.clone();
+            }
+        }
+        cfg.value(key).to_string()
     }
 
     fn value(&self, i: usize) -> String {
         let r = &self.table[i];
-        if r.key == "BORDER_ACTIVE" {
+        if r.key == "ACCENT" {
             if let Some(ref preview) = self.accent_preview {
                 return preview.clone();
             }
@@ -1202,29 +1167,6 @@ impl LookCard {
             return fmt_number(v);
         }
         self.key_value(r.key)
-    }
-
-    fn wallpaper_lock(&self) -> WallpaperColorLock {
-        let v = self.key_value("THEME_FROM_WALLPAPER");
-        if v.is_empty() || v.eq_ignore_ascii_case("false") {
-            WallpaperColorLock::Off
-        } else if v.eq_ignore_ascii_case("accent") {
-            WallpaperColorLock::Accent
-        } else {
-            WallpaperColorLock::All
-        }
-    }
-
-    fn is_locked(&self, key: &str) -> bool {
-        if self.kind != LookKind::Appearance {
-            return false;
-        }
-        match self.wallpaper_lock() {
-            WallpaperColorLock::Off | WallpaperColorLock::Accent => false,
-            WallpaperColorLock::All => {
-                matches!(key, "SURFACE_COLOR" | "BORDER_INACTIVE" | "CANVAS_COLOR")
-            }
-        }
     }
 
     fn accent_picker_open(&self) -> bool {
@@ -1497,12 +1439,16 @@ impl LookCard {
     }
 
     fn is_bad_color(&self, r: &LookRow) -> bool {
-        r.control_is_color()
-            && !self.is_locked(r.key)
-            && self
-                .look
-                .as_ref()
-                .is_some_and(|l| l.bad_colors.contains(r.key))
+        matches!(r.control, LookControl::Accent)
+            && self.look.as_ref().is_some_and(|l| {
+                l.bad_colors.contains(r.key)
+                    || (r.key == "ACCENT"
+                        && !self
+                            .config
+                            .as_ref()
+                            .is_some_and(|d| d.now.get("ACCENT").is_some_and(|v| !v.is_empty()))
+                        && l.bad_colors.contains("BORDER_ACTIVE"))
+            })
     }
 
     fn state(&self, r: &LookRow) -> (&'static str, bool) {
@@ -1581,7 +1527,7 @@ impl LookCard {
     }
 
     fn sync_accent_hsv(&mut self) {
-        let cur = self.key_value("BORDER_ACTIVE");
+        let cur = self.key_value("ACCENT");
         if let Some(rgb) = parse_hex(&cur) {
             self.accent_hsv = rgb_to_hsv(rgb);
         }
@@ -1649,7 +1595,7 @@ impl LookCard {
                 .map(Rgba::rgb)
                 .unwrap_or(cx.theme.card)
         } else if scheme.eq_ignore_ascii_case("monochrome") {
-            // Monochrome uses a fixed light accent independent of BORDER_ACTIVE.
+            // Monochrome uses a fixed accent independent of ACCENT.
             return false;
         } else {
             cx.theme.card
@@ -2098,7 +2044,7 @@ impl LookCard {
                     &Text {
                         size: 12.0,
                         bold: false,
-                        color: cx.theme.accent_text,
+                        color: cx.theme.alert,
                         text: "Not a colour",
                     },
                 );
@@ -2224,12 +2170,6 @@ impl LookCard {
         }
 
         let _ = cr.restore();
-    }
-}
-
-impl LookRow {
-    fn control_is_color(&self) -> bool {
-        matches!(self.control, LookControl::Color | LookControl::Accent)
     }
 }
 
@@ -3050,59 +2990,6 @@ impl Card for LookCard {
                         self.draw_accent_picker(cr, cx, hits, list_r);
                     }
                 }
-                LookControl::Color => {
-                    let locked = self.is_locked(s.key);
-                    let raw_val = self.value(i);
-                    let rgb = parse_hex(&raw_val);
-                    let shown = if locked {
-                        "From the wallpaper".to_string()
-                    } else if raw_val.is_empty() {
-                        "Not set".to_string()
-                    } else {
-                        raw_val
-                    };
-                    let swatch_space = if rgb.is_some() { SWATCH + 8.0 } else { 0.0 };
-                    let text_w = draw::measure(
-                        cr,
-                        &Text {
-                            size: 12.0,
-                            bold: false,
-                            color: cx.theme.muted,
-                            text: &shown,
-                        },
-                    )
-                    .0
-                    .min(max_val_w);
-                    let reserve = (text_w + swatch_space + 14.0).min(body.2 * 0.65);
-                    let mut no_hits = Hits::new(None, None);
-                    let target_hits = if locked { &mut no_hits } else { &mut *hits };
-                    ui::row(
-                        cr,
-                        cx,
-                        target_hits,
-                        id,
-                        r,
-                        &Row {
-                            icon: None,
-                            name: s.name,
-                            state,
-                            on: state_accent,
-                            right: reserve,
-                        },
-                    );
-                    let tw = value_at_right_capped(
-                        cr,
-                        cx,
-                        r,
-                        right,
-                        (max_val_w - swatch_space).max(40.0),
-                        &shown,
-                        !locked && changed,
-                    );
-                    if let Some(rgb) = rgb {
-                        draw_swatch(cr, cx, right - tw - 8.0 - SWATCH, r, rgb);
-                    }
-                }
             }
             y += h;
         }
@@ -3351,7 +3238,7 @@ impl Card for LookCard {
                 let Some(r) = self.table.get(i).copied() else {
                     return false;
                 };
-                if !self.row_visible(&r) || self.is_locked(r.key) {
+                if !self.row_visible(&r) {
                     return false;
                 }
                 match r.control {
@@ -3391,11 +3278,6 @@ impl Card for LookCard {
                     }
                     LookControl::Accent => {
                         self.open_accent_pick(i);
-                        true
-                    }
-                    LookControl::Color => {
-                        let now = self.value(i);
-                        out.push(Action::Run(self.color_ask_command(&r, &now)));
                         true
                     }
                     _ => false,
@@ -3489,7 +3371,6 @@ impl Card for LookCard {
         }
         if let Some(i) = self.table.iter().position(|r| {
             self.row_visible(r)
-                && !self.is_locked(r.key)
                 && match r.control {
                     LookControl::Pick(_) | LookControl::Found { .. } => true,
                     LookControl::Wallpapers => self.has_more_wallpapers(),
@@ -3574,7 +3455,8 @@ mod tests {
             now,
             &[
                 ("COLOR_SCHEME", "prefer-dark"),
-                ("BORDER_ACTIVE", "#7aa2f7"),
+                ("ACCENT", "#7aa2f7"),
+                ("BORDER_ACTIVE", ""),
                 ("THEME_FROM_WALLPAPER", "false"),
                 ("WINDOW_CORNERS", "8"),
                 ("THEME_SCHEME", "yours"),
@@ -3586,6 +3468,7 @@ mod tests {
                 ("CANVAS_COLOR", "#0b0f14"),
                 ("FOLDER_COLOR", "accent"),
                 ("THEME_SYNC", "true"),
+                ("MOTION", "on"),
                 ("WALLPAPER", ""),
                 ("WALLPAPER_MODE", "fill"),
                 ("WALLPAPER_PARALLAX", "off"),
@@ -3661,13 +3544,14 @@ mod tests {
     #[test]
     fn every_key_is_in_config_config_with_a_value_its_control_has() {
         let def = shipped_defaults();
+        assert_eq!(TABLE_APPEARANCE.len(), 9);
         for table in [TABLE_APPEARANCE, TABLE_WALLPAPER, TABLE_FONTS] {
             for r in table {
                 let v = def
                     .get(r.key)
                     .unwrap_or_else(|| panic!("{} not in config/config", r.key));
                 match r.control {
-                    LookControl::Color | LookControl::Accent => {
+                    LookControl::Accent => {
                         assert!(parse_hex(v).is_some(), "{} = {v} is not #rrggbb", r.key);
                     }
                     LookControl::Found { .. } | LookControl::Wallpapers => {
@@ -3873,16 +3757,13 @@ mod tests {
 
         fs::create_dir_all(home.join(".local/bin")).unwrap();
         fs::write(home.join(".local/bin/infynitae-wallpaper"), b"").unwrap();
-        fs::write(bad.join("BORDER_ACTIVE"), b"").unwrap();
+        fs::write(bad.join("ACCENT"), b"").unwrap();
         // Subdirectories inside bad_dir must be ignored
         fs::create_dir_all(bad.join("dir_ignored")).unwrap();
 
         let full = src.fetch().downcast::<LookData>().unwrap();
         assert!(full.wallpaper_bin);
-        assert_eq!(
-            full.bad_colors,
-            HashSet::from(["BORDER_ACTIVE".to_string()])
-        );
+        assert_eq!(full.bad_colors, HashSet::from(["ACCENT".to_string()]));
     }
 
     #[test]
@@ -3900,38 +3781,36 @@ mod tests {
         assert!(!keys1.contains(&"THEME_FROM_WALLPAPER"));
         assert!(!keys1.contains(&"FOLDER_COLOR"));
 
-        // With wallpaper bin + Papirus-Dark, both appear
+        // With wallpaper bin + Papirus-Dark, all 9 Appearance rows appear at size M
         let c2 = init_appearance(&[("ICON_THEME", "Papirus-Dark")], true, &[]);
         let (rows2, _) = c2.shown(&cx_m);
         let keys2: Vec<&str> = rows2.iter().map(|&i| c2.table[i].key).collect();
+        assert!(keys2.contains(&"ACCENT"));
         assert!(keys2.contains(&"THEME_FROM_WALLPAPER"));
         assert!(keys2.contains(&"FOLDER_COLOR"));
+        assert!(keys2.contains(&"MOTION"));
+        for file_only_key in [
+            "BORDER_ACTIVE",
+            "SURFACE_COLOR",
+            "TEXT_COLOR",
+            "BORDER_INACTIVE",
+            "CANVAS_COLOR",
+            "THEME_SYNC",
+        ] {
+            assert!(!keys2.contains(&file_only_key), "{file_only_key}");
+        }
 
-        // THEME_FROM_WALLPAPER="accent" leaves BORDER_ACTIVE clickable to open its picker, and leaves SURFACE_COLOR unlocked
-        let mut c_accent = init_appearance(&[("THEME_FROM_WALLPAPER", "accent")], true, &[]);
-        let (hits_acc, _) = draw_card(&c_accent, &cx_m, 404.0);
-        let accent_hit = ROW + 10; // BORDER_ACTIVE is row 1
-        assert!(hits_acc.list.iter().any(|(id, _)| *id == accent_hit));
-        let mut out = Vec::new();
-        assert!(c_accent.event(&press(accent_hit), &cx_m, &mut out));
-        assert!(c_accent.accent_picker_open());
-        assert!(out.is_empty());
-        // SURFACE_COLOR (row 6) stays clickable
-        assert!(hits_acc.list.iter().any(|(id, _)| *id == ROW + 60));
-
-        // THEME_FROM_WALLPAPER="all" / "shuffle" lock SURFACE_COLOR, BORDER_INACTIVE, CANVAS_COLOR; BORDER_ACTIVE and TEXT_COLOR stay unlocked
-        for mode in ["all", "shuffle"] {
-            out.clear();
-            let mut c_all = init_appearance(&[("THEME_FROM_WALLPAPER", mode)], true, &[]);
-            let (hits_all, _) = draw_card(&c_all, &cx_m, 404.0);
-            for locked_row in [6u32, 9, 10] {
-                let hid = ROW + 10 * locked_row;
-                assert!(hits_all.list.iter().all(|(id, _)| *id != hid));
-                assert!(!c_all.event(&press(hid), &cx_m, &mut out));
-            }
-            assert!(hits_all.list.iter().any(|(id, _)| *id == accent_hit));
-            assert!(c_all.event(&press(ROW + 70), &cx_m, &mut out)); // TEXT_COLOR
-            assert_eq!(out.len(), 1);
+        // THEME_FROM_WALLPAPER="accent" / "all" / "shuffle" leave ACCENT and THEME_SCHEME clickable
+        for mode in ["accent", "all", "shuffle"] {
+            let mut c_wp = init_appearance(&[("THEME_FROM_WALLPAPER", mode)], true, &[]);
+            let (hits_wp, _) = draw_card(&c_wp, &cx_m, 404.0);
+            let accent_hit = ROW + 10; // ACCENT is row 1
+            assert!(hits_wp.list.iter().any(|(id, _)| *id == accent_hit));
+            assert!(hits_wp.list.iter().any(|(id, _)| *id == ROW + 40)); // THEME_SCHEME
+            let mut out = Vec::new();
+            assert!(c_wp.event(&press(accent_hit), &cx_m, &mut out));
+            assert!(c_wp.accent_picker_open());
+            assert!(out.is_empty());
         }
 
         // Wallpaper card hidden without infynitae-wallpaper, ready with it
@@ -3975,17 +3854,18 @@ mod tests {
         );
         assert_eq!(c.value(0), "prefer-light");
 
-        // 2. Switch: THEME_SYNC (row 12) true -> false
+        // 2. Switch: MOTION (row 8) on -> off
         out.clear();
-        assert!(c.event(&press(ROW + 12 * 10), &cx_m, &mut out));
+        assert!(c.event(&press(ROW + 8 * 10 + 1), &cx_m, &mut out));
         assert_eq!(
             out,
             vec![Action::Run(
-                "sh \"$HOME/infynitae/live/settings.sh\" log THEME_SYNC - && \
-                 sh \"$HOME/infynitae/live/settings.sh\" set THEME_SYNC 'false' >/dev/null 2>&1"
+                "sh \"$HOME/infynitae/live/settings.sh\" log MOTION - && \
+                 sh \"$HOME/infynitae/live/settings.sh\" set MOTION 'off' >/dev/null 2>&1"
                     .to_string()
             )]
         );
+        assert_eq!(c.value(8), "off");
 
         // 3. Pick: THEME_SCHEME (row 4) -> Tonal (index 3)
         out.clear();
@@ -4037,9 +3917,9 @@ mod tests {
             )]
         );
 
-        // 5. Step: BORDER_WIDTH (row 8) + -> 2
+        // 5. Step: BORDER_WIDTH (row 6) + -> 2
         out.clear();
-        assert!(c.event(&press(ROW + 82), &cx_m, &mut out));
+        assert!(c.event(&press(ROW + 62), &cx_m, &mut out));
         assert_eq!(
             out,
             vec![Action::Run(
@@ -4062,20 +3942,24 @@ mod tests {
                 "v=$(\"$HOME/.local/bin/infynitae-edge\" ask --text --default '#7aa2f7' 'Accent') || exit 0; \
                  bd=\"${XDG_RUNTIME_DIR:-$HOME/.cache}/infynitae/look-bad\"; \
                  case \"$v\" in \"#\"[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]) \
-                 rm -f \"$bd\"/'BORDER_ACTIVE'; \
-                 sh \"$HOME/infynitae/live/settings.sh\" log BORDER_ACTIVE - && \
-                 sh \"$HOME/infynitae/live/settings.sh\" set BORDER_ACTIVE \"$v\" >/dev/null 2>&1 ;; \
-                 *) mkdir -p \"$bd\" && : > \"$bd\"/'BORDER_ACTIVE' ;; esac"
+                 rm -f \"$bd\"/'ACCENT'; \
+                 sh \"$HOME/infynitae/live/settings.sh\" log ACCENT - && \
+                 sh \"$HOME/infynitae/live/settings.sh\" set ACCENT \"$v\" >/dev/null 2>&1 ;; \
+                 *) mkdir -p \"$bd\" && : > \"$bd\"/'ACCENT' ;; esac"
                     .to_string()
             )]
         );
-        // Close accent picker so subsequent checks don't have it open, and check plain Color row (SURFACE_COLOR, row 6) directly runs ask
+        // Close accent picker so subsequent checks don't have it open, and check bad accent marker (new ACCENT or legacy BORDER_ACTIVE)
         assert!(c.event(&press(ROW + 10), &cx_m, &mut out));
-        out.clear();
-        assert!(c.event(&press(ROW + 60), &cx_m, &mut out));
-        assert!(!out.is_empty());
-        let c_bad = init_appearance(&[], true, &["BORDER_ACTIVE"]);
+        let c_bad = init_appearance(&[], true, &["ACCENT"]);
         assert_eq!(c_bad.state(&c_bad.table[1]), ("Not a colour", true));
+        let c_bad_legacy =
+            init_appearance(&[("BORDER_ACTIVE", "#112233")], true, &["BORDER_ACTIVE"]);
+        assert_eq!(c_bad_legacy.value(ACCENT_ROW), "#112233");
+        assert_eq!(
+            c_bad_legacy.state(&c_bad_legacy.table[1]),
+            ("Not a colour", true)
+        );
 
         // 7. Wallpapers thumbnail grid: click thumbnail sets WALLPAPER; >24 shows More row opening remaining list + "The first..." + "Other file"
         let mut wp = init_wallpaper(
@@ -4345,22 +4229,22 @@ mod tests {
         assert!(!pwn.exists());
         assert!(!calls.exists());
         let bad_dir = xdg.join("infynitae/look-bad");
-        assert!(bad_dir.join("BORDER_ACTIVE").is_file());
+        assert!(bad_dir.join("ACCENT").is_file());
 
         let mut src = LookSource {
             home: home.clone(),
             bad_dir: bad_dir.clone(),
         };
         let d1 = src.fetch().downcast::<LookData>().unwrap();
-        assert!(d1.bad_colors.contains("BORDER_ACTIVE"));
+        assert!(d1.bad_colors.contains("ACCENT"));
 
         // Valid #rrggbb clears the marker and runs log + set
         assert!(run_with_answer("#22aa44").success());
-        assert!(!bad_dir.join("BORDER_ACTIVE").exists());
+        assert!(!bad_dir.join("ACCENT").exists());
         let d2 = src.fetch().downcast::<LookData>().unwrap();
-        assert!(!d2.bad_colors.contains("BORDER_ACTIVE"));
+        assert!(!d2.bad_colors.contains("ACCENT"));
         let logged = fs::read_to_string(&calls).unwrap();
-        assert_eq!(logged, "log BORDER_ACTIVE -\nset BORDER_ACTIVE #22aa44\n");
+        assert_eq!(logged, "log ACCENT -\nset ACCENT #22aa44\n");
     }
 
     #[test]
@@ -4455,7 +4339,7 @@ mod tests {
             size: Size::M,
             ..test_cx(&th)
         };
-        let mut c = init_appearance(&[("BORDER_ACTIVE", "#7aa2f7")], true, &[]);
+        let mut c = init_appearance(&[("ACCENT", "#7aa2f7")], true, &[]);
         c.look.as_mut().unwrap().accent_candidates =
             parse_accent_lines("#e05d44 0.2 0.2\n#44cc88 0.8 0.8\n");
 
@@ -4519,8 +4403,8 @@ mod tests {
         assert_eq!(
             out[0],
             Action::Run(
-                "sh \"$HOME/infynitae/live/settings.sh\" log BORDER_ACTIVE '#7aa2f7' && \
-                 sh \"$HOME/infynitae/live/settings.sh\" set BORDER_ACTIVE '#000000' >/dev/null 2>&1"
+                "sh \"$HOME/infynitae/live/settings.sh\" log ACCENT '#7aa2f7' && \
+                 sh \"$HOME/infynitae/live/settings.sh\" set ACCENT '#000000' >/dev/null 2>&1"
                     .to_string()
             )
         );
@@ -4543,19 +4427,19 @@ mod tests {
     fn reads_recent_accents_from_temporary_log() {
         let log = "\
 100\tFONT_NAME\tSans\n\
-101\tBORDER_ACTIVE\t-\n\
+101\tACCENT\t-\n\
 102\tBORDER_ACTIVE\t#111111\n\
-103\tBORDER_ACTIVE\tnotacolor\n\
+103\tACCENT\tnotacolor\n\
 104\tBORDER_ACTIVE\t#222222\n\
 105\tBORDER_ACTIVE\t#333333\n\
-106\tBORDER_ACTIVE\t#444444\n\
-107\tBORDER_ACTIVE\t#555555\n\
+106\tACCENT\t#444444\n\
+107\tACCENT\t#555555\n\
 108\tBORDER_ACTIVE\t#666666\n\
-109\tBORDER_ACTIVE\t#777777\n\
-110\tBORDER_ACTIVE\t#222222\tEXTRA\n\
+109\tACCENT\t#777777\n\
+110\tACCENT\t#222222\tEXTRA\n\
 111\tBORDER_ACTIVE\t#888888\n\
-112\tBORDER_ACTIVE\t#999999\n\
-113\tBORDER_ACTIVE\t#888888\n";
+112\tACCENT\t#999999\n\
+113\tACCENT\t#888888\n";
         let parsed = parse_recent_accents(log);
         assert_eq!(
             parsed,
@@ -4577,7 +4461,7 @@ mod tests {
         let look = src.fetch().downcast::<LookData>().unwrap();
         assert_eq!(look.recent_accents, parsed);
 
-        let mut c = init_appearance(&[("BORDER_ACTIVE", "#ABCDEF")], true, &[]);
+        let mut c = init_appearance(&[("ACCENT", "#ABCDEF")], true, &[]);
         c.look = Some(*look);
         let colors = c.recent_colors();
         assert_eq!(colors.len(), 9);
@@ -4596,7 +4480,7 @@ mod tests {
         };
 
         let mut c = init_appearance(
-            &[("BORDER_ACTIVE", "#11111b"), ("SURFACE_COLOR", "#11111b")],
+            &[("ACCENT", "#11111b"), ("SURFACE_COLOR", "#11111b")],
             true,
             &[],
         );
@@ -4673,8 +4557,8 @@ mod tests {
         assert_eq!(
             out,
             vec![Action::Run(
-                "sh \"$HOME/infynitae/live/settings.sh\" log BORDER_ACTIVE '#11111b' && \
-                 sh \"$HOME/infynitae/live/settings.sh\" set BORDER_ACTIVE '#44cc88' >/dev/null 2>&1"
+                "sh \"$HOME/infynitae/live/settings.sh\" log ACCENT '#11111b' && \
+                 sh \"$HOME/infynitae/live/settings.sh\" set ACCENT '#44cc88' >/dev/null 2>&1"
                     .to_string()
             )]
         );
@@ -4683,8 +4567,8 @@ mod tests {
         assert_eq!(
             out,
             vec![Action::Run(
-                "sh \"$HOME/infynitae/live/settings.sh\" log BORDER_ACTIVE '#11111b' && \
-                 sh \"$HOME/infynitae/live/settings.sh\" set BORDER_ACTIVE '#3b82f6' >/dev/null 2>&1"
+                "sh \"$HOME/infynitae/live/settings.sh\" log ACCENT '#11111b' && \
+                 sh \"$HOME/infynitae/live/settings.sh\" set ACCENT '#3b82f6' >/dev/null 2>&1"
                     .to_string()
             )]
         );
@@ -4708,14 +4592,14 @@ mod tests {
         assert_eq!(
             out,
             vec![Action::Run(
-                "sh \"$HOME/infynitae/live/settings.sh\" log BORDER_ACTIVE '#11111b' && \
-                 sh \"$HOME/infynitae/live/settings.sh\" set BORDER_ACTIVE '#e05d44' >/dev/null 2>&1"
+                "sh \"$HOME/infynitae/live/settings.sh\" log ACCENT '#11111b' && \
+                 sh \"$HOME/infynitae/live/settings.sh\" set ACCENT '#e05d44' >/dev/null 2>&1"
                     .to_string()
             )]
         );
 
         // Force unreadable current accent to verify warning line height at S and M.
-        c.pending.insert("BORDER_ACTIVE", "#11111b".to_string());
+        c.pending.insert("ACCENT", "#11111b".to_string());
         assert!(c.accent_adjusted_warning(&cx_m));
         for (label, cx_cur) in [("any-s", &cx_s), ("any-m", &cx_m)] {
             let (hits_any, h_any) = draw_card(&c, cx_cur, 404.0);
@@ -4732,7 +4616,7 @@ mod tests {
         }
 
         // With 0 candidates, Accent opens directly on "Any colour", and Wallpaper tab shows exact bounds.
-        let mut c_empty = init_appearance(&[("BORDER_ACTIVE", "#7aa2f7")], true, &[]);
+        let mut c_empty = init_appearance(&[("ACCENT", "#7aa2f7")], true, &[]);
         assert!(c_empty.event(&press(ROW + 10), &cx_m, &mut out));
         assert_eq!(c_empty.accent_tab, AccentTab::AnyColor);
         assert!(c_empty.event(&press(H_TAB_WP), &cx_m, &mut out));
@@ -4782,5 +4666,60 @@ mod tests {
         assert!(other_in[3] > 0);
         assert_eq!(chosen_edge, chosen_in);
         assert_ne!(chosen_in, other_in);
+    }
+
+    #[test]
+    fn legacy_border_active_feeds_accent_and_saves_accent_key() {
+        let th = test_theme();
+        let cx_m = Cx {
+            size: Size::M,
+            ..test_cx(&th)
+        };
+        let mut c = init_appearance(&[("BORDER_ACTIVE", "#cc70a9")], true, &[]);
+        c.look.as_mut().unwrap().accent_candidates = parse_accent_lines("#44cc88 0.5 0.5\n");
+        assert_eq!(c.value(ACCENT_ROW), "#cc70a9");
+
+        let mut out = Vec::new();
+        assert!(c.event(&press(ROW + 10), &cx_m, &mut out));
+        assert!(c.event(&press(H_CAND_SQ_BASE), &cx_m, &mut out));
+        assert_eq!(
+            out,
+            vec![Action::Run(
+                "sh \"$HOME/infynitae/live/settings.sh\" log ACCENT - && \
+                 sh \"$HOME/infynitae/live/settings.sh\" set ACCENT '#44cc88' >/dev/null 2>&1"
+                    .to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn picker_error_uses_theme_alert_not_accent() {
+        let mut th1 = test_theme();
+        th1.alert = Rgba::rgb([0xff, 0x22, 0x22]);
+        let mut th2 = th1.clone();
+        th2.alert = Rgba::rgb([0x22, 0xff, 0x22]);
+
+        let render = |th: &Theme| -> Vec<u8> {
+            let cx = Cx {
+                size: Size::M,
+                ..test_cx(th)
+            };
+            let mut c = init_appearance(&[], true, &["ACCENT"]);
+            let mut out = Vec::new();
+            assert!(c.event(&press(ROW + 10), &cx, &mut out));
+            c.tick(500.0);
+            let h = c.height(&cx, 404.0).ceil() as i32 + 10;
+            let mut surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 420, h).unwrap();
+            let mut hits = Hits::new(None, None);
+            {
+                let cr = Context::new(&surf).unwrap();
+                c.draw(&cr, &cx, (0.0, 0.0, 404.0, h as f64), &mut hits);
+            }
+            surf.flush();
+            let bytes = surf.data().unwrap().to_vec();
+            bytes
+        };
+
+        assert_ne!(render(&th1), render(&th2));
     }
 }

@@ -149,7 +149,8 @@ PAN_MODE="free"
     #    rts     camera grip (edge-scroll style)
 
 CANVAS_COLOR="#0b0f14"
-    # Background behind the windows (when no wallpaper)
+    # Background behind the windows when no wallpaper (used with THEME_SCHEME="yours"; built
+    # schemes derive it from the card)
     # default: "#0b0f14"
     # options: "#0b0f14"  · any "#rrggbb"
 
@@ -158,13 +159,18 @@ BORDER_WIDTH="1"
     # default: 1
     # options: 1  · 0 none  · any number
 
-BORDER_ACTIVE="#7aa2f7"
-    # Border of the focused window, and the accent colour apps use (selection, switches, links)
+ACCENT="#7aa2f7"
+    # The accent colour: focused border, switches, selection, folders, apps [reload]
     # default: "#7aa2f7"
     # options: "#7aa2f7"  · any "#rrggbb"
 
+BORDER_ACTIVE=""
+    # Override the focused window border when it differs from ACCENT
+    # default: "" (same as ACCENT)
+    # options: ""  · any "#rrggbb"
+
 BORDER_INACTIVE="#333b54"
-    # Border of the other windows
+    # Border of the other windows (used with THEME_SCHEME="yours"; built schemes derive it)
     # default: "#333b54"
     # options: "#333b54"  · any "#rrggbb"
 
@@ -196,11 +202,11 @@ WINDOW_CORNERS="8"
     # options: 0 (square) to 28
 
 THEME_SCHEME="yours"
-    # The colours of the panels, widgets, notifications and menus [reload]
+    # Colours of the desktop, panels, widgets, notifications, lock and apps [reload]
     # default: yours
-    #   yours        SURFACE_COLOR, TEXT_COLOR and BORDER_ACTIVE as they are
-    #   monochrome   greys only
-    #   neutral · tonal · vibrant · expressive   built from BORDER_ACTIVE, more colour each
+    #   yours        SURFACE_COLOR, TEXT_COLOR and ACCENT as they are
+    #   monochrome   greys only (light or dark per COLOR_SCHEME)
+    #   neutral · tonal · vibrant · expressive   built from ACCENT, more colour each
 
 CARD_OPACITY="90"
     # How solid the panels' and widgets' cards are, in % [reload]
@@ -331,7 +337,7 @@ TERMINAL_FONT=""
     # options: ""  · monospace  · any installed family
 
 FONT_SIZE="10"
-    # Font size in points (apps and terminals)
+    # Font size in points for apps and terminals (for the desktop and panels, scale with OUTPUT_SCALE)
     # default: 10
     # options: 10  · any number
 
@@ -341,24 +347,26 @@ ICON_THEME="Adwaita"
     # options: Adwaita  · Papirus-Dark  · any installed theme (GTK and Qt apps)
 
 FOLDER_COLOR="accent"
-    # Folders in the file manager: in the theme's colour (BORDER_ACTIVE), following it when it
+    # Folders in the file manager: in the theme's colour (ACCENT), following it when it
     # changes (requires ICON_THEME set to Papirus, Papirus-Dark or Papirus-Light; with Adwaita
     # or other themes this setting has no effect), or the icon theme's own ("theme")
     # default: accent
     # options: accent · theme
 
 COLOR_SCHEME="prefer-dark"
-    # Apps' light or dark look (GTK, Qt, and apps that ask the desktop: Firefox, Chromium, Electron)
+    # Dark or light look (apps, and built THEME_SCHEME cards and text)
     # default: prefer-dark
     # options: prefer-dark  · prefer-light
 
 SURFACE_COLOR="#111317"
     # Background of panels, menus, notifications, lock box, and managed terminals
+    # (used with THEME_SCHEME="yours")
     # default: "#111317"
     # options: "#111317"  · any "#rrggbb"
 
 TEXT_COLOR="#eef2f8"
     # Primary text colour across panels, menus, notifications, and managed apps
+    # (used with THEME_SCHEME="yours")
     # default: "#eef2f8"
     # options: "#eef2f8"  · any "#rrggbb"
 
@@ -369,7 +377,7 @@ THEME_SYNC="true"
     # options: true  · false
 
 THEME_FROM_WALLPAPER="false"
-    # Take the colours above from the wallpaper whenever it changes: the accent (BORDER_ACTIVE)
+    # Take the colours above from the wallpaper whenever it changes: the accent (ACCENT)
     # alone, the accent plus backgrounds and borders ("all"), or a random candidate accent from
     # the wallpaper on each wallpaper change ("shuffle", never at login). Once, by hand:
     # infynitae-settings wallpaper-colors [accent|all|accents|shuffle]
@@ -392,6 +400,11 @@ WALLPAPER_PARALLAX="off"
     # larger than the screen: subtle 3%, strong 6%) [save]
     # default: off
     # options: off  · subtle  · strong
+
+MOTION="on"
+    # Interface transitions and wallpaper settle [save]
+    # default: on
+    # options: on  · off
 
 
 # ═══ Displays & sharpness ══════════════════════════════════════════════════════════ [restart] ═══
@@ -668,15 +681,20 @@ IDLE_SLEEP_TIMEOUT_MIN="15"
     # default: 15
     # options: 15  · 0 never  · any number
 
-IDLE_AUTO_LOCK="true"
-    # Lock when the screens go off (Super+Shift+I: stay awake)
+LOCK_WHEN_AWAY="true"
+    # Lock when the screens go off on idle or before sleep / lid close (Super+Shift+I: stay awake) [reload]
     # default: true
     # options: true  · false
 
-SLEEP_LOCK="true"
-    # Lock the screen before the machine sleeps or closes the lid [reload]
-    # default: true
-    # options: true  · false
+IDLE_AUTO_LOCK=""
+    # Override lock when idle screens go off (Super+Shift+I: stay awake)
+    # default: "" (follows LOCK_WHEN_AWAY)
+    # options: ""  · true  · false
+
+SLEEP_LOCK=""
+    # Override lock before sleep or lid close [reload]
+    # default: "" (follows LOCK_WHEN_AWAY)
+    # options: ""  · true  · false
 
 SHUTDOWN_SCREEN="true"
     # Show the "Rebooting…" / "Shutting down…" screen on reboot or power off [use]

@@ -524,7 +524,13 @@ pub struct Config {
     pub surface: [u8; 3],
     pub text: [u8; 3],
     pub accent: [u8; 3],
+    /// ACCENT was given (BORDER_ACTIVE then does not change the accent)
+    accent_given: bool,
     pub hair: Option<[u8; 3]>,
+    /// COLOR_SCHEME: true for prefer-light / light
+    pub light: bool,
+    /// FONT_NAME, defaults to sans-serif
+    pub font: String,
     /// CORNERS, else WINDOW_CORNERS, else 8: shared corner radius for windows and panels;
     /// SQUARE_CORNERS only squares apps
     pub corners: f64,
@@ -542,6 +548,10 @@ pub struct Config {
     pub opacity: f64,
     /// SWITCH_LOOK
     pub switch_look: String,
+    /// MOTION: Some(true) for on, Some(false) for off, None when absent
+    #[allow(dead_code)]
+    // Durations still stay enabled until motion wiring reads this (docs/POLISH_PLAN.md 2.E).
+    pub motion: Option<bool>,
 }
 
 pub fn config_path() -> PathBuf {
@@ -581,7 +591,10 @@ impl Config {
             surface: [0x11, 0x13, 0x17],
             text: [0xee, 0xf2, 0xf8],
             accent: [0x33, 0x3b, 0x54],
+            accent_given: false,
             hair: None,
+            light: false,
+            font: "sans-serif".into(),
             corners: 8.0,
             corners_given: false,
             scheme: "yours".into(),
@@ -589,6 +602,7 @@ impl Config {
             tray_card: "menu".into(),
             opacity: 0.90, // 90 % until CARD_BLUR exists: 70 % without blur reads as see-through
             switch_look: "rows".into(),
+            motion: None,
         };
         let mut ctrl = vec![
             Module::Clock,
@@ -639,8 +653,25 @@ impl Config {
                 }
                 "SURFACE_COLOR" => c.surface = parse_hex(v).unwrap_or(c.surface),
                 "BORDER_INACTIVE" => c.hair = parse_hex(v).or(c.hair),
-                "BORDER_ACTIVE" => c.accent = parse_hex(v).unwrap_or(c.accent),
+                "ACCENT" => {
+                    if let Some(rgb) = parse_hex(v) {
+                        c.accent = rgb;
+                        c.accent_given = true;
+                    }
+                }
+                "BORDER_ACTIVE" if !c.accent_given => c.accent = parse_hex(v).unwrap_or(c.accent),
                 "TEXT_COLOR" => c.text = parse_hex(v).unwrap_or(c.text),
+                "COLOR_SCHEME" => {
+                    let t = value_text(v).trim().to_ascii_lowercase();
+                    c.light = matches!(t.as_str(), "prefer-light" | "light");
+                }
+                "FONT_NAME" => {
+                    let t = value_text(v);
+                    let t = t.trim();
+                    if !t.is_empty() {
+                        c.font = t.to_string();
+                    }
+                }
                 "CORNERS" => {
                     if let Ok(n) = value_text(v).parse::<f64>() {
                         c.corners = n.clamp(0.0, 28.0);
@@ -661,6 +692,14 @@ impl Config {
                     }
                 }
                 "SWITCH_LOOK" => c.switch_look = value_text(v).to_ascii_lowercase(),
+                "MOTION" => {
+                    let t = value_text(v).trim().to_ascii_lowercase();
+                    c.motion = match t.as_str() {
+                        "on" | "true" | "yes" | "1" => Some(true),
+                        "off" | "false" | "no" | "0" => Some(false),
+                        _ => None,
+                    };
+                }
                 "CONTROL_MODULES" => {
                     // the control panel's modules before PANEL_CONTROL; "apps" there was the tray
                     let t = value_text(v);
@@ -862,6 +901,38 @@ mod tests {
         assert_eq!(c.corners, 4.0);
         let c = Config::from_text("WINDOW_CORNERS=\"14\"\nCORNERS=\"4\"\n");
         assert_eq!(c.corners, 4.0);
+    }
+
+    #[test]
+    fn accent_color_scheme_font_and_motion_parse_cleanly() {
+        // ACCENT wins over BORDER_ACTIVE in either order; empty ACCENT still falls back
+        assert_eq!(
+            Config::from_text("ACCENT=\"#7aa2f7\"\nBORDER_ACTIVE=\"#cc70a9\"\n").accent,
+            [0x7a, 0xa2, 0xf7]
+        );
+        assert_eq!(
+            Config::from_text("BORDER_ACTIVE=\"#cc70a9\"\nACCENT=\"#7aa2f7\"\n").accent,
+            [0x7a, 0xa2, 0xf7]
+        );
+        assert_eq!(
+            Config::from_text("ACCENT=\"\"\nBORDER_ACTIVE=\"#cc70a9\"\n").accent,
+            [0xcc, 0x70, 0xa9]
+        );
+
+        assert!(!Config::from_text("").light);
+        assert!(Config::from_text("COLOR_SCHEME=\"prefer-light\"\n").light);
+        assert!(
+            !Config::from_text("COLOR_SCHEME=\"prefer-light\"\nCOLOR_SCHEME=\"prefer-dark\"\n")
+                .light
+        );
+
+        assert_eq!(Config::from_text("").font, "sans-serif");
+        assert_eq!(Config::from_text("FONT_NAME=\"\"\n").font, "sans-serif");
+        assert_eq!(Config::from_text("FONT_NAME=\"Inter\"\n").font, "Inter");
+
+        assert_eq!(Config::from_text("").motion, None);
+        assert_eq!(Config::from_text("MOTION=\"on\"\n").motion, Some(true));
+        assert_eq!(Config::from_text("MOTION=\"off\"\n").motion, Some(false));
     }
 
     #[test]
