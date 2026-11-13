@@ -1,0 +1,1164 @@
+//! The Wayland client of the edge from apps (docs/EDGE_APPS.md section 5): one layer surface per
+//! output on the Top layer, two shm buffers each, drawn on frame callbacks, nothing drawn while
+//! closed, the window list from the compositor, the signals and request files the compositor's keys
+//! use, the sources fetched on worker threads, and the actions the cards ask for. The surface code
+//! follows live/edge-rs/src/wayland.rs, where its damage, pacing and fullscreen rules were measured
+//! and fixed; what the new edge does not have yet (edit mode, desktop widgets, the ask card, the
+//! notification server) is left out here and comes in the next parts of stage 1.
+
+use crate::card::{Action, Button, Data, Window};
+use crate::shell::{Shell, ARRIVE_LIFT};
+use smithay_client_toolkit::{
+    compositor::{CompositorHandler, CompositorState, Region},
+    delegate_compositor, delegate_keyboard, delegate_layer, delegate_output, delegate_pointer,
+    delegate_registry, delegate_seat, delegate_shm,
+    output::{OutputHandler, OutputState},
+    reexports::{
+        calloop::{
+            channel::{self, Sender},
+            generic::Generic,
+            EventLoop, Interest, Mode, PostAction,
+        },
+        calloop_wayland_source::WaylandSource,
+        client::{
+            globals::registry_queue_init,
+            protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface},
+            Connection, Dispatch, QueueHandle,
+        },
+        protocols_wlr::foreign_toplevel::v1::client::{
+            zwlr_foreign_toplevel_handle_v1::{self, ZwlrForeignToplevelHandleV1},
+            zwlr_foreign_toplevel_manager_v1::{self, ZwlrForeignToplevelManagerV1},
+        },
+    },
+    registry::{ProvidesRegistryState, RegistryState},
+    registry_handlers,
+    seat::{
+        keyboard::{KeyEvent, KeyboardHandler, Keysym, Modifiers, RawModifiers},
+        pointer::{
+            PointerEvent, PointerEventKind, PointerHandler, BTN_LEFT, BTN_MIDDLE, BTN_RIGHT,
+        },
+        Capability, SeatHandler, SeatState,
+    },
+    shell::{
+        wlr_layer::{
+            Anchor, KeyboardInteractivity, Layer, LayerShell, LayerShellHandler, LayerSurface,
+            LayerSurfaceConfigure,
+        },
+        WaylandSurface,
+    },
+    shm::{
+        slot::{Buffer, SlotPool},
+        Shm, ShmHandler,
+    },
+};
+use std::collections::HashSet;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::path::PathBuf;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
+
+// the same files as today's edge: only one edge runs at a time, and every caller finds it so
+const PID_FILE: &str = "infynitae-edge-rs.pid";
+const PANEL_FILE: &str = "infynitae-edge-rs.panel";
+
+pub fn runtime_path(name: &str) -> PathBuf {
+    let dir = std::env::var("XDG_RUNTIME_DIR")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "/tmp".to_string());
+    PathBuf::from(dir).join(name)
+}
+
+/// The running edge's pid (this one's or today's: any `infynitae-edge-*`).
+pub fn running_pid() -> Option<i32> {
+    let text = std::fs::read_to_string(runtime_path(PID_FILE)).ok()?;
+    let pid: i32 = text.trim().parse().ok()?;
+    if pid <= 1 || pid == std::process::id() as i32 || unsafe { libc::kill(pid, 0) } != 0 {
+        return None;
+    }
+    let comm = std::fs::read_to_string(format!("/proc/{pid}/comm")).ok()?;
+    let comm = comm.trim();
+    (comm.starts_with("infynitae-edge-") || comm == "infynitae-edge").then_some(pid)
+}
+
+/// Asks the running edge to open or close panel `name`.
+pub fn send_panel(name: &str) -> bool {
+    let Some(pid) = running_pid() else {
+        return false;
+    };
+    if std::fs::write(runtime_path(PANEL_FILE), format!("{name}\n")).is_err() {
+        return false;
+    }
+    unsafe { libc::kill(pid, libc::SIGRTMIN() + 2) == 0 }
+}
+
+pub fn stop_running() -> bool {
+    let Some(pid) = running_pid() else {
+        return false;
+    };
+    unsafe { libc::kill(pid, libc::SIGTERM) == 0 }
+}
+
+struct BufferSlot {
+    buffer: Buffer,
+    prev_box: Option<(i32, i32, i32, i32)>,
+}
+
+struct OutputSurface {
+    output: wl_output::WlOutput,
+    layer: LayerSurface,
+    pool: SlotPool,
+    slots: [Option<BufferSlot>; 2],
+    /// the box last committed (in either buffer): the next frame damages it too
+    committed_box: Option<(i32, i32, i32, i32)>,
+    width: u32,
+    height: u32,
+    buf_size: (u32, u32),
+    configured: bool,
+    mapped_closed: bool,
+    clear_pending: bool,
+    /// a fullscreen window is on this screen: closed, the surface is unmapped, so the window can
+    /// be shown directly (scanout, tearing)
+    fullscreen_under: bool,
+    unmapped: bool,
+    dirty: bool,
+    frame_pending: bool,
+}
+
+impl OutputSurface {
+    fn set_input_region(&self, compositor: &CompositorState, shell: &Shell) {
+        let Ok(region) = Region::new(compositor) else {
+            return;
+        };
+        let (w, h) = (self.width as f64, self.height as f64);
+        if w > 0.0 && h > 0.0 {
+            if let Some(idx) = shell.open {
+                // opened by its key: the whole screen, so a click outside reaches the edge and
+                // closes it; opened by hover: the panel and the way to it, so leaving closes it
+                let r = if shell.opened_by_hover {
+                    shell.hover_box(idx, w, h)
+                } else {
+                    (0.0, 0.0, w, h)
+                };
+                region.add(
+                    r.0.floor() as i32,
+                    r.1.floor() as i32,
+                    r.2.ceil() as i32,
+                    r.3.ceil() as i32,
+                );
+            } else {
+                for i in 0..shell.panels.len() {
+                    if shell.panels[i].panel.hover {
+                        let s = shell.hover_strip(i, w, h);
+                        region.add(
+                            s.0.floor() as i32,
+                            s.1.floor() as i32,
+                            s.2.ceil() as i32,
+                            s.3.ceil() as i32,
+                        );
+                    }
+                }
+            }
+        }
+        self.layer
+            .wl_surface()
+            .set_input_region(Some(region.wl_region()));
+    }
+
+    fn apply_mode(&mut self, qh: &QueueHandle<App>, compositor: &CompositorState, shell: &Shell) {
+        let active = shell.open.is_some();
+        if !active && self.fullscreen_under {
+            if !self.unmapped {
+                // a null buffer unmaps a layer surface; it maps again after a commit and its configure
+                self.layer.wl_surface().attach(None, 0, 0);
+                self.layer.commit();
+                self.unmapped = true;
+                self.configured = false;
+                self.mapped_closed = false;
+                self.clear_pending = false;
+                self.dirty = false;
+                self.frame_pending = false;
+                self.committed_box = None;
+                for slot in self.slots.iter_mut().flatten() {
+                    slot.prev_box = None;
+                }
+            }
+            return;
+        }
+        if self.unmapped {
+            self.unmapped = false;
+            self.layer.commit();
+            return;
+        }
+        if !self.configured || self.width == 0 || self.height == 0 {
+            return;
+        }
+        self.layer.set_keyboard_interactivity(if active {
+            KeyboardInteractivity::Exclusive
+        } else {
+            KeyboardInteractivity::None
+        });
+        self.set_input_region(compositor, shell);
+        if active {
+            self.dirty = true;
+            self.mapped_closed = false;
+            self.clear_pending = false;
+            self.render_if_needed(qh, shell);
+        } else {
+            self.dirty = false;
+            self.frame_pending = false;
+            self.clear_and_commit(qh);
+        }
+    }
+
+    fn ensure_pool_size(&mut self) {
+        if self.buf_size != (self.width, self.height) {
+            self.slots = [None, None];
+            self.buf_size = (self.width, self.height);
+            let need = (self.width as usize) * (self.height as usize) * 4 * 2;
+            if self.pool.len() < need {
+                let _ = self.pool.resize(need);
+            }
+        }
+    }
+
+    fn acquire_slot(&mut self) -> Option<usize> {
+        self.ensure_pool_size();
+        let (w, h) = (self.width as i32, self.height as i32);
+        for i in 0..2 {
+            if self.slots[i].is_none() {
+                if let Ok((buffer, _)) =
+                    self.pool
+                        .create_buffer(w, h, w * 4, wl_shm::Format::Argb8888)
+                {
+                    self.slots[i] = Some(BufferSlot {
+                        buffer,
+                        prev_box: None,
+                    });
+                }
+            }
+            if let Some(slot) = &self.slots[i] {
+                if slot.buffer.canvas(&mut self.pool).is_some() {
+                    return Some(i);
+                }
+            }
+        }
+        None
+    }
+
+    fn clear_box(canvas: &mut [u8], stride: i32, w: i32, h: i32, rect: (i32, i32, i32, i32)) {
+        let x0 = rect.0.clamp(0, w);
+        let y0 = rect.1.clamp(0, h);
+        let x1 = (rect.0 + rect.2).clamp(0, w);
+        let y1 = (rect.1 + rect.3).clamp(0, h);
+        if x1 <= x0 || y1 <= y0 {
+            return;
+        }
+        let row_bytes = ((x1 - x0) * 4) as usize;
+        for row in y0..y1 {
+            let start = (row * stride + x0 * 4) as usize;
+            if start + row_bytes <= canvas.len() {
+                canvas[start..start + row_bytes].fill(0);
+            }
+        }
+    }
+
+    /// Closed: a clear frame, damaging what this buffer held and what is on screen (the other
+    /// buffer's box); with both buffers still held, again on the next frame callback.
+    fn clear_and_commit(&mut self, qh: &QueueHandle<App>) {
+        if self.mapped_closed {
+            self.layer.commit();
+            return;
+        }
+        let (w, h) = (self.width as i32, self.height as i32);
+        let Some(idx) = self.acquire_slot() else {
+            self.clear_pending = true;
+            let wl = self.layer.wl_surface();
+            wl.frame(qh, wl.clone());
+            self.layer.commit();
+            return;
+        };
+        self.clear_pending = false;
+        let slot = self.slots[idx].as_mut().unwrap();
+        let old = slot.prev_box.take();
+        if let Some(canvas) = slot.buffer.canvas(&mut self.pool) {
+            if let Some(r) = old {
+                Self::clear_box(canvas, w * 4, w, h, r);
+            }
+        }
+        let shown = self.committed_box.take();
+        let wl = self.layer.wl_surface();
+        if old.is_none() && shown.is_none() {
+            wl.damage_buffer(0, 0, w, h);
+        }
+        for (x, y, bw, bh) in [old, shown].into_iter().flatten() {
+            wl.damage_buffer(x, y, bw, bh);
+        }
+        if slot.buffer.attach_to(wl).is_ok() {
+            self.mapped_closed = true;
+            self.layer.commit();
+        }
+        crate::boxes::dump_closed();
+    }
+
+    fn render_if_needed(&mut self, qh: &QueueHandle<App>, shell: &Shell) {
+        if !self.configured || !self.dirty || self.frame_pending || shell.open.is_none() {
+            return;
+        }
+        let (w, h) = (self.width as i32, self.height as i32);
+        let stride = w * 4;
+        let Some(slot_idx) = self.acquire_slot() else {
+            // both buffers still held: commit unchanged and draw on the callback
+            let wl = self.layer.wl_surface();
+            wl.frame(qh, wl.clone());
+            self.layer.commit();
+            self.frame_pending = true;
+            return;
+        };
+        let Some(idx) = shell.open else { return };
+        let ((bx, by, bw, bh), _) = shell.layout(idx, w as f64, h as f64);
+        let pad = 4;
+        let lift = if shell.open_ms.is_finite() {
+            ARRIVE_LIFT.ceil() as i32
+        } else {
+            0
+        };
+        let new_box = (
+            (bx.floor() as i32 - pad).max(0),
+            (by.floor() as i32 - pad).max(0),
+            (bw.ceil() as i32 + 2 * pad).min(w),
+            (bh.ceil() as i32 + 2 * pad + lift).min(h),
+        );
+        let slot = self.slots[slot_idx].as_mut().unwrap();
+        let old_box = slot.prev_box.replace(new_box);
+        if let Some(canvas) = slot.buffer.canvas(&mut self.pool) {
+            match old_box {
+                Some(r) => Self::clear_box(canvas, stride, w, h, r),
+                None => canvas.fill(0),
+            }
+            Self::clear_box(canvas, stride, w, h, new_box);
+            if let Ok(surface) = unsafe {
+                cairo::ImageSurface::create_for_data_unsafe(
+                    canvas.as_mut_ptr(),
+                    cairo::Format::ARgb32,
+                    w,
+                    h,
+                    stride,
+                )
+            } {
+                if let Ok(cr) = cairo::Context::new(&surface) {
+                    shell.draw(&cr, w as f64, h as f64);
+                }
+                surface.flush();
+            }
+        }
+        let wl = self.layer.wl_surface();
+        for (dx, dy, dw, dh) in [old_box, self.committed_box.replace(new_box)]
+            .into_iter()
+            .flatten()
+        {
+            wl.damage_buffer(dx, dy, dw, dh);
+        }
+        wl.damage_buffer(new_box.0, new_box.1, new_box.2, new_box.3);
+        wl.frame(qh, wl.clone());
+        self.frame_pending = true;
+        self.dirty = false;
+        if slot.buffer.attach_to(wl).is_ok() {
+            self.layer.commit();
+        }
+        crate::boxes::dump(shell, w as f64, h as f64);
+    }
+}
+
+struct Toplevel {
+    id: u64,
+    handle: ZwlrForeignToplevelHandleV1,
+    title: String,
+    app_id: String,
+    focused: bool,
+    fullscreen: bool,
+    outputs: Vec<wl_output::WlOutput>,
+}
+
+/// What comes back to the loop from a worker thread.
+enum Fetched {
+    Data(&'static str, &'static str, Data),
+}
+
+struct App {
+    registry_state: RegistryState,
+    seat_state: SeatState,
+    output_state: OutputState,
+    compositor: CompositorState,
+    layer_shell: LayerShell,
+    shm: Shm,
+    qh: QueueHandle<App>,
+    outputs: Vec<OutputSurface>,
+    toplevels: Vec<Toplevel>,
+    next_toplevel_id: u64,
+    fullscreen_changed: bool,
+    keyboard: Option<wl_keyboard::WlKeyboard>,
+    pointer: Option<wl_pointer::WlPointer>,
+    modifiers: Modifiers,
+    shell: Shell,
+    fetch_tx: Sender<Fetched>,
+    /// sources being fetched now (one fetch at a time each)
+    fetching: HashSet<(&'static str, &'static str)>,
+    last_fetch: Option<Instant>,
+    was_animating: bool,
+    exit: bool,
+}
+
+impl App {
+    fn create_output_surface(&mut self, output: wl_output::WlOutput) {
+        if self.outputs.iter().any(|o| o.output == output) {
+            return;
+        }
+        let Ok(pool) = SlotPool::new(4096, &self.shm) else {
+            return;
+        };
+        let surface = self.compositor.create_surface(&self.qh);
+        let layer = self.layer_shell.create_layer_surface(
+            &self.qh,
+            surface,
+            Layer::Top,
+            Some("infynitae-edge"),
+            Some(&output),
+        );
+        layer.set_anchor(Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT);
+        layer.set_exclusive_zone(-1);
+        layer.set_keyboard_interactivity(KeyboardInteractivity::None);
+        layer.commit();
+        self.outputs.push(OutputSurface {
+            output,
+            layer,
+            pool,
+            slots: [None, None],
+            committed_box: None,
+            width: 0,
+            height: 0,
+            buf_size: (0, 0),
+            configured: false,
+            mapped_closed: false,
+            clear_pending: false,
+            fullscreen_under: false,
+            unmapped: false,
+            dirty: false,
+            frame_pending: false,
+        });
+    }
+
+    fn surface_dims(&self, surface: &wl_surface::WlSurface) -> Option<(f64, f64)> {
+        self.outputs
+            .iter()
+            .find(|o| o.layer.wl_surface() == surface && o.configured)
+            .map(|o| (o.width as f64, o.height as f64))
+    }
+
+    /// After anything changed: the actions run, the sources fetched as needed, every surface drawn.
+    fn sync_all(&mut self) {
+        self.run_actions();
+        self.fetch_due(false);
+        for os in &mut self.outputs {
+            os.apply_mode(&self.qh, &self.compositor, &self.shell);
+        }
+    }
+
+    fn apply_modes(&mut self) {
+        for os in &mut self.outputs {
+            os.fullscreen_under = self
+                .toplevels
+                .iter()
+                .any(|t| t.fullscreen && t.outputs.contains(&os.output));
+        }
+        self.sync_all();
+    }
+
+    /// The open panel's sources, fetched on worker threads (each at most once at a time); `force`
+    /// fetches again before its time.
+    fn fetch_due(&mut self, force: bool) {
+        if self.shell.open.is_none() {
+            return;
+        }
+        let due = force
+            || self
+                .last_fetch
+                .is_none_or(|t| t.elapsed() >= Duration::from_secs(2));
+        if !due {
+            return;
+        }
+        self.last_fetch = Some(Instant::now());
+        for (prov, key) in self.shell.sources() {
+            if !self.fetching.insert((prov, key)) {
+                continue;
+            }
+            let Some(mut src) = crate::provider::by_id(prov).and_then(|p| p.source(key)) else {
+                self.fetching.remove(&(prov, key));
+                continue;
+            };
+            let tx = self.fetch_tx.clone();
+            std::thread::spawn(move || {
+                let _ = tx.send(Fetched::Data(prov, key, src.fetch()));
+            });
+        }
+    }
+
+    /// The cards' actions: commands on a thread each (then their sources fetched again), apps and
+    /// links started detached, windows focused or closed through the compositor's list.
+    fn run_actions(&mut self) {
+        let actions = std::mem::take(&mut self.shell.actions);
+        for (a, prov, keys) in actions {
+            match a {
+                Action::Run(cmd) => {
+                    let tx = self.fetch_tx.clone();
+                    let keys: Vec<&'static str> = keys.to_vec();
+                    std::thread::spawn(move || {
+                        let _ = Command::new("sh")
+                            .arg("-c")
+                            .arg(&cmd)
+                            .stdin(Stdio::null())
+                            .stdout(Stdio::null())
+                            .stderr(Stdio::null())
+                            .status();
+                        // what the command changed, shown at once
+                        for key in keys {
+                            if let Some(mut src) =
+                                crate::provider::by_id(prov).and_then(|p| p.source(key))
+                            {
+                                let _ = tx.send(Fetched::Data(prov, key, src.fetch()));
+                            }
+                        }
+                    });
+                }
+                Action::Launch(id) => {
+                    if let Some(app) = self.shell.apps.iter().find(|x| x.id == id) {
+                        let cmd = if app.terminal {
+                            format!(
+                                "\"$HOME/infynitae/live/launch.sh\" terminal sh -c {}",
+                                crate::cards::settings::sq(&app.exec)
+                            )
+                        } else {
+                            app.exec.clone()
+                        };
+                        spawn_detached(&cmd);
+                    }
+                    self.shell.close();
+                }
+                Action::OpenUri(uri) => {
+                    spawn_detached(&format!("xdg-open {}", crate::cards::settings::sq(&uri)));
+                    self.shell.close();
+                }
+                Action::Focus(id) => {
+                    if let (Some(t), Some(seat)) = (
+                        self.toplevels.iter().find(|t| t.id == id),
+                        self.seat_state.seats().next(),
+                    ) {
+                        t.handle.activate(&seat);
+                    }
+                    self.shell.close();
+                }
+                Action::CloseWindow(id) => {
+                    if let Some(t) = self.toplevels.iter().find(|t| t.id == id) {
+                        t.handle.close();
+                    }
+                }
+                // the notification server comes with the next part of stage 1
+                Action::Dismiss(_) | Action::Invoke(_, _) => {}
+                Action::ClosePanel => {
+                    self.shell.close();
+                }
+            }
+        }
+    }
+
+    fn sync_windows(&mut self) {
+        self.shell.windows = self
+            .toplevels
+            .iter()
+            .map(|t| Window {
+                id: t.id,
+                title: t.title.clone(),
+                app_id: t.app_id.clone(),
+                focused: t.focused,
+            })
+            .collect();
+    }
+
+    fn handle_signal_byte(&mut self, b: u8) {
+        let changed = match b {
+            b'Q' => {
+                self.exit = true;
+                false
+            }
+            b'W' => self.shell.toggle_named("windows"),
+            b'C' => self.shell.toggle_named("control"),
+            b'V' => self.shell.toggle_named("clipboard"),
+            b'A' => self.shell.toggle_named("apps"),
+            b'P' => {
+                let name = std::fs::read_to_string(runtime_path(PANEL_FILE)).unwrap_or_default();
+                let name = name.trim();
+                if name == "stop" {
+                    self.exit = true;
+                    false
+                } else {
+                    self.shell.toggle_named(name)
+                }
+            }
+            b'K' => {
+                // fetch the open panel's data again (a script changed something)
+                self.fetch_due(true);
+                false
+            }
+            _ => false,
+        };
+        if changed {
+            self.last_fetch = None;
+            self.sync_all();
+        }
+    }
+}
+
+fn spawn_detached(cmd: &str) {
+    let _ = Command::new("setsid")
+        .arg("-f")
+        .arg("sh")
+        .arg("-c")
+        .arg(cmd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map(|mut c| std::thread::spawn(move || c.wait()));
+}
+
+impl CompositorHandler for App {
+    fn scale_factor_changed(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_surface::WlSurface,
+        _: i32,
+    ) {
+    }
+    fn transform_changed(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_surface::WlSurface,
+        _: wl_output::Transform,
+    ) {
+    }
+    fn frame(
+        &mut self,
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+        surface: &wl_surface::WlSurface,
+        _: u32,
+    ) {
+        // an animation running (the cards arriving, a list opening): draw again
+        let animating = self.shell.open.is_some() && self.shell.tick(Instant::now());
+        let ended = self.was_animating && !animating;
+        self.was_animating = animating;
+        if let Some(os) = self
+            .outputs
+            .iter_mut()
+            .find(|o| o.layer.wl_surface() == surface)
+        {
+            os.frame_pending = false;
+            if animating {
+                os.dirty = true;
+            }
+            if os.dirty {
+                os.render_if_needed(qh, &self.shell);
+            } else if os.clear_pending {
+                os.clear_and_commit(qh);
+            }
+        }
+        if ended {
+            // the panel's size settled: its input region follows
+            self.sync_all();
+        }
+    }
+    fn surface_enter(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_surface::WlSurface,
+        _: &wl_output::WlOutput,
+    ) {
+    }
+    fn surface_leave(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_surface::WlSurface,
+        _: &wl_output::WlOutput,
+    ) {
+    }
+}
+
+impl OutputHandler for App {
+    fn output_state(&mut self) -> &mut OutputState {
+        &mut self.output_state
+    }
+    fn new_output(&mut self, _: &Connection, _: &QueueHandle<Self>, output: wl_output::WlOutput) {
+        self.create_output_surface(output);
+    }
+    fn update_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
+    fn output_destroyed(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        output: wl_output::WlOutput,
+    ) {
+        self.outputs.retain(|o| o.output != output);
+    }
+}
+
+impl LayerShellHandler for App {
+    fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, layer: &LayerSurface) {
+        self.outputs.retain(|o| &o.layer != layer);
+    }
+    fn configure(
+        &mut self,
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+        layer: &LayerSurface,
+        configure: LayerSurfaceConfigure,
+        _: u32,
+    ) {
+        if let Some(os) = self.outputs.iter_mut().find(|o| &o.layer == layer) {
+            os.width = configure.new_size.0.max(1);
+            os.height = configure.new_size.1.max(1);
+            os.configured = true;
+            os.apply_mode(qh, &self.compositor, &self.shell);
+        }
+    }
+}
+
+impl SeatHandler for App {
+    fn seat_state(&mut self) -> &mut SeatState {
+        &mut self.seat_state
+    }
+    fn new_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
+    fn new_capability(
+        &mut self,
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+        seat: wl_seat::WlSeat,
+        capability: Capability,
+    ) {
+        if capability == Capability::Keyboard && self.keyboard.is_none() {
+            self.keyboard = self.seat_state.get_keyboard(qh, &seat, None).ok();
+        }
+        if capability == Capability::Pointer && self.pointer.is_none() {
+            self.pointer = self.seat_state.get_pointer(qh, &seat).ok();
+        }
+    }
+    fn remove_capability(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: wl_seat::WlSeat,
+        capability: Capability,
+    ) {
+        if capability == Capability::Keyboard {
+            if let Some(kb) = self.keyboard.take() {
+                kb.release();
+            }
+        }
+        if capability == Capability::Pointer {
+            if let Some(p) = self.pointer.take() {
+                p.release();
+            }
+        }
+    }
+    fn remove_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
+}
+
+impl KeyboardHandler for App {
+    fn enter(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: &wl_surface::WlSurface,
+        _: u32,
+        _: &[u32],
+        _: &[Keysym],
+    ) {
+    }
+    fn leave(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: &wl_surface::WlSurface,
+        _: u32,
+    ) {
+    }
+    fn press_key(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: u32,
+        event: KeyEvent,
+    ) {
+        if event.keysym == Keysym::Escape && self.shell.escape() {
+            self.sync_all();
+        }
+    }
+    fn repeat_key(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: u32,
+        _: KeyEvent,
+    ) {
+    }
+    fn release_key(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: u32,
+        _: KeyEvent,
+    ) {
+    }
+    fn update_modifiers(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: u32,
+        modifiers: Modifiers,
+        _: RawModifiers,
+        _: u32,
+    ) {
+        self.modifiers = modifiers;
+    }
+}
+
+impl PointerHandler for App {
+    fn pointer_frame(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_pointer::WlPointer,
+        events: &[PointerEvent],
+    ) {
+        let mut changed = false;
+        for event in events {
+            let Some((w, h)) = self.surface_dims(&event.surface) else {
+                continue;
+            };
+            let (x, y) = event.position;
+            changed |= match event.kind {
+                PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
+                    self.shell.pointer_motion(w, h, x, y)
+                }
+                PointerEventKind::Leave { .. } => self.shell.pointer_leave(),
+                PointerEventKind::Press { button, .. } => {
+                    let b = match button {
+                        BTN_LEFT => Button::Left,
+                        BTN_RIGHT => Button::Right,
+                        BTN_MIDDLE => Button::Middle,
+                        _ => continue,
+                    };
+                    self.shell.click(w, h, x, y, b)
+                }
+                PointerEventKind::Release { .. } => self.shell.release(),
+                PointerEventKind::Axis { vertical, .. } => {
+                    let dy = if vertical.discrete != 0 {
+                        vertical.discrete as f64
+                    } else {
+                        vertical.absolute
+                    };
+                    dy.abs() > 0.0 && self.shell.scroll(x, y, dy)
+                }
+            };
+        }
+        if changed || !self.shell.actions.is_empty() {
+            self.sync_all();
+        }
+    }
+}
+
+impl ShmHandler for App {
+    fn shm_state(&mut self) -> &mut Shm {
+        &mut self.shm
+    }
+}
+
+delegate_compositor!(App);
+delegate_output!(App);
+delegate_shm!(App);
+delegate_seat!(App);
+delegate_keyboard!(App);
+delegate_pointer!(App);
+delegate_layer!(App);
+delegate_registry!(App);
+
+impl ProvidesRegistryState for App {
+    fn registry(&mut self) -> &mut RegistryState {
+        &mut self.registry_state
+    }
+    registry_handlers![OutputState, SeatState];
+}
+
+impl Dispatch<ZwlrForeignToplevelManagerV1, ()> for App {
+    fn event(
+        state: &mut Self,
+        _: &ZwlrForeignToplevelManagerV1,
+        event: zwlr_foreign_toplevel_manager_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let zwlr_foreign_toplevel_manager_v1::Event::Toplevel { toplevel } = event {
+            let id = state.next_toplevel_id;
+            state.next_toplevel_id += 1;
+            state.toplevels.push(Toplevel {
+                id,
+                handle: toplevel,
+                title: String::new(),
+                app_id: String::new(),
+                focused: false,
+                fullscreen: false,
+                outputs: Vec::new(),
+            });
+        }
+    }
+
+    smithay_client_toolkit::reexports::client::event_created_child!(
+        App,
+        ZwlrForeignToplevelManagerV1,
+        [zwlr_foreign_toplevel_manager_v1::EVT_TOPLEVEL_OPCODE => (ZwlrForeignToplevelHandleV1, ())]
+    );
+}
+
+impl Dispatch<ZwlrForeignToplevelHandleV1, ()> for App {
+    fn event(
+        state: &mut Self,
+        handle: &ZwlrForeignToplevelHandleV1,
+        event: zwlr_foreign_toplevel_handle_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        use zwlr_foreign_toplevel_handle_v1::{Event as E, State as S};
+        let t = state.toplevels.iter_mut().find(|t| &t.handle == handle);
+        match event {
+            E::Title { title } => {
+                if let Some(t) = t {
+                    t.title = title
+                }
+            }
+            E::AppId { app_id } => {
+                if let Some(t) = t {
+                    t.app_id = app_id
+                }
+            }
+            E::State { state: raw } => {
+                let has = |s: S| {
+                    raw.as_chunks::<4>()
+                        .0
+                        .iter()
+                        .any(|&c| u32::from_ne_bytes(c) == s as u32)
+                };
+                let (active, fullscreen) = (has(S::Activated), has(S::Fullscreen));
+                if let Some(t) = t {
+                    t.focused = active;
+                    if t.fullscreen != fullscreen {
+                        t.fullscreen = fullscreen;
+                        state.fullscreen_changed = true;
+                    }
+                }
+            }
+            E::OutputEnter { output } => {
+                if let Some(t) = t {
+                    if !t.outputs.contains(&output) {
+                        t.outputs.push(output);
+                        state.fullscreen_changed |= t.fullscreen;
+                    }
+                }
+            }
+            E::OutputLeave { output } => {
+                if let Some(t) = t {
+                    let before = t.outputs.len();
+                    t.outputs.retain(|o| o != &output);
+                    state.fullscreen_changed |= t.fullscreen && t.outputs.len() != before;
+                }
+            }
+            E::Done => {
+                if std::mem::take(&mut state.fullscreen_changed) {
+                    state.apply_modes();
+                }
+                state.sync_windows();
+            }
+            E::Closed => {
+                handle.destroy();
+                let was_fullscreen = state
+                    .toplevels
+                    .iter()
+                    .any(|t| &t.handle == handle && t.fullscreen);
+                state.toplevels.retain(|t| &t.handle != handle);
+                if was_fullscreen {
+                    state.apply_modes();
+                }
+                state.sync_windows();
+            }
+            _ => {}
+        }
+    }
+}
+
+fn setup_signal_pipe() -> Result<OwnedFd, String> {
+    let mut fds = [0i32; 2];
+    if unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_NONBLOCK | libc::O_CLOEXEC) } != 0 {
+        return Err("failed to create signal pipe".to_string());
+    }
+    let rd = unsafe { OwnedFd::from_raw_fd(fds[0]) };
+    let wr = fds[1];
+    let rt = libc::SIGRTMIN();
+    let pairs: &[(i32, u8)] = &[
+        (libc::SIGTERM, b'Q'),
+        (libc::SIGINT, b'Q'),
+        (libc::SIGUSR1, b'W'),
+        (libc::SIGUSR2, b'C'),
+        (rt, b'V'),
+        (rt + 1, b'A'),
+        (rt + 2, b'P'),
+        (rt + 3, b'K'),
+    ];
+    for &(sig, byte) in pairs {
+        let _ = unsafe {
+            signal_hook_registry::register(sig, move || {
+                let buf = [byte];
+                let _ = libc::write(wr, buf.as_ptr().cast(), 1);
+            })
+        };
+    }
+    Ok(rd)
+}
+
+pub fn run(initial_panel: Option<&str>) -> Result<(), String> {
+    if stop_running() {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let pid_file = runtime_path(PID_FILE);
+    let _ = std::fs::write(&pid_file, format!("{}\n", std::process::id()));
+    let res = run_loop(initial_panel);
+    if std::fs::read_to_string(&pid_file).is_ok_and(|t| t.trim() == std::process::id().to_string())
+    {
+        let _ = std::fs::remove_file(&pid_file);
+    }
+    res
+}
+
+fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
+    let conn = Connection::connect_to_env().map_err(|e| e.to_string())?;
+    let (globals, event_queue) = registry_queue_init(&conn).map_err(|e| e.to_string())?;
+    let qh = event_queue.handle();
+    let compositor =
+        CompositorState::bind(&globals, &qh).map_err(|e| format!("wl_compositor: {e}"))?;
+    let layer_shell =
+        LayerShell::bind(&globals, &qh).map_err(|e| format!("zwlr_layer_shell_v1: {e}"))?;
+    let shm = Shm::bind(&globals, &qh).map_err(|e| format!("wl_shm: {e}"))?;
+    let _toplevel_mgr: Option<ZwlrForeignToplevelManagerV1> = globals.bind(&qh, 1..=3, ()).ok();
+
+    let shell = Shell::new(
+        crate::config::Config::load(),
+        crate::app::load(&crate::app::dirs()),
+    );
+    let (fetch_tx, fetch_rx) = channel::channel::<Fetched>();
+    let output_state = OutputState::new(&globals, &qh);
+    let existing: Vec<_> = output_state.outputs().collect();
+    let mut app = App {
+        registry_state: RegistryState::new(&globals),
+        seat_state: SeatState::new(&globals, &qh),
+        output_state,
+        compositor,
+        layer_shell,
+        shm,
+        qh: qh.clone(),
+        outputs: Vec::new(),
+        toplevels: Vec::new(),
+        next_toplevel_id: 1,
+        fullscreen_changed: false,
+        keyboard: None,
+        pointer: None,
+        modifiers: Modifiers::default(),
+        shell,
+        fetch_tx,
+        fetching: HashSet::new(),
+        last_fetch: None,
+        was_animating: false,
+        exit: false,
+    };
+    for output in existing {
+        app.create_output_surface(output);
+    }
+    if let Some(name) = initial_panel {
+        app.shell.toggle_named(name);
+    }
+    app.sync_all();
+
+    let mut event_loop: EventLoop<App> = EventLoop::try_new().map_err(|e| e.to_string())?;
+    let handle = event_loop.handle();
+    handle
+        .insert_source(fetch_rx, |evt, _, app| {
+            if let channel::Event::Msg(Fetched::Data(prov, key, data)) = evt {
+                app.fetching.remove(&(prov, key));
+                if app.shell.apply(prov, key, data.as_ref()) && app.shell.open.is_some() {
+                    for os in &mut app.outputs {
+                        os.dirty = true;
+                        os.render_if_needed(&app.qh, &app.shell);
+                    }
+                    // a card that grew or shrank: the input region follows
+                    for os in &mut app.outputs {
+                        os.set_input_region(&app.compositor, &app.shell);
+                    }
+                }
+            }
+        })
+        .map_err(|e| e.to_string())?;
+    let sig_rd = setup_signal_pipe()?;
+    handle
+        .insert_source(
+            Generic::new(sig_rd, Interest::READ, Mode::Level),
+            |_, fd, app| {
+                let mut buf = [0u8; 32];
+                loop {
+                    let n =
+                        unsafe { libc::read(fd.as_raw_fd(), buf.as_mut_ptr().cast(), buf.len()) };
+                    if n <= 0 {
+                        break;
+                    }
+                    for &b in &buf[..n as usize] {
+                        app.handle_signal_byte(b);
+                    }
+                }
+                Ok(PostAction::Continue)
+            },
+        )
+        .map_err(|e| e.to_string())?;
+    WaylandSource::new(conn, event_queue)
+        .insert(handle)
+        .map_err(|e| e.to_string())?;
+
+    while !app.exit {
+        // while a panel is open its data is fetched every 2 s; closed, nothing wakes the edge
+        let timeout = app.shell.open.map(|_| Duration::from_secs(2));
+        if app.shell.open.is_some() {
+            app.shell.now = chrono::Local::now().naive_local();
+            app.fetch_due(false);
+        }
+        event_loop
+            .dispatch(timeout, &mut app)
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}

@@ -74,6 +74,21 @@ impl Provider for Settings {
     }
 }
 
+/// A source's output cut at its "---" lines (each command's part), however empty a part is.
+pub fn sections(out: &str) -> Vec<String> {
+    let mut parts = vec![String::new()];
+    for l in out.lines() {
+        if l.trim() == "---" {
+            parts.push(String::new());
+        } else {
+            let p = parts.last_mut().unwrap();
+            p.push_str(l);
+            p.push('\n');
+        }
+    }
+    parts
+}
+
 /// A string as one shell word.
 pub fn sq(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
@@ -161,8 +176,8 @@ pub fn nmcli_fields(line: &str) -> Vec<String> {
 /// Reads the network source's output: sections apart by "---": the radio, the devices
 /// (TYPE:STATE), the networks (IN-USE:SIGNAL:SECURITY:SSID), the saved connections (NAME:TYPE).
 pub fn parse_network(out: &str) -> NetworkData {
-    let parts: Vec<&str> = out.split("\n---\n").collect();
-    let sec = |i: usize| parts.get(i).copied().unwrap_or("");
+    let parts = sections(out);
+    let sec = |i: usize| parts.get(i).map(String::as_str).unwrap_or("");
     let mut d = NetworkData {
         radio_on: sec(0).lines().any(|l| l.trim() == "enabled"),
         ..Default::default()
@@ -495,8 +510,8 @@ fn device_lines(s: &str) -> Vec<(String, String)> {
 /// Reads the bluetooth source's output: `bluetoothctl show`, `devices Paired`, `devices Connected`,
 /// `devices` (all known, found ones too), apart by "---".
 pub fn parse_bluetooth(out: &str) -> BluetoothData {
-    let parts: Vec<&str> = out.split("\n---\n").collect();
-    let sec = |i: usize| parts.get(i).copied().unwrap_or("");
+    let parts = sections(out);
+    let sec = |i: usize| parts.get(i).map(String::as_str).unwrap_or("");
     let show = sec(0);
     let mut d = BluetoothData {
         adapter: show.contains("Controller "),

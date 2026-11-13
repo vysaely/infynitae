@@ -8,14 +8,17 @@
 #![allow(dead_code)]
 
 mod app;
+mod boxes;
 mod card;
 mod cards;
 mod config;
 mod draw;
 mod panel;
 mod provider;
+mod shell;
 mod theme;
 mod ui;
+mod wayland;
 
 use card::{Card, Cx, Hits, Status};
 use config::{Config, Panel, Side};
@@ -271,6 +274,16 @@ fn render(name: &str, size: &str, out: &str) -> Result<(), String> {
     surface.write_to_png(&mut f).map_err(|e| e.to_string())
 }
 
+fn run(panel: Option<&str>) -> ExitCode {
+    match wayland::run(panel) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("infynitae-edge-apps: {e}");
+            ExitCode::from(1)
+        }
+    }
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let a: Vec<&str> = args.iter().map(String::as_str).collect();
@@ -293,8 +306,28 @@ fn main() -> ExitCode {
                 ExitCode::from(1)
             }
         },
+        // the ask card comes in the next part of stage 1: until then "no edge running", so its
+        // callers (the keyring, the drive formatter, the share picker) use their fallbacks
+        ["ask", ..] => ExitCode::from(3),
+        ["stop"] => {
+            wayland::stop_running();
+            ExitCode::SUCCESS
+        }
+        [] => run(None),
+        ["panel", name] | [name] if !name.starts_with('-') => {
+            // the windows panel answers to its older names too
+            let name = match *name {
+                "toggle" | "center" | "open" => "windows",
+                n => n,
+            };
+            if wayland::send_panel(name) {
+                ExitCode::SUCCESS
+            } else {
+                run(Some(name))
+            }
+        }
         _ => {
-            eprintln!("usage: infynitae-edge-apps --print-panels | --print-theme | --render PANEL WxH FILE.png");
+            eprintln!("usage: infynitae-edge-apps [PANEL | stop | --print-panels | --print-theme | --render PANEL WxH FILE.png]");
             ExitCode::from(2)
         }
     }
