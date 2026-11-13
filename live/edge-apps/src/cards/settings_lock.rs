@@ -1,5 +1,5 @@
 //! Settings: Lock and sleep (docs/EDGE_SETTINGS.md, `settings/lock`): the "Lock & idle" keys
-//! and BATTERY_LIMIT. Left to the file: SCREEN_LOCKER.
+//! and BATTERY_LIMIT. Left to the file: IDLE_AUTO_LOCK, SLEEP_LOCK, SCREEN_LOCKER.
 
 use super::settings_rows::{After, Control, Setting, TableCard};
 use crate::card::{render_value, Action, Card, Cx, Data, Event, Hits, Rect, Source, Status};
@@ -39,20 +39,10 @@ const SCREENS_OFF: Setting = Setting {
     needs: &[],
 };
 
-const IDLE_AUTO_LOCK: Setting = Setting {
-    key: "IDLE_AUTO_LOCK",
-    name: "Lock when the screens go off",
-    says: "",
-    control: ON_OFF,
-    after: After::Save,
-    more: false,
-    needs: &[],
-};
-
-const SLEEP_LOCK: Setting = Setting {
-    key: "SLEEP_LOCK",
-    name: "Lock before sleep",
-    says: "Also when closing the lid",
+const LOCK_WHEN_AWAY: Setting = Setting {
+    key: "LOCK_WHEN_AWAY",
+    name: "Lock when away",
+    says: "When the screens go off or before sleep",
     control: ON_OFF,
     after: After::Reload("sleep-lock"),
     more: false,
@@ -91,8 +81,7 @@ const SHUTDOWN_SCREEN: Setting = Setting {
 
 pub const TABLE: &[Setting] = &[
     SCREENS_OFF,
-    IDLE_AUTO_LOCK,
-    SLEEP_LOCK,
+    LOCK_WHEN_AWAY,
     BATTERY_LIMIT,
     START_LOCKED,
     SHUTDOWN_SCREEN,
@@ -100,13 +89,7 @@ pub const TABLE: &[Setting] = &[
 
 // `Setting::needs` checks PATH programs only, so `LockCard` swaps between the full table and this
 // slice without `BATTERY_LIMIT` when sysfs has no `BAT*/charge_control_end_threshold`.
-const TABLE_NO_BATTERY: &[Setting] = &[
-    SCREENS_OFF,
-    IDLE_AUTO_LOCK,
-    SLEEP_LOCK,
-    START_LOCKED,
-    SHUTDOWN_SCREEN,
-];
+const TABLE_NO_BATTERY: &[Setting] = &[SCREENS_OFF, LOCK_WHEN_AWAY, START_LOCKED, SHUTDOWN_SCREEN];
 
 /// Whether any battery on this PC exposes `charge_control_end_threshold`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -199,6 +182,30 @@ impl Card for LockCard {
             self.battery = Some(*d);
             self.inner.table = if d.supported { TABLE } else { TABLE_NO_BATTERY };
             return changed;
+        }
+        if key == "config" {
+            if let Some(d) = data.downcast_ref::<super::settings_rows::ConfigData>() {
+                // Configs from before LOCK_WHEN_AWAY only have IDLE_AUTO_LOCK / SLEEP_LOCK: derive
+                // the shown state without pretending LOCK_WHEN_AWAY was already in the file.
+                if !d.now.get("LOCK_WHEN_AWAY").is_some_and(|v| !v.is_empty()) {
+                    let legacy: Vec<&str> = ["IDLE_AUTO_LOCK", "SLEEP_LOCK"]
+                        .into_iter()
+                        .filter_map(|k| d.now.get(k).map(String::as_str).filter(|v| !v.is_empty()))
+                        .collect();
+                    if !legacy.is_empty() {
+                        let shown = if legacy.iter().any(|v| v.eq_ignore_ascii_case("true")) {
+                            "true"
+                        } else {
+                            "false"
+                        };
+                        let mut migrated = d.clone();
+                        migrated
+                            .default
+                            .insert("LOCK_WHEN_AWAY".into(), shown.into());
+                        return self.inner.apply(key, &migrated as &dyn Any);
+                    }
+                }
+            }
         }
         self.inner.apply(key, data)
     }
@@ -312,7 +319,11 @@ mod tests {
             }
         }
         assert!(def.contains_key("SCREEN_LOCKER"));
-        assert!(!TABLE.iter().any(|s| s.key == "SCREEN_LOCKER"));
+        assert!(def.contains_key("IDLE_AUTO_LOCK"));
+        assert!(def.contains_key("SLEEP_LOCK"));
+        assert!(!TABLE
+            .iter()
+            .any(|s| matches!(s.key, "SCREEN_LOCKER" | "IDLE_AUTO_LOCK" | "SLEEP_LOCK")));
         let keys_full: Vec<&str> = TABLE
             .iter()
             .filter(|s| s.key != "BATTERY_LIMIT")
@@ -419,7 +430,7 @@ mod tests {
         assert!(c2.apply("config", &data(&[], &[], &[]) as &dyn Any));
         assert_eq!(c2.status(&cx_s), Status::Ready);
 
-        // without battery limit: 2 visible + More at S (3 rows), 5 at M; search for battery finds nothing
+        // without battery limit: 2 visible + More at S (3 rows), 4 at M; search for battery finds nothing
         let h_s_no_bat = c.height(&cx_s, 440.0);
         let h_m_no_bat = c.height(&cx_m, 440.0);
         assert!(c.event(&Event::Text("charging"), &cx_s, &mut Vec::new()));
@@ -457,11 +468,14 @@ mod tests {
             &data(
                 &[
                     ("IDLE_SLEEP_TIMEOUT_MIN", "15"),
-                    ("IDLE_AUTO_LOCK", "true"),
-                    ("SLEEP_LOCK", "true"),
+                    ("LOCK_WHEN_AWAY", "true"),
                     ("BATTERY_LIMIT", "off"),
                 ],
-                &[("START_LOCKED", "false"), ("SHUTDOWN_SCREEN", "true")],
+                &[
+                    ("LOCK_WHEN_AWAY", "true"),
+                    ("START_LOCKED", "false"),
+                    ("SHUTDOWN_SCREEN", "true"),
+                ],
                 &[],
             ) as &dyn Any,
         );
@@ -478,29 +492,19 @@ mod tests {
             )]
         );
 
-        // Switch [save] (row 1: IDLE_AUTO_LOCK -> "false")
+        // Switch [reload] (row 1: LOCK_WHEN_AWAY -> "false", infynitae-reload sleep-lock)
         let mut out = Vec::new();
         assert!(c.event(&press(ROW + 10 + 1), &cx, &mut out));
         assert_eq!(
             out,
             vec![Action::Run(
-                "sh \"$HOME/infynitae/live/settings.sh\" log IDLE_AUTO_LOCK 'true' && sh \"$HOME/infynitae/live/settings.sh\" set IDLE_AUTO_LOCK 'false' >/dev/null 2>&1".into()
+                "sh \"$HOME/infynitae/live/settings.sh\" log LOCK_WHEN_AWAY 'true' && sh \"$HOME/infynitae/live/settings.sh\" set LOCK_WHEN_AWAY 'false' >/dev/null 2>&1 && sh \"$HOME/infynitae/live/infynitae-reload\" sleep-lock >/dev/null 2>&1".into()
             )]
         );
 
-        // Switch [reload] (row 2: SLEEP_LOCK -> "false", infynitae-reload sleep-lock)
+        // Pick BATTERY_LIMIT (row 2: "off" -> "80", appends battery-limit '80')
         let mut out = Vec::new();
-        assert!(c.event(&press(ROW + 20 + 1), &cx, &mut out));
-        assert_eq!(
-            out,
-            vec![Action::Run(
-                "sh \"$HOME/infynitae/live/settings.sh\" log SLEEP_LOCK 'true' && sh \"$HOME/infynitae/live/settings.sh\" set SLEEP_LOCK 'false' >/dev/null 2>&1 && sh \"$HOME/infynitae/live/infynitae-reload\" sleep-lock >/dev/null 2>&1".into()
-            )]
-        );
-
-        // Pick BATTERY_LIMIT (row 3: "off" -> "80", appends battery-limit '80')
-        let mut out = Vec::new();
-        assert!(c.event(&press(ROW + 30), &cx, &mut out));
+        assert!(c.event(&press(ROW + 20), &cx, &mut out));
         assert!(c.event(&press(LIST + 1), &cx, &mut out));
         assert_eq!(
             out,
@@ -509,9 +513,9 @@ mod tests {
             )]
         );
 
-        // Switch [restart] (row 4: START_LOCKED unset -> "true") and Switch [use] (row 5)
+        // Switch [restart] (row 3: START_LOCKED unset -> "true") and Switch [use] (row 4)
         let mut out = Vec::new();
-        assert!(c.event(&press(ROW + 40 + 1), &cx_m, &mut out));
+        assert!(c.event(&press(ROW + 30 + 1), &cx_m, &mut out));
         assert_eq!(
             out,
             vec![Action::Run(
@@ -520,7 +524,7 @@ mod tests {
         );
 
         let mut out = Vec::new();
-        assert!(c.event(&press(ROW + 50 + 1), &cx_m, &mut out));
+        assert!(c.event(&press(ROW + 40 + 1), &cx_m, &mut out));
         assert_eq!(
             out,
             vec![Action::Run(
@@ -534,12 +538,32 @@ mod tests {
             &data(&[("BATTERY_LIMIT", "a'b")], &[], &[]) as &dyn Any,
         );
         let mut out = Vec::new();
-        assert!(c.event(&press(ROW + 30), &cx, &mut out));
+        assert!(c.event(&press(ROW + 20), &cx, &mut out));
         assert!(c.event(&press(LIST + 2), &cx, &mut out));
         assert_eq!(
             out,
             vec![Action::Run(
                 "sh \"$HOME/infynitae/live/settings.sh\" log BATTERY_LIMIT 'a'\\''b' && sh \"$HOME/infynitae/live/settings.sh\" set BATTERY_LIMIT '90' >/dev/null 2>&1 && sh \"$HOME/infynitae/live/battery-limit\" '90' >/dev/null 2>&1".into()
+            )]
+        );
+
+        // Legacy migration without LOCK_WHEN_AWAY: both false -> switch off (click sets true)
+        let mut legacy = LockCard::default();
+        legacy.apply("battery_limit", &supported(false) as &dyn Any);
+        legacy.apply(
+            "config",
+            &data(
+                &[("IDLE_AUTO_LOCK", "false"), ("SLEEP_LOCK", "false")],
+                &[("LOCK_WHEN_AWAY", "true")],
+                &[],
+            ) as &dyn Any,
+        );
+        let mut out = Vec::new();
+        assert!(legacy.event(&press(ROW + 10 + 1), &cx, &mut out));
+        assert_eq!(
+            out,
+            vec![Action::Run(
+                "sh \"$HOME/infynitae/live/settings.sh\" log LOCK_WHEN_AWAY - && sh \"$HOME/infynitae/live/settings.sh\" set LOCK_WHEN_AWAY 'true' >/dev/null 2>&1 && sh \"$HOME/infynitae/live/infynitae-reload\" sleep-lock >/dev/null 2>&1".into()
             )]
         );
     }

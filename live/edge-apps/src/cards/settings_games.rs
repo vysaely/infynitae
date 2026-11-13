@@ -1,5 +1,6 @@
 //! Settings: Games (docs/EDGE_SETTINGS.md, `settings/games`): the "Performance & latency" keys of
-//! config/config a person changes. Left to the file: FRAME_GUARD, OVERLAY_PLANES, LATENCY_STATS.
+//! config/config a person changes. Left to the file: GAME_QUIET, GPU_RELIEF, LATENCY,
+//! DIRECT_SCANOUT, FIT_IS_FULLSCREEN, HARDWARE_CURSOR, FRAME_GUARD, OVERLAY_PLANES, LATENCY_STATS.
 
 use super::settings_rows::{After, Control, Setting};
 use crate::provider::{CardKind, Size};
@@ -7,7 +8,7 @@ use crate::provider::{CardKind, Size};
 pub const KIND: CardKind = CardKind {
     id: "games",
     title: "Games",
-    about: "Game mode, tearing, how frames reach the screen",
+    about: "Game mode, tearing, background priority",
     sizes: &[Size::S, Size::M],
     default: Size::S,
     half: false,
@@ -30,15 +31,6 @@ pub const TABLE: &[Setting] = &[
         needs: &["gamemoded"],
     },
     Setting {
-        key: "GAME_QUIET",
-        name: "Hold notifications during a game",
-        says: "They show when the game ends",
-        control: ON_OFF,
-        after: After::Save,
-        more: false,
-        needs: &[],
-    },
-    Setting {
         key: "TEARING",
         name: "Tearing in fullscreen",
         says: "Each frame at once, with a tear line",
@@ -52,59 +44,9 @@ pub const TABLE: &[Setting] = &[
         needs: &[],
     },
     Setting {
-        key: "GPU_RELIEF",
-        name: "Slow hidden windows when the GPU is full",
-        says: "Only while a game fills the screen",
-        control: ON_OFF,
-        after: After::Save,
-        more: false,
-        needs: &[],
-    },
-    Setting {
         key: "BACKGROUND_PRIORITY",
         name: "Lower priority for apps out of sight",
         says: "After 15 s with no window seen",
-        control: ON_OFF,
-        after: After::Save,
-        more: true,
-        needs: &[],
-    },
-    Setting {
-        key: "LATENCY",
-        name: "When frames are drawn",
-        says: "",
-        control: Control::Pick(&[
-            ("direct", "Direct"),
-            ("off", "At once"),
-            ("balanced", "Balanced"),
-            ("lowest", "Lowest"),
-        ]),
-        after: After::Save,
-        more: true,
-        needs: &[],
-    },
-    Setting {
-        key: "DIRECT_SCANOUT",
-        name: "Fullscreen straight to the screen",
-        says: "",
-        control: ON_OFF,
-        after: After::Save,
-        more: true,
-        needs: &[],
-    },
-    Setting {
-        key: "FIT_IS_FULLSCREEN",
-        name: "A window filling the screen counts as fullscreen",
-        says: "",
-        control: ON_OFF,
-        after: After::Save,
-        more: true,
-        needs: &[],
-    },
-    Setting {
-        key: "HARDWARE_CURSOR",
-        name: "Cursor on the GPU's layer",
-        says: "",
         control: ON_OFF,
         after: After::Save,
         more: true,
@@ -135,5 +77,8 @@ mod tests {
                 _ => {}
             }
         }
+        assert_eq!(TABLE.len(), 3);
+        assert!(def.contains_key("LATENCY"));
+        assert!(!TABLE.iter().any(|s| s.key == "LATENCY"));
     }
 }
