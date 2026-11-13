@@ -1258,8 +1258,6 @@ pub(crate) fn parse_user_lines(user_text: &str) -> HashMap<String, usize> {
     map
 }
 
-/// Builds the terminal editor shell command, jumping to `+N` for editors that accept it and quoting
-/// every value with `settings::sq`.
 /// The word a card shows for a value (its Pick or Words label), so a summary says what the card says.
 fn shown_word(key: &str, value: &str) -> Option<&'static str> {
     use super::settings_rows::Control;
@@ -1285,6 +1283,8 @@ fn shown_word(key: &str, value: &str) -> Option<&'static str> {
         })
 }
 
+/// Builds the terminal editor shell command, jumping to `+N` for editors that accept it and quoting
+/// every value with `settings::sq`.
 pub(crate) fn open_file_command(editor: Option<&str>, path: &Path, line: Option<usize>) -> String {
     let ed = editor
         .map(str::trim)
