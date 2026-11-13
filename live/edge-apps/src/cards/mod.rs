@@ -21,6 +21,7 @@ pub mod settings_recording;
 pub mod settings_privacy;
 pub mod settings_lock;
 pub mod settings_rows;
+pub mod settings_windows;
 pub mod simple;
 pub mod sound;
 pub mod steam;

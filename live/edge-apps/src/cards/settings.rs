@@ -50,6 +50,7 @@ const KINDS: &[CardKind] = &[
     crate::cards::settings_recording::KIND,
     crate::cards::settings_privacy::KIND,
     crate::cards::settings_lock::KIND,
+    crate::cards::settings_windows::KIND,
 ];
 
 impl Provider for Settings {
@@ -88,6 +89,9 @@ impl Provider for Settings {
             "privacy" => Some(Box::new(crate::cards::settings_privacy::PrivacyCard::new())),
             "lock" => Some(Box::new(crate::cards::settings_lock::LockCard::default())),
             "defaults" => Some(Box::new(crate::cards::settings_apps::DefaultsCard::new())),
+            "windows" => Some(Box::new(crate::cards::settings_rows::TableCard::new(
+                crate::cards::settings_windows::TABLE,
+            ))),
             "network" => Some(Box::new(NetworkCard::default())),
             "bluetooth" => Some(Box::new(BluetoothCard::default())),
             "power" => Some(Box::new(PowerCard::default())),
