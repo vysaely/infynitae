@@ -699,16 +699,25 @@ impl Core {
     ) -> Vec<Effect> {
         let mut fx = Vec::new();
         let mut saved = saved;
+        let mut repeat = false;
         self.returning.retain(|e| *e != id);
         if let Some(i) = self.fullscreen.iter().position(|f| f.element == id) {
             // still fullscreen: the size to return to is the one saved at the first grant
-            saved = self.fullscreen.remove(i).saved;
+            let old = self.fullscreen.remove(i);
+            saved = old.saved;
+            repeat = old.output == output;
         }
         self.fullscreen.push(FullscreenState {
             element: id,
             output,
             saved,
         });
+        // an app asking again for the fullscreen it already has (games do on every focus) does
+        // not take back a screen the user turned away from: that would raise it over the window
+        // the user chose (owner, 2026-11-15: "fullscreen apps still appear above other windows")
+        if repeat && self.is_presentation_suppressed(output) {
+            return fx;
+        }
         if self.stage.mapped(id).is_some() {
             fx.extend(self.take_output(id));
         }
