@@ -839,7 +839,7 @@ impl JsonParser<'_> {
 
 fn settings_sh_cmd(sub: &str, args: &str) -> String {
     format!(
-        "{{ [ -f \"$HOME/infynitae/live/settings.sh\" ] && sh \"$HOME/infynitae/live/settings.sh\" {sub} {args} || infynitae-settings {sub} {args}; }}"
+        "if [ -f \"$HOME/infynitae/live/settings.sh\" ]; then sh \"$HOME/infynitae/live/settings.sh\" {sub} {args}; else infynitae-settings {sub} {args}; fi"
     )
 }
 
@@ -2739,5 +2739,77 @@ mod tests {
         let srow = srows.iter().find(|r| r.key == "SCALING_FILTER").unwrap();
         assert_eq!(srow.value_text, "Smooth", "linear alias shows as Smooth");
         assert!(srow.changed);
+    }
+
+    #[test]
+    fn settings_sh_cmd_skips_fallback_when_settings_sh_fails() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir =
+            std::env::temp_dir().join(format!("infynitae-display-fallback-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let live_dir = dir.join("infynitae/live");
+        let bin_dir = dir.join("bin");
+        fs::create_dir_all(&live_dir).unwrap();
+        fs::create_dir_all(&bin_dir).unwrap();
+        let log_file = dir.join("calls.log");
+
+        let write_exec = |p: &Path, body: &str| {
+            fs::write(p, body).unwrap();
+            fs::set_permissions(p, fs::Permissions::from_mode(0o755)).unwrap();
+        };
+        let fallback_bin = bin_dir.join("infynitae-settings");
+        write_exec(
+            &fallback_bin,
+            &format!(
+                "#!/bin/sh\nprintf 'fallback:%s\\n' \"$*\" >> {}\n",
+                sq(log_file.to_str().unwrap())
+            ),
+        );
+        let sh_path = live_dir.join("settings.sh");
+        write_exec(
+            &sh_path,
+            &format!(
+                "#!/bin/sh\nprintf 'sh:%s\\n' \"$*\" >> {}\nexit 1\n",
+                sq(log_file.to_str().unwrap())
+            ),
+        );
+
+        let path_env = format!(
+            "{}:{}",
+            bin_dir.display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let cmd = settings_sh_cmd("set", "'DP_KEY' 'val'");
+
+        // When settings.sh exists and fails, infynitae-settings must not run.
+        let st = Command::new("sh")
+            .args(["-c", &cmd])
+            .env("HOME", &dir)
+            .env("PATH", &path_env)
+            .status()
+            .unwrap();
+        assert!(!st.success());
+        assert_eq!(
+            fs::read_to_string(&log_file).unwrap(),
+            "sh:set DP_KEY val\n"
+        );
+
+        // When settings.sh is missing, the infynitae-settings fallback runs.
+        fs::remove_file(&sh_path).unwrap();
+        fs::remove_file(&log_file).unwrap();
+        let st = Command::new("sh")
+            .args(["-c", &cmd])
+            .env("HOME", &dir)
+            .env("PATH", &path_env)
+            .status()
+            .unwrap();
+        assert!(st.success());
+        assert_eq!(
+            fs::read_to_string(&log_file).unwrap(),
+            "fallback:set DP_KEY val\n"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }

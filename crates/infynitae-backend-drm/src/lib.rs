@@ -2531,9 +2531,9 @@ fn render(data: &mut LoopData, turn: &mut TurnClock) {
                 }
                 let queued = s.compositor.queue_frame(());
                 if queued.is_ok() {
-                    s.schedule
-                        .rendered(started, infynitae_wayland::presentation_clock_now());
-                    s.latency.drawn();
+                    let submitted = infynitae_wayland::presentation_clock_now();
+                    s.schedule.rendered(started, submitted);
+                    s.latency.drawn(submitted);
                 }
                 if tear {
                     if s.compositor.async_flip() {
@@ -2659,8 +2659,8 @@ fn render(data: &mut LoopData, turn: &mut TurnClock) {
                 data.session.frame_rests(wait);
             }
             s.empty_since_refresh = true;
-            // an input that needed no frame must not be charged to the next unrelated redraw
-            s.latency.drop_pending();
+            // keep the input across empty renders up to 100 ms while an app commits its frame
+            s.latency.expire_pending(now);
             data.state.frame_tick(id, now);
         }
         turn.mark("queue");

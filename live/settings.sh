@@ -404,6 +404,51 @@ archive_validate_and_unpack() {
         echo "Archive is missing the config file." >&2
         return 1
     fi
+    av_bad=$(LC_ALL=C awk '
+        function valid_sq(s,    n, i) {
+            n = length(s)
+            if (n < 2 || substr(s, 1, 1) != "\047") return 0
+            i = 2
+            while (i <= n) {
+                if (substr(s, i, 1) != "\047") i++
+                else if (i == n) return 1
+                else if (substr(s, i, 4) == "\047\134\047\047" && i + 3 < n) i += 4
+                else return 0
+            }
+            return 0
+        }
+        function valid_dq(s,    inner) {
+            if (length(s) < 2 || substr(s, 1, 1) != "\"" || substr(s, length(s), 1) != "\"") return 0
+            inner = substr(s, 2, length(s) - 2)
+            return index(inner, "\"") == 0 && index(inner, "$") == 0 && index(inner, "\140") == 0 && index(inner, "\134") == 0
+        }
+        {
+            if (index($0, "\r") > 0) { print NR; exit }
+            line = $0
+            sub(/^[ \t]+/, "", line)
+            sub(/[ \t]+$/, "", line)
+            if (line == "" || substr(line, 1, 1) == "#") next
+            eq = index(line, "=")
+            if (eq <= 1) { print NR; exit }
+            key = substr(line, 1, eq - 1)
+            if (key !~ /^[A-Z_][A-Z0-9_]*$/) { print NR; exit }
+            val = substr(line, eq + 1)
+            if (substr(val, 1, 1) == "\047") {
+                if (!valid_sq(val)) { print NR; exit }
+            } else if (substr(val, 1, 1) == "\"") {
+                if (!valid_dq(val)) { print NR; exit }
+            } else if (val !~ /^[A-Za-z0-9_.\/:+%@,-]+$/) {
+                print NR; exit
+            }
+        }
+    ' "$av_stage/.config/infynitae/config") || {
+        echo "Failed to check config in archive." >&2
+        return 1
+    }
+    if [ -n "$av_bad" ]; then
+        echo "Archive config has unsafe line $av_bad." >&2
+        return 1
+    fi
     return 0
 }
 

@@ -78,19 +78,23 @@ fn element(inst: u64, elem: u64) -> Value {
     Value::Arr(vec![inst.into(), elem.into()])
 }
 
-/// The first screen's id (1 when the compositor does not say).
-fn first_output() -> u64 {
-    let snap = request(&Value::obj([
-        ("id", 1u64.into()),
-        ("cmd", "snapshot".into()),
-    ]));
+/// The first screen's id from a snapshot reply, if present.
+fn first_output_in(snap: &Value) -> Option<u64> {
     snap.get("snapshot")
         .and_then(|s| s.get("outputs"))
         .and_then(Value::as_array)
         .and_then(|o| o.first())
         .and_then(|o| o.get("id"))
         .and_then(Value::as_u64)
-        .unwrap_or(1)
+}
+
+/// The first screen's id (1 when the compositor does not say).
+fn first_output() -> u64 {
+    let snap = request(&Value::obj([
+        ("id", 1u64.into()),
+        ("cmd", "snapshot".into()),
+    ]));
+    first_output_in(&snap).unwrap_or(1)
 }
 
 fn usage() -> ExitCode {
@@ -484,39 +488,84 @@ pub fn overview_lines(snapshot: &Value) -> Vec<(String, (u64, u64))> {
         .collect()
 }
 
-/// The window switcher (Super+Shift+Tab without Quickshell): the windows in a menu (`MENU_PICKER`,
-/// else fuzzel, rofi or wofi); the chosen one is focused and the camera goes to it. No windows:
-/// the launcher.
+fn find_in_path(path_env: Option<&std::ffi::OsStr>, name: &str) -> Option<PathBuf> {
+    path_env.and_then(|path| {
+        std::env::split_paths(path)
+            .map(|d| d.join(name))
+            .find(|p| p.is_file())
+    })
+}
+
+fn find_edge_bin(
+    path_env: Option<&std::ffi::OsStr>,
+    home_env: Option<&std::ffi::OsStr>,
+) -> Option<PathBuf> {
+    find_in_path(path_env, "infynitae-edge").or_else(|| {
+        home_env
+            .map(PathBuf::from)
+            .map(|h| h.join(".local/bin/infynitae-edge"))
+            .filter(|p| p.is_file())
+    })
+}
+
+/// The window switcher (Super+Shift+Tab without Quickshell): asks a running edge for its windows
+/// panel, else falls back to a menu (`MENU_PICKER`, fuzzel, rofi or wofi) and focuses and
+/// navigates to the chosen window (or opens the launcher when there are no windows).
 fn overview() -> ExitCode {
-    use std::process::{Command, Stdio};
-    // The edge handles overview interaction directly; keep fuzzel/rofi/wofi as fallback without edge.
-    if edge_running_in(&runtime_dir(), std::path::Path::new("/proc")) {
-        return ExitCode::SUCCESS;
-    }
-    let snap = request(&Value::obj([
-        ("id", 1u64.into()),
-        ("cmd", "snapshot".into()),
-    ]));
-    let lines = overview_lines(&snap);
-    let have = |p: &str| {
-        std::env::var_os("PATH")
-            .is_some_and(|path| std::env::split_paths(&path).any(|d| d.join(p).is_file()))
-    };
-    if lines.is_empty() {
-        let launcher = std::env::var("LAUNCHER")
-            .ok()
-            .filter(|l| !l.is_empty() && l != "auto")
-            .unwrap_or_else(|| "fuzzel".into());
-        let _ = Command::new("sh").args(["-c", &launcher]).status();
-        return ExitCode::SUCCESS;
-    }
+    let path_env = std::env::var_os("PATH");
+    let home_env = std::env::var_os("HOME");
+    let edge_bin = find_edge_bin(path_env.as_deref(), home_env.as_deref());
     let picker = std::env::var("MENU_PICKER")
         .ok()
         .filter(|p| !p.trim().is_empty());
+    let launcher = std::env::var("LAUNCHER")
+        .ok()
+        .filter(|l| !l.is_empty() && l != "auto")
+        .unwrap_or_else(|| "fuzzel".into());
+    overview_with(
+        &runtime_dir(),
+        std::path::Path::new("/proc"),
+        &shell_socket(),
+        edge_bin.as_deref(),
+        path_env.as_deref(),
+        picker.as_deref(),
+        &launcher,
+    )
+}
+
+fn overview_with(
+    runtime: &std::path::Path,
+    proc_root: &std::path::Path,
+    socket: &std::path::Path,
+    edge_bin: Option<&std::path::Path>,
+    path_env: Option<&std::ffi::OsStr>,
+    picker: Option<&str>,
+    launcher: &str,
+) -> ExitCode {
+    use std::process::{Command, Stdio};
+    if edge_running_in(runtime, proc_root)
+        && let Some(bin) = edge_bin
+        && Command::new(bin)
+            .args(["panel", "windows"])
+            .status()
+            .is_ok_and(|s| s.success())
+    {
+        return ExitCode::SUCCESS;
+    }
+    let snap = request_at(
+        socket,
+        &Value::obj([("id", 1u64.into()), ("cmd", "snapshot".into())]),
+    );
+    let lines = overview_lines(&snap);
+    let have = |p: &str| find_in_path(path_env, p).is_some();
+    if lines.is_empty() {
+        let _ = Command::new("sh").args(["-c", launcher]).status();
+        return ExitCode::SUCCESS;
+    }
     let mut menu = match picker {
         Some(p) => {
             let mut c = Command::new("sh");
-            c.args(["-c", &p]);
+            c.args(["-c", p]);
             c
         }
         None if have("fuzzel") => {
@@ -550,18 +599,24 @@ fn overview() -> ExitCode {
     let Some(&(_, (inst, elem))) = lines.iter().find(|(l, _)| *l == chosen) else {
         return ExitCode::SUCCESS;
     };
-    request(&Value::obj([
-        ("id", 1u64.into()),
-        ("cmd", "focus".into()),
-        ("element", element(inst, elem)),
-    ]));
-    let output = first_output();
-    request(&Value::obj([
-        ("id", 2u64.into()),
-        ("cmd", "navigate".into()),
-        ("output", output.into()),
-        ("to", Value::obj([("element", element(inst, elem))])),
-    ]));
+    request_at(
+        socket,
+        &Value::obj([
+            ("id", 1u64.into()),
+            ("cmd", "focus".into()),
+            ("element", element(inst, elem)),
+        ]),
+    );
+    let output = first_output_in(&snap).unwrap_or(1);
+    request_at(
+        socket,
+        &Value::obj([
+            ("id", 2u64.into()),
+            ("cmd", "navigate".into()),
+            ("output", output.into()),
+            ("to", Value::obj([("element", element(inst, elem))])),
+        ]),
+    );
     ExitCode::SUCCESS
 }
 
@@ -760,6 +815,102 @@ mod tests {
 
         std::fs::write(proc_root.join("4242/comm"), "infynitae-edge-rs\n").unwrap();
         assert!(edge_running_in(&rt, &proc_root));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn overview_reaches_edge_panel_or_fallback_picker() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let base = std::env::temp_dir().join(format!("infynitae-msg-ov-{}", std::process::id()));
+        let rt = base.join("rt");
+        let proc_root = base.join("proc");
+        let sock_path = base.join("shell.sock");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&rt).unwrap();
+        std::fs::create_dir_all(proc_root.join("4242")).unwrap();
+        std::fs::write(rt.join("infynitae-edge-rs.pid"), "4242\n").unwrap();
+        std::fs::write(proc_root.join("4242/comm"), "infynitae-edge-\n").unwrap();
+
+        let write_script = |path: &std::path::Path, body: &str| {
+            std::fs::write(path, body).unwrap();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        };
+
+        // 1. Live edge + succeeding `panel windows` skips the fallback picker.
+        let edge_log = base.join("edge.log");
+        let picker_log = base.join("picker.log");
+        let edge_ok = base.join("edge-ok.sh");
+        write_script(
+            &edge_ok,
+            &format!(
+                "#!/bin/sh\necho \"$*\" >> '{}'\nexit 0\n",
+                edge_log.display()
+            ),
+        );
+        let picker_cmd = format!(
+            "tee '{}' >/dev/null; printf '[1] kitty — ~\\n'",
+            picker_log.display()
+        );
+        let rc = overview_with(
+            &rt,
+            &proc_root,
+            &sock_path,
+            Some(&edge_ok),
+            None,
+            Some(&picker_cmd),
+            "false",
+        );
+        assert_eq!(rc, ExitCode::SUCCESS);
+        assert_eq!(
+            std::fs::read_to_string(&edge_log).unwrap().trim(),
+            "panel windows"
+        );
+        assert!(!picker_log.exists());
+
+        // 2. Live edge whose `panel windows` fails falls through to the window-pick fallback.
+        let edge_fail = base.join("edge-fail.sh");
+        write_script(&edge_fail, "#!/bin/sh\nexit 1\n");
+
+        let listener = std::os::unix::net::UnixListener::bind(&sock_path).unwrap();
+        let server = std::thread::spawn(move || {
+            let mut cmds = Vec::new();
+            for reply in [
+                r#"{"ok":true,"snapshot":{"outputs":[{"id":2}],"elements":[{"id":[10,3],"app_id":"kitty","title":"~"}]}}"#,
+                r#"{"ok":true}"#,
+                r#"{"ok":true}"#,
+            ] {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut line = String::new();
+                BufReader::new(stream.try_clone().unwrap())
+                    .read_line(&mut line)
+                    .unwrap();
+                let req = json::parse(line.trim()).unwrap();
+                cmds.push(req.get("cmd").and_then(Value::as_str).unwrap().to_string());
+                writeln!(stream, "{reply}").unwrap();
+            }
+            cmds
+        });
+
+        let rc = overview_with(
+            &rt,
+            &proc_root,
+            &sock_path,
+            Some(&edge_fail),
+            None,
+            Some(&picker_cmd),
+            "false",
+        );
+        assert_eq!(rc, ExitCode::SUCCESS);
+        assert_eq!(
+            server.join().unwrap(),
+            vec!["snapshot", "focus", "navigate"]
+        );
+        assert_eq!(
+            std::fs::read_to_string(&picker_log).unwrap().trim(),
+            "[1] kitty — ~"
+        );
 
         let _ = std::fs::remove_dir_all(&base);
     }

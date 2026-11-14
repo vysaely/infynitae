@@ -1453,7 +1453,7 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
     for output in existing {
         app.create_output_surface(output);
     }
-    // notes the config file's time: a later change is read again
+    // catch any config change or creation between startup and the first event-loop wait
     app.shell.reload_if_changed();
     if let Some(name) = initial_panel {
         app.shell.toggle_named(name);

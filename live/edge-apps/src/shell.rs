@@ -149,8 +149,16 @@ pub struct Shell {
     pub fetch_needed: bool,
 }
 
+fn file_mtime(path: &std::path::Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(path).and_then(|m| m.modified()).ok()
+}
+
 impl Shell {
     pub fn new(cfg: Config, apps: Vec<App>) -> Shell {
+        Self::new_at(cfg, apps, &crate::config::config_path())
+    }
+
+    pub fn new_at(cfg: Config, apps: Vec<App>, config_path: &std::path::Path) -> Shell {
         let theme = Theme::from_config(&cfg);
         let panels = cfg
             .panels
@@ -168,7 +176,7 @@ impl Shell {
             notes: Vec::new(),
             notify: Default::default(),
             ask: Default::default(),
-            config_mtime: None,
+            config_mtime: file_mtime(config_path),
             transient: None,
             edit_menu: None,
             query: String::new(),
@@ -582,23 +590,24 @@ impl Shell {
 
     /// The config file changed (a Settings card, `settings.sh set`, the owner's editor): read it
     /// again and rebuild the panels, the open one staying open. Never while a panel is edited
-    /// (Done saves that one). The first call only notes the file's time. True when it reloaded.
+    /// (Done saves that one). True when it reloaded.
     pub fn reload_if_changed(&mut self) -> bool {
+        self.reload_if_changed_at(&crate::config::config_path())
+    }
+
+    pub fn reload_if_changed_at(&mut self, path: &std::path::Path) -> bool {
         if self.edit.active {
             return false;
         }
-        let mtime = std::fs::metadata(crate::config::config_path())
-            .and_then(|m| m.modified())
-            .ok();
-        if self.config_mtime.is_none() || mtime.is_none() {
-            self.config_mtime = mtime;
-            return false;
-        }
+        let mtime = file_mtime(path);
         if mtime == self.config_mtime {
             return false;
         }
         self.config_mtime = mtime;
-        let cfg = Config::load();
+        if mtime.is_none() {
+            return false;
+        }
+        let cfg = Config::from_text(&std::fs::read_to_string(path).unwrap_or_default());
         if cfg.panels == self.cfg.panels && cfg.favorites == self.cfg.favorites {
             // the same panels and cards: keep them (an open list, the accent picker stay as they
             // are while a setting is written); the colours and the cards' data follow
@@ -2475,6 +2484,44 @@ mod tests {
         assert!(sh.click(1920.0, 1080.0, dx, dy, Button::Left));
         let cfg_written2 = std::fs::read_to_string(&cfg_path).unwrap();
         assert!(cfg_written2.contains("PANEL_APPS="));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reload_if_changed_catches_first_poll_writes_and_post_start_creation() {
+        let dir =
+            std::env::temp_dir().join(format!("infynitae-shell-mtime-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg_path = dir.join("config");
+
+        // 1. Config exists at start, then changes before the very first reload_if_changed poll.
+        std::fs::write(&cfg_path, "ACCENT=\"#112233\"\n").unwrap();
+        let mut sh = Shell::new_at(
+            Config::from_text(&std::fs::read_to_string(&cfg_path).unwrap()),
+            Vec::new(),
+            &cfg_path,
+        );
+        assert!(!sh.reload_if_changed_at(&cfg_path));
+        std::fs::write(&cfg_path, "ACCENT=\"#445566\"\n").unwrap();
+        let future = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
+        std::fs::File::options()
+            .write(true)
+            .open(&cfg_path)
+            .unwrap()
+            .set_modified(future)
+            .unwrap();
+        assert!(sh.reload_if_changed_at(&cfg_path));
+        assert_eq!(sh.cfg.accent, [0x44, 0x55, 0x66]);
+
+        // 2. Config does not exist at start, then is created after start.
+        let new_cfg_path = dir.join("config-new");
+        let mut sh_missing = Shell::new_at(Config::from_text(""), Vec::new(), &new_cfg_path);
+        assert!(!sh_missing.reload_if_changed_at(&new_cfg_path));
+        std::fs::write(&new_cfg_path, "ACCENT=\"#778899\"\n").unwrap();
+        assert!(sh_missing.reload_if_changed_at(&new_cfg_path));
+        assert_eq!(sh_missing.cfg.accent, [0x77, 0x88, 0x99]);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
