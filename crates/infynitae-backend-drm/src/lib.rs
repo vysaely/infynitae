@@ -38,6 +38,7 @@ use smithay::backend::allocator::gbm::{GbmAllocator, GbmBufferFlags, GbmDevice};
 use smithay::backend::drm::compositor::{DrmCompositor, FrameFlags};
 use smithay::backend::drm::exporter::gbm::GbmFramebufferExporter;
 use smithay::backend::drm::{DrmDevice, DrmDeviceFd, DrmEvent};
+use smithay::backend::egl::fence::EGLFence;
 use smithay::backend::egl::{EGLContext, EGLDisplay};
 use smithay::backend::input::{
     AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, InputEvent, KeyState,
@@ -46,13 +47,16 @@ use smithay::backend::input::{
 };
 use smithay::backend::libinput::{LibinputInputBackend, LibinputSessionInterface};
 use smithay::backend::renderer::damage::OutputDamageTracker;
-use smithay::backend::renderer::gles::{GlesRenderer, GlesTexture};
+use smithay::backend::renderer::gles::{Capability, GlesRenderer, GlesTexture};
+use smithay::backend::renderer::sync::SyncPoint;
 use smithay::backend::renderer::{Bind, ExportMem, Offscreen, Texture};
 use smithay::backend::renderer::{Renderer, TextureFilter};
 use smithay::backend::session::libseat::LibSeatSession;
 use smithay::backend::session::{Event as SeatEvent, Session as _};
 use smithay::output::OutputModeSource;
-use smithay::reexports::calloop::EventLoop;
+use smithay::reexports::calloop::generic::Generic;
+use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
+use smithay::reexports::calloop::{EventLoop, Interest, Mode, PostAction};
 use smithay::reexports::drm::control::{Device, ModeTypeFlags, connector, crtc, property};
 use smithay::reexports::input::Libinput;
 use smithay::reexports::rustix::fs::OFlags;
@@ -563,9 +567,11 @@ struct LoopData {
     rescan_at: Option<std::time::Instant>,
     /// The laptop's lid is closed: its panel is left out while another screen is connected.
     lid_closed: bool,
-    /// Captures into memory whose GPU copy was started last turn: copied out and handed over at the next turn,
-    /// when the GPU has done it, instead of this loop waiting for the GPU (review 2026-11-11, 1).
+    /// Captures into memory whose GPU copy was started and waits for its GPU fence before mapping
+    /// (`deliver_copies`), instead of blocking the loop on `map_texture`.
     capture_copies: Vec<PendingCopy>,
+    /// Screens whose `wl_shm` capture was deferred while a readback on that screen was in flight.
+    capture_readback_deferred: Vec<OutputId>,
     /// `ConsoleOptions::virtual_screen`.
     virtual_screen_enabled: bool,
     /// The virtual screen standing in while no screen is connected.
@@ -1614,6 +1620,7 @@ pub fn run_console_with(
         rescan_at: None,
         lid_closed: false,
         capture_copies: Vec::new(),
+        capture_readback_deferred: Vec::new(),
         virtual_screen_enabled: options.virtual_screen,
         virtual_screen: None,
     };
@@ -2031,6 +2038,23 @@ pub fn run_console_with(
             data.session.flush();
         }
 
+        turn.mark("new windows");
+        if !data.capture_copies.is_empty() && data.active {
+            let mut woken = Vec::new();
+            deliver_copies(&mut data.renderer, &mut data.capture_copies, &mut woken);
+            for id in woken {
+                if let Some(pos) = data
+                    .capture_readback_deferred
+                    .iter()
+                    .position(|&deferred_id| deferred_id == id)
+                {
+                    data.capture_readback_deferred.swap_remove(pos);
+                    data.state.screencopy.wake_waiting(id);
+                }
+            }
+            turn.mark("capture copies");
+            data.session.flush();
+        }
         let has_screencopy = data
             .screens
             .iter()
@@ -2043,7 +2067,6 @@ pub fn run_console_with(
             .screens
             .iter()
             .any(|s| s.deferred.is_some_and(|t| t <= now));
-        turn.mark("new windows");
         if (data.session.frame_due() || has_screencopy || deferred_due) && data.active {
             // what this turn's input made goes to the clients first: a game reads its mouse motion
             // now, not after the compositor's own drawing (review 2026-11-12)
@@ -2131,6 +2154,9 @@ fn recover_renderer(data: &mut LoopData) {
             req.fail();
         }
     }
+    for id in data.capture_readback_deferred.drain(..) {
+        data.state.screencopy.wake_waiting(id);
+    }
     for s in &mut data.screens {
         s.screencopy_texture = None;
         let _ = s.compositor.reset_state();
@@ -2141,30 +2167,50 @@ fn recover_renderer(data: &mut LoopData) {
     data.session.request_frame();
 }
 
-fn sync_scaling_filter(data: &mut LoopData) {
-    let next = data.state.scaling_filter;
-    if next == data.scaling_filter {
-        return;
+fn apply_scaling_filter<K>(
+    current: &mut infynitae_wayland::ZoomFilter,
+    next: infynitae_wayland::ZoomFilter,
+    renderer: &mut GlesRenderer,
+    zoom_cache: &mut smooth::ZoomCache,
+    screencopy_damage: &Mutex<infynitae_wayland::screencopy::CaptureDamage<K>>,
+) -> bool {
+    if next == *current {
+        return false;
     }
-    data.scaling_filter = next;
+    *current = next;
     let tex_filter = if next.uses_nearest_upscale() {
         TextureFilter::Nearest
     } else {
         TextureFilter::Linear
     };
-    if let Err(e) = data.renderer.upscale_filter(tex_filter) {
+    if let Err(e) = renderer.upscale_filter(tex_filter) {
         log_line!("[infynitae] Warning: failed to update upscale filter: {e:?}");
     }
     if !next.averages_zoom_out() {
-        data.zoom_cache.clear_mips();
+        zoom_cache.clear_mips();
     }
     if !next.is_fsr() {
-        data.zoom_cache.clear_fsr();
+        zoom_cache.clear_fsr();
+    }
+    *screencopy_damage.lock().unwrap() = Default::default();
+    true
+}
+
+fn sync_scaling_filter(data: &mut LoopData) {
+    if !apply_scaling_filter(
+        &mut data.scaling_filter,
+        data.state.scaling_filter,
+        &mut data.renderer,
+        &mut data.zoom_cache,
+        &data.state.screencopy.damage,
+    ) {
+        return;
     }
     for s in &mut data.screens {
-        let _ = s.compositor.reset_state();
+        // Redraw with the new filter without resetting DRM surface state (which forces a blocking
+        // mode set on the next flip).
+        s.compositor.reset_buffers();
     }
-    *data.state.screencopy.damage.lock().unwrap() = Default::default();
 }
 
 /// Async page flips refused in a row before a screen stops trying (until its window stops
@@ -2177,8 +2223,6 @@ const TEARING_RETRY: Duration = Duration::from_secs(5);
 /// One frame on every screen that is not waiting for its vblank. A screen whose frame changed
 /// nothing completes its frame callbacks now; a queued one at its vblank.
 fn render(data: &mut LoopData, turn: &mut TurnClock) {
-    deliver_copies(&mut data.renderer, &mut data.capture_copies);
-    turn.mark("capture copies");
     let locked = data.state.is_locked();
     let clear = if locked {
         convert::LOCKED_CLEAR
@@ -2198,6 +2242,7 @@ fn render(data: &mut LoopData, turn: &mut TurnClock) {
             &mut data.renderer,
             &mut data.screens[i].screencopy_texture,
             &mut data.capture_copies,
+            &mut data.capture_readback_deferred,
             &mut data.capture_log,
             turn,
             data.zoom_programs.as_ref(),
@@ -2621,6 +2666,7 @@ fn render(data: &mut LoopData, turn: &mut TurnClock) {
             &mut data.renderer,
             &mut v.screencopy_texture,
             &mut data.capture_copies,
+            &mut data.capture_readback_deferred,
             &mut data.capture_log,
             turn,
             data.zoom_programs.as_ref(),
@@ -2636,9 +2682,12 @@ fn render(data: &mut LoopData, turn: &mut TurnClock) {
     }
     data.zoom_cache.gc();
     confirm_lock(data);
-    // a capture copied out of the GPU this turn is handed over at the next one: make sure there is one
-    if !data.capture_copies.is_empty() {
-        data.session.request_frame();
+    // Watch newly started GPU readbacks so `deliver_copies` runs once the GPU finishes them.
+    for c in &mut data.capture_copies {
+        if !c.watched {
+            c.watched = true;
+            watch_copy_sync(&data.loop_handle, &c.sync, &mut data.session);
+        }
     }
     turn.mark("post render");
     data.session.flush();
@@ -2665,6 +2714,7 @@ fn serve_captures(
     renderer: &mut GlesRenderer,
     screencopy_texture: &mut Option<GlesTexture>,
     copies: &mut Vec<PendingCopy>,
+    capture_readback_deferred: &mut Vec<OutputId>,
     capture_log: &mut CaptureSeen<(
         Option<smithay::reexports::wayland_server::backend::ClientId>,
         Option<infynitae_wayland::screencopy::Consumer>,
@@ -2687,8 +2737,14 @@ fn serve_captures(
         .take_pending(output_id)
         .into_iter()
         .partition(|p| p.window.is_some());
+    let mut deferred_shm = Vec::new();
     for req in windows {
         let Some(window) = req.window else { continue };
+        let is_dmabuf = smithay::wayland::dmabuf::get_dmabuf(&req.buffer).is_ok();
+        if !is_dmabuf && has_pending_readback(copies, output_id) {
+            deferred_shm.push(req);
+            continue;
+        }
         match convert::window_capture_elements(state, renderer, window) {
             Ok(Some((elements, k, size))) => {
                 turn.mark("capture elements");
@@ -2700,6 +2756,7 @@ fn serve_captures(
                     copies,
                     capture_log,
                     turn,
+                    output_id,
                     vec![req],
                     &elements,
                     size,
@@ -2715,6 +2772,21 @@ fn serve_captures(
                 req.fail();
             }
         }
+    }
+    let pending = if has_pending_readback(copies, output_id) {
+        let (gpu, shm): (Vec<_>, Vec<_>) = pending
+            .into_iter()
+            .partition(|req| smithay::wayland::dmabuf::get_dmabuf(&req.buffer).is_ok());
+        deferred_shm.extend(shm);
+        gpu
+    } else {
+        pending
+    };
+    if !deferred_shm.is_empty() {
+        if !capture_readback_deferred.contains(&output_id) {
+            capture_readback_deferred.push(output_id);
+        }
+        state.screencopy.defer(deferred_shm);
     }
     if pending.is_empty() {
         return;
@@ -2788,6 +2860,7 @@ fn serve_captures(
         copies,
         capture_log,
         turn,
+        output_id,
         pending,
         &elements,
         size,
@@ -2883,6 +2956,7 @@ fn handle_screencopy<E>(
         Option<infynitae_wayland::screencopy::Consumer>,
     )>,
     turn: &mut TurnClock,
+    output_id: OutputId,
     pending: Vec<infynitae_wayland::screencopy::PendingFrame>,
     elements: &[E],
     size: (i32, i32),
@@ -3017,10 +3091,15 @@ fn handle_screencopy<E>(
             return;
         }
     };
+    drop(framebuffer);
+    let sync = readback_sync(renderer);
 
-    // the GPU copies in the background; the next turn hands it over (`deliver_copies`)
+    // the GPU copies in the background; `deliver_copies` maps it only once `sync` has signalled
     copies.push(PendingCopy {
         mapping,
+        sync,
+        watched: false,
+        output_id,
         reqs: remaining,
         size,
         view,
@@ -3029,9 +3108,82 @@ fn handle_screencopy<E>(
     });
 }
 
+/// Inserts and flushes an EGL fence after `copy_framebuffer` so we know when the GPU has finished
+/// writing into the PBO before mapping it.
+#[allow(unsafe_code)]
+fn readback_sync(renderer: &mut GlesRenderer) -> SyncPoint {
+    if renderer.capabilities().contains(&Capability::ExportFence) {
+        let display = renderer.egl_context().display().clone();
+        if let Ok(Ok(fence)) = renderer.with_context(|gl| {
+            let fence = EGLFence::create(&display);
+            if fence.is_ok() {
+                unsafe {
+                    gl.Flush();
+                }
+            }
+            fence
+        }) {
+            return SyncPoint::from(fence);
+        }
+    }
+    SyncPoint::signaled()
+}
+
+/// Wakes the event loop when `sync` signals so a completed capture copy is delivered without polling.
+fn watch_copy_sync(
+    loop_handle: &smithay::reexports::calloop::LoopHandle<'static, LoopData>,
+    sync: &SyncPoint,
+    session: &mut Session,
+) {
+    if sync.is_reached() {
+        session.request_frame();
+        return;
+    }
+    if let Some(fd) = sync.export() {
+        let source = Generic::new(fd, Interest::READ, Mode::Level);
+        if loop_handle
+            .insert_source(source, |_, _, _| Ok(PostAction::Remove))
+            .is_ok()
+        {
+            return;
+        }
+    }
+    let _ = loop_handle.insert_source(
+        Timer::from_duration(Duration::from_millis(2)),
+        |_, _, data| {
+            if data.capture_copies.iter().all(|c| c.sync.is_reached()) {
+                TimeoutAction::Drop
+            } else {
+                TimeoutAction::ToDuration(Duration::from_millis(2))
+            }
+        },
+    );
+}
+
+fn has_pending_readback(copies: &[PendingCopy], output_id: OutputId) -> bool {
+    copies.iter().any(|c| c.output_id == output_id)
+}
+
+fn take_ready<T>(items: &mut Vec<T>, mut is_ready: impl FnMut(&T) -> bool) -> Vec<T> {
+    let mut ready = Vec::with_capacity(items.len());
+    let mut pending = Vec::new();
+    for item in items.drain(..) {
+        if is_ready(&item) {
+            ready.push(item);
+        } else {
+            pending.push(item);
+        }
+    }
+    *items = pending;
+    ready
+}
+
 /// A capture into memory whose copy out of the GPU was started: handed over by `deliver_copies`.
 struct PendingCopy {
     mapping: <GlesRenderer as ExportMem>::TextureMapping,
+    sync: SyncPoint,
+    watched: bool,
+    output_id: OutputId,
     reqs: Vec<infynitae_wayland::screencopy::PendingFrame>,
     size: (i32, i32),
     view: (i32, i32),
@@ -3039,19 +3191,30 @@ struct PendingCopy {
     now: std::time::Duration,
 }
 
-/// Hands over the captures copied out of the GPU since the last turn (the GPU has finished them by now, so
-/// mapping does not wait on it the way mapping right after the copy did).
+/// Hands over the captures copied out of the GPU whose fence has signalled, leaving unfinished
+/// readbacks in `copies` so `map_texture` never stalls the event loop.
 #[allow(unsafe_code)]
-fn deliver_copies(renderer: &mut GlesRenderer, copies: &mut Vec<PendingCopy>) {
+fn deliver_copies(
+    renderer: &mut GlesRenderer,
+    copies: &mut Vec<PendingCopy>,
+    woken_outputs: &mut Vec<OutputId>,
+) {
+    let ready = take_ready(copies, |c| c.sync.is_reached());
     for PendingCopy {
         mapping,
+        sync: _,
+        watched: _,
+        output_id,
         reqs: remaining,
         size,
         view,
         transform,
         now,
-    } in copies.drain(..)
+    } in ready
     {
+        if !woken_outputs.contains(&output_id) {
+            woken_outputs.push(output_id);
+        }
         let slice = match ExportMem::map_texture(renderer, &mapping) {
             Ok(s) => s,
             Err(e) => {
@@ -4549,5 +4712,298 @@ mod tests {
             "LOCK_WHEN_AWAY=\"\"\nIDLE_AUTO_LOCK=\"false\"\n"
         ));
         assert!(parse_lock_when_away("IDLE_AUTO_LOCK=\"not-a-bool\"\n"));
+    }
+
+    #[test]
+    fn take_ready_leaves_unsignaled_fences_pending() {
+        use smithay::backend::renderer::sync::{Fence, Interrupted, SyncPoint};
+        use std::os::unix::io::OwnedFd;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        #[derive(Debug)]
+        struct TestFence(Arc<AtomicBool>);
+
+        impl Fence for TestFence {
+            fn is_signaled(&self) -> bool {
+                self.0.load(Ordering::Acquire)
+            }
+            fn wait(&self) -> Result<(), Interrupted> {
+                Ok(())
+            }
+            fn is_exportable(&self) -> bool {
+                false
+            }
+            fn export(&self) -> Option<OwnedFd> {
+                None
+            }
+        }
+
+        let slow_flag = Arc::new(AtomicBool::new(false));
+        let mut items = vec![
+            (1u32, SyncPoint::from(TestFence(slow_flag.clone()))),
+            (2u32, SyncPoint::signaled()),
+        ];
+
+        let ready = take_ready(&mut items, |(_, sync)| sync.is_reached());
+        assert_eq!(ready.iter().map(|(id, _)| *id).collect::<Vec<_>>(), [2]);
+        assert_eq!(items.iter().map(|(id, _)| *id).collect::<Vec<_>>(), [1]);
+
+        slow_flag.store(true, Ordering::Release);
+        let ready = take_ready(&mut items, |(_, sync)| sync.is_reached());
+        assert_eq!(ready.iter().map(|(id, _)| *id).collect::<Vec<_>>(), [1]);
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn capture_readback_sync_signals_and_delivers_when_gpu_finishes() {
+        use smithay::backend::allocator::Fourcc;
+        use smithay::backend::allocator::gbm::GbmDevice;
+        use smithay::backend::renderer::gles::{Capability, GlesTexture};
+        use smithay::backend::renderer::{Bind, ExportMem, Frame, Offscreen, Renderer};
+        use smithay::utils::{DeviceFd, Rectangle, Transform};
+
+        let Some(mut renderer) = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open("/dev/dri/renderD128")
+            .ok()
+            .and_then(|f| {
+                GbmDevice::new(DrmDeviceFd::new(DeviceFd::from(
+                    std::os::fd::OwnedFd::from(f),
+                )))
+                .ok()
+            })
+            .and_then(|gbm| gles_renderer(&gbm).ok())
+        else {
+            eprintln!("no GPU render node: skipped");
+            return;
+        };
+
+        let size = (4, 4);
+        let mut offscreen: GlesTexture =
+            Offscreen::create_buffer(&mut renderer, Fourcc::Argb8888, size.into())
+                .expect("offscreen");
+        let mapping = {
+            let mut target = renderer.bind(&mut offscreen).expect("bind");
+            let mut frame = renderer
+                .render(&mut target, size.into(), Transform::Normal)
+                .expect("frame");
+            frame
+                .clear(
+                    [0.2, 0.4, 0.6, 1.0].into(),
+                    &[Rectangle::from_size(size.into())],
+                )
+                .expect("clear");
+            let _ = frame.finish().expect("finish");
+            ExportMem::copy_framebuffer(
+                &mut renderer,
+                &target,
+                Rectangle::from_size(size.into()),
+                Fourcc::Argb8888,
+            )
+            .expect("copy_framebuffer")
+        };
+
+        let sync = readback_sync(&mut renderer);
+        if renderer.capabilities().contains(&Capability::ExportFence) {
+            assert!(sync.contains_fence(), "readback should carry an EGL fence");
+            if sync.is_exportable() {
+                assert!(sync.export().is_some());
+            }
+        }
+        sync.wait().expect("fence wait");
+        assert!(sync.is_reached());
+
+        let (mut core, _, _, mut token) = Core::new(Default::default());
+        let make_output = |connector: &str| OutputDescriptor {
+            key: OutputKey {
+                device: "test".into(),
+                connector: connector.into(),
+                make: "Test".into(),
+                model: "Test".into(),
+                serial: None,
+            },
+            mode: (1920, 1080),
+            transform: infynitae_core::output::Transform::Normal,
+            scale_120: 120,
+            refresh_mhz: 60_000,
+        };
+        let (id1, _) = core
+            .output_connected(&mut token, make_output("DP-1"))
+            .expect("output 1");
+        let (id2, _) = core
+            .output_connected(&mut token, make_output("DP-2"))
+            .expect("output 2");
+
+        let mut copies = vec![PendingCopy {
+            mapping,
+            sync,
+            watched: false,
+            output_id: id1,
+            reqs: Vec::new(),
+            size,
+            view: size,
+            transform: infynitae_core::output::Transform::Normal,
+            now: Duration::ZERO,
+        }];
+        assert!(has_pending_readback(&copies, id1));
+        assert!(!has_pending_readback(&copies, id2));
+
+        let mut woken = Vec::new();
+        deliver_copies(&mut renderer, &mut copies, &mut woken);
+        assert!(copies.is_empty());
+        assert_eq!(woken, [id1]);
+    }
+
+    #[test]
+    fn scaling_filter_change_resets_buffers_and_forces_full_redraw() {
+        use infynitae_wayland::ZoomFilter;
+        use smithay::backend::allocator::dmabuf::AsDmabuf;
+        use smithay::backend::allocator::gbm::{GbmAllocator, GbmBufferFlags, GbmDevice};
+        use smithay::backend::allocator::{Fourcc, Modifier, Swapchain};
+        use smithay::backend::renderer::Bind;
+        use smithay::backend::renderer::damage::OutputDamageTracker;
+        use smithay::backend::renderer::element::solid::SolidColorRenderElement;
+        use smithay::backend::renderer::element::{Id, Kind};
+        use smithay::utils::{DeviceFd, Transform};
+
+        let Some(gbm) = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open("/dev/dri/renderD128")
+            .ok()
+            .and_then(|f| {
+                GbmDevice::new(DrmDeviceFd::new(DeviceFd::from(
+                    std::os::fd::OwnedFd::from(f),
+                )))
+                .ok()
+            })
+        else {
+            eprintln!("no GPU render node: skipped");
+            return;
+        };
+        let Ok(mut renderer) = gles_renderer(&gbm) else {
+            eprintln!("no GLES renderer: skipped");
+            return;
+        };
+
+        let mut current = ZoomFilter::Sharp;
+        let mut zoom_cache = smooth::ZoomCache::default();
+        let damage = Mutex::new(infynitae_wayland::screencopy::CaptureDamage::default());
+        let elem = SolidColorRenderElement::new(
+            Id::new(),
+            Rectangle::from_size((16, 16).into()),
+            0,
+            [0.3, 0.5, 0.7, 1.0],
+            Kind::Unspecified,
+        );
+        let elements = [elem];
+        let now = std::time::Instant::now();
+        assert!(
+            damage
+                .lock()
+                .unwrap()
+                .damage(&"c", (16, 16), 1.0, Transform::Normal, &elements, now)
+                .is_some()
+        );
+        assert!(
+            damage
+                .lock()
+                .unwrap()
+                .damage(&"c", (16, 16), 1.0, Transform::Normal, &elements, now)
+                .is_none()
+        );
+
+        // Unchanged filter is a no-op and preserves screencopy damage state.
+        assert!(!apply_scaling_filter(
+            &mut current,
+            ZoomFilter::Sharp,
+            &mut renderer,
+            &mut zoom_cache,
+            &damage,
+        ));
+        assert!(
+            damage
+                .lock()
+                .unwrap()
+                .damage(&"c", (16, 16), 1.0, Transform::Normal, &elements, now)
+                .is_none()
+        );
+
+        // Changed filter updates state and clears screencopy damage so captures redraw too.
+        assert!(apply_scaling_filter(
+            &mut current,
+            ZoomFilter::Smooth,
+            &mut renderer,
+            &mut zoom_cache,
+            &damage,
+        ));
+        assert_eq!(current, ZoomFilter::Smooth);
+        assert!(
+            damage
+                .lock()
+                .unwrap()
+                .damage(&"c", (16, 16), 1.0, Transform::Normal, &elements, now)
+                .is_some()
+        );
+
+        // Resetting swapchain buffers forces age=0 and a full redraw on identical elements.
+        let allocator = GbmAllocator::new(gbm, GbmBufferFlags::RENDERING);
+        let mut swapchain = Swapchain::new(
+            allocator,
+            16,
+            16,
+            Fourcc::Argb8888,
+            vec![Modifier::Linear, Modifier::Invalid],
+        );
+        let mut tracker = OutputDamageTracker::new((16, 16), 1.0, Transform::Normal);
+
+        // Seed 4 slots so the next acquire returns a buffer with age > 0 and zero damage.
+        for _ in 0..4 {
+            let slot = swapchain.acquire().expect("acquire").expect("slot");
+            let age = usize::from(slot.age());
+            let mut dmabuf = slot.export().expect("dmabuf");
+            let mut fb = renderer.bind(&mut dmabuf).expect("bind");
+            let _ = tracker
+                .render_output(&mut renderer, &mut fb, age, &elements, [0.0, 0.0, 0.0, 1.0])
+                .expect("render");
+            swapchain.submitted(&slot);
+        }
+        let steady = swapchain.acquire().expect("acquire").expect("slot");
+        assert!(steady.age() > 0);
+        let mut dmabuf = steady.export().expect("dmabuf");
+        let mut fb = renderer.bind(&mut dmabuf).expect("bind");
+        let steady_res = tracker
+            .render_output(
+                &mut renderer,
+                &mut fb,
+                usize::from(steady.age()),
+                &elements,
+                [0.0, 0.0, 0.0, 1.0],
+            )
+            .expect("render");
+        assert!(steady_res.damage.is_none(), "steady frame has no damage");
+        drop(fb);
+        swapchain.submitted(&steady);
+        drop(steady);
+
+        swapchain.reset_buffers();
+        let redrawn = swapchain.acquire().expect("acquire").expect("slot");
+        assert_eq!(redrawn.age(), 0);
+        let mut dmabuf = redrawn.export().expect("dmabuf");
+        let mut fb = renderer.bind(&mut dmabuf).expect("bind");
+        let redrawn_res = tracker
+            .render_output(
+                &mut renderer,
+                &mut fb,
+                usize::from(redrawn.age()),
+                &elements,
+                [0.0, 0.0, 0.0, 1.0],
+            )
+            .expect("render");
+        assert!(
+            redrawn_res.damage.is_some(),
+            "reset_buffers forces a full redraw even when elements are unchanged"
+        );
     }
 }
