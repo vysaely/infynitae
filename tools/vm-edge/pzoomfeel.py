@@ -194,8 +194,8 @@ def set_config_feel(cfg_path: Path, feel: str) -> None:
     else:
         updated = text.rstrip("\n") + ("\n" if text else "") + line + "\n"
     cfg_path.write_text(updated, encoding="utf-8")
-    subprocess.run(["infynitae-reload"], check=True)
-    time.sleep(0.15)
+    # the compositor rereads its config when the file's time changes (it checks about once a second)
+    time.sleep(1.5)
 
 
 def extract_camera_samples(events: List[Dict[str, object]], output_id: int) -> List[Tuple[Tuple[float, float], float]]:
@@ -284,8 +284,14 @@ def run_live(args: argparse.Namespace) -> int:
     cfg_path = Path(args.config)
     had_cfg = cfg_path.exists()
     backup = cfg_path.read_text(encoding="utf-8") if had_cfg else None
-    client = ShellClient(Path(args.socket))
+    # the virtual wheel needs root; the compositor's shell socket accepts only its own user, so the
+    # script drops to the session user (the socket's owner) once the wheel is open
     uinput = UInputWheel()
+    if os.geteuid() == 0:
+        st = os.stat(args.socket)
+        os.setgid(st.st_gid)
+        os.setuid(st.st_uid)
+    client = ShellClient(Path(args.socket))
     try:
         snap = client.request("snapshot")["snapshot"]
         out = snap["outputs"][0]  # type: ignore[index]
@@ -323,8 +329,8 @@ def run_live(args: argparse.Namespace) -> int:
         uinput.close()
         client.close()
         if backup is not None:
+            # the compositor rereads its config when the file changes
             cfg_path.write_text(backup, encoding="utf-8")
-            subprocess.run(["infynitae-reload"], check=False)
     return 0
 
 
