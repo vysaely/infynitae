@@ -1,0 +1,28 @@
+# Shared config parsing cases for shell (live/config.sh + infy_on) and future parser checks.
+# Format (tab-separated, empty lines and # lines ignored; line is last so values may hold spaces/tabs):
+# KEY	EXPECTED	ON_OR_OFF	LINE
+# ON_OR_OFF is "on", "off", or "-" (non-boolean).
+# Note: YES/ON/NO/OFF stay omitted until infy_on and tools/test-session are updated together.
+
+TEST_PLAIN	hello	-	TEST_PLAIN=hello
+TEST_DQ	hello world	-	TEST_DQ="hello world"
+TEST_SQ	hello world	-	TEST_SQ='hello world'
+TEST_HASH_IN_QUOTES	#7aa2f7	-	TEST_HASH_IN_QUOTES="#7aa2f7"
+TEST_INLINE_COMMENT	12	-	TEST_INLINE_COMMENT=12 # pixels
+TEST_EXPORT	exported	-	export TEST_EXPORT="exported"
+TEST_EMPTY		off	TEST_EMPTY=""
+TEST_COMMENTED		-	# TEST_COMMENTED="ignored"
+
+TEST_BOOL_1	1	on	TEST_BOOL_1=1
+TEST_BOOL_TRUE_L	true	on	TEST_BOOL_TRUE_L="true"
+TEST_BOOL_YES_L	yes	on	TEST_BOOL_YES_L="yes"
+TEST_BOOL_ON_L	on	on	TEST_BOOL_ON_L="on"
+TEST_BOOL_TRUE_U	TRUE	on	TEST_BOOL_TRUE_U="TRUE"
+TEST_BOOL_TRUE_T	True	on	TEST_BOOL_TRUE_T="True"
+
+TEST_BOOL_0	0	off	TEST_BOOL_0=0
+TEST_BOOL_FALSE_L	false	off	TEST_BOOL_FALSE_L="false"
+TEST_BOOL_NO_L	no	off	TEST_BOOL_NO_L="no"
+TEST_BOOL_OFF_L	off	off	TEST_BOOL_OFF_L="off"
+TEST_BOOL_FALSE_U	FALSE	off	TEST_BOOL_FALSE_U="FALSE"
+TEST_BOOL_FALSE_T	False	off	TEST_BOOL_FALSE_T="False"

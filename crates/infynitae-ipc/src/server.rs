@@ -17,14 +17,19 @@ use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use infynitae_core::input::keys::{KeyCapture, format_chord};
 use infynitae_core::protocol::Effect;
 use infynitae_core::{Core, ShellCommand, ShellError, ShellPort, ShellStream};
 
+use crate::json::Value;
 use crate::model::Model;
 use crate::protocol::{self, MAX_LINE, Request, RequestError};
 
 /// How many lines may wait for one shell before it is disconnected.
 pub const OUTBOX: usize = 1024;
+
+/// Maximum wait for `capture-chord` before timing out (`error: "timeout"`).
+const CAPTURE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Connections open at once (each has two threads). One more is closed at once; the acceptor
 /// goes on (owner, 2026-10-31). A shell needs one or two.
@@ -74,6 +79,12 @@ pub struct Serviced {
 }
 
 /// The shell server: owner of the `ShellPort` (C7.1) and of every connection's state (OBJ-31).
+struct PendingCapture {
+    conn_id: u64,
+    req_id: Value,
+    deadline: Instant,
+}
+
 pub struct ShellServer {
     port: ShellPort,
     wake: Wake,
@@ -97,6 +108,9 @@ pub struct ShellServer {
     /// A `service` came before `next_refresh`: Core may have changed since the last refresh, and
     /// one is owed at `next_refresh` (`wake_at`).
     refresh_owed: bool,
+    /// In-flight `capture-chord` request (at most one at a time).
+    capture: Option<PendingCapture>,
+    capture_timeout: Duration,
 }
 
 impl ShellServer {
@@ -118,6 +132,8 @@ impl ShellServer {
             refresh_owed: false,
             live: Arc::default(),
             acceptor: None,
+            capture: None,
+            capture_timeout: CAPTURE_TIMEOUT,
         }
     }
 
@@ -186,10 +202,20 @@ impl ShellServer {
         self.refresh_every = every;
     }
 
+    /// Overrides the `capture-chord` timeout (default 10 s); useful for unit tests.
+    pub fn set_capture_timeout(&mut self, timeout: Duration) {
+        self.capture_timeout = timeout;
+    }
+
     /// When the loop must turn so subscribers get what changed (`None`: nothing is owed). A loop
     /// with nothing happening sleeps after that one turn (INV-IDLE-1).
     pub fn wake_at(&self) -> Option<Instant> {
-        self.refresh_owed.then_some(self.next_refresh).flatten()
+        let refresh = self.refresh_owed.then_some(self.next_refresh).flatten();
+        let capture = self.capture.as_ref().map(|c| c.deadline);
+        match (refresh, capture) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        }
     }
 
     pub fn service(&mut self, core: &mut Core) -> Serviced {
@@ -220,6 +246,7 @@ impl ShellServer {
         } else {
             self.refresh_owed = false;
         }
+        self.service_capture(core, &mut done);
         done
     }
 
@@ -230,6 +257,18 @@ impl ShellServer {
         let (rid, req) = protocol::parse_request(line, core);
         let reply = match req {
             Err(e) => protocol::error_reply(rid, e),
+            Ok(Request::CaptureChord) => {
+                if self.capture.is_some() || !core.begin_key_capture() {
+                    protocol::error_reply(rid, RequestError::Busy)
+                } else {
+                    self.capture = Some(PendingCapture {
+                        conn_id: id,
+                        req_id: rid,
+                        deadline: Instant::now() + self.capture_timeout,
+                    });
+                    return;
+                }
+            }
             Ok(Request::Snapshot) => {
                 let g = self.refresh(core, done);
                 protocol::ok_reply(rid, g, self.model.as_ref().map(Model::to_value))
@@ -349,10 +388,48 @@ impl ShellServer {
 
     /// The connection is gone (or is dropped): its threads end, and a stream it left open ends
     /// (C7.3: nothing to roll back; the epoch settles).
+    fn service_capture(&mut self, core: &mut Core, done: &mut Serviced) {
+        let Some(pending) = self.capture.as_ref() else {
+            return;
+        };
+        if let Some(captured) = core.take_key_capture() {
+            let pending = self.capture.take().unwrap();
+            let reply = match captured {
+                KeyCapture::Captured(chord) => match format_chord(chord) {
+                    Some(name) => protocol::capture_reply(pending.req_id, self.generation, &name),
+                    None => protocol::error_reply(pending.req_id, RequestError::Invalid),
+                },
+                KeyCapture::Cancelled => {
+                    protocol::error_reply(pending.req_id, RequestError::Cancelled)
+                }
+                KeyCapture::Waiting => {
+                    self.capture = Some(pending);
+                    return;
+                }
+            };
+            self.send(pending.conn_id, reply, core, done);
+            return;
+        }
+        if Instant::now() >= pending.deadline {
+            let pending = self.capture.take().unwrap();
+            core.cancel_key_capture();
+            self.send(
+                pending.conn_id,
+                protocol::error_reply(pending.req_id, RequestError::Timeout),
+                core,
+                done,
+            );
+        }
+    }
+
     fn close(&mut self, id: u64, core: &mut Core, done: &mut Serviced) {
         let Some(i) = self.conns.iter().position(|c| c.id == id) else {
             return;
         };
+        if self.capture.as_ref().is_some_and(|c| c.conn_id == id) {
+            self.capture = None;
+            core.cancel_key_capture();
+        }
         let c = self.conns.remove(i);
         let _ = c.stream.shutdown(std::net::Shutdown::Both);
         if c.streaming

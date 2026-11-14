@@ -37,4 +37,41 @@ printf '[Profile0]\nPath=p.default\n' > "$FF/profiles.ini"
 printf 'THEME_SYNC="false"\n' > "$H/.config/infynitae/config"
 apply "$H"
 check "THEME_SYNC=false writes nothing into Firefox" "$([ -e "$FF/p.default/chrome" ] || [ -e "$FF/p.default/user.js" ] && echo written || echo none)" "none"
+
+# Built scheme via --print-theme drives Firefox from LOOK_*
+H="$TMP/c"; FF="$H/.config/mozilla/firefox"
+mkdir -p "$H/.config/infynitae" "$H/.local/bin" "$FF/scheme.default"
+cat > "$H/.local/bin/infynitae-edge-rs" << 'EOF'
+#!/bin/sh
+[ "${1:-}" = "--print-theme" ] || exit 1
+cat << 'OUT'
+LOOK_CARD="#1b1824"
+LOOK_CARD_AA="e6"
+LOOK_EDGE="#e8e2f0"
+LOOK_EDGE_AA="1a"
+LOOK_TEXT="#e8e2f0"
+LOOK_TEXT_AA="ff"
+LOOK_MUTED="#a8a3b4"
+LOOK_MUTED_AA="ff"
+LOOK_ACCENT="#c49ef7"
+LOOK_ACCENT_AA="ff"
+LOOK_ON_ACCENT="#1b1824"
+LOOK_ON_ACCENT_AA="ff"
+LOOK_ACCENT_TEXT="#c49ef7"
+LOOK_ACCENT_TEXT_AA="ff"
+LOOK_TRACK="#e8e2f0"
+LOOK_TRACK_AA="1f"
+LOOK_CORNERS="8"
+LOOK_SMALL_RADIUS="4"
+LOOK_FONT="sans-serif"
+OUT
+EOF
+chmod +x "$H/.local/bin/infynitae-edge-rs"
+printf '[Profile0]\nPath=scheme.default\n' > "$FF/profiles.ini"
+printf 'SURFACE_COLOR="#111317"\nBORDER_ACTIVE="#7aa2f7"\nTEXT_COLOR="#eef2f8"\nTHEME_SCHEME="tonal"\n' > "$H/.config/infynitae/config"
+apply "$H"
+css="$FF/scheme.default/chrome/infynitae.css"
+check "scheme Firefox sidebar uses LOOK_CARD" "$(grep -c '#1b1824' "$css" | sed 's/^[1-9][0-9]*$/yes/')" "yes"
+check "scheme Firefox accent uses LOOK_ACCENT" "$(grep -c '#c49ef7' "$css" | sed 's/^[1-9][0-9]*$/yes/')" "yes"
+check "scheme Firefox border uses blended LOOK_EDGE" "$(grep -c '#302d39' "$css" | sed 's/^[1-9][0-9]*$/yes/')" "yes"
 exit $fail

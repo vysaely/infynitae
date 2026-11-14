@@ -151,6 +151,8 @@ pub enum PhysicalEvent {
     TouchFrame,
     /// The touchscreen gave up the touches (a gesture taken by the hardware, a palm).
     TouchCancel,
+    /// Focus, raise and jump the camera to a mapped window chosen by the user in a bar or list.
+    JumpToWindow { element: stage::ElementId },
 }
 
 /// A semantic command from the trusted shell (C7.2, INV-SHELL-1): a value Core validates and then
@@ -467,6 +469,8 @@ pub struct Core {
     relief_spared: Vec<(output::OutputId, stage::ElementId)>,
     /// Canvas pan interaction style (Grab vs Rts).
     pub pan_mode: navigation::PanMode,
+    /// Camera zoom glide feel (`ZOOM_FEEL`).
+    pub zoom_feel: navigation::ZoomFeel,
     /// Whether keyboard focus follows pointer hover (Focus Follows Mouse).
     pub focus_follows_mouse: bool,
     /// Whether focus is cleared when pointer hovers over empty canvas (Strict vs Sloppy).
@@ -490,10 +494,12 @@ pub struct Core {
     pub(crate) overview_at: Vec<(output::OutputId, CameraView)>,
     /// Whether Super+Middle pan or camera navigation moves out of fullscreen presentation.
     pub fullscreen_pan: bool,
-    /// Whether newly opened windows are automatically focused.
+    /// Whether newly opened windows receive focus on map.
     pub focus_on_open: bool,
     /// The user's key bindings (`set_key_bindings`).
     key_bindings: input::keys::UserBindings,
+    /// Pending IPC chord capture request (`begin_key_capture`).
+    key_capture: Option<input::keys::KeyCapture>,
     /// `xdg_toplevel` parents, (child, parent), from the adapter (`set_toplevel_parent`).
     toplevel_parents: Vec<(stage::ElementId, stage::ElementId)>,
     /// The centre of each app's last destroyed window (app_id lowercase), newest last, at most
@@ -587,6 +593,7 @@ impl Core {
                 usable: Vec::new(),
                 windowed_placement_pending: Vec::new(),
                 pan_mode: navigation::PanMode::default(),
+                zoom_feel: navigation::ZoomFeel::default(),
                 focus_follows_mouse: false,
                 focus_follows_mouse_strict: false,
                 hover_seen: None,
@@ -599,6 +606,7 @@ impl Core {
                 fullscreen_pan: false,
                 focus_on_open: false,
                 key_bindings: input::keys::UserBindings::default(),
+                key_capture: None,
                 toplevel_parents: Vec::new(),
                 closed_windows: Vec::new(),
                 teleport_on_open: false,
@@ -743,7 +751,22 @@ impl Core {
         }
     }
 
-    /// Sets whether Super+Tab focus cycling automatically moves camera to the focused window.
+    /// Sets the camera zoom glide feel (`ZOOM_FEEL`).
+    pub fn set_zoom_feel(&mut self, feel: navigation::ZoomFeel) {
+        self.zoom_feel = feel;
+    }
+
+    /// Active camera zoom glide feel.
+    pub fn zoom_feel(&self) -> navigation::ZoomFeel {
+        self.zoom_feel
+    }
+
+    /// Whether any bound camera currently has an active zoom glide.
+    pub fn zoom_gliding(&self) -> bool {
+        self.cameras.any_gliding()
+    }
+
+    /// Sets whether Super+Tab focus cycling moves the camera to the focused window.
     pub fn set_focus_cycle_navigate(&mut self, enabled: bool) {
         self.focus_cycle_navigate = enabled;
     }
@@ -848,7 +871,7 @@ impl Core {
         self.fullscreen_pan
     }
 
-    /// Sets whether newly opened windows are automatically focused.
+    /// Sets whether newly opened windows receive focus on map.
     pub fn set_focus_on_open(&mut self, enabled: bool) {
         self.focus_on_open = enabled;
     }
@@ -1180,6 +1203,39 @@ impl Core {
     /// The user's key bindings from the config (live reload), checked before the built-in ones.
     pub fn set_key_bindings(&mut self, bindings: input::keys::UserBindings) {
         self.key_bindings = bindings;
+    }
+
+    /// Starts capturing the next pressed chord instead of acting on or forwarding it. Returns
+    /// `false` if a capture is already pending.
+    pub fn begin_key_capture(&mut self) -> bool {
+        if self.key_capture.is_some() {
+            return false;
+        }
+        self.key_capture = Some(input::keys::KeyCapture::Waiting);
+        true
+    }
+
+    /// Clears any active or uncollected key capture (timeout or caller disconnect).
+    pub fn cancel_key_capture(&mut self) {
+        self.key_capture = None;
+    }
+
+    /// True while waiting for the next key press to satisfy a capture request.
+    pub fn is_capturing_key(&self) -> bool {
+        matches!(self.key_capture, Some(input::keys::KeyCapture::Waiting))
+    }
+
+    /// Collects the finished capture result (`Captured` or `Cancelled`), if ready.
+    pub fn take_key_capture(&mut self) -> Option<input::keys::KeyCapture> {
+        match self.key_capture {
+            Some(
+                res @ (input::keys::KeyCapture::Captured(_) | input::keys::KeyCapture::Cancelled),
+            ) => {
+                self.key_capture = None;
+                Some(res)
+            }
+            _ => None,
+        }
     }
 
     /// The output the pointer is currently located on, if any.
@@ -3339,5 +3395,233 @@ mod tests {
             Some((240, 2)),
             "observed window gets preferred scale 2 at camera zoom 2 when suppressed"
         );
+    }
+
+    #[test]
+    fn key_capture_intercepts_bindings_handles_modifiers_escape_and_concurrency() {
+        use crate::input::bindings::Modifiers;
+        use crate::input::keys::{
+            Chord, KEY_ESC, KEY_L, KEY_LEFTMETA, KEY_LEFTSHIFT, KEY_Q, KEY_VOLUMEUP, KeyCapture,
+            format_chord,
+        };
+        use crate::protocol::{Effect, EffectBuf};
+        use crate::{PhysicalEvent, navigation::PersistedCameras};
+
+        let (mut core, mut port, _shell, _token) = Core::new(PersistedCameras::default());
+        let logo = Modifiers {
+            logo: true,
+            ..Modifiers::default()
+        };
+        let logo_shift = Modifiers {
+            logo: true,
+            shift: true,
+            ..Modifiers::default()
+        };
+
+        assert!(core.begin_key_capture());
+        assert!(core.is_capturing_key());
+        assert!(!core.begin_key_capture(), "only one capture at a time");
+        assert_eq!(core.take_key_capture(), None);
+
+        // Pure modifier presses and unbindable keys do not complete or leak actions.
+        let mut fx = EffectBuf::new();
+        core.physical_input(
+            &mut port,
+            PhysicalEvent::KeyboardKey {
+                key: KEY_LEFTMETA,
+                pressed: true,
+                modifiers: logo,
+                mods_changed: true,
+                time_us: 100,
+            },
+            &mut fx,
+        )
+        .unwrap();
+        core.physical_input(
+            &mut port,
+            PhysicalEvent::KeyboardKey {
+                key: KEY_LEFTSHIFT,
+                pressed: true,
+                modifiers: logo_shift,
+                mods_changed: true,
+                time_us: 110,
+            },
+            &mut fx,
+        )
+        .unwrap();
+        assert_eq!(core.take_key_capture(), None);
+
+        fx.clear();
+        core.physical_input(
+            &mut port,
+            PhysicalEvent::KeyboardKey {
+                key: KEY_VOLUMEUP,
+                pressed: true,
+                modifiers: Modifiers::default(),
+                mods_changed: false,
+                time_us: 120,
+            },
+            &mut fx,
+        )
+        .unwrap();
+        assert!(matches!(
+            fx.fx.as_slice(),
+            [Effect::KeyboardIntercept { key }] if *key == KEY_VOLUMEUP
+        ));
+        assert_eq!(core.take_key_capture(), None);
+
+        // Bound shortcut Super+Shift+L is captured without triggering lock screen or forwarding.
+        fx.clear();
+        core.physical_input(
+            &mut port,
+            PhysicalEvent::KeyboardKey {
+                key: KEY_L,
+                pressed: true,
+                modifiers: logo_shift,
+                mods_changed: false,
+                time_us: 130,
+            },
+            &mut fx,
+        )
+        .unwrap();
+        assert!(matches!(
+            fx.fx.as_slice(),
+            [Effect::KeyboardIntercept { key }] if *key == KEY_L
+        ));
+        assert!(!core.is_capturing_key());
+        let captured = core.take_key_capture();
+        assert_eq!(
+            captured,
+            Some(KeyCapture::Captured(Chord {
+                key: KEY_L,
+                mods: logo_shift,
+            }))
+        );
+        assert_eq!(
+            captured.and_then(|c| match c {
+                KeyCapture::Captured(ch) => format_chord(ch),
+                _ => None,
+            }),
+            Some("SUPER+SHIFT+L".to_string())
+        );
+
+        // Release stays compositor-intercepted and does not leak to clients.
+        fx.clear();
+        core.physical_input(
+            &mut port,
+            PhysicalEvent::KeyboardKey {
+                key: KEY_L,
+                pressed: false,
+                modifiers: logo_shift,
+                mods_changed: false,
+                time_us: 140,
+            },
+            &mut fx,
+        )
+        .unwrap();
+        assert!(matches!(
+            fx.fx.as_slice(),
+            [Effect::KeyboardIntercept { key }] if *key == KEY_L
+        ));
+
+        // Escape alone cancels and is intercepted.
+        assert!(core.begin_key_capture());
+        fx.clear();
+        core.physical_input(
+            &mut port,
+            PhysicalEvent::KeyboardKey {
+                key: KEY_ESC,
+                pressed: true,
+                modifiers: Modifiers::default(),
+                mods_changed: false,
+                time_us: 200,
+            },
+            &mut fx,
+        )
+        .unwrap();
+        assert!(matches!(
+            fx.fx.as_slice(),
+            [Effect::KeyboardIntercept { key }] if *key == KEY_ESC
+        ));
+        assert_eq!(core.take_key_capture(), Some(KeyCapture::Cancelled));
+
+        core.physical_input(
+            &mut port,
+            PhysicalEvent::KeyboardKey {
+                key: KEY_ESC,
+                pressed: false,
+                modifiers: Modifiers::default(),
+                mods_changed: false,
+                time_us: 210,
+            },
+            &mut fx,
+        )
+        .unwrap();
+
+        // Escape WITH modifiers (Super+Shift+Escape) captures rather than cancelling.
+        assert!(core.begin_key_capture());
+        fx.clear();
+        core.physical_input(
+            &mut port,
+            PhysicalEvent::KeyboardKey {
+                key: KEY_ESC,
+                pressed: true,
+                modifiers: logo_shift,
+                mods_changed: false,
+                time_us: 250,
+            },
+            &mut fx,
+        )
+        .unwrap();
+        assert!(matches!(
+            fx.fx.as_slice(),
+            [Effect::KeyboardIntercept { key }] if *key == KEY_ESC
+        ));
+        assert_eq!(
+            core.take_key_capture(),
+            Some(KeyCapture::Captured(Chord {
+                key: KEY_ESC,
+                mods: logo_shift,
+            }))
+        );
+
+        // Works while shortcuts are inhibited and cancel_key_capture resets timeout cleanly.
+        core.set_shortcuts_inhibited(true);
+        assert!(core.begin_key_capture());
+        core.cancel_key_capture();
+        assert!(!core.is_capturing_key());
+        assert!(core.begin_key_capture());
+
+        // Already-held client key press repeat before capture does not trigger capture.
+        core.cancel_key_capture();
+        fx.clear();
+        core.physical_input(
+            &mut port,
+            PhysicalEvent::KeyboardKey {
+                key: KEY_Q,
+                pressed: true,
+                modifiers: Modifiers::default(),
+                mods_changed: false,
+                time_us: 300,
+            },
+            &mut fx,
+        )
+        .unwrap();
+        assert!(core.begin_key_capture());
+        fx.clear();
+        core.physical_input(
+            &mut port,
+            PhysicalEvent::KeyboardKey {
+                key: KEY_Q,
+                pressed: true,
+                modifiers: Modifiers::default(),
+                mods_changed: false,
+                time_us: 310,
+            },
+            &mut fx,
+        )
+        .unwrap();
+        assert!(fx.is_empty());
+        assert!(core.is_capturing_key());
     }
 }

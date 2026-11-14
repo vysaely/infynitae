@@ -195,6 +195,7 @@ pub fn bring_into_view(
 /// INV-HIT-1); then Core's frame clock decides which observed elements complete, and the adapter
 /// completes their callbacks and presents their feedback.
 pub fn vblank(state: &mut WaylandState, output: OutputId, now: Duration) {
+    state.zoom_tick(output, now);
     // an output without a view has no frame to produce; the frame clock still ticks
     let _ = render_frame(state, &mut DummyRenderer, output);
     state.frame_tick(output, now);
@@ -299,7 +300,7 @@ pub fn render_frame(
 /// Options for configuring headless compositor execution.
 #[derive(Clone, Debug)]
 pub struct HeadlessCompositorOptions {
-    /// Wayland socket name (e.g. "wayland-1"). If None, automatically selects an available socket.
+    /// Wayland socket name (e.g. "wayland-1"). When `None`, picks an unused socket.
     pub socket_name: Option<String>,
     /// Optional command to execute on compositor startup (e.g. "weston-terminal").
     pub exec: Option<String>,
@@ -309,9 +310,9 @@ pub struct HeadlessCompositorOptions {
     pub height: u32,
     /// Virtual output refresh in mHz.
     pub refresh_mhz: u32,
-    /// Optional maximum run duration before clean exit.
+    /// Optional maximum run duration before exit.
     pub duration: Option<Duration>,
-    /// Optional maximum frame count before clean exit.
+    /// Optional maximum frame count before exit.
     pub max_frames: Option<u64>,
     /// What the headless renderer reports as its device limit.
     pub device_limit: DeviceLimit,
@@ -575,6 +576,9 @@ pub fn run_headless_with(
             session.count_frame();
             session.flush();
         }
+        if state.core().zoom_gliding() {
+            session.request_frame();
+        }
 
         // M16: withheld callbacks of unobserved elements, on a timer armed only while one is
         // pending (INV-IDLE-1)
@@ -592,6 +596,6 @@ pub fn run_headless_with(
     session.shutdown_with(&mut state);
     let _ = disconnect(&mut state, &mut output_token, output_id);
     session.flush();
-    println!("[infynitae] Headless compositor exited cleanly.");
+    println!("[infynitae] Headless compositor exited.");
     Ok(())
 }

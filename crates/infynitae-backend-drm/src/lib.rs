@@ -21,7 +21,7 @@ mod edid;
 mod scanout_log;
 mod smooth;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::error::Error;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -38,6 +38,7 @@ use smithay::backend::allocator::gbm::{GbmAllocator, GbmBufferFlags, GbmDevice};
 use smithay::backend::drm::compositor::{DrmCompositor, FrameFlags};
 use smithay::backend::drm::exporter::gbm::GbmFramebufferExporter;
 use smithay::backend::drm::{DrmDevice, DrmDeviceFd, DrmEvent};
+use smithay::backend::egl::fence::EGLFence;
 use smithay::backend::egl::{EGLContext, EGLDisplay};
 use smithay::backend::input::{
     AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, InputEvent, KeyState,
@@ -46,13 +47,16 @@ use smithay::backend::input::{
 };
 use smithay::backend::libinput::{LibinputInputBackend, LibinputSessionInterface};
 use smithay::backend::renderer::damage::OutputDamageTracker;
-use smithay::backend::renderer::gles::{GlesRenderer, GlesTexProgram, GlesTexture};
+use smithay::backend::renderer::gles::{Capability, GlesRenderer, GlesTexture};
+use smithay::backend::renderer::sync::SyncPoint;
 use smithay::backend::renderer::{Bind, ExportMem, Offscreen, Texture};
 use smithay::backend::renderer::{Renderer, TextureFilter};
 use smithay::backend::session::libseat::LibSeatSession;
 use smithay::backend::session::{Event as SeatEvent, Session as _};
 use smithay::output::OutputModeSource;
-use smithay::reexports::calloop::EventLoop;
+use smithay::reexports::calloop::generic::Generic;
+use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
+use smithay::reexports::calloop::{EventLoop, Interest, Mode, PostAction};
 use smithay::reexports::drm::control::{Device, ModeTypeFlags, connector, crtc, property};
 use smithay::reexports::input::Libinput;
 use smithay::reexports::rustix::fs::OFlags;
@@ -82,7 +86,7 @@ pub struct ConsoleOptions {
     pub xwayland_satellite: Option<PathBuf>,
     /// Output scale ×120 for every screen (`None`: 120, i.e. 1.0).
     pub scale_120: Option<u32>,
-    /// Scaling texture filter ("nearest" for 0% blur, "linear" for smooth).
+    /// Scaling texture filter ("sharp" / "nearest", "smooth" / "linear", "fsr", "fsr-sharp", "fast").
     pub scaling_filter: Option<String>,
     /// Direct scanout for fullscreen apps and games.
     pub direct_scanout: Option<bool>,
@@ -308,6 +312,8 @@ struct Screen {
     schedule: infynitae_wayland::frame_schedule::FrameSchedule,
     /// Whether this screen spares the GPU (`GPU_RELIEF`).
     relief: infynitae_wayland::frame_schedule::FrameRelief,
+    /// Whether `GPU_RELIEF` is currently acting on this screen.
+    relief_on: bool,
     /// A frame had nothing to show since the last refresh.
     empty_since_refresh: bool,
     /// Whether its last frame went to the screen without being drawn.
@@ -520,11 +526,12 @@ struct LoopData {
     last_mapped_generation: u64,
     /// Direct scanout for primary and overlay planes.
     direct_scanout: bool,
-    /// The shader averaging windows drawn smaller than their buffer (`smooth`); `None` with
-    /// `SCALING_FILTER="fast"` or where it does not compile.
-    smooth_program: Option<GlesTexProgram>,
-    /// `SCALING_FILTER`, for a renderer made again after a GPU reset.
-    scaling_filter: String,
+    /// Compiled shaders for zoomed-out downsampling and zoomed-in FSR 1; `None` if unavailable.
+    zoom_programs: Option<std::sync::Arc<smooth::ZoomPrograms>>,
+    /// Per-window cached downsample mip pyramids and EASU offscreen textures.
+    zoom_cache: smooth::ZoomCache,
+    /// `SCALING_FILTER`, updated live on config reload and reused after a GPU reset.
+    scaling_filter: infynitae_wayland::ZoomFilter,
     /// When the renderer was last made again after a GPU reset (at most once a second: GPU
     /// memory still full makes the next one fail too).
     renderer_recovered_at: Option<std::time::Instant>,
@@ -536,8 +543,15 @@ struct LoopData {
     loop_busy_max: Duration,
     /// The last LATENCY_STATS summary.
     latency_logged: Option<std::time::Instant>,
-    /// When the last slow turn was reported (rate bounded to at most one per second).
-    slow_turn_logged: Option<std::time::Instant>,
+    /// Slowest turn of each 1 s window, flushed when the second ends.
+    slow_turn: SlowTurnLog,
+    /// Whether the immediately preceding loop turn took at least one refresh period.
+    last_turn_slow: bool,
+    /// Capture streams and one-shot clients already logged with their path (`dmabuf` vs `shm`).
+    capture_log: CaptureSeen<(
+        Option<smithay::reexports::wayland_server::backend::ClientId>,
+        Option<infynitae_wayland::screencopy::Consumer>,
+    )>,
     dpms_active: bool,
     idle_sleep_timeout_min: u32,
     idle_auto_lock: bool,
@@ -553,9 +567,11 @@ struct LoopData {
     rescan_at: Option<std::time::Instant>,
     /// The laptop's lid is closed: its panel is left out while another screen is connected.
     lid_closed: bool,
-    /// Captures into memory whose GPU copy was started last turn: copied out and handed over at the next turn,
-    /// when the GPU has done it, instead of this loop waiting for the GPU (review 2026-11-11, 1).
+    /// Captures into memory whose GPU copy was started and waits for its GPU fence before mapping
+    /// (`deliver_copies`), instead of blocking the loop on `map_texture`.
     capture_copies: Vec<PendingCopy>,
+    /// Screens whose `wl_shm` capture was deferred while a readback on that screen was in flight.
+    capture_readback_deferred: Vec<OutputId>,
     /// `ConsoleOptions::virtual_screen`.
     virtual_screen_enabled: bool,
     /// The virtual screen standing in while no screen is connected.
@@ -1051,10 +1067,11 @@ fn connect_screen(
         empty_since_refresh: false,
         schedule: infynitae_wayland::frame_schedule::FrameSchedule::new(
             infynitae_wayland::frame_schedule::LatencyMode::Balanced,
-            std::time::Duration::from_nanos(16_666_667),
+            std::time::Duration::from_nanos(1_000_000_000_000 / u64::from(refresh.max(1))),
         ),
         deferred: None,
         relief: Default::default(),
+        relief_on: false,
         latency: Default::default(),
         scanout_logged: None,
         modes: conn
@@ -1187,19 +1204,16 @@ pub fn run_console_with(
         state.set_dmabuf_mark(Box::new(move |dmabuf| dmabuf.set_node(node)));
     }
 
-    // SCALING_FILTER: zoomed in, nearest (crisp pixels, the default) or linear; zoomed out,
-    // averaged (`smooth`) unless "fast"
-    let filter = options.scaling_filter.as_deref().unwrap_or("nearest");
-    if filter != "linear"
+    // SCALING_FILTER: sharp (default), smooth, fsr, fsr-sharp, or fast.
+    let filter =
+        infynitae_wayland::ZoomFilter::parse(options.scaling_filter.as_deref().unwrap_or("sharp"));
+    state.scaling_filter = filter;
+    if filter.uses_nearest_upscale()
         && let Err(e) = renderer.upscale_filter(TextureFilter::Nearest)
     {
         log_line!("[infynitae] Warning: failed to set upscale filter to Nearest: {e:?}");
     }
-    let smooth_program = if filter == "fast" {
-        None
-    } else {
-        smooth::program(&mut renderer)
-    };
+    let zoom_programs = smooth::zoom_programs(&mut renderer);
     let corners_ready = smooth::init_corners(&mut renderer);
     let allocator = GbmAllocator::new(
         gbm.clone(),
@@ -1229,6 +1243,7 @@ pub fn run_console_with(
     if let Ok(home) = std::env::var("HOME") {
         let config_path = format!("{home}/.config/infynitae/config");
         if let Ok(content) = std::fs::read_to_string(&config_path) {
+            idle_auto_lock = parse_lock_when_away(&content);
             for (k, v) in content.lines().filter_map(infynitae_wayland::config_line) {
                 let key = k.trim();
                 let val = v.trim();
@@ -1240,9 +1255,6 @@ pub fn run_console_with(
                     if let Ok(m) = val.parse::<u32>() {
                         idle_timeout_min = m;
                     }
-                } else if key == "IDLE_AUTO_LOCK" {
-                    idle_auto_lock =
-                        !matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no");
                 } else if key.starts_with("OUTPUT_") && key.ends_with("_SCALE") {
                     let conn_name = key
                         .trim_start_matches("OUTPUT_")
@@ -1496,6 +1508,7 @@ pub fn run_console_with(
                             .output(id)
                             .map_or(60, |m| u64::from(m.refresh_mhz / 1000));
                         let (on, changed) = s.relief.step(s.schedule.counts(), hz);
+                        s.relief_on = on;
                         if changed {
                             data.state.core_mut().set_frame_relief(id, on);
                             log_line!(
@@ -1508,6 +1521,7 @@ pub fn run_console_with(
                             );
                         }
                     } else {
+                        s.relief_on = false;
                         data.state.core_mut().set_frame_relief(id, false);
                     }
                     if !data.dpms_active {
@@ -1583,15 +1597,18 @@ pub fn run_console_with(
         last_mapped_generation: u64::MAX,
         loop_busy_max: Duration::ZERO,
         direct_scanout: options.direct_scanout.unwrap_or(true),
-        smooth_program,
-        scaling_filter: filter.to_string(),
+        zoom_programs,
+        zoom_cache: smooth::ZoomCache::default(),
+        scaling_filter: filter,
         renderer_recovered_at: None,
         config_path: cfg_path,
         last_config_check: std::time::Instant::now(),
         last_config_mtime: initial_mtime,
         last_user_activity: std::time::Instant::now(),
         latency_logged: None,
-        slow_turn_logged: None,
+        slow_turn: SlowTurnLog::default(),
+        last_turn_slow: false,
+        capture_log: CaptureSeen::default(),
         dpms_active: false,
         idle_sleep_timeout_min: idle_timeout_min,
         idle_auto_lock,
@@ -1603,6 +1620,7 @@ pub fn run_console_with(
         rescan_at: None,
         lid_closed: false,
         capture_copies: Vec::new(),
+        capture_readback_deferred: Vec::new(),
         virtual_screen_enabled: options.virtual_screen,
         virtual_screen: None,
     };
@@ -1610,6 +1628,7 @@ pub fn run_console_with(
     update_virtual_screen(&mut data);
 
     data.state.reload_config();
+    sync_scaling_filter(&mut data);
     if let Some(ds) = data.state.direct_scanout {
         data.direct_scanout = ds;
     }
@@ -1621,8 +1640,9 @@ pub fn run_console_with(
 
     log_line!("[infynitae] Compositor running. Ctrl+Alt+Backspace quits.");
     data.session.follow_display();
-    let mut turn_started = std::time::Instant::now();
-    let mut turn = TurnClock::new(turn_started);
+    let mut turn_began = std::time::Instant::now();
+    let mut turn_started = data.state.latency_stats.then_some(turn_began);
+    let mut turn = turn_started.map_or_else(TurnClock::off, TurnClock::new);
     while !data.quit && !data.session.finished() {
         data.session
             .wake_at(data.state.core().next_settlement_deadline());
@@ -1677,12 +1697,22 @@ pub fn run_console_with(
         .min();
         // time spent in the loop's own turn, every wait left out: a stall of this process alone,
         // where "refresh to submit" also counts a quiet screen
-        let busy = turn_started.elapsed();
-        data.loop_busy_max = data.loop_busy_max.max(busy);
-        turn.report_if_slow(busy, &mut data.slow_turn_logged);
+        let now = std::time::Instant::now();
+        let busy = now.saturating_duration_since(turn_began);
+        let threshold = slow_turn_threshold(&data.screens);
+        data.last_turn_slow = busy >= threshold;
+        if turn_started.is_some() {
+            data.loop_busy_max = data.loop_busy_max.max(busy);
+            if let Some(line) = data.slow_turn.record_at(&turn, busy, threshold, now) {
+                log_line!("{line}");
+            }
+        }
+        let slow_flush = data.slow_turn.remaining(std::time::Instant::now());
+        let timeout = [timeout, slow_flush].into_iter().flatten().min();
         event_loop.dispatch(timeout, &mut data)?;
-        turn_started = std::time::Instant::now();
-        turn = TurnClock::new(turn_started);
+        turn_began = std::time::Instant::now();
+        turn_started = data.state.latency_stats.then_some(turn_began);
+        turn = turn_started.map_or_else(TurnClock::off, TurnClock::new);
         if data.active
             && data
                 .rescan_at
@@ -1721,23 +1751,21 @@ pub fn run_console_with(
                         "[infynitae] Config change detected (~/.config/infynitae/config). Live reloading..."
                     );
                     data.state.reload_config();
+                    turn.mark("config reload");
                     data.state.config_changed();
+                    turn.mark("config-check");
                     if let Some(ds) = data.state.direct_scanout {
                         data.direct_scanout = ds;
                     }
                     if let Ok(content) = std::fs::read_to_string(path) {
+                        data.idle_auto_lock = parse_lock_when_away(&content);
                         for (k, v) in content.lines().filter_map(infynitae_wayland::config_line) {
                             let key = k.trim();
                             let val = v.trim();
-                            if key == "IDLE_SLEEP_TIMEOUT_MIN" {
-                                if let Ok(m) = val.parse::<u32>() {
-                                    data.idle_sleep_timeout_min = m;
-                                }
-                            } else if key == "IDLE_AUTO_LOCK" {
-                                data.idle_auto_lock = !matches!(
-                                    val.to_lowercase().as_str(),
-                                    "0" | "false" | "off" | "no"
-                                );
+                            if key == "IDLE_SLEEP_TIMEOUT_MIN"
+                                && let Ok(m) = val.parse::<u32>()
+                            {
+                                data.idle_sleep_timeout_min = m;
                             }
                         }
                     }
@@ -1745,7 +1773,9 @@ pub fn run_console_with(
                     for dev in &mut data.input_devices {
                         configure_input_device(dev, &input_cfg);
                     }
+                    sync_scaling_filter(&mut data);
                     data.session.request_frame();
+                    turn.mark("config second read");
                 } else if data.last_config_mtime.is_none() {
                     data.last_config_mtime = Some(mtime);
                 }
@@ -2008,6 +2038,23 @@ pub fn run_console_with(
             data.session.flush();
         }
 
+        turn.mark("new windows");
+        if !data.capture_copies.is_empty() && data.active {
+            let mut woken = Vec::new();
+            deliver_copies(&mut data.renderer, &mut data.capture_copies, &mut woken);
+            for id in woken {
+                if let Some(pos) = data
+                    .capture_readback_deferred
+                    .iter()
+                    .position(|&deferred_id| deferred_id == id)
+                {
+                    data.capture_readback_deferred.swap_remove(pos);
+                    data.state.screencopy.wake_waiting(id);
+                }
+            }
+            turn.mark("capture copies");
+            data.session.flush();
+        }
         let has_screencopy = data
             .screens
             .iter()
@@ -2020,11 +2067,15 @@ pub fn run_console_with(
             .screens
             .iter()
             .any(|s| s.deferred.is_some_and(|t| t <= now));
-        turn.mark("new windows");
+        // a zoom glide draws on every refresh until it rests
+        if data.state.core().zoom_gliding() {
+            data.session.request_frame();
+        }
         if (data.session.frame_due() || has_screencopy || deferred_due) && data.active {
             // what this turn's input made goes to the clients first: a game reads its mouse motion
             // now, not after the compositor's own drawing (review 2026-11-12)
             data.session.flush();
+            turn.mark("flush");
             render(&mut data, &mut turn);
         }
         let now = infynitae_wayland::presentation_clock_now();
@@ -2036,14 +2087,20 @@ pub fn run_console_with(
         let now = infynitae_wayland::presentation_clock_now();
         let deadline = data.state.frame_fallback(now);
         data.session.set_fallback_deadline(deadline, now);
+        turn.mark("frame fallback");
         let idle_deadline = data.state.idle_notify_check(now);
         data.session.set_idle_deadline(idle_deadline, now);
+        turn.mark("idle notify");
         let anim_due = data.state.cursor_animation_due(now);
         data.session.set_cursor_animation_due(anim_due);
+        turn.mark("cursor animation");
         data.session.flush();
         turn.mark("flush");
     }
 
+    if let Some(line) = data.slow_turn.flush() {
+        log_line!("{line}");
+    }
     log_line!("[infynitae] Shutting down compositor...");
     data.state.background_restore_all();
     drop(xwayland);
@@ -2058,7 +2115,7 @@ pub fn run_console_with(
         }
     }
     data.session.flush();
-    log_line!("[infynitae] Compositor exited cleanly.");
+    log_line!("[infynitae] Compositor exited.");
     Ok(())
 }
 
@@ -2085,14 +2142,14 @@ fn recover_renderer(data: &mut LoopData) {
             return;
         }
     };
-    if data.scaling_filter != "linear" {
-        let _ = renderer.upscale_filter(TextureFilter::Nearest);
-    }
-    data.smooth_program = if data.scaling_filter == "fast" {
-        None
+    data.zoom_cache.clear();
+    let tex_filter = if data.scaling_filter.uses_nearest_upscale() {
+        TextureFilter::Nearest
     } else {
-        smooth::program(&mut renderer)
+        TextureFilter::Linear
     };
+    let _ = renderer.upscale_filter(tex_filter);
+    data.zoom_programs = smooth::zoom_programs(&mut renderer);
     data.state.corners_drawn = smooth::init_corners(&mut renderer);
     data.renderer = renderer;
     // copies started on the lost renderer cannot be read: their captures fail (the client asks again)
@@ -2100,6 +2157,9 @@ fn recover_renderer(data: &mut LoopData) {
         for req in c.reqs {
             req.fail();
         }
+    }
+    for id in data.capture_readback_deferred.drain(..) {
+        data.state.screencopy.wake_waiting(id);
     }
     for s in &mut data.screens {
         s.screencopy_texture = None;
@@ -2109,6 +2169,52 @@ fn recover_renderer(data: &mut LoopData) {
         v.screencopy_texture = None;
     }
     data.session.request_frame();
+}
+
+fn apply_scaling_filter<K>(
+    current: &mut infynitae_wayland::ZoomFilter,
+    next: infynitae_wayland::ZoomFilter,
+    renderer: &mut GlesRenderer,
+    zoom_cache: &mut smooth::ZoomCache,
+    screencopy_damage: &Mutex<infynitae_wayland::screencopy::CaptureDamage<K>>,
+) -> bool {
+    if next == *current {
+        return false;
+    }
+    *current = next;
+    let tex_filter = if next.uses_nearest_upscale() {
+        TextureFilter::Nearest
+    } else {
+        TextureFilter::Linear
+    };
+    if let Err(e) = renderer.upscale_filter(tex_filter) {
+        log_line!("[infynitae] Warning: failed to update upscale filter: {e:?}");
+    }
+    if !next.averages_zoom_out() {
+        zoom_cache.clear_mips();
+    }
+    if !next.is_fsr() {
+        zoom_cache.clear_fsr();
+    }
+    *screencopy_damage.lock().unwrap() = Default::default();
+    true
+}
+
+fn sync_scaling_filter(data: &mut LoopData) {
+    if !apply_scaling_filter(
+        &mut data.scaling_filter,
+        data.state.scaling_filter,
+        &mut data.renderer,
+        &mut data.zoom_cache,
+        &data.state.screencopy.damage,
+    ) {
+        return;
+    }
+    for s in &mut data.screens {
+        // Redraw with the new filter without resetting DRM surface state (which forces a blocking
+        // mode set on the next flip).
+        s.compositor.reset_buffers();
+    }
 }
 
 /// Async page flips refused in a row before a screen stops trying (until its window stops
@@ -2121,8 +2227,6 @@ const TEARING_RETRY: Duration = Duration::from_secs(5);
 /// One frame on every screen that is not waiting for its vblank. A screen whose frame changed
 /// nothing completes its frame callbacks now; a queued one at its vblank.
 fn render(data: &mut LoopData, turn: &mut TurnClock) {
-    deliver_copies(&mut data.renderer, &mut data.capture_copies);
-    turn.mark("capture copies");
     let locked = data.state.is_locked();
     let clear = if locked {
         convert::LOCKED_CLEAR
@@ -2142,13 +2246,16 @@ fn render(data: &mut LoopData, turn: &mut TurnClock) {
             &mut data.renderer,
             &mut data.screens[i].screencopy_texture,
             &mut data.capture_copies,
-            data.smooth_program.as_ref(),
+            &mut data.capture_readback_deferred,
+            &mut data.capture_log,
+            turn,
+            data.zoom_programs.as_ref(),
+            &mut data.zoom_cache,
+            data.scaling_filter,
             id,
             size,
             clear,
         );
-        // screen copies (the replay recorder, screen sharing) drawn and read back on this thread
-        turn.mark("captures");
 
         if data.screens[i].pending {
             continue;
@@ -2160,6 +2267,7 @@ fn render(data: &mut LoopData, turn: &mut TurnClock) {
             data.state.set_fitted_window(id, None);
             let s = &mut data.screens[i];
             s.shows_locked = true;
+            s.latency.drop_pending();
             // a frame held back for its start time is not waited for either
             s.deferred = None;
             let now = infynitae_wayland::presentation_clock_now();
@@ -2168,8 +2276,21 @@ fn render(data: &mut LoopData, turn: &mut TurnClock) {
         }
 
         // just in time for the next refresh (LATENCY): held back until its start time, unless the
-        // window on it tears or a fullscreen game runs under VRR (those are drawn at once)
+        // window on it tears, a fullscreen game runs under VRR, or a composited frame in Direct
+        // mode hits a safety guard (GPU relief, a game on another screen, or a slow previous turn)
         let started = infynitae_wayland::presentation_clock_now();
+        let relief_active = data.state.gpu_relief && data.screens.iter().any(|sc| sc.relief_on);
+        let game_on_other = data
+            .screens
+            .iter()
+            .any(|other| other.id != id && data.state.exclusive_window(other.id).is_some());
+        let skip_composited_late = skip_composited_late_start(
+            data.state.latency_mode,
+            data.screens[i].scanned_out,
+            relief_active,
+            game_on_other,
+            data.last_turn_slow,
+        );
         {
             let s = &mut data.screens[i];
             let m = s.compositor.pending_mode();
@@ -2177,8 +2298,9 @@ fn render(data: &mut LoopData, turn: &mut TurnClock) {
             s.schedule.set_period(std::time::Duration::from_nanos(
                 1_000_000_000_000 / u64::from(mhz),
             ));
-            s.schedule
-                .set_mode(data.state.latency_mode.for_screen(s.scanned_out));
+            s.schedule.set_mode(data.state.latency_mode);
+            s.schedule.set_scanned_out(s.scanned_out);
+            s.schedule.set_skip_late(skip_composited_late);
             // a frame the GPU has to draw needs more of the refresh than one it only shows
             s.schedule.set_guard_percent(if s.scanned_out {
                 data.state.frame_guard_percent / 4
@@ -2200,14 +2322,24 @@ fn render(data: &mut LoopData, turn: &mut TurnClock) {
             }
         }
 
+        turn.mark("frame schedule");
+        data.state.zoom_tick(id, started);
         if locked {
             data.state.set_fitted_window(id, None);
         }
         // locked: only the lock surface (lock.rs); never a window
         let frame = match convert::lock_elements(&data.state, &mut data.renderer, id) {
-            Ok(Some(f)) => Ok(f),
-            Ok(None) => convert::output_elements(&mut data.state, &mut data.renderer, id)
-                .map_err(|e| format!("{e:?}")),
+            Ok(Some(f)) => {
+                turn.mark("lock elements");
+                Ok(f)
+            }
+            Ok(None) => {
+                let enabled = turn.is_enabled();
+                let mut record = |name: &'static str| turn.mark(name);
+                let mark = enabled.then_some(&mut record as &mut dyn FnMut(&'static str));
+                convert::output_elements_with_marks(&mut data.state, &mut data.renderer, id, mark)
+                    .map_err(|e| format!("{e:?}"))
+            }
             Err(e) => Err(format!("{e:?}")),
         };
         let (elements, k) = match frame {
@@ -2217,18 +2349,17 @@ fn render(data: &mut LoopData, turn: &mut TurnClock) {
                 continue;
             }
         };
-        let elements: Vec<_> = elements
-            .into_iter()
-            .map(|e| {
-                let round = data
-                    .state
-                    .rounding
-                    .get(smithay::backend::renderer::element::Element::id(&e))
-                    .copied();
-                smooth::Smoothed::new(e, data.smooth_program.clone()).rounded(round)
-            })
-            .collect();
-        turn.mark("element building");
+        let elements = smooth::prepare_elements(
+            &mut data.renderer,
+            &data.state.rounding,
+            data.zoom_programs.as_ref(),
+            &mut data.zoom_cache,
+            elements,
+            k,
+            data.screens[i].size,
+            data.scaling_filter,
+        );
+        turn.mark("smooth wrap");
         // VRR auto: on while this screen shows a fullscreen window
         let want_vrr = data.screens[i]
             .vrr_mode
@@ -2296,6 +2427,7 @@ fn render(data: &mut LoopData, turn: &mut TurnClock) {
                 use smithay::backend::drm::compositor::PrimaryPlaneElement;
                 let scanout = matches!(result.primary_element, PrimaryPlaneElement::Element(_));
                 s.scanned_out = scanout;
+                s.schedule.set_scanned_out(scanout);
                 data.state.fullscreen_frame_shown(id);
                 // a change of (fullscreen shown, scanned out) is logged; composited while
                 // fullscreen says what else is drawn over or around the window
@@ -2399,9 +2531,9 @@ fn render(data: &mut LoopData, turn: &mut TurnClock) {
                 }
                 let queued = s.compositor.queue_frame(());
                 if queued.is_ok() {
-                    s.schedule
-                        .rendered(started, infynitae_wayland::presentation_clock_now());
-                    s.latency.drawn();
+                    let submitted = infynitae_wayland::presentation_clock_now();
+                    s.schedule.rendered(started, submitted);
+                    s.latency.drawn(submitted);
                 }
                 if tear {
                     if s.compositor.async_flip() {
@@ -2527,6 +2659,8 @@ fn render(data: &mut LoopData, turn: &mut TurnClock) {
                 data.session.frame_rests(wait);
             }
             s.empty_since_refresh = true;
+            // keep the input across empty renders up to 100 ms while an app commits its frame
+            s.latency.expire_pending(now);
             data.state.frame_tick(id, now);
         }
         turn.mark("queue");
@@ -2537,24 +2671,39 @@ fn render(data: &mut LoopData, turn: &mut TurnClock) {
             &mut data.renderer,
             &mut v.screencopy_texture,
             &mut data.capture_copies,
-            data.smooth_program.as_ref(),
+            &mut data.capture_readback_deferred,
+            &mut data.capture_log,
+            turn,
+            data.zoom_programs.as_ref(),
+            &mut data.zoom_cache,
+            data.scaling_filter,
             v.id,
             VIRTUAL_SCREEN_SIZE,
             clear,
         );
         let now = infynitae_wayland::presentation_clock_now();
         data.state.frame_tick(v.id, now);
-        // was counted as "flush", the next mark (review 2026-11-12: 374 slow "flush" turns)
-        turn.mark("virtual screen captures");
+        turn.mark("virtual screen");
     }
+    data.zoom_cache.gc();
     confirm_lock(data);
-    // a capture copied out of the GPU this turn is handed over at the next one: make sure there is one
-    if !data.capture_copies.is_empty() {
+    // Watch newly started GPU readbacks so `deliver_copies` runs once the GPU finishes them.
+    for c in &mut data.capture_copies {
+        if !c.watched {
+            c.watched = true;
+            watch_copy_sync(&data.loop_handle, &c.sync, &mut data.session);
+        }
+    }
+    // a zoom glide draws on every refresh until it rests
+    if data.state.core().zoom_gliding() {
         data.session.request_frame();
     }
+    turn.mark("post render");
     data.session.flush();
+    turn.mark("flush");
     if renderer_lost(&mut data.renderer) {
         recover_renderer(data);
+        turn.mark("renderer recover");
     }
 }
 
@@ -2574,7 +2723,15 @@ fn serve_captures(
     renderer: &mut GlesRenderer,
     screencopy_texture: &mut Option<GlesTexture>,
     copies: &mut Vec<PendingCopy>,
-    smooth_program: Option<&GlesTexProgram>,
+    capture_readback_deferred: &mut Vec<OutputId>,
+    capture_log: &mut CaptureSeen<(
+        Option<smithay::reexports::wayland_server::backend::ClientId>,
+        Option<infynitae_wayland::screencopy::Consumer>,
+    )>,
+    turn: &mut TurnClock,
+    zoom_programs: Option<&std::sync::Arc<smooth::ZoomPrograms>>,
+    zoom_cache: &mut smooth::ZoomCache,
+    scaling_filter: infynitae_wayland::ZoomFilter,
     output_id: OutputId,
     size: (i32, i32),
     clear: smithay::backend::renderer::Color32F,
@@ -2589,16 +2746,26 @@ fn serve_captures(
         .take_pending(output_id)
         .into_iter()
         .partition(|p| p.window.is_some());
+    let mut deferred_shm = Vec::new();
     for req in windows {
         let Some(window) = req.window else { continue };
+        let is_dmabuf = smithay::wayland::dmabuf::get_dmabuf(&req.buffer).is_ok();
+        if !is_dmabuf && has_pending_readback(copies, output_id) {
+            deferred_shm.push(req);
+            continue;
+        }
         match convert::window_capture_elements(state, renderer, window) {
             Ok(Some((elements, k, size))) => {
+                turn.mark("capture elements");
                 // a window's own transparency is kept
                 let mut texture = None;
                 handle_screencopy(
                     renderer,
                     &mut texture,
                     copies,
+                    capture_log,
+                    turn,
+                    output_id,
                     vec![req],
                     &elements,
                     size,
@@ -2609,8 +2776,26 @@ fn serve_captures(
                 let now = infynitae_wayland::presentation_clock_now();
                 state.window_captured(window, output_id, now);
             }
-            _ => req.fail(),
+            _ => {
+                turn.mark("capture elements");
+                req.fail();
+            }
         }
+    }
+    let pending = if has_pending_readback(copies, output_id) {
+        let (gpu, shm): (Vec<_>, Vec<_>) = pending
+            .into_iter()
+            .partition(|req| smithay::wayland::dmabuf::get_dmabuf(&req.buffer).is_ok());
+        deferred_shm.extend(shm);
+        gpu
+    } else {
+        pending
+    };
+    if !deferred_shm.is_empty() {
+        if !capture_readback_deferred.contains(&output_id) {
+            capture_readback_deferred.push(output_id);
+        }
+        state.screencopy.defer(deferred_shm);
     }
     if pending.is_empty() {
         return;
@@ -2632,6 +2817,7 @@ fn serve_captures(
     let (elements, k) = match frame {
         Ok(res) => res,
         Err(e) => {
+            turn.mark("capture elements");
             log_line!("[screencopy] Failed to get elements: {e}");
             for p in pending {
                 p.fail();
@@ -2639,16 +2825,16 @@ fn serve_captures(
             return;
         }
     };
-    let elements: Vec<_> = elements
-        .into_iter()
-        .map(|e| {
-            let round = state
-                .rounding
-                .get(smithay::backend::renderer::element::Element::id(&e))
-                .copied();
-            smooth::Smoothed::new(e, smooth_program.cloned()).rounded(round)
-        })
-        .collect();
+    let elements = smooth::prepare_elements(
+        renderer,
+        &state.rounding,
+        zoom_programs,
+        zoom_cache,
+        elements,
+        k,
+        size,
+        scaling_filter,
+    );
     // a capture that may wait is served once its consumer's last capture differs, with what
     // changed as its damage (whole for a region or a turned screen); else it waits
     let now = std::time::Instant::now();
@@ -2673,6 +2859,7 @@ fn serve_captures(
     }
     let pending = serve;
     state.screencopy.defer(waiting);
+    turn.mark("capture elements");
     if pending.is_empty() {
         return;
     }
@@ -2680,6 +2867,9 @@ fn serve_captures(
         renderer,
         screencopy_texture,
         copies,
+        capture_log,
+        turn,
+        output_id,
         pending,
         &elements,
         size,
@@ -2688,21 +2878,79 @@ fn serve_captures(
     );
 }
 
-/// Says once each which way captures come: a GPU buffer, drawn into, or memory, copied out on this
-/// thread (each frame waits for the GPU then, so it may cost milliseconds).
-fn note_capture_path(gpu: bool) {
-    use std::sync::atomic::{AtomicBool, Ordering};
-    static SAID: [AtomicBool; 2] = [AtomicBool::new(false), AtomicBool::new(false)];
-    if !SAID[usize::from(gpu)].swap(true, Ordering::Relaxed) {
-        log_line!(
-            "[infynitae] A capture into {}",
-            if gpu {
-                "a GPU buffer (dmabuf)"
-            } else {
-                "memory (shm), copied on the main thread"
-            }
-        );
+const CAPTURE_SEEN_MAX: usize = 128;
+
+/// Tracks active/recent `(client, buffer path)` pairs so each new capture logs once without
+/// repeating on subsequent frames of a stream.
+struct CaptureSeen<K> {
+    seen: VecDeque<(K, bool)>,
+}
+
+impl<K> Default for CaptureSeen<K> {
+    fn default() -> Self {
+        Self {
+            seen: VecDeque::new(),
+        }
     }
+}
+
+impl<K: PartialEq> CaptureSeen<K> {
+    fn note(&mut self, key: K, gpu: bool) -> bool {
+        if self.seen.iter().any(|(k, g)| *k == key && *g == gpu) {
+            return false;
+        }
+        if self.seen.len() >= CAPTURE_SEEN_MAX {
+            self.seen.pop_front();
+        }
+        self.seen.push_back((key, gpu));
+        true
+    }
+}
+
+fn format_capture_log(program: Option<&str>, path: Option<&str>, gpu: bool) -> String {
+    let who = match (program, path) {
+        (Some(prog), Some(p)) if p.starts_with(prog) => p.to_string(),
+        (Some(prog), Some(p)) => format!("{prog} ({p})"),
+        (Some(prog), None) => prog.to_string(),
+        (None, Some(p)) => p.to_string(),
+        (None, None) => "unknown client".to_string(),
+    };
+    let via = if gpu {
+        "a GPU buffer (dmabuf)"
+    } else {
+        "memory (shm), copied on the main thread"
+    };
+    format!("[infynitae] Capture started by {who}: into {via}")
+}
+
+/// Logs once per capture client/session which program captures, its path (or sandbox id), and
+/// whether it takes dmabuf or shm.
+fn note_capture_start(
+    capture_log: &mut CaptureSeen<(
+        Option<smithay::reexports::wayland_server::backend::ClientId>,
+        Option<infynitae_wayland::screencopy::Consumer>,
+    )>,
+    req: &infynitae_wayland::screencopy::PendingFrame,
+    gpu: bool,
+) {
+    use smithay::reexports::wayland_server::Resource;
+    let client = req.buffer.client();
+    let client_id = client
+        .as_ref()
+        .map(smithay::reexports::wayland_server::Client::id);
+    if !capture_log.note((client_id, req.consumer.clone()), gpu) {
+        return;
+    }
+    let identity = client
+        .as_ref()
+        .and_then(|c| c.get_data::<infynitae_wayland::ClientState>())
+        .and_then(|s| s.identity());
+    let program = identity.map(|id| id.app_name());
+    let path = identity.map(|id| id.describe());
+    log_line!(
+        "{}",
+        format_capture_log(program.as_deref(), path.as_deref(), gpu)
+    );
 }
 
 /// Renders `elements` (`size` px at `k`) into each waiting capture's buffer: a dmabuf on the GPU,
@@ -2712,6 +2960,12 @@ fn handle_screencopy<E>(
     renderer: &mut GlesRenderer,
     screencopy_texture: &mut Option<GlesTexture>,
     copies: &mut Vec<PendingCopy>,
+    capture_log: &mut CaptureSeen<(
+        Option<smithay::reexports::wayland_server::backend::ClientId>,
+        Option<infynitae_wayland::screencopy::Consumer>,
+    )>,
+    turn: &mut TurnClock,
+    output_id: OutputId,
     pending: Vec<infynitae_wayland::screencopy::PendingFrame>,
     elements: &[E],
     size: (i32, i32),
@@ -2729,16 +2983,15 @@ fn handle_screencopy<E>(
     let draw_transform = convert::output_transform(transform);
     let view = convert::capture_buffer_size(size, transform);
 
-    // -------------------------------------------------------------------------
-    // 1. Direct DMA-BUF GPU Render
-    // If the client supplied a linux_dmabuf (PipeWire, OBS, gpu-screen-recorder),
-    // import it as a GPU texture and render the composite scene directly onto it.
-    // -------------------------------------------------------------------------
+    // Direct DMA-BUF GPU render (PipeWire, OBS, gpu-screen-recorder) before the CPU/shm fallback.
     let mut remaining = Vec::new();
+    let mut drew_dmabuf = false;
 
     for req in pending {
-        note_capture_path(smithay::wayland::dmabuf::get_dmabuf(&req.buffer).is_ok());
+        let gpu = smithay::wayland::dmabuf::get_dmabuf(&req.buffer).is_ok();
+        note_capture_start(capture_log, &req, gpu);
         if let Ok(dmabuf) = smithay::wayland::dmabuf::get_dmabuf(&req.buffer) {
+            drew_dmabuf = true;
             use smithay::backend::renderer::ImportDma;
             let mut dmabuf_rendered = false;
             if let Ok(mut dmabuf_tex) = renderer.import_dmabuf(dmabuf, None)
@@ -2781,16 +3034,15 @@ fn handle_screencopy<E>(
             remaining.push(req);
         }
     }
+    if drew_dmabuf {
+        turn.mark("capture draw");
+    }
 
     if remaining.is_empty() {
-        // All requests were fulfilled via direct GPU DMA-BUF rendering.
         return;
     }
 
-    // -------------------------------------------------------------------------
-    // 2. Fallback for wl_shm or CPU memory buffers
-    // Executed when at least one client requested a CPU or shm buffer.
-    // -------------------------------------------------------------------------
+    // Fallback for wl_shm or CPU buffers when a request was not fulfilled on GPU.
     if screencopy_texture
         .as_ref()
         .is_none_or(|t| t.width() != size.0 as u32 || t.height() != size.1 as u32)
@@ -2821,7 +3073,9 @@ fn handle_screencopy<E>(
 
     let mut damage_tracker =
         OutputDamageTracker::new(size, smithay::utils::Scale::from(k), draw_transform);
-    if let Err(e) = damage_tracker.render_output(renderer, &mut framebuffer, 0, elements, clear) {
+    let render_res = damage_tracker.render_output(renderer, &mut framebuffer, 0, elements, clear);
+    turn.mark("capture draw");
+    if let Err(e) = render_res {
         log_line!("[screencopy] Failed to render output: {e:?}");
         for p in remaining {
             p.fail();
@@ -2829,12 +3083,14 @@ fn handle_screencopy<E>(
         return;
     }
 
-    let mapping = match ExportMem::copy_framebuffer(
+    let mapping = ExportMem::copy_framebuffer(
         renderer,
         &framebuffer,
         Rectangle::from_size(size.into()),
         Fourcc::Argb8888,
-    ) {
+    );
+    turn.mark("capture readback");
+    let mapping = match mapping {
         Ok(m) => m,
         Err(e) => {
             log_line!("[screencopy] Failed to copy framebuffer: {e:?}");
@@ -2844,10 +3100,15 @@ fn handle_screencopy<E>(
             return;
         }
     };
+    drop(framebuffer);
+    let sync = readback_sync(renderer);
 
-    // the GPU copies in the background; the next turn hands it over (`deliver_copies`)
+    // the GPU copies in the background; `deliver_copies` maps it only once `sync` has signalled
     copies.push(PendingCopy {
         mapping,
+        sync,
+        watched: false,
+        output_id,
         reqs: remaining,
         size,
         view,
@@ -2856,9 +3117,82 @@ fn handle_screencopy<E>(
     });
 }
 
+/// Inserts and flushes an EGL fence after `copy_framebuffer` so we know when the GPU has finished
+/// writing into the PBO before mapping it.
+#[allow(unsafe_code)]
+fn readback_sync(renderer: &mut GlesRenderer) -> SyncPoint {
+    if renderer.capabilities().contains(&Capability::ExportFence) {
+        let display = renderer.egl_context().display().clone();
+        if let Ok(Ok(fence)) = renderer.with_context(|gl| {
+            let fence = EGLFence::create(&display);
+            if fence.is_ok() {
+                unsafe {
+                    gl.Flush();
+                }
+            }
+            fence
+        }) {
+            return SyncPoint::from(fence);
+        }
+    }
+    SyncPoint::signaled()
+}
+
+/// Wakes the event loop when `sync` signals so a completed capture copy is delivered without polling.
+fn watch_copy_sync(
+    loop_handle: &smithay::reexports::calloop::LoopHandle<'static, LoopData>,
+    sync: &SyncPoint,
+    session: &mut Session,
+) {
+    if sync.is_reached() {
+        session.request_frame();
+        return;
+    }
+    if let Some(fd) = sync.export() {
+        let source = Generic::new(fd, Interest::READ, Mode::Level);
+        if loop_handle
+            .insert_source(source, |_, _, _| Ok(PostAction::Remove))
+            .is_ok()
+        {
+            return;
+        }
+    }
+    let _ = loop_handle.insert_source(
+        Timer::from_duration(Duration::from_millis(2)),
+        |_, _, data| {
+            if data.capture_copies.iter().all(|c| c.sync.is_reached()) {
+                TimeoutAction::Drop
+            } else {
+                TimeoutAction::ToDuration(Duration::from_millis(2))
+            }
+        },
+    );
+}
+
+fn has_pending_readback(copies: &[PendingCopy], output_id: OutputId) -> bool {
+    copies.iter().any(|c| c.output_id == output_id)
+}
+
+fn take_ready<T>(items: &mut Vec<T>, mut is_ready: impl FnMut(&T) -> bool) -> Vec<T> {
+    let mut ready = Vec::with_capacity(items.len());
+    let mut pending = Vec::new();
+    for item in items.drain(..) {
+        if is_ready(&item) {
+            ready.push(item);
+        } else {
+            pending.push(item);
+        }
+    }
+    *items = pending;
+    ready
+}
+
 /// A capture into memory whose copy out of the GPU was started: handed over by `deliver_copies`.
 struct PendingCopy {
     mapping: <GlesRenderer as ExportMem>::TextureMapping,
+    sync: SyncPoint,
+    watched: bool,
+    output_id: OutputId,
     reqs: Vec<infynitae_wayland::screencopy::PendingFrame>,
     size: (i32, i32),
     view: (i32, i32),
@@ -2866,19 +3200,30 @@ struct PendingCopy {
     now: std::time::Duration,
 }
 
-/// Hands over the captures copied out of the GPU since the last turn (the GPU has finished them by now, so
-/// mapping does not wait on it the way mapping right after the copy did).
+/// Hands over the captures copied out of the GPU whose fence has signalled, leaving unfinished
+/// readbacks in `copies` so `map_texture` never stalls the event loop.
 #[allow(unsafe_code)]
-fn deliver_copies(renderer: &mut GlesRenderer, copies: &mut Vec<PendingCopy>) {
+fn deliver_copies(
+    renderer: &mut GlesRenderer,
+    copies: &mut Vec<PendingCopy>,
+    woken_outputs: &mut Vec<OutputId>,
+) {
+    let ready = take_ready(copies, |c| c.sync.is_reached());
     for PendingCopy {
         mapping,
+        sync: _,
+        watched: _,
+        output_id,
         reqs: remaining,
         size,
         view,
         transform,
         now,
-    } in copies.drain(..)
+    } in ready
     {
+        if !woken_outputs.contains(&output_id) {
+            woken_outputs.push(output_id);
+        }
         let slice = match ExportMem::map_texture(renderer, &mapping) {
             Ok(s) => s,
             Err(e) => {
@@ -3024,35 +3369,59 @@ fn core_presentation_format(
 }
 
 /// Where a turn of the loop spent its time, for a turn long enough to be felt as a stutter
-/// ([`SLOW_TURN`]): the session log names its slowest parts. "Loop busy" said only how long
-/// (553 ms on the owner's PC, 2026-11-06), not where.
+/// ([`slow_turn_threshold`]): the session log names its slowest parts. "Loop busy" said only how
+/// long (553 ms on the owner's PC, 2026-11-06), not where.
 struct TurnClock {
-    last: std::time::Instant,
+    last: Option<std::time::Instant>,
     phases: Vec<(&'static str, Duration)>,
 }
 
-/// A turn this long is reported with its parts (about 8 refreshes at 165 Hz).
-const SLOW_TURN: Duration = Duration::from_millis(8);
+/// Fallback slow-turn threshold when no physical screen is connected.
+const SLOW_TURN_FALLBACK: Duration = Duration::from_millis(8);
+
+/// One refresh of the fastest connected screen, or [`SLOW_TURN_FALLBACK`] when none is attached.
+fn slow_turn_threshold(screens: &[Screen]) -> Duration {
+    screens
+        .iter()
+        .map(|s| s.schedule.period())
+        .min()
+        .unwrap_or(SLOW_TURN_FALLBACK)
+}
 
 impl TurnClock {
     fn new(start: std::time::Instant) -> Self {
         Self {
-            last: start,
-            phases: Vec::with_capacity(12),
+            last: Some(start),
+            phases: Vec::with_capacity(20),
         }
+    }
+
+    /// Disabled clock: allocates nothing and takes no timestamps.
+    fn off() -> Self {
+        Self {
+            last: None,
+            phases: Vec::new(),
+        }
+    }
+
+    fn is_enabled(&self) -> bool {
+        self.last.is_some()
     }
 
     /// The part of the turn since the last mark is `name`.
     fn mark(&mut self, name: &'static str) {
+        let Some(last) = self.last else {
+            return;
+        };
         let now = std::time::Instant::now();
-        self.phases.push((name, now.duration_since(self.last)));
-        self.last = now;
+        self.phases.push((name, now.duration_since(last)));
+        self.last = Some(now);
     }
 
-    /// The parts of a turn of `busy`, slowest first, those of 1 ms or more; the rest is time
-    /// before the first mark or between marks this turn did not reach.
-    fn slow_parts(&self, busy: Duration) -> Option<String> {
-        if busy < SLOW_TURN {
+    /// The parts of a turn of `busy` at least `threshold`, slowest first, those of 1 ms or more;
+    /// the rest is time before the first mark or between marks this turn did not reach.
+    fn slow_parts(&self, busy: Duration, threshold: Duration) -> Option<String> {
+        if self.last.is_none() || busy < threshold {
             return None;
         }
         let mut phase_totals: HashMap<&'static str, Duration> = HashMap::new();
@@ -3079,20 +3448,73 @@ impl TurnClock {
             out.join(", ")
         ))
     }
+}
 
-    fn report_if_slow(&self, busy: Duration, last_logged: &mut Option<std::time::Instant>) {
-        if busy < SLOW_TURN {
-            return;
+/// Holds the slowest turn of each 1 s window so a 7 ms hiccup earlier in the second never hides a
+/// 40 ms stall later in the same second.
+#[derive(Debug, Default)]
+struct SlowTurnLog {
+    window_started: Option<std::time::Instant>,
+    worst: Option<(Duration, String)>,
+}
+
+impl SlowTurnLog {
+    fn record_at(
+        &mut self,
+        clock: &TurnClock,
+        busy: Duration,
+        threshold: Duration,
+        now: std::time::Instant,
+    ) -> Option<String> {
+        let flushed = self.take_due_at(now);
+        if let Some(line) = clock.slow_parts(busy, threshold) {
+            match self.window_started {
+                Some(_) => {
+                    if self.worst.as_ref().is_none_or(|(prev, _)| busy > *prev) {
+                        self.worst = Some((busy, line));
+                    }
+                }
+                None => {
+                    self.window_started = Some(now);
+                    self.worst = Some((busy, line));
+                }
+            }
         }
-        let now = std::time::Instant::now();
-        if last_logged.is_some_and(|t| now.duration_since(t) < Duration::from_secs(1)) {
-            return;
-        }
-        if let Some(line) = self.slow_parts(busy) {
-            *last_logged = Some(now);
-            log_line!("{line}");
-        }
+        flushed
     }
+
+    fn take_due_at(&mut self, now: std::time::Instant) -> Option<String> {
+        let ws = self.window_started?;
+        if now.duration_since(ws) < Duration::from_secs(1) {
+            return None;
+        }
+        self.window_started = None;
+        self.worst.take().map(|(_, line)| line)
+    }
+
+    fn flush(&mut self) -> Option<String> {
+        self.window_started = None;
+        self.worst.take().map(|(_, line)| line)
+    }
+
+    fn remaining(&self, now: std::time::Instant) -> Option<Duration> {
+        self.window_started
+            .map(|ws| Duration::from_secs(1).saturating_sub(now.saturating_duration_since(ws)))
+    }
+}
+
+/// Skips late scheduling on a composited desktop frame under `Direct` while the GPU is under
+/// relief, a fullscreen window owns another screen, or the previous loop turn ran over one refresh.
+fn skip_composited_late_start(
+    mode: infynitae_wayland::frame_schedule::LatencyMode,
+    scanned_out: bool,
+    relief_active: bool,
+    game_on_other_screen: bool,
+    last_turn_slow: bool,
+) -> bool {
+    mode == infynitae_wayland::frame_schedule::LatencyMode::Direct
+        && !scanned_out
+        && (relief_active || game_on_other_screen || last_turn_slow)
 }
 
 /// LATENCY_STATS: every 10 s, each screen's input-to-screen times and missed refreshes, in the
@@ -3118,11 +3540,24 @@ fn latency_summary(data: &mut LoopData) {
     }
     for s in &mut data.screens {
         let (frames, misses) = s.schedule.counts();
+        let (pause_frames, pause_misses) = s.schedule.pause_counts();
         let (pauses, paused) = s.schedule.pauses();
         if let Some((p50, p95, max, n)) = s.latency.take_summary() {
             let ms = |d: std::time::Duration| d.as_secs_f64() * 1000.0;
+            let (direct_m, comp_m) = s.schedule.margins();
+            let margins = if data.state.latency_mode
+                == infynitae_wayland::frame_schedule::LatencyMode::Direct
+            {
+                format!(
+                    " (direct {:.2}, composited {:.2})",
+                    ms(direct_m),
+                    ms(comp_m)
+                )
+            } else {
+                String::new()
+            };
             log_line!(
-                "[infynitae] Latency {:?}: input to screen p50 {:.2} ms, p95 {:.2} ms, max {:.2} ms ({n} frames); budget {:.2} ms, margin {:.2} ms, {misses} of {frames} frames missed their refresh; paused {pauses} times{}",
+                "[infynitae] Latency {:?}: input to screen p50 {:.2} ms, p95 {:.2} ms, max {:.2} ms ({n} frames); budget {:.2} ms, margin {:.2} ms{margins}, {misses} of {frames} frames in a run missed their refresh ({pause_misses} of {pause_frames} after pause); paused {pauses} times{}",
                 s.id,
                 ms(p50),
                 ms(p95),
@@ -3582,11 +4017,30 @@ pub fn calculate_abs_pointer_delta(
 
 /// Resolves whether touchpad tap-to-click should be enabled.
 /// Unset defaults to true (TOUCHPAD_TAP="true").
+pub fn parse_lock_when_away(content: &str) -> bool {
+    let mut lock_when_away = None;
+    let mut legacy_idle = None;
+    for (k, v) in content.lines().filter_map(infynitae_wayland::config_line) {
+        match k.trim() {
+            "LOCK_WHEN_AWAY" => {
+                if let Some(b) = infynitae_wayland::parse_bool(v.trim()) {
+                    lock_when_away = Some(b);
+                }
+            }
+            "IDLE_AUTO_LOCK" => {
+                if let Some(b) = infynitae_wayland::parse_bool(v.trim()) {
+                    legacy_idle = Some(b);
+                }
+            }
+            _ => {}
+        }
+    }
+    lock_when_away.or(legacy_idle).unwrap_or(true)
+}
+
 pub fn resolve_touchpad_tap(configured: Option<bool>, env_val: Option<&str>) -> bool {
     configured
-        .or_else(|| {
-            env_val.map(|t| matches!(t.to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
-        })
+        .or_else(|| env_val.map(|t| infynitae_wayland::parse_bool(t).unwrap_or(false)))
         .unwrap_or(true)
 }
 
@@ -3637,7 +4091,7 @@ fn configure_input_device(
     let nat = config.touchpad_natural_scroll.or_else(|| {
         std::env::var("TOUCHPAD_NATURAL_SCROLL")
             .ok()
-            .map(|t| matches!(t.to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+            .map(|t| infynitae_wayland::parse_bool(&t).unwrap_or(false))
     });
     if let Some(enable) = nat
         && device.config_scroll_has_natural_scroll()
@@ -3658,22 +4112,56 @@ mod tests {
         assert!(!resolve_touchpad_tap(Some(false), None));
         assert!(!resolve_touchpad_tap(None, Some("false")));
         assert!(!resolve_touchpad_tap(None, Some("0")));
+        assert!(resolve_touchpad_tap(None, Some("YES")));
+        assert!(resolve_touchpad_tap(None, Some("On")));
+        assert!(!resolve_touchpad_tap(None, Some("NO")));
+        assert!(!resolve_touchpad_tap(None, Some("invalid")));
         assert!(resolve_touchpad_tap(Some(true), Some("false")));
         assert!(!resolve_touchpad_tap(Some(false), Some("true")));
     }
 
     #[test]
+    fn turn_clock_marks_only_when_enabled() {
+        use std::time::{Duration, Instant};
+        let threshold = super::SLOW_TURN_FALLBACK;
+        let mut off = super::TurnClock::off();
+        assert!(!off.is_enabled());
+        off.mark("config reload");
+        off.mark("cursor");
+        assert!(off.phases.is_empty());
+        assert_eq!(off.phases.capacity(), 0);
+        assert_eq!(off.slow_parts(Duration::from_millis(50), threshold), None);
+        let mut log = super::SlowTurnLog::default();
+        assert_eq!(
+            log.record_at(&off, Duration::from_millis(50), threshold, Instant::now()),
+            None
+        );
+        assert_eq!(log.flush(), None);
+
+        let mut on = super::TurnClock::new(Instant::now());
+        assert!(on.is_enabled());
+        on.mark("config reload");
+        on.mark("cursor");
+        assert_eq!(
+            on.phases.iter().map(|(n, _)| *n).collect::<Vec<_>>(),
+            ["config reload", "cursor"]
+        );
+    }
+
+    #[test]
     fn a_slow_turn_names_its_slowest_parts() {
         use std::time::Duration;
+        let threshold = super::SLOW_TURN_FALLBACK;
         let mut c = super::TurnClock::new(std::time::Instant::now());
         c.phases = vec![
             ("client requests", Duration::from_millis(15)),
             ("background priority", Duration::from_micros(500)),
             ("render", Duration::from_millis(40)),
         ];
-        assert_eq!(c.slow_parts(Duration::from_millis(7)), None);
+        assert_eq!(c.slow_parts(Duration::from_millis(7), threshold), None);
         assert_eq!(
-            c.slow_parts(Duration::from_micros(60_500)).as_deref(),
+            c.slow_parts(Duration::from_micros(60_500), threshold)
+                .as_deref(),
             Some(
                 "[infynitae] Slow turn 60.5 ms: render 40.0 ms, client requests 15.0 ms, other 5.0 ms"
             )
@@ -3691,7 +4179,8 @@ mod tests {
             ("render_frame", Duration::from_millis(5)),
         ];
         assert_eq!(
-            c.slow_parts(Duration::from_millis(16)).as_deref(),
+            c.slow_parts(Duration::from_millis(16), super::SLOW_TURN_FALLBACK)
+                .as_deref(),
             Some(
                 "[infynitae] Slow turn 16.0 ms: element building 7.0 ms, render_frame 5.0 ms, scanout decision 2.0 ms, other 2.0 ms"
             )
@@ -3699,30 +4188,132 @@ mod tests {
     }
 
     #[test]
-    fn slow_turn_rate_limits_to_one_per_second() {
+    fn slow_turn_reports_worst_of_each_second() {
         use std::time::{Duration, Instant};
-        let mut c = super::TurnClock::new(Instant::now());
-        c.phases = vec![("render_frame", Duration::from_millis(10))];
-        let mut last_logged = None;
-        c.report_if_slow(Duration::from_millis(10), &mut last_logged);
-        assert!(last_logged.is_some());
-        let first_logged = last_logged;
-        // Immediate second slow turn is suppressed by rate limiter
-        c.report_if_slow(Duration::from_millis(10), &mut last_logged);
-        assert_eq!(last_logged, first_logged);
-        // After 1 second passes, it logs again
-        let mut past_logged = Some(Instant::now() - Duration::from_millis(1100));
-        c.report_if_slow(Duration::from_millis(10), &mut past_logged);
-        assert!(past_logged.unwrap() > first_logged.unwrap());
+        let threshold = Duration::from_nanos(6_060_606); // 165 Hz
+        let mut log = super::SlowTurnLog::default();
+        let t0 = Instant::now();
+
+        let mut mild = super::TurnClock::new(t0);
+        mild.phases = vec![("capture readback", Duration::from_millis(7))];
+        let mut worst = super::TurnClock::new(t0);
+        worst.phases = vec![("render_frame", Duration::from_millis(40))];
+        let mut tail = super::TurnClock::new(t0);
+        tail.phases = vec![("flush", Duration::from_millis(10))];
+
+        // Earlier slow turn opens the 1 s window without immediately printing.
+        assert_eq!(
+            log.record_at(&mild, Duration::from_millis(7), threshold, t0),
+            None
+        );
+        // Slower turn within the same second replaces it; a milder one after does not.
+        assert_eq!(
+            log.record_at(
+                &worst,
+                Duration::from_millis(40),
+                threshold,
+                t0 + Duration::from_millis(100),
+            ),
+            None
+        );
+        assert_eq!(
+            log.record_at(
+                &tail,
+                Duration::from_millis(10),
+                threshold,
+                t0 + Duration::from_millis(200),
+            ),
+            None
+        );
+        // After 1 second, the slowest turn of that second is emitted.
+        let due = log.take_due_at(t0 + Duration::from_millis(1000)).unwrap();
+        assert!(due.starts_with("[infynitae] Slow turn 40.0 ms: render_frame 40.0 ms"));
+        assert_eq!(log.take_due_at(t0 + Duration::from_millis(1100)), None);
     }
 
     #[test]
-    fn slow_turn_threshold_is_8ms() {
+    fn slow_turn_threshold_matches_one_refresh() {
         use std::time::Duration;
+        let period_165hz = Duration::from_nanos(6_060_606);
         let mut c = super::TurnClock::new(std::time::Instant::now());
-        c.phases = vec![("render_frame", Duration::from_millis(5))];
-        assert_eq!(c.slow_parts(Duration::from_millis(7)), None);
-        assert!(c.slow_parts(Duration::from_millis(8)).is_some());
+        c.phases = vec![("render_frame", Duration::from_millis(6))];
+        assert_eq!(c.slow_parts(Duration::from_millis(6), period_165hz), None);
+        assert!(
+            c.slow_parts(Duration::from_micros(6_100), period_165hz)
+                .is_some()
+        );
+        assert_eq!(super::slow_turn_threshold(&[]), super::SLOW_TURN_FALLBACK);
+    }
+
+    #[test]
+    fn capture_log_reports_client_path_and_buffer_kind_once_per_capture() {
+        let mut seen = super::CaptureSeen::default();
+        assert!(seen.note((1u64, None::<u64>), true));
+        assert!(!seen.note((1u64, None::<u64>), true));
+        // Buffer path change or new session/client logs again.
+        assert!(seen.note((1u64, None::<u64>), false));
+        assert!(seen.note((2u64, None::<u64>), true));
+
+        assert_eq!(
+            super::format_capture_log(Some("obs"), Some("/usr/bin/obs"), true),
+            "[infynitae] Capture started by obs (/usr/bin/obs): into a GPU buffer (dmabuf)"
+        );
+        assert_eq!(
+            super::format_capture_log(
+                Some("org.obsproject.Studio"),
+                Some("org.obsproject.Studio (sandboxed by flatpak)"),
+                false,
+            ),
+            "[infynitae] Capture started by org.obsproject.Studio (sandboxed by flatpak): into memory (shm), copied on the main thread"
+        );
+    }
+
+    #[test]
+    fn composited_late_start_respects_mode_scanout_and_safety_guards() {
+        use infynitae_wayland::frame_schedule::LatencyMode;
+        assert!(!super::skip_composited_late_start(
+            LatencyMode::Direct,
+            false,
+            false,
+            false,
+            false,
+        ));
+        assert!(super::skip_composited_late_start(
+            LatencyMode::Direct,
+            false,
+            true,
+            false,
+            false,
+        ));
+        assert!(super::skip_composited_late_start(
+            LatencyMode::Direct,
+            false,
+            false,
+            true,
+            false,
+        ));
+        assert!(super::skip_composited_late_start(
+            LatencyMode::Direct,
+            false,
+            false,
+            false,
+            true,
+        ));
+        // Direct scanout (fullscreen game) and explicit Balanced mode are unaffected.
+        assert!(!super::skip_composited_late_start(
+            LatencyMode::Direct,
+            true,
+            true,
+            true,
+            true,
+        ));
+        assert!(!super::skip_composited_late_start(
+            LatencyMode::Balanced,
+            false,
+            true,
+            true,
+            true,
+        ));
     }
 
     use super::*;
@@ -4112,5 +4703,316 @@ mod tests {
         let fallback =
             choose_mode_custom(&modes, Some((3840, 2160)), None).or_else(|| choose_mode(&modes));
         assert_eq!(fallback, Some(1));
+    }
+
+    #[test]
+    fn parse_lock_when_away_prefers_unified_key_and_falls_back_to_idle_auto_lock() {
+        use super::parse_lock_when_away;
+        assert!(parse_lock_when_away(""));
+        assert!(parse_lock_when_away("IDLE_AUTO_LOCK=\"true\"\n"));
+        assert!(!parse_lock_when_away("IDLE_AUTO_LOCK=\"false\"\n"));
+        assert!(!parse_lock_when_away(
+            "LOCK_WHEN_AWAY=\"false\"\nIDLE_AUTO_LOCK=\"true\"\n"
+        ));
+        assert!(!parse_lock_when_away(
+            "IDLE_AUTO_LOCK=\"true\"\nLOCK_WHEN_AWAY=\"false\"\n"
+        ));
+        assert!(!parse_lock_when_away(
+            "LOCK_WHEN_AWAY=\"\"\nIDLE_AUTO_LOCK=\"false\"\n"
+        ));
+        assert!(parse_lock_when_away("IDLE_AUTO_LOCK=\"not-a-bool\"\n"));
+    }
+
+    #[test]
+    fn take_ready_leaves_unsignaled_fences_pending() {
+        use smithay::backend::renderer::sync::{Fence, Interrupted, SyncPoint};
+        use std::os::unix::io::OwnedFd;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        #[derive(Debug)]
+        struct TestFence(Arc<AtomicBool>);
+
+        impl Fence for TestFence {
+            fn is_signaled(&self) -> bool {
+                self.0.load(Ordering::Acquire)
+            }
+            fn wait(&self) -> Result<(), Interrupted> {
+                Ok(())
+            }
+            fn is_exportable(&self) -> bool {
+                false
+            }
+            fn export(&self) -> Option<OwnedFd> {
+                None
+            }
+        }
+
+        let slow_flag = Arc::new(AtomicBool::new(false));
+        let mut items = vec![
+            (1u32, SyncPoint::from(TestFence(slow_flag.clone()))),
+            (2u32, SyncPoint::signaled()),
+        ];
+
+        let ready = take_ready(&mut items, |(_, sync)| sync.is_reached());
+        assert_eq!(ready.iter().map(|(id, _)| *id).collect::<Vec<_>>(), [2]);
+        assert_eq!(items.iter().map(|(id, _)| *id).collect::<Vec<_>>(), [1]);
+
+        slow_flag.store(true, Ordering::Release);
+        let ready = take_ready(&mut items, |(_, sync)| sync.is_reached());
+        assert_eq!(ready.iter().map(|(id, _)| *id).collect::<Vec<_>>(), [1]);
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn capture_readback_sync_signals_and_delivers_when_gpu_finishes() {
+        use smithay::backend::allocator::Fourcc;
+        use smithay::backend::allocator::gbm::GbmDevice;
+        use smithay::backend::renderer::gles::{Capability, GlesTexture};
+        use smithay::backend::renderer::{Bind, ExportMem, Frame, Offscreen, Renderer};
+        use smithay::utils::{DeviceFd, Rectangle, Transform};
+
+        let Some(mut renderer) = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open("/dev/dri/renderD128")
+            .ok()
+            .and_then(|f| {
+                GbmDevice::new(DrmDeviceFd::new(DeviceFd::from(
+                    std::os::fd::OwnedFd::from(f),
+                )))
+                .ok()
+            })
+            .and_then(|gbm| gles_renderer(&gbm).ok())
+        else {
+            eprintln!("no GPU render node: skipped");
+            return;
+        };
+
+        let size = (4, 4);
+        let mut offscreen: GlesTexture =
+            Offscreen::create_buffer(&mut renderer, Fourcc::Argb8888, size.into())
+                .expect("offscreen");
+        let mapping = {
+            let mut target = renderer.bind(&mut offscreen).expect("bind");
+            let mut frame = renderer
+                .render(&mut target, size.into(), Transform::Normal)
+                .expect("frame");
+            frame
+                .clear(
+                    [0.2, 0.4, 0.6, 1.0].into(),
+                    &[Rectangle::from_size(size.into())],
+                )
+                .expect("clear");
+            let _ = frame.finish().expect("finish");
+            ExportMem::copy_framebuffer(
+                &mut renderer,
+                &target,
+                Rectangle::from_size(size.into()),
+                Fourcc::Argb8888,
+            )
+            .expect("copy_framebuffer")
+        };
+
+        let sync = readback_sync(&mut renderer);
+        if renderer.capabilities().contains(&Capability::ExportFence) {
+            assert!(sync.contains_fence(), "readback should carry an EGL fence");
+            if sync.is_exportable() {
+                assert!(sync.export().is_some());
+            }
+        }
+        sync.wait().expect("fence wait");
+        assert!(sync.is_reached());
+
+        let (mut core, _, _, mut token) = Core::new(Default::default());
+        let make_output = |connector: &str| OutputDescriptor {
+            key: OutputKey {
+                device: "test".into(),
+                connector: connector.into(),
+                make: "Test".into(),
+                model: "Test".into(),
+                serial: None,
+            },
+            mode: (1920, 1080),
+            transform: infynitae_core::output::Transform::Normal,
+            scale_120: 120,
+            refresh_mhz: 60_000,
+        };
+        let (id1, _) = core
+            .output_connected(&mut token, make_output("DP-1"))
+            .expect("output 1");
+        let (id2, _) = core
+            .output_connected(&mut token, make_output("DP-2"))
+            .expect("output 2");
+
+        let mut copies = vec![PendingCopy {
+            mapping,
+            sync,
+            watched: false,
+            output_id: id1,
+            reqs: Vec::new(),
+            size,
+            view: size,
+            transform: infynitae_core::output::Transform::Normal,
+            now: Duration::ZERO,
+        }];
+        assert!(has_pending_readback(&copies, id1));
+        assert!(!has_pending_readback(&copies, id2));
+
+        let mut woken = Vec::new();
+        deliver_copies(&mut renderer, &mut copies, &mut woken);
+        assert!(copies.is_empty());
+        assert_eq!(woken, [id1]);
+    }
+
+    #[test]
+    fn scaling_filter_change_resets_buffers_and_forces_full_redraw() {
+        use infynitae_wayland::ZoomFilter;
+        use smithay::backend::allocator::dmabuf::AsDmabuf;
+        use smithay::backend::allocator::gbm::{GbmAllocator, GbmBufferFlags, GbmDevice};
+        use smithay::backend::allocator::{Fourcc, Modifier, Swapchain};
+        use smithay::backend::renderer::Bind;
+        use smithay::backend::renderer::damage::OutputDamageTracker;
+        use smithay::backend::renderer::element::solid::SolidColorRenderElement;
+        use smithay::backend::renderer::element::{Id, Kind};
+        use smithay::utils::{DeviceFd, Transform};
+
+        let Some(gbm) = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open("/dev/dri/renderD128")
+            .ok()
+            .and_then(|f| {
+                GbmDevice::new(DrmDeviceFd::new(DeviceFd::from(
+                    std::os::fd::OwnedFd::from(f),
+                )))
+                .ok()
+            })
+        else {
+            eprintln!("no GPU render node: skipped");
+            return;
+        };
+        let Ok(mut renderer) = gles_renderer(&gbm) else {
+            eprintln!("no GLES renderer: skipped");
+            return;
+        };
+
+        let mut current = ZoomFilter::Sharp;
+        let mut zoom_cache = smooth::ZoomCache::default();
+        let damage = Mutex::new(infynitae_wayland::screencopy::CaptureDamage::default());
+        let elem = SolidColorRenderElement::new(
+            Id::new(),
+            Rectangle::from_size((16, 16).into()),
+            0,
+            [0.3, 0.5, 0.7, 1.0],
+            Kind::Unspecified,
+        );
+        let elements = [elem];
+        let now = std::time::Instant::now();
+        assert!(
+            damage
+                .lock()
+                .unwrap()
+                .damage(&"c", (16, 16), 1.0, Transform::Normal, &elements, now)
+                .is_some()
+        );
+        assert!(
+            damage
+                .lock()
+                .unwrap()
+                .damage(&"c", (16, 16), 1.0, Transform::Normal, &elements, now)
+                .is_none()
+        );
+
+        // Unchanged filter is a no-op and preserves screencopy damage state.
+        assert!(!apply_scaling_filter(
+            &mut current,
+            ZoomFilter::Sharp,
+            &mut renderer,
+            &mut zoom_cache,
+            &damage,
+        ));
+        assert!(
+            damage
+                .lock()
+                .unwrap()
+                .damage(&"c", (16, 16), 1.0, Transform::Normal, &elements, now)
+                .is_none()
+        );
+
+        // Changed filter updates state and clears screencopy damage so captures redraw too.
+        assert!(apply_scaling_filter(
+            &mut current,
+            ZoomFilter::Smooth,
+            &mut renderer,
+            &mut zoom_cache,
+            &damage,
+        ));
+        assert_eq!(current, ZoomFilter::Smooth);
+        assert!(
+            damage
+                .lock()
+                .unwrap()
+                .damage(&"c", (16, 16), 1.0, Transform::Normal, &elements, now)
+                .is_some()
+        );
+
+        // Resetting swapchain buffers forces age=0 and a full redraw on identical elements.
+        let allocator = GbmAllocator::new(gbm, GbmBufferFlags::RENDERING);
+        let mut swapchain = Swapchain::new(
+            allocator,
+            16,
+            16,
+            Fourcc::Argb8888,
+            vec![Modifier::Linear, Modifier::Invalid],
+        );
+        let mut tracker = OutputDamageTracker::new((16, 16), 1.0, Transform::Normal);
+
+        // Seed 4 slots so the next acquire returns a buffer with age > 0 and zero damage.
+        for _ in 0..4 {
+            let slot = swapchain.acquire().expect("acquire").expect("slot");
+            let age = usize::from(slot.age());
+            let mut dmabuf = slot.export().expect("dmabuf");
+            let mut fb = renderer.bind(&mut dmabuf).expect("bind");
+            let _ = tracker
+                .render_output(&mut renderer, &mut fb, age, &elements, [0.0, 0.0, 0.0, 1.0])
+                .expect("render");
+            swapchain.submitted(&slot);
+        }
+        let steady = swapchain.acquire().expect("acquire").expect("slot");
+        assert!(steady.age() > 0);
+        let mut dmabuf = steady.export().expect("dmabuf");
+        let mut fb = renderer.bind(&mut dmabuf).expect("bind");
+        let steady_res = tracker
+            .render_output(
+                &mut renderer,
+                &mut fb,
+                usize::from(steady.age()),
+                &elements,
+                [0.0, 0.0, 0.0, 1.0],
+            )
+            .expect("render");
+        assert!(steady_res.damage.is_none(), "steady frame has no damage");
+        drop(fb);
+        swapchain.submitted(&steady);
+        drop(steady);
+
+        swapchain.reset_buffers();
+        let redrawn = swapchain.acquire().expect("acquire").expect("slot");
+        assert_eq!(redrawn.age(), 0);
+        let mut dmabuf = redrawn.export().expect("dmabuf");
+        let mut fb = renderer.bind(&mut dmabuf).expect("bind");
+        let redrawn_res = tracker
+            .render_output(
+                &mut renderer,
+                &mut fb,
+                usize::from(redrawn.age()),
+                &elements,
+                [0.0, 0.0, 0.0, 1.0],
+            )
+            .expect("render");
+        assert!(
+            redrawn_res.damage.is_some(),
+            "reset_buffers forces a full redraw even when elements are unchanged"
+        );
     }
 }

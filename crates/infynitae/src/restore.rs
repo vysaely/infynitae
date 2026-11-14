@@ -784,23 +784,30 @@ pub fn restorable(session: &Path, apps_dirs: &[PathBuf]) -> bool {
         .any(|a| app_command(a, apps_dirs).is_some_and(|cmd| installed(&cmd[0])))
 }
 
-fn session_restore_enabled() -> bool {
-    if let Ok(val) = std::env::var("SESSION_RESTORE") {
-        return !matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no");
+fn session_restore_from(env_val: Option<&str>, config_content: Option<&str>) -> bool {
+    if let Some(val) = env_val {
+        return infynitae_wayland::parse_bool(val) != Some(false);
     }
-    if let Ok(home) = std::env::var("HOME")
-        && let Ok(content) = std::fs::read_to_string(format!("{home}/.config/infynitae/config"))
-    {
+    if let Some(content) = config_content {
         for (k, v) in content.lines().filter_map(infynitae_wayland::config_line) {
             if k.trim() == "SESSION_RESTORE" {
-                return !matches!(
-                    v.trim().to_lowercase().as_str(),
-                    "0" | "false" | "off" | "no"
-                );
+                return infynitae_wayland::parse_bool(&v) != Some(false);
             }
         }
     }
     true
+}
+
+fn session_restore_enabled() -> bool {
+    let env_val = std::env::var("SESSION_RESTORE").ok();
+    let config_content = if env_val.is_none() {
+        std::env::var("HOME").ok().and_then(|home| {
+            std::fs::read_to_string(format!("{home}/.config/infynitae/config")).ok()
+        })
+    } else {
+        None
+    };
+    session_restore_from(env_val.as_deref(), config_content.as_deref())
 }
 
 /// `infynitae restore watch|save|restore|check` (`args` after "restore").
@@ -1433,5 +1440,17 @@ mod tests {
         assert!(other.exists());
 
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn session_restore_from_respects_env_and_config_bool_tokens() {
+        assert!(session_restore_from(None, None));
+        assert!(!session_restore_from(
+            Some("off"),
+            Some("SESSION_RESTORE=1")
+        ));
+        assert!(session_restore_from(Some("yes"), Some("SESSION_RESTORE=0")));
+        assert!(!session_restore_from(None, Some("SESSION_RESTORE=NO\n")));
+        assert!(session_restore_from(None, Some("OTHER=1\n")));
     }
 }

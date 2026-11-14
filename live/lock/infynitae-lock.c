@@ -1,7 +1,6 @@
 /*
  * infynitae-lock - the lock screen (and the start screen after login)
- * 
- * Part of the Infynitae Compositor ecosystem.
+ *
  * It draws in the theme colors from the config (CANVAS_COLOR, SURFACE_COLOR, …),
  * standard Linux PAM authentication, ext-session-lock-v1: the compositor shows only this
  * client's surfaces and gives them every key until it unlocks, even if this client dies.
@@ -13,6 +12,7 @@
 #include <string.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <ctype.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/mman.h>
@@ -102,13 +102,19 @@ typedef struct {
      * compositor confirmed the lock, so nothing before the lock depends on them; NULL: none */
     cairo_surface_t *background;
     cairo_surface_t *avatar;
-    double corners; /* LOOK_CORNERS: the radius of the password field, as windows and the edge (0: square) */
+    double corners;       /* LOOK_CORNERS (0: square) */
+    double small_corners; /* LOOK_SMALL_RADIUS: the radius of the password field */
+    double edge_alpha;    /* LOOK_EDGE_AA: opacity of the 1 px edge */
+    char font[128];       /* LOOK_FONT, else "sans-serif" */
 
     double canvas_rgb[3];
     double surface_rgb[3];
     double border_act_rgb[3];
     double border_inact_rgb[3];
     double text_rgb[3];
+    double muted_rgb[3];
+    double accent_text_rgb[3];
+    double alert_rgb[3];
 } LockApp;
 
 typedef struct LockOutput {
@@ -137,16 +143,10 @@ typedef struct LockOutput {
     struct LockOutput *next;
 } LockOutput;
 
-/* ========================================================================== */
-/* Forward Declarations                                                       */
-/* ========================================================================== */
 static void render_output(LockOutput *output);
 static void request_frame(LockOutput *output);
 static void damage_all_outputs(LockApp *app);
 
-/* ========================================================================== */
-/* Shared Memory Buffer Allocation                                            */
-/* ========================================================================== */
 static int create_shm_file(off_t size) {
     int fd = memfd_create("infynitae-lock-shm", MFD_CLOEXEC | MFD_ALLOW_SEALING);
     if (fd < 0) {
@@ -205,9 +205,6 @@ static bool allocate_output_buffer(LockOutput *output) {
     return true;
 }
 
-/* ========================================================================== */
-/* PAM Authentication Worker Thread                                           */
-/* ========================================================================== */
 typedef struct {
     char username[128];
     char password[PASSWORD_MAX_LEN];
@@ -274,7 +271,6 @@ static void *pam_worker_thread(void *arg) {
         pam_end(pamh, rc);
     }
 
-    // Securely shred sensitive memory
     explicit_bzero(data->password, sizeof(data->password));
 
     if (rc == PAM_SUCCESS) {
@@ -308,7 +304,6 @@ static void trigger_auth(LockApp *app) {
     data->password[sizeof(data->password) - 1] = '\0';
     data->app = app;
 
-    // Clear local buffer immediately
     explicit_bzero(app->password, sizeof(app->password));
     app->password_len = 0;
 
@@ -324,23 +319,77 @@ static void trigger_auth(LockApp *app) {
     pthread_detach(app->pam_thread);
 }
 
-static void parse_hex_rgb(const char *s, double out[3]) {
-    while (*s == ' ' || *s == '\t' || *s == '"' || *s == '\'') s++;
-    if (*s == '#') s++;
-    unsigned int r = 0, g = 0, b = 0;
-    if (sscanf(s, "%02x%02x%02x", &r, &g, &b) == 3) {
-        out[0] = (double)r / 255.0;
-        out[1] = (double)g / 255.0;
-        out[2] = (double)b / 255.0;
-    }
+static int hex_nibble(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
 }
 
+static bool parse_hex_rgb(const char *s, double out[3]) {
+    while (*s == ' ' || *s == '\t' || *s == '"' || *s == '\'') s++;
+    if (*s == '#') s++;
+    int d[6];
+    for (int i = 0; i < 6; i++) {
+        d[i] = hex_nibble(s[i]);
+        if (d[i] < 0) return false;
+    }
+    if (hex_nibble(s[6]) >= 0) return false;
+    out[0] = (double)((d[0] << 4) | d[1]) / 255.0;
+    out[1] = (double)((d[2] << 4) | d[3]) / 255.0;
+    out[2] = (double)((d[4] << 4) | d[5]) / 255.0;
+    return true;
+}
+
+static bool parse_hex_alpha(const char *s, double *out) {
+    while (*s == ' ' || *s == '\t' || *s == '"' || *s == '\'') s++;
+    int hi = hex_nibble(s[0]), lo = hex_nibble(s[1]);
+    if (hi < 0 || lo < 0 || hex_nibble(s[2]) >= 0) return false;
+    *out = (double)((hi << 4) | lo) / 255.0;
+    return true;
+}
+
+static bool parse_radius(const char *s, double *out) {
+    while (*s == ' ' || *s == '\t' || *s == '"' || *s == '\'') s++;
+    if (*s < '0' || *s > '9') return false;
+    char *end = NULL;
+    long v = strtol(s, &end, 10);
+    if (end == s) return false;
+    while (*end == ' ' || *end == '\t' || *end == '"' || *end == '\'' || *end == '\r' || *end == '\n') end++;
+    if (*end != '\0' && *end != '#') return false;
+    if (v < 0) v = 0;
+    if (v > 28) v = 28;
+    *out = (double)v;
+    return true;
+}
+
+static void parse_font_name(const char *s, char *dst, size_t dst_sz) {
+    while (*s == ' ' || *s == '\t') s++;
+    char quote = 0;
+    if (*s == '"' || *s == '\'') quote = *s++;
+    char val[128];
+    size_t j = 0;
+    while (*s && *s != '\n' && *s != '\r' && j + 1 < sizeof(val)) {
+        if (quote && *s == quote) break;
+        if (!quote && *s == '#') break;
+        unsigned char ch = (unsigned char)*s;
+        if (isalnum(ch) || ch == ' ' || ch == '-' || ch == '_' || ch == ',' || ch == '.') {
+            val[j++] = *s++;
+        } else {
+            return;
+        }
+    }
+    if (quote && *s != quote) return;
+    while (j > 0 && (val[j - 1] == ' ' || val[j - 1] == '\t')) j--;
+    val[j] = '\0';
+    if (j > 0 && j < dst_sz) memcpy(dst, val, j + 1);
+}
 
 /* The look the panels, widgets, notifications and menus share (docs/EDGE_RUST.md, stage 7), as
- * infynitae-settings resolved it into ~/.cache/infynitae/look: the card colour, its edge, the text,
- * the accent and the corners (0: square). Read after the config, so a colour scheme reaches the
- * lock screen too; without the file, the config's colours as before. */
-static void read_look(LockApp *app, const char *home) {
+ * infynitae-settings resolved it into ~/.cache/infynitae/look: card, edge, text, muted, accent,
+ * accent-as-text, corners, small radius and font. Read after the config, so a colour scheme reaches
+ * the lock screen too; missing keys fall back to values worked out from the resolved colours. */
+static void read_look(LockApp *app, const char *home, bool *has_muted, bool *has_accent_text, bool *has_alert, bool *has_small) {
     const char *cache = getenv("XDG_CACHE_HOME");
     char path[512];
     if (cache && *cache) snprintf(path, sizeof(path), "%s/infynitae/look", cache);
@@ -351,12 +400,22 @@ static void read_look(LockApp *app, const char *home) {
     while (fgets(line, sizeof(line), f)) {
         if (strncmp(line, "LOOK_CARD=", 10) == 0) parse_hex_rgb(line + 10, app->surface_rgb);
         else if (strncmp(line, "LOOK_EDGE=", 10) == 0) parse_hex_rgb(line + 10, app->border_inact_rgb);
+        else if (strncmp(line, "LOOK_EDGE_AA=", 13) == 0) parse_hex_alpha(line + 13, &app->edge_alpha);
         else if (strncmp(line, "LOOK_TEXT=", 10) == 0) parse_hex_rgb(line + 10, app->text_rgb);
-        else if (strncmp(line, "LOOK_ACCENT=", 12) == 0) parse_hex_rgb(line + 12, app->border_act_rgb);
-        else if (strncmp(line, "LOOK_CORNERS=", 13) == 0) {
-            const char *v = line + 13;
-            while (*v == '"') v++;
-            if (*v >= '0' && *v <= '9') app->corners = atoi(v) > 28 ? 28 : atoi(v);
+        else if (strncmp(line, "LOOK_MUTED=", 11) == 0) {
+            if (parse_hex_rgb(line + 11, app->muted_rgb)) *has_muted = true;
+        } else if (strncmp(line, "LOOK_ACCENT=", 12) == 0) {
+            parse_hex_rgb(line + 12, app->border_act_rgb);
+        } else if (strncmp(line, "LOOK_ACCENT_TEXT=", 17) == 0) {
+            if (parse_hex_rgb(line + 17, app->accent_text_rgb)) *has_accent_text = true;
+        } else if (strncmp(line, "LOOK_ALERT=", 11) == 0) {
+            if (parse_hex_rgb(line + 11, app->alert_rgb)) *has_alert = true;
+        } else if (strncmp(line, "LOOK_CORNERS=", 13) == 0) {
+            parse_radius(line + 13, &app->corners);
+        } else if (strncmp(line, "LOOK_SMALL_RADIUS=", 18) == 0) {
+            if (parse_radius(line + 18, &app->small_corners)) *has_small = true;
+        } else if (strncmp(line, "LOOK_FONT=", 10) == 0) {
+            parse_font_name(line + 10, app->font, sizeof(app->font));
         }
     }
     fclose(f);
@@ -368,44 +427,70 @@ static void load_theme_config(LockApp *app) {
     app->border_act_rgb[0] = 0.478; app->border_act_rgb[1] = 0.635; app->border_act_rgb[2] = 0.969; /* #7aa2f7 */
     app->border_inact_rgb[0] = 0.200; app->border_inact_rgb[1] = 0.231; app->border_inact_rgb[2] = 0.329; /* #333b54 */
     app->text_rgb[0] = 0.933; app->text_rgb[1] = 0.949; app->text_rgb[2] = 0.973;             /* #eef2f8 */
+    app->edge_alpha = 0.90;
     app->corners = 8; /* the corners of windows and the edge: 8 unless the look file says */
+    snprintf(app->font, sizeof(app->font), "sans-serif");
 
+    bool has_muted = false, has_accent_text = false, has_alert = false, has_small = false;
     const char *home = getenv("HOME");
-    if (!home) return;
-    char path[512];
-    snprintf(path, sizeof(path), "%s/.config/infynitae/config", home);
-    FILE *f = fopen(path, "r");
-    if (!f) return;
-    char line[256];
-    while (fgets(line, sizeof(line), f)) {
-        char *p = line;
-        while (*p == ' ' || *p == '\t') p++;
-        if (*p == '#') continue;
-        if (strncmp(p, "CANVAS_COLOR=", 13) == 0) parse_hex_rgb(p + 13, app->canvas_rgb);
-        else if (strncmp(p, "SURFACE_COLOR=", 14) == 0) parse_hex_rgb(p + 14, app->surface_rgb);
-        else if (strncmp(p, "BORDER_ACTIVE=", 14) == 0) parse_hex_rgb(p + 14, app->border_act_rgb);
-        else if (strncmp(p, "BORDER_INACTIVE=", 16) == 0) parse_hex_rgb(p + 16, app->border_inact_rgb);
-        else if (strncmp(p, "TEXT_COLOR=", 11) == 0) parse_hex_rgb(p + 11, app->text_rgb);
+    if (home) {
+        char path[512];
+        snprintf(path, sizeof(path), "%s/.config/infynitae/config", home);
+        FILE *f = fopen(path, "r");
+        if (f) {
+            double accent_cfg[3], border_cfg[3];
+            bool has_accent_cfg = false, has_border_cfg = false;
+            char line[256];
+            while (fgets(line, sizeof(line), f)) {
+                char *p = line;
+                while (*p == ' ' || *p == '\t') p++;
+                if (*p == '#') continue;
+                if (strncmp(p, "CANVAS_COLOR=", 13) == 0) parse_hex_rgb(p + 13, app->canvas_rgb);
+                else if (strncmp(p, "SURFACE_COLOR=", 14) == 0) parse_hex_rgb(p + 14, app->surface_rgb);
+                else if (strncmp(p, "ACCENT=", 7) == 0) {
+                    if (parse_hex_rgb(p + 7, accent_cfg)) has_accent_cfg = true;
+                } else if (strncmp(p, "BORDER_ACTIVE=", 14) == 0) {
+                    if (parse_hex_rgb(p + 14, border_cfg)) has_border_cfg = true;
+                } else if (strncmp(p, "BORDER_INACTIVE=", 16) == 0) parse_hex_rgb(p + 16, app->border_inact_rgb);
+                else if (strncmp(p, "TEXT_COLOR=", 11) == 0) parse_hex_rgb(p + 11, app->text_rgb);
+            }
+            fclose(f);
+            if (has_accent_cfg) memcpy(app->border_act_rgb, accent_cfg, sizeof(accent_cfg));
+            else if (has_border_cfg) memcpy(app->border_act_rgb, border_cfg, sizeof(border_cfg));
+        }
+        read_look(app, home, &has_muted, &has_accent_text, &has_alert, &has_small);
     }
-    fclose(f);
-    read_look(app, home);
+    if (!has_muted) {
+        for (int i = 0; i < 3; i++)
+            app->muted_rgb[i] = app->text_rgb[i] + (app->surface_rgb[i] - app->text_rgb[i]) * 0.32;
+    }
+    if (!has_accent_text) {
+        memcpy(app->accent_text_rgb, app->border_act_rgb, sizeof(app->accent_text_rgb));
+    }
+    if (!has_alert) {
+        memcpy(app->alert_rgb, app->accent_text_rgb, sizeof(app->alert_rgb));
+    }
+    if (!has_small) {
+        app->small_corners = round(app->corners * 0.55);
+    }
 }
 
-/* ========================================================================== */
-/* UI Rendering (Cairo & Pango)                                               */
-/* ========================================================================== */
 static void draw_sharp_rect(cairo_t *cr, double x, double y, double w, double h) {
     cairo_rectangle(cr, round(x) + 0.5, round(y) + 0.5, round(w) - 1.0, round(h) - 1.0);
 }
 
-/* Draws `text` centered at `(cx, cy)` using exact Pango sub-pixel extents.
+/* Draws `text` centered at `(cx, cy)` using exact Pango sub-pixel extents, at `size_px` in pixels.
  * When `use_ink_y` is true (single glyphs, uppercase badges, numerals), vertical centering uses
  * the actual ink bounding box so ascenders/descenders never push the glyph off-center.
  * When `use_ink_y` is false (mixed-case phrases), vertical centering uses the logical box while
  * horizontal centering still uses the ink box so left/right bearings never shift text sideways. */
-static void draw_text_centered(cairo_t *cr, PangoLayout *layout, const char *font_str,
-                               const char *text, double cx, double cy, bool use_ink_y) {
-    PangoFontDescription *desc = pango_font_description_from_string(font_str);
+static void draw_text_centered(cairo_t *cr, PangoLayout *layout, const char *family,
+                               PangoWeight weight, double size_px, const char *text,
+                               double cx, double cy, bool use_ink_y) {
+    PangoFontDescription *desc = pango_font_description_new();
+    pango_font_description_set_family(desc, family);
+    pango_font_description_set_weight(desc, weight);
+    pango_font_description_set_absolute_size(desc, size_px * PANGO_SCALE);
     pango_layout_set_font_description(layout, desc);
     pango_font_description_free(desc);
     pango_layout_set_text(layout, text, -1);
@@ -432,14 +517,9 @@ static void draw_text_centered(cairo_t *cr, PangoLayout *layout, const char *fon
     pango_cairo_show_layout(cr, layout);
 }
 
-/* ========================================================================== */
-/* On-screen keyboard (touchscreens, tablet mode)                             */
-/* ========================================================================== */
-/* A key grid drawn on the lock surface itself: the compositor gives the lock surface the taps
- * on its screen and nothing else sees them, so the password never leaves this program (no
- * input method or virtual keyboard reaches a lock screen). It appears at the first tap and
- * types characters directly, whatever the keyboard layout. A key acts when the finger lifts
- * on it. */
+/* On-screen keyboard (touchscreens, tablet mode): a key grid drawn on the lock surface itself, so
+ * the compositor gives it the taps directly and nothing else (no input method or external virtual
+ * keyboard) ever sees the password. A key acts when the finger lifts on it. */
 typedef enum { OSK_CHAR, OSK_SHIFT, OSK_BACKSPACE, OSK_SYMBOLS, OSK_SPACE, OSK_HIDE, OSK_ENTER } OskKind;
 
 typedef struct {
@@ -519,29 +599,28 @@ static void osk_draw(cairo_t *cr, PangoLayout *layout, const LockApp *app, const
     cairo_set_source_rgba(cr, app->surface_rgb[0], app->surface_rgb[1], app->surface_rgb[2], 0.96);
     cairo_rectangle(cr, 0, top, w, h - top);
     cairo_fill(cr);
-    cairo_set_source_rgba(cr, app->border_inact_rgb[0], app->border_inact_rgb[1], app->border_inact_rgb[2], 0.85);
+    cairo_set_source_rgba(cr, app->border_inact_rgb[0], app->border_inact_rgb[1], app->border_inact_rgb[2], app->edge_alpha);
     cairo_set_line_width(cr, 1.0);
     cairo_move_to(cr, 0, round(top) + 0.5);
     cairo_line_to(cr, w, round(top) + 0.5);
     cairo_stroke(cr);
 
-    PangoFontDescription *desc = pango_font_description_from_string("Sans 14");
-    pango_layout_set_font_description(layout, desc);
-    pango_font_description_free(desc);
     for (int i = 0; i < n; i++) {
         bool pressed = app->osk_pressed == i && app->osk_pressed_output == output;
         bool lit = keys[i].kind == OSK_SHIFT && app->osk_shift;
-        if (pressed || lit)
-            cairo_set_source_rgba(cr, 0.16, 0.19, 0.25, 0.96);
-        else
-            cairo_set_source_rgba(cr, app->canvas_rgb[0], app->canvas_rgb[1], app->canvas_rgb[2], 0.95);
+        cairo_set_source_rgba(cr, app->surface_rgb[0], app->surface_rgb[1], app->surface_rgb[2], 0.96);
         cairo_rectangle(cr, round(keys[i].x), round(keys[i].y), round(keys[i].w), round(keys[i].h));
+        cairo_fill_preserve(cr);
+        if (pressed || lit)
+            cairo_set_source_rgba(cr, app->border_act_rgb[0], app->border_act_rgb[1], app->border_act_rgb[2], pressed ? 0.22 : 0.16);
+        else
+            cairo_set_source_rgba(cr, app->text_rgb[0], app->text_rgb[1], app->text_rgb[2], 0.08);
         cairo_fill(cr);
 
         if (pressed || lit)
             cairo_set_source_rgba(cr, app->border_act_rgb[0], app->border_act_rgb[1], app->border_act_rgb[2], 0.85);
         else
-            cairo_set_source_rgba(cr, app->border_inact_rgb[0], app->border_inact_rgb[1], app->border_inact_rgb[2], 0.65);
+            cairo_set_source_rgba(cr, app->border_inact_rgb[0], app->border_inact_rgb[1], app->border_inact_rgb[2], app->edge_alpha);
         cairo_set_line_width(cr, 1.0);
         draw_sharp_rect(cr, keys[i].x, keys[i].y, keys[i].w, keys[i].h);
         cairo_stroke(cr);
@@ -549,7 +628,7 @@ static void osk_draw(cairo_t *cr, PangoLayout *layout, const LockApp *app, const
         char label[8];
         osk_label(app, &keys[i], label);
         cairo_set_source_rgba(cr, app->text_rgb[0], app->text_rgb[1], app->text_rgb[2], 0.94);
-        draw_text_centered(cr, layout, "Sans 14", label,
+        draw_text_centered(cr, layout, app->font, PANGO_WEIGHT_NORMAL, 18.0, label,
                            keys[i].x + keys[i].w / 2.0,
                            keys[i].y + keys[i].h / 2.0, true);
     }
@@ -665,9 +744,9 @@ static const struct wl_touch_listener touch_listener = {
     .cancel = touch_cancel,
 };
 
-/* A rectangle rounded by the system's corners (square at 0), at most a pill, as the current path. */
+/* A rectangle rounded by the small corner (square at 0), at most a pill, as the current path. */
 static void scene_rect(cairo_t *cr, const LockApp *app, double x, double y, double w, double h) {
-    double r = app->corners;
+    double r = app->small_corners;
     if (r <= 0) {
         cairo_rectangle(cr, x, y, w, h);
         return;
@@ -703,14 +782,6 @@ static void draw_background(cairo_t *cr, const LockApp *app, int w, int h) {
             cairo_set_source_rgba(cr, app->canvas_rgb[0], app->canvas_rgb[1], app->canvas_rgb[2], 0.55);
             cairo_paint(cr);
         }
-    } else {
-        /* a soft light from the centre in the surface colour */
-        cairo_pattern_t *pat = cairo_pattern_create_radial(w / 2.0, h * 0.42, 0, w / 2.0, h * 0.42, fmax(w, h) * 0.75);
-        cairo_pattern_add_color_stop_rgba(pat, 0.0, app->surface_rgb[0], app->surface_rgb[1], app->surface_rgb[2], 0.9);
-        cairo_pattern_add_color_stop_rgba(pat, 1.0, app->surface_rgb[0], app->surface_rgb[1], app->surface_rgb[2], 0.0);
-        cairo_set_source(cr, pat);
-        cairo_paint(cr);
-        cairo_pattern_destroy(pat);
     }
 }
 
@@ -724,9 +795,12 @@ static void draw_scene(cairo_t *cr, LockApp *app, const LockOutput *output, int 
         shake_offset = sin(app->shake_frame * 1.5) * 16.0 * decay;
     }
     double cx = w / 2.0;
-    double clock_y = h * 0.30;
+    /* one group: clock, date, avatar, name, field (owner 2026-11-14: they sat too far apart, 0.30 h and
+       0.56 h); the avatar a fixed step below the clock, the group centred a little above the middle */
     double avatar_r = 48.0;
-    double avatar_y = h * 0.56;
+    double group_h = 48.0 + 190.0 + avatar_r + 16 + 26 + 16 + 44; /* clock top to field bottom */
+    double clock_y = h * 0.47 - group_h / 2.0 + 48.0;
+    double avatar_y = clock_y + 190.0;
     if (app->osk_visible) {
         /* the password stays above the keyboard: everything moves up together */
         OskKey keys[OSK_MAX_KEYS];
@@ -760,11 +834,11 @@ static void draw_scene(cairo_t *cr, LockApp *app, const LockOutput *output, int 
     pango_attr_list_insert(clock_attrs, pango_attr_font_features_new("tnum=1"));
     pango_layout_set_attributes(layout, clock_attrs);
     cairo_set_source_rgba(cr, tx[0], tx[1], tx[2], 0.96);
-    draw_text_centered(cr, layout, "sans-serif Light 72", time_str, cx, clock_y, true);
+    draw_text_centered(cr, layout, app->font, PANGO_WEIGHT_LIGHT, 96.0, time_str, cx, clock_y, true);
     pango_layout_set_attributes(layout, NULL);
     pango_attr_list_unref(clock_attrs);
-    cairo_set_source_rgba(cr, tx[0], tx[1], tx[2], 0.66);
-    draw_text_centered(cr, layout, "sans-serif 13.5", date_str, cx, clock_y + 70.0, false);
+    cairo_set_source_rgb(cr, app->muted_rgb[0], app->muted_rgb[1], app->muted_rgb[2]);
+    draw_text_centered(cr, layout, app->font, PANGO_WEIGHT_NORMAL, 15.0, date_str, cx, clock_y + 70.0, false);
 
     double ax = cx + shake_offset;
 
@@ -791,10 +865,10 @@ static void draw_scene(cairo_t *cr, LockApp *app, const LockOutput *output, int 
         cairo_arc(cr, ax, avatar_y, avatar_r, 0, 2 * M_PI);
         cairo_fill(cr);
         cairo_set_source_rgba(cr, tx[0], tx[1], tx[2], 0.94);
-        draw_text_centered(cr, layout, "sans-serif Medium 26", app->initials, ax, avatar_y, true);
+        draw_text_centered(cr, layout, app->font, PANGO_WEIGHT_MEDIUM, 35.0, app->initials, ax, avatar_y, true);
     }
 
-    // The ring: a hairline, a spinning arc while busy, red after a wrong password
+    // The ring: a hairline, a spinning arc while busy, accent after a wrong password
     bool busy = (app->auth_state == AUTH_STATE_VERIFYING ||
                  app->auth_state == AUTH_STATE_SUCCESS ||
                  app->status_msg[0] != '\0');
@@ -811,7 +885,7 @@ static void draw_scene(cairo_t *cr, LockApp *app, const LockOutput *output, int 
         cairo_arc(cr, ax, avatar_y, avatar_r + 3, app->pulse_phase, app->pulse_phase + 1.8);
         cairo_stroke(cr);
     } else if (app->auth_state == AUTH_STATE_FAILED) {
-        cairo_set_source_rgba(cr, 0.97, 0.46, 0.56, 0.95);
+        cairo_set_source_rgba(cr, app->alert_rgb[0], app->alert_rgb[1], app->alert_rgb[2], 0.95);
         cairo_set_line_width(cr, 2.0);
         cairo_new_path(cr);
         cairo_arc(cr, ax, avatar_y, avatar_r + 3, 0, 2 * M_PI);
@@ -827,7 +901,7 @@ static void draw_scene(cairo_t *cr, LockApp *app, const LockOutput *output, int 
     // The name
     double name_y = avatar_y + avatar_r + 16.0 + 13.0;
     cairo_set_source_rgba(cr, tx[0], tx[1], tx[2], 0.92);
-    draw_text_centered(cr, layout, "sans-serif Medium 13.5", app->display_name, ax, name_y, false);
+    draw_text_centered(cr, layout, app->font, PANGO_WEIGHT_SEMIBOLD, 15.0, app->display_name, ax, name_y, false);
 
     // The password field
     double field_w = 320.0, field_h = 44.0;
@@ -840,23 +914,23 @@ static void draw_scene(cairo_t *cr, LockApp *app, const LockOutput *output, int 
     cairo_fill_preserve(cr);
     cairo_set_line_width(cr, 1.0);
     if (app->auth_state == AUTH_STATE_FAILED) {
-        cairo_set_source_rgba(cr, 0.97, 0.46, 0.56, 0.90);
+        cairo_set_source_rgba(cr, app->alert_rgb[0], app->alert_rgb[1], app->alert_rgb[2], 0.90);
     } else if (busy || app->password_len > 0) {
         cairo_set_source_rgba(cr, app->border_act_rgb[0], app->border_act_rgb[1], app->border_act_rgb[2], 0.90);
     } else {
-        cairo_set_source_rgba(cr, app->border_inact_rgb[0], app->border_inact_rgb[1], app->border_inact_rgb[2], 0.90);
+        cairo_set_source_rgba(cr, app->border_inact_rgb[0], app->border_inact_rgb[1], app->border_inact_rgb[2], app->edge_alpha);
     }
     cairo_stroke(cr);
 
     if (app->status_msg[0] != '\0') {
         cairo_set_source_rgba(cr, tx[0], tx[1], tx[2], 0.94);
-        draw_text_centered(cr, layout, "sans-serif 11", app->status_msg, ax, field_cy, false);
+        draw_text_centered(cr, layout, app->font, PANGO_WEIGHT_NORMAL, 13.0, app->status_msg, ax, field_cy, false);
     } else if (app->auth_state == AUTH_STATE_SUCCESS) {
         cairo_set_source_rgba(cr, tx[0], tx[1], tx[2], 0.94);
-        draw_text_centered(cr, layout, "sans-serif 11", "Unlocking", ax, field_cy, false);
+        draw_text_centered(cr, layout, app->font, PANGO_WEIGHT_NORMAL, 13.0, "Unlocking", ax, field_cy, false);
     } else if (app->auth_state == AUTH_STATE_VERIFYING) {
         cairo_set_source_rgba(cr, tx[0], tx[1], tx[2], 0.80);
-        draw_text_centered(cr, layout, "sans-serif 11", "Checking", ax, field_cy, false);
+        draw_text_centered(cr, layout, app->font, PANGO_WEIGHT_NORMAL, 13.0, "Checking", ax, field_cy, false);
     } else if (app->password_len > 0) {
         double dot_spacing = 14.0;
         size_t max_dots = 18;
@@ -870,18 +944,18 @@ static void draw_scene(cairo_t *cr, LockApp *app, const LockOutput *output, int 
             cairo_fill(cr);
         }
     } else {
-        cairo_set_source_rgba(cr, tx[0], tx[1], tx[2], 0.45);
-        draw_text_centered(cr, layout, "sans-serif 11", "Password", ax, field_cy, false);
+        cairo_set_source_rgb(cr, app->muted_rgb[0], app->muted_rgb[1], app->muted_rgb[2]);
+        draw_text_centered(cr, layout, app->font, PANGO_WEIGHT_NORMAL, 13.0, "Password", ax, field_cy, false);
     }
 
     // One line under the field: the error, or caps lock
     double note_y = field_y + field_h + 22.0;
     if (app->auth_state == AUTH_STATE_FAILED && app->password_len == 0) {
-        cairo_set_source_rgba(cr, 0.97, 0.46, 0.56, 0.95);
-        draw_text_centered(cr, layout, "sans-serif 10.5", "Wrong password, try again", ax, note_y, false);
+        cairo_set_source_rgba(cr, app->alert_rgb[0], app->alert_rgb[1], app->alert_rgb[2], 0.95);
+        draw_text_centered(cr, layout, app->font, PANGO_WEIGHT_NORMAL, 11.0, "Wrong password, try again", ax, note_y, false);
     } else if (app->caps_lock) {
-        cairo_set_source_rgba(cr, 0.88, 0.69, 0.41, 0.95);
-        draw_text_centered(cr, layout, "sans-serif 10.5", "Caps Lock is on", ax, note_y, false);
+        cairo_set_source_rgba(cr, app->accent_text_rgb[0], app->accent_text_rgb[1], app->accent_text_rgb[2], 0.95);
+        draw_text_centered(cr, layout, app->font, PANGO_WEIGHT_NORMAL, 11.0, "Caps Lock is on", ax, note_y, false);
     }
 
     if (app->osk_visible) osk_draw(cr, layout, app, output, w, h);
@@ -970,9 +1044,6 @@ static void damage_all_outputs(LockApp *app) {
     }
 }
 
-/* ========================================================================== */
-/* Session Lock (ext-session-lock-v1)                                         */
-/* ========================================================================== */
 static void lock_surface_configure(void *data, struct ext_session_lock_surface_v1 *lock_surface,
                                    uint32_t serial, uint32_t width, uint32_t height) {
     LockOutput *output = (LockOutput *)data;
@@ -1035,9 +1106,6 @@ static const struct ext_session_lock_v1_listener lock_listener = {
     .finished = lock_finished,
 };
 
-/* ========================================================================== */
-/* Keyboard Input (XKB)                                                       */
-/* ========================================================================== */
 static void keyboard_keymap(void *data, struct wl_keyboard *keyboard,
                             uint32_t format, int32_t fd, uint32_t size) {
     (void)keyboard;
@@ -1190,9 +1258,6 @@ static const struct wl_seat_listener seat_listener = {
     .name = seat_name,
 };
 
-/* ========================================================================== */
-/* Registry Listener                                                          */
-/* ========================================================================== */
 static void registry_global(void *data, struct wl_registry *registry,
                             uint32_t name, const char *interface, uint32_t version) {
     (void)version;
@@ -1252,9 +1317,6 @@ static const struct wl_registry_listener registry_listener = {
     .global_remove = registry_global_remove,
 };
 
-/* ========================================================================== */
-/* Main Loop & Lifecycle                                                      */
-/* ========================================================================== */
 /* The name the screen shows and up to two initials (UTF-8 aware): the account's full name (GECOS
  * up to the first comma), else the login. */
 static void resolve_display_name(LockApp *app) {
@@ -1325,6 +1387,28 @@ static void load_lock_pictures(LockApp *app) {
     app->avatar = load_cached_picture("avatar.png", 1024);
 }
 
+static void print_rgb_line(const char *name, const double c[3]) {
+    unsigned int r = (unsigned int)llround(fmin(fmax(c[0], 0.0), 1.0) * 255.0);
+    unsigned int g = (unsigned int)llround(fmin(fmax(c[1], 0.0), 1.0) * 255.0);
+    unsigned int b = (unsigned int)llround(fmin(fmax(c[2], 0.0), 1.0) * 255.0);
+    printf("%s=#%02x%02x%02x\n", name, r, g, b);
+}
+
+static int print_look(const LockApp *app) {
+    print_rgb_line("card", app->surface_rgb);
+    print_rgb_line("edge", app->border_inact_rgb);
+    printf("edge_alpha=%.2f\n", app->edge_alpha);
+    print_rgb_line("text", app->text_rgb);
+    print_rgb_line("muted", app->muted_rgb);
+    print_rgb_line("accent", app->border_act_rgb);
+    print_rgb_line("accent_text", app->accent_text_rgb);
+    print_rgb_line("alert", app->alert_rgb);
+    printf("corners=%.0f\n", app->corners);
+    printf("small_corners=%.0f\n", app->small_corners);
+    printf("font=%s\n", app->font);
+    return 0;
+}
+
 /* --render WxH OUT.png: one frame of the lock screen into a PNG, for tests and screenshots. It
  * connects to nothing and locks nothing. */
 static int render_to_png(LockApp *app, const char *size, const char *out) {
@@ -1339,6 +1423,7 @@ static int render_to_png(LockApp *app, const char *size, const char *out) {
     else if (state && strcmp(state, "failed") == 0) app->auth_state = AUTH_STATE_FAILED;
     else if (state && strcmp(state, "caps") == 0) app->caps_lock = true;
     else if (state && strcmp(state, "verifying") == 0) app->auth_state = AUTH_STATE_VERIFYING;
+    else if (state && strcmp(state, "osk") == 0) { app->osk_visible = true; app->osk_shift = true; }
     cairo_surface_t *surf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, w, h);
     cairo_t *cr = cairo_create(surf);
     draw_background(cr, app, w, h);
@@ -1359,9 +1444,9 @@ int main(int argc, char **argv) {
     strncpy(app.session_cmd, "infynitae-session", sizeof(app.session_cmd) - 1);
     load_theme_config(&app);
     const char *render_size = NULL, *render_out = NULL;
+    bool want_print_look = false;
     (void)mlock(app.password, sizeof(app.password));
 
-    // Parse options
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "--greeter") == 0) {
             app.greeter_mode = true;
@@ -1374,8 +1459,11 @@ int main(int argc, char **argv) {
         } else if (strcmp(argv[i], "--render") == 0 && i + 2 < argc) {
             render_size = argv[++i];
             render_out = argv[++i];
+        } else if (strcmp(argv[i], "--print-look") == 0) {
+            want_print_look = true;
         }
     }
+    if (want_print_look) return print_look(&app);
 
     // Resolve username. Locking, it is always the real account (getuid), never the environment
     // or an argument: only that account's password unlocks the session. `--user` picks the
@@ -1465,7 +1553,6 @@ int main(int argc, char **argv) {
     load_lock_pictures(&app);
     damage_all_outputs(&app);
 
-    // Event poll loop
     time_t last_clock_tick = time(NULL);
 
     while (app.running) {
@@ -1489,7 +1576,7 @@ int main(int argc, char **argv) {
             .revents = 0
         };
 
-        // Poll every 250ms for clock update and state transition
+        /* 16 ms while animating shake/verifying/status, 250 ms idle so clock/auth ticks still wake promptly */
         int poll_timeout = (app.shake_frame > 0 || app.auth_state == AUTH_STATE_VERIFYING || app.status_msg[0] != '\0') ? 16 : 250;
         int ret = poll(&pfd, 1, poll_timeout);
 
@@ -1507,7 +1594,6 @@ int main(int argc, char **argv) {
             }
         }
 
-        // Check auth status
         if (app.auth_state == AUTH_STATE_SUCCESS) {
             damage_all_outputs(&app);
             wl_display_roundtrip(app.display);
@@ -1519,7 +1605,6 @@ int main(int argc, char **argv) {
             return 1;
         }
 
-        // Update clock every minute
         time_t cur = time(NULL);
         if (cur / 60 != last_clock_tick / 60) {
             last_clock_tick = cur;
@@ -1527,7 +1612,7 @@ int main(int argc, char **argv) {
         }
     }
 
-    // Unlock (only after authentication), then destroy the lock surfaces
+    /* ext-session-lock-v1 requires unlocking before destroying the lock surfaces */
     if (app.lock && app.auth_state == AUTH_STATE_SUCCESS) {
         ext_session_lock_v1_unlock_and_destroy(app.lock);
         app.lock = NULL;
@@ -1564,8 +1649,10 @@ int main(int argc, char **argv) {
     if (app.greeter_mode && app.auth_state == AUTH_STATE_SUCCESS) {
         printf("[infynitae-lock] Launching session: %s\n", app.session_cmd);
         execlp(app.session_cmd, app.session_cmd, NULL);
+        perror("[infynitae-lock] execlp");
+        return 1;
     }
 
-    printf("[infynitae-lock] Unlocked successfully.\n");
+    printf("[infynitae-lock] Unlocked.\n");
     return 0;
 }

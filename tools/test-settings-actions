@@ -1,9 +1,5 @@
 #!/bin/sh
 # tools/test-settings-actions: checks the settings CLI (live/settings.sh).
-# Tests:
-# - list cursors does not split themes with spaces across multiple lines (finding 18)
-# - set on fresh install when config file does not exist creates config and succeeds (finding 1)
-# - wallpaper path with $(...) does not execute shell command substitution (finding 4)
 set -eu
 
 REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
@@ -54,5 +50,52 @@ check "Thunar uca sed replacement handles pipe and ampersand characters in paths
 # Finding 26: config_write and cmd_set do not use predictable .tmp.$$ suffix
 has_predictable_tmp=$(grep -F '$CONFIG_FILE.tmp.$$' "$REPO_DIR/live/settings.sh" || true)
 check "settings.sh does not use predictable \$CONFIG_FILE.tmp.\$\$ temp files" "$has_predictable_tmp" ""
+
+# set KEY VALUE OLD logs in one invocation; non-look keys skip toolkit apply
+H_SET="$TMP/h_set"
+CFG_SET="$H_SET/.config/infynitae/config"
+mkdir -p "$H_SET/.config/infynitae"
+printf 'TOUCHPAD_TAP="true"\n' > "$CFG_SET"
+HOME="$H_SET" CONFIG_FILE="$CFG_SET" sh "$REPO_DIR/live/settings.sh" set TOUCHPAD_TAP "false" "true" >/dev/null 2>&1
+log_file="$H_SET/.local/state/infynitae/settings-changes"
+check "set KEY NEW OLD logs change in one invocation" \
+    "$(awk -F '\t' '{print $2 "|" $3}' "$log_file" 2>/dev/null || echo missing)" "TOUCHPAD_TAP|true"
+check "set writes non-look key" "$(grep '^TOUCHPAD_TAP=' "$CFG_SET" 2>/dev/null || true)" "TOUCHPAD_TAP='false'"
+check "non-look key skips toolkit apply (no look or gtk-3.0)" \
+    "$([ -e "$H_SET/.cache/infynitae/look" ] || [ -e "$H_SET/.config/gtk-3.0" ] && echo applied || echo skipped)" "skipped"
+
+# live/config.sh: honours CONFIG_FILE, survives syntax errors under set -e, maps renames, and passes config-cases
+H_CFG="$TMP/h_cfg"
+CFG_CASES="$H_CFG/.config/infynitae/config"
+mkdir -p "$H_CFG/.config/infynitae"
+{
+    awk -F '\t' '!/^[[:space:]]*($|#)/ { print $4 }' "$REPO_DIR/tools/config-cases"
+    printf 'ISLAND_EDGE="top"\n'
+    printf 'BROKEN SYNTAX (\n'
+} > "$CFG_CASES"
+
+cases_result=$(
+    HOME="$H_CFG" CONFIG_FILE="$CFG_CASES" _infy_renames="$REPO_DIR/live/config-renames" \
+    sh -ec '
+        . "$1"
+        failures=""
+        while IFS= read -r row; do
+            case "$row" in "" | "#"*) continue ;; esac
+            key=$(printf "%s\n" "$row" | cut -f1)
+            expected=$(printf "%s\n" "$row" | cut -f2)
+            on=$(printf "%s\n" "$row" | cut -f3)
+            eval "got=\${$key:-}"
+            [ "$got" = "$expected" ] || { failures="$failures $key([$got]!=[$expected])"; continue; }
+            case "$on" in
+                on) infy_on "$got" || failures="$failures infy_on($key=$got)" ;;
+                off) ! infy_on "$got" || failures="$failures !infy_on($key=$got)" ;;
+            esac
+        done < "$2"
+        [ "${EDGE_POSITION:-}" = "top" ] || failures="$failures rename(EDGE_POSITION=$EDGE_POSITION)"
+        [ -z "$failures" ] || { echo "FAIL$failures"; exit 1; }
+        echo "ok"
+    ' _ "$REPO_DIR/live/config.sh" "$REPO_DIR/tools/config-cases" 2>&1 || true
+)
+check "config.sh parses config-cases, renames, and broken lines under set -e" "$cases_result" "ok"
 
 exit $fail

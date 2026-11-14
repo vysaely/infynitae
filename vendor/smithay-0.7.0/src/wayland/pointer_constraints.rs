@@ -176,7 +176,8 @@ impl PointerConstraint {
         }
     }
 
-    fn lifetime(&self) -> WEnum<Lifetime> {
+    /// Lifetime of the constraint (oneshot or persistent)
+    pub fn lifetime(&self) -> WEnum<Lifetime> {
         match self {
             PointerConstraint::Confined(confined) => confined.lifetime,
             PointerConstraint::Locked(locked) => locked.lifetime,

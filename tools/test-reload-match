@@ -18,9 +18,7 @@ got=$(pids_matching infynitae 7)
 if pids_matching infynitae 9 >/dev/null; then echo "FAIL: no copy has that argument"; exit 1; fi
 echo "ok: only the matching copy"
 
-# ----------------------------------------------------------------------
-# Finding 12: Wildcard path expansion when scanning process cmdlines
-# ----------------------------------------------------------------------
+# ---- Finding 12: Wildcard path expansion when scanning process cmdlines
 # In a directory with local files matching a glob, pids_of and pids_matching
 # must not expand cmdline arguments against the local directory.
 wild_dir="$tmp/wild"
@@ -47,9 +45,7 @@ fi
 kill $c 2>/dev/null || true
 echo "ok Finding 12: process cmdline wildcard expansion prevented by set -f"
 
-# ----------------------------------------------------------------------
-# Finding 22: Tilde and $HOME expansion for quoted WALLPAPER paths
-# ----------------------------------------------------------------------
+# ---- Finding 22: Tilde and $HOME expansion for quoted WALLPAPER paths
 SPAWN_ARGS=""
 spawn() {
     SPAWN_ARGS="$*"
@@ -90,9 +86,7 @@ fi
 
 echo "ok Finding 22: quoted tilde paths in WALLPAPER are safely expanded"
 
-# ----------------------------------------------------------------------
-# Finding 26: Predictable temp file $cfg.new without cleanup trap
-# ----------------------------------------------------------------------
+# ---- Finding 26: Predictable temp file $cfg.new without cleanup trap
 # Test that reload_screenshare uses mktemp and cleans up on interruption,
 # and does not write to static $cfg.new.
 cfg_dir2="$tmp/portal_wlr/.config/xdg-desktop-portal-wlr"

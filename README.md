@@ -82,7 +82,7 @@ right.
 | `Super + L` | List of open windows |
 | `Super + Shift + L` | Lock |
 | `Super + Shift + C` | Close the window |
-| `Super + Delete` | Force close (ends the app) |
+| `Super + Shift + Delete` | Force close (ends the app) |
 | `Super + Shift + K` | Keep the window on top |
 | `Super + Shift + Escape` | System monitor |
 | `Super + Shift + P` | Hide the window from screenshots and sharing |

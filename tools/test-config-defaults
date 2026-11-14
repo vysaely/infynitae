@@ -48,12 +48,38 @@ check "WINDOW_CORNERS alone shapes the interface too" "$got" "14"
 got=$(sh -c 'CORNERS=4 WINDOW_CORNERS=14; . live/settings.sh >/dev/null 2>&1; look_load; echo "$LOOK_CORNERS"')
 check "CORNERS given wins for the interface" "$got" "4"
 
-# 6. RECORD_CODEC: default is hevc
+# 5. RECORD_CODEC: default is hevc
 got=$(sed -n 's/^RECORD_CODEC="\${RECORD_CODEC:-\([^}]*\)}".*/\1/p' live/record/infynitae-recorder)
 check "RECORD_CODEC in infynitae-recorder defaults to hevc" "$got" "hevc"
 
-# 7. TOUCHPAD_TAP: default is true
+# 6. TOUCHPAD_TAP: default is true
 got=$(sh -c 'unset TOUCHPAD_TAP; . live/env.sh >/dev/null 2>&1; echo "$TOUCHPAD_TAP"')
 check "TOUCHPAD_TAP in env.sh defaults to true" "$got" "true"
+
+# 7. ACCENT prefers ACCENT over BORDER_ACTIVE and falls back when unset or empty
+got=$(sh -c 'unset ACCENT; BORDER_ACTIVE="#cc70a9"; . live/settings.sh >/dev/null 2>&1; look_load; echo "$LOOK_ACCENT"')
+check "BORDER_ACTIVE alone drives LOOK_ACCENT in settings.sh" "$got" "#cc70a9"
+got=$(sh -c 'ACCENT="#1188ee"; BORDER_ACTIVE="#cc70a9"; . live/settings.sh >/dev/null 2>&1; look_load; echo "$LOOK_ACCENT"')
+check "ACCENT wins over BORDER_ACTIVE in settings.sh" "$got" "#1188ee"
+got=$(sh -c 'ACCENT=""; BORDER_ACTIVE="#cc70a9"; . live/settings.sh >/dev/null 2>&1; look_load; echo "$LOOK_ACCENT"')
+check "empty ACCENT falls back to BORDER_ACTIVE in settings.sh" "$got" "#cc70a9"
+
+# 8. LOCK_WHEN_AWAY drives sleep-lock with SLEEP_LOCK fallback in reload and session.sh
+reload_check() {
+    TMP_RL=$(mktemp -d)
+    sed -n '/^is_true() {/,/^}/p; /^reload_sleep_lock() {/,/^}/p' live/infynitae-reload > "$TMP_RL/fn.sh"
+    got=$(sh -c "BIN_DIR=$TMP_RL; LIVE=$TMP_RL; stop_helper() { :; }; first() { echo dummy; }; spawn() { :; }; . $TMP_RL/fn.sh; $1; reload_sleep_lock" | tr '\n' ' ')
+    rm -rf "$TMP_RL"
+}
+reload_check 'unset LOCK_WHEN_AWAY SLEEP_LOCK'
+check "reload sleep-lock defaults on" "$got" "sleep-lock: restarted "
+reload_check 'unset LOCK_WHEN_AWAY; SLEEP_LOCK=false'
+check "reload sleep-lock falls back to SLEEP_LOCK=false" "$got" "sleep-lock: stopped (LOCK_WHEN_AWAY is off) "
+reload_check 'LOCK_WHEN_AWAY=false; SLEEP_LOCK=true'
+check "reload sleep-lock prefers LOCK_WHEN_AWAY=false over SLEEP_LOCK=true" "$got" "sleep-lock: stopped (LOCK_WHEN_AWAY is off) "
+reload_check 'LOCK_WHEN_AWAY=""; SLEEP_LOCK=false'
+check "reload sleep-lock empty LOCK_WHEN_AWAY falls back to SLEEP_LOCK=false" "$got" "sleep-lock: stopped (LOCK_WHEN_AWAY is off) "
+got=$(sh -c 'infy_on() { [ "$1" = "true" ] || [ "$1" = "1" ] || [ "$1" = "yes" ]; }; LOCK_WHEN_AWAY=false SLEEP_LOCK=true; sed -n "/LOCK_WHEN_AWAY:-/{p;q}" live/session.sh | grep -q "LOCK_WHEN_AWAY:-" && if infy_on "${LOCK_WHEN_AWAY:-${SLEEP_LOCK:-true}}"; then echo on; else echo off; fi')
+check "session.sh prefers LOCK_WHEN_AWAY over SLEEP_LOCK" "$got" "off"
 
 [ "$fails" = 0 ] && echo "test-config-defaults: passed" || { echo "test-config-defaults: $fails failed"; exit 1; }

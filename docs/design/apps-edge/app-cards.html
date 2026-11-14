@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>App cards, first look</title>
+<style>
+:root {
+  /* the owner's theme (LOOK_* of ~/.cache/infynitae/look); the running edge reads these, never fixed values */
+  --card-rgb: 23 16 19;              /* #171013 */
+  --card: rgb(var(--card-rgb) / .92);
+  --edge: #452e3c;
+  --text: #eef2f8;
+  --muted: #a9aaaf;
+  --accent: #cc70a9;
+  --track: rgb(238 242 248 / .12);
+  --light: rgb(238 242 248 / .07);
+  --r: 8px;
+  --rs: 4px;
+  --page: #0e0a0c;
+  --wall: color-mix(in srgb, var(--accent) 16%, #0b0809);
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--page); color: var(--text);
+  font: 13px/1.4 system-ui, "Segoe UI", "Noto Sans", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; text-align: left; }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.page { max-width: 1300px; margin: 0 auto; padding: 24px 16px 48px; }
+h1 { font-size: 20px; font-weight: 600; margin: 0 0 4px; }
+.lead { color: var(--muted); margin: 0 0 16px; max-width: 80ch; }
+.bar { display: flex; gap: 6px; margin-bottom: 12px; }
+.pick { padding: 6px 12px; border: 1px solid var(--edge); border-radius: var(--rs); color: var(--muted); }
+.pick:hover { background: var(--light); color: var(--text); }
+.pick[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
+
+.desk {
+  background: var(--wall); border: 1px solid var(--edge); border-radius: var(--r);
+  padding: 24px; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(380px, 100%), 1fr));
+  gap: 12px 24px; align-items: start;
+}
+.col { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.slot { min-width: 0; }
+.cap { font-size: 11px; color: var(--muted); margin: 6px 2px 4px; }
+.cap code { font: inherit; color: var(--text); }
+
+.card { background: var(--card); border: 1px solid var(--edge); border-radius: var(--r); padding: 14px 18px 12px; animation: rise .2s cubic-bezier(.2,.8,.2,1) both; animation-delay: calc(var(--i) * 28ms); }
+@keyframes rise { from { opacity: 0; transform: translateY(14px); } }
+.head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+.head b { font-size: 15px; font-weight: 600; flex: 1; min-width: 0; }
+.head .app { font-size: 12px; color: var(--muted); }
+.head .x { display: none; }
+.editing .head .x { display: block; }
+.editing .head .app { display: none; }
+.editing .card { border-color: var(--accent); }
+
+.ico { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.on { color: var(--accent); }
+
+.row { display: flex; align-items: center; gap: 10px; margin: 0 -8px; padding: 2px 8px; min-height: 36px; border-radius: var(--rs); position: relative; }
+.row:has(> .cover:hover), .row:has(> .cover:focus-visible) { background: var(--light); }
+.cover { position: absolute; inset: 0; border-radius: var(--rs); }
+.row > :not(.cover) { position: relative; pointer-events: none; }
+.row > button:not(.cover) { pointer-events: auto; }
+.txt { flex: 1; min-width: 0; }
+.txt b, .txt small { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.txt b { font-weight: 500; }
+.txt small { font-size: 11px; color: var(--muted); }
+.state { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.act, .x { font-size: 12px; color: var(--muted); padding: 3px 8px; border-radius: var(--rs); border: 1px solid var(--edge); }
+.x { border: 0; padding: 3px 6px; }
+.act:hover, .x:hover { background: var(--light); color: var(--text); }
+.hov { opacity: 0; }
+.row:hover .hov, .hov:focus-visible { opacity: 1; }
+.appicon { width: 28px; height: 28px; border-radius: var(--rs); background: var(--track); display: grid; place-items: center; font-weight: 600; flex: none; }
+.sub { font-size: 11px; color: var(--muted); margin: 8px 0 2px; }
+
+/* a thin bar; a slider is the same bar and thickens under the pointer */
+.barline { height: 3px; border-radius: 2px; background: var(--track); overflow: hidden; }
+.barline i { display: block; height: 100%; background: var(--accent); border-radius: 2px; }
+.seek { display: block; width: 100%; padding: 8px 0; }
+.seek .barline { transition: height .12s; }
+.seek:hover .barline { height: 6px; border-radius: 3px; }
+
+/* the clock and the month */
+.clock { display: flex; align-items: baseline; justify-content: space-between; }
+.clock b { font-size: 18px; font-weight: 600; }
+.clock span { color: var(--muted); }
+.arrow { color: var(--muted); padding: 0 7px; border-radius: var(--rs); font-size: 15px; line-height: 20px; }
+.arrow:hover { background: var(--light); color: var(--text); }
+.month { display: grid; grid-template-columns: repeat(7, 1fr); text-align: center; row-gap: 2px; }
+.month span { font-size: 11px; color: var(--muted); padding: 4px 0; }
+.month button { text-align: center; padding: 5px 0; border-radius: var(--rs); }
+.month button:hover { background: var(--light); }
+.month .other { color: var(--muted); opacity: .5; }
+.month .today { background: var(--accent); color: rgb(var(--card-rgb)); font-weight: 600; }
+
+/* the monitor */
+.meter { padding: 5px 0 7px; }
+.meter div:first-child { display: flex; justify-content: space-between; margin-bottom: 5px; }
+.meter span { color: var(--muted); font-size: 12px; }
+
+/* music */
+.song { display: flex; gap: 12px; align-items: center; }
+.cover-art { width: 60px; height: 60px; border-radius: var(--rs); background: var(--track); flex: none; }
+.times { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); margin-top: -4px; }
+.keys { display: flex; justify-content: center; gap: 14px; margin-top: 6px; }
+.keys button { width: 34px; height: 34px; border-radius: var(--rs); display: grid; place-items: center; color: var(--muted); }
+.keys button:hover { background: var(--light); color: var(--text); }
+.keys .play { color: var(--accent); border: 1px solid var(--accent); }
+.keys .ico { fill: currentColor; stroke: none; }
+
+/* add a card */
+.sheet .row { min-height: 32px; }
+.kinds { padding: 2px 0 6px 38px; }
+.kinds .row { min-height: 40px; }
+
+.fine { color: var(--muted); font-size: 12px; margin-top: 16px; max-width: 80ch; }
+@media (prefers-reduced-motion: reduce) { .card { animation: none; } .seek .barline { transition: none; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>App cards: a first look</h1>
+  <p class="lead">The cards of stage 2 in version 1 of the system cards (a header with the title and the app the card comes from, rows, the light under the pointer, buttons that appear on hover). A real panel is one column; here the cards stand in columns to fit a page. Under each card: its word in a PANEL_ line and what a click does.</p>
+  <div class="bar">
+    <button class="pick" id="edit" aria-pressed="false">Edit panel</button>
+    <button class="pick" id="reset">Put every card back</button>
+  </div>
+  <div class="desk" id="desk"></div>
+  <p class="fine">What is real here: the time and the month, the Steam games and their order (the owner's library on 2026-11-13), the drives I to IV and their sizes, the installed apps in "Add a card". What is an example: the monitor's numbers, the song, the Discord messages, the Firefox windows. The squares with a letter stand for the apps' own icons, and the plain square for the song's cover.</p>
+  <p class="fine">The Discord card shows what Discord sent as notifications and its windows. Discord gives no unread count, so none is drawn.</p>
+</div>
+
+<script>
+const svg = (d, cls = "") => `<svg class="ico ${cls}" viewBox="0 0 16 16" aria-hidden="true">${d}</svg>`;
+const now = new Date();
+const two = n => String(n).padStart(2, "0");
+const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+
+const S = {
+  shift: 0, playing: true, part: 0.33, starting: null, removed: new Set(), editing: false,
+  notes: [
+    { id: 1, who: "A friend", text: "The message as Discord sent it", age: "2 min" },
+    { id: 2, who: "A friend", text: "A second message from the same person", age: "1 min" },
+    { id: 3, who: "#a-channel", text: "A message in a server's channel", age: "14 min" },
+  ],
+  wins: ["Infynitae on GitHub", "A second window's title"],
+  picked: null, added: new Set(),
+};
+
+/* the owner's Steam library by LastPlayed in the appmanifest files, newest first */
+const GAMES = [
+  [1422450, "Deadlock", "Yesterday"], [570, "Dota 2", "Yesterday"], [730, "Counter-Strike 2", "Yesterday"],
+  [440, "Team Fortress 2", "Wed 11 Nov"], [359320, "Elite Dangerous", "Sun 8 Nov"], [108600, "Project Zomboid", "Mon 2 Nov"],
+];
+const DRIVES = [["I", 117, 401], ["II", 695, 932], ["III", 1271, 1864], ["IV", 1603, 1864]];
+const FOLDERS = ["Documents", "Downloads", "Projects", "Games"];
+const ADD = [
+  ["Infynitae", [["Settings", ["Network", "Bluetooth", "Power mode", "Quick settings", "Session"]], ["Sound", ["Volume"]], ["Calendar", ["Clock", "Month"]], ["Notifications", ["Notifications"]]]],
+  ["Rich cards", [["btop++", ["Overview", "Memory", "GPU"]], ["Discord", ["Messages"]], ["LACT", ["Overview", "Memory", "GPU"]], ["Melodyae", ["Playing"]], ["mpv", ["Playing"]], ["PCManFM-Qt", ["Drives", "Folders"]], ["Steam", ["Games"]], ["Telegram", ["Messages"]]]],
+  ["Simple card", [["AEAM", ["App"]], ["Faugus", ["App"]], ["Firefox", ["App"]], ["kitty", ["App"]], ["qBittorrent", ["App"]], ["RustDesk", ["App"]], ["SongRec", ["App"]]]],
+];
+
+const head = (title, app, key, extra = "") => `<div class="head"><b>${title}</b>${extra}<span class="app">${app}</span><button class="x" data-a="remove" data-n="${key}" aria-label="Take ${title} out of the panel">x</button></div>`;
+const gb = n => n >= 1000 ? (n / 1024).toFixed(2).replace(/0$/, "") + " TB" : n + " GB";
+
+function month() {
+  const first = new Date(now.getFullYear(), now.getMonth() + S.shift, 1);
+  const y = first.getFullYear(), m = first.getMonth();
+  const lead = (first.getDay() + 6) % 7;                 // Monday first
+  const days = new Date(y, m + 1, 0).getDate();
+  let cells = "MTWTFSS".split("").map(d => `<span>${d}</span>`).join("");
+  const total = Math.ceil((lead + days) / 7) * 7;
+  for (let i = 0; i < total; i++) {
+    const d = new Date(y, m, i - lead + 1);
+    const today = d.toDateString() === now.toDateString();
+    cells += `<button class="${d.getMonth() !== m ? "other" : ""} ${today ? "today" : ""}" ${today ? 'aria-current="date"' : ""}>${d.getDate()}</button>`;
+  }
+  return { title: `${MONTHS[m]} ${y}`, cells };
+}
+
+const CARDS = {
+  clock: () => [`${head("Clock", "Calendar", "clock")}
+    <div class="clock"><b>${two(now.getHours())}:${two(now.getMinutes())}</b><span>${DAYS[now.getDay()]} ${now.getDate()} ${MONTHS[now.getMonth()]}</span></div>`,
+    `<code>calendar/clock:s</code> A click shows the month.`],
+  month: () => { const m = month(); return [`${head(m.title, "Calendar", "month", `<button class="arrow" data-a="month" data-n="-1" aria-label="Previous month">&lsaquo;</button><button class="arrow" data-a="month" data-n="1" aria-label="Next month">&rsaquo;</button>`)}
+    <div class="month">${m.cells}</div>`,
+    `<code>calendar/month</code> The arrows change the month. Events come later and are not drawn until they exist.`]; },
+  monitor: () => [`${head("System monitor", "btop++", "monitor")}
+    ${[["CPU", "23%", "48 C", 23], ["GPU", "97%", "71 C", 97], ["GPU memory", "14.2 of 16 GB", "", 89], ["Memory", "19.6 of 32 GB", "", 61]].map(([n, v, t, p]) =>
+      `<div class="meter"><div><span>${n}</span><b>${v}${t ? ` <span>${t}</span>` : ""}</b></div><div class="barline"><i style="width:${p}%"></i></div></div>`).join("")}`,
+    `<code>monitor/overview:m</code> A click opens btop++. A value the PC does not report is left out.`],
+  music: () => [`${head("Playing", "Melodyae", "music")}
+    <div class="song"><div class="cover-art"></div><div class="txt"><b>Song title</b><small>Artist</small></div></div>
+    <button class="seek" data-a="seek" aria-label="Position in the song"><div class="barline"><i style="width:${S.part * 100}%"></i></div></button>
+    <div class="times"><span>${clockOf(S.part * 220)}</span><span>3:40</span></div>
+    <div class="keys">
+      <button aria-label="Previous">${svg('<path d="M3 3h1.6v10H3zM13 3v10L5.5 8z"/>')}</button>
+      <button class="play" data-a="play" aria-label="${S.playing ? "Pause" : "Play"}">${svg(S.playing ? '<path d="M4 3h3v10H4zM9 3h3v10H9z"/>' : '<path d="M4.5 2.5v11L13 8z"/>')}</button>
+      <button aria-label="Next">${svg('<path d="M11.4 3H13v10h-1.6zM3 3v10l7.5-5z"/>')}</button>
+    </div>`,
+    `<code>music/playing:m</code> The slider thickens under the pointer; a click on it moves the song there.`],
+  steam: () => [`${head("Games", "Steam", "steam")}
+    ${GAMES.map(([id, name, played]) => `<div class="row"><button class="cover" data-a="start" data-n="${id}" aria-label="Play ${name}"></button>
+      <span class="txt"><b>${name}</b><small>${S.starting == id ? "Starting" : "Last played " + (played === "Yesterday" ? "yesterday" : played)}</small></span>
+      <button class="act hov" data-a="start" data-n="${id}">Play</button></div>`).join("")}`,
+    `<code>steam/games:m</code> Play starts <code>steam://rungameid/ID</code>. Last played first.`],
+  discord: () => {
+    const groups = {}; S.notes.forEach(n => (groups[n.who] ||= []).push(n));
+    const g = Object.entries(groups).map(([who, list]) => `<div class="sub">${who}</div>` + list.map(n =>
+      `<div class="row"><button class="cover" data-a="note" data-n="${n.id}" aria-label="Open in Discord"></button><span class="txt"><b>${n.text}</b></span><span class="state">${n.age}</span><button class="x hov" data-a="dismiss" data-n="${n.id}" aria-label="Dismiss">x</button></div>`).join("")).join("");
+    return [`${head("Messages", "Discord", "discord")}${g}
+      <div class="sub">Windows</div>
+      <div class="row"><button class="cover" aria-label="Go to the Discord window"></button><span class="txt"><b>Discord</b></span><span class="state hov">Go to window</span></div>`,
+      `<code>discord/messages:m</code> A click on a message opens it in Discord, x dismisses it. Grouped by sender or channel.`]; },
+  files: () => [`${head("Drives", "PCManFM-Qt", "files")}
+    ${DRIVES.map(([n, used, size]) => `<div class="row" style="flex-wrap:wrap;padding-bottom:7px"><button class="cover" aria-label="Open drive ${n}"></button><span class="txt"><b>${n}</b></span><span class="state">${gb(used)} of ${gb(size)}</span><div class="barline" style="flex-basis:100%"><i style="width:${used / size * 100}%"></i></div></div>`).join("")}`,
+    `<code>files/drives</code> A click opens the drive in the file manager.`],
+  folders: () => [`${head("Folders", "PCManFM-Qt", "folders")}
+    ${FOLDERS.map(f => `<div class="row"><button class="cover" aria-label="Open ${f}"></button><span class="txt"><b>${f}</b></span><span class="state hov">Open</span></div>`).join("")}`,
+    `<code>files/folders:s</code> Home folders, then bookmarks, then recent folders.`],
+  simple: () => [`${head("Firefox", "Simple card", "simple")}
+    <div class="row"><button class="cover" aria-label="Go to Firefox"></button><span class="appicon">F</span><span class="txt"><b>Firefox</b><small>${S.wins.length ? S.wins.length + (S.wins.length === 1 ? " window" : " windows") : "Not running"}</small></span><span class="state hov">${S.wins.length ? "Go to window" : "Open"}</span></div>
+    ${S.wins.length ? `<div class="sub">Windows</div>` : ""}
+    ${S.wins.map((w, i) => `<div class="row"><button class="cover" aria-label="Go to ${w}"></button><span class="txt"><b>${w}</b></span><button class="x hov" data-a="closewin" data-n="${i}" aria-label="Close ${w}">x</button></div>`).join("")}`,
+    `<code>firefox/app:m</code> Any app nobody wrote a card for: open it, its windows, its notifications when it has some.`],
+  simpleS: () => [`${head("kitty", "Simple card", "simpleS")}
+    <div class="row"><button class="cover" aria-label="Open kitty"></button><span class="appicon">k</span><span class="txt"><b>kitty</b><small>Not running</small></span><span class="state hov">Open</span></div>`,
+    `<code>kitty/app:s</code> The small size: one row.`],
+  add: () => [`<div class="sheet">${head("Add a card", "", "add")}
+    ${ADD.map(([group, apps]) => `<div class="sub">${group}</div>` + apps.map(([app, kinds]) => `
+      <div class="row"><button class="cover" data-a="pick" data-n="${app}" aria-expanded="${S.picked === app}" aria-label="${app}"></button><span class="appicon">${app[0]}</span><span class="txt"><b>${app}</b></span><span class="state">${kinds.length === 1 ? "1 card" : kinds.length + " cards"}</span></div>
+      ${S.picked === app ? `<div class="kinds">${kinds.map(k => `<div class="row"><span class="txt"><b>${k}</b></span><button class="act" data-a="add" data-n="${app}/${k}">${S.added.has(app + "/" + k) ? "Added" : "Add"}</button></div>`).join("")}</div>` : ""}`).join("")).join("")}</div>`,
+    `The sheet that opens beside a panel while it is edited. Pick an app, then one of its cards.`],
+};
+const COLS = [["clock", "month", "monitor", "music"], ["steam", "discord", "files"], ["folders", "simple", "simpleS", "add"]];
+
+function clockOf(s) { s = Math.round(s); return Math.floor(s / 60) + ":" + two(s % 60); }
+function render(first) {
+  const desk = document.getElementById("desk");
+  desk.className = "desk" + (S.editing ? " editing" : "");
+  let i = 0;
+  desk.innerHTML = COLS.map(col => `<div class="col">${col.filter(k => !S.removed.has(k)).map(k => {
+    const [card, cap] = CARDS[k]();
+    return `<div class="slot"><section class="card" style="--i:${first ? i++ : 0};${first ? "" : "animation:none"}">${card}</section><p class="cap">${cap}</p></div>`;
+  }).join("")}</div>`).join("");
+  const e = document.getElementById("edit");
+  e.setAttribute("aria-pressed", S.editing); e.textContent = S.editing ? "Done" : "Edit panel";
+}
+document.addEventListener("click", e => {
+  if (e.target.id === "edit") { S.editing = !S.editing; return render(); }
+  if (e.target.id === "reset") { S.removed.clear(); return render(true); }
+  const t = e.target.closest("[data-a]"); if (!t) return;
+  const a = t.dataset.a, n = t.dataset.n;
+  if (a === "month") S.shift += +n;
+  else if (a === "play") S.playing = !S.playing;
+  else if (a === "seek") { const r = t.getBoundingClientRect(); S.part = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)); }
+  else if (a === "start") { S.starting = n; setTimeout(() => { S.starting = null; render(); }, 1500); }
+  else if (a === "dismiss" || a === "note") S.notes = S.notes.filter(x => x.id != n);
+  else if (a === "closewin") S.wins.splice(+n, 1);
+  else if (a === "pick") S.picked = S.picked === n ? null : n;
+  else if (a === "add") S.added.has(n) ? S.added.delete(n) : S.added.add(n);
+  else if (a === "remove") S.removed.add(n);
+  render();
+});
+render(true);
+</script>
+</body>
+</html>

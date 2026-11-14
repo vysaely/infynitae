@@ -600,7 +600,7 @@ impl XwaylandSupervisor {
             && self.wanted.take()
             && let Err(e) = self.spawn()
         {
-            log_line!("[infynitae] failed to start xwayland-satellite: {e}");
+            log_line!("[infynitae] Failed to start xwayland-satellite: {e}");
             self.state = SatelliteState::Degraded;
         }
         if self.state == SatelliteState::Running
@@ -643,7 +643,7 @@ impl XwaylandSupervisor {
         {
             if now >= at {
                 if let Err(e) = self.spawn() {
-                    log_line!("[infynitae] failed to restart xwayland-satellite: {e}");
+                    log_line!("[infynitae] Failed to restart xwayland-satellite: {e}");
                     self.state = SatelliteState::Degraded;
                     self.restart_at = None;
                 }

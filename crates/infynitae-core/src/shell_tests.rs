@@ -133,10 +133,11 @@ fn shell_command_refuses_a_foreign_port() {
 }
 
 /// Navigate to a Canvas position: the centre is the position quantised once (exact here), the zoom
-/// is unchanged, and no history entry is made (OBJ-30 records fits).
+/// is unchanged, and a history entry is recorded so Back returns; incremental Delta does not push.
 #[test]
 fn navigate_centres_the_camera_and_keeps_its_zoom() {
     let mut f = fixture();
+    let before = f.c.cameras().center(0);
     let zoom = f.c.cameras().zoom(0);
     f.c.shell_command(&mut f.s, navigate(f.o, NavigateTo::Canvas(1000.5, -200.25)))
         .unwrap();
@@ -148,7 +149,7 @@ fn navigate_centres_the_camera_and_keeps_its_zoom() {
         })
     );
     assert_eq!(f.c.cameras().zoom(0), zoom);
-    assert_eq!(f.c.cameras().history(0).map(|h| h.len()), Some(0));
+    assert_eq!(f.c.cameras().history(0).map(|h| h.len()), Some(1));
     f.c.shell_command(&mut f.s, navigate(f.o, NavigateTo::Delta(-0.5, 0.25)))
         .unwrap();
     assert_eq!(
@@ -158,12 +159,21 @@ fn navigate_centres_the_camera_and_keeps_its_zoom() {
             y: -200 * Q
         })
     );
+    assert_eq!(f.c.cameras().history(0).map(|h| h.len()), Some(1));
+    f.c.shell_command(&mut f.s, ShellCommand::ViewportRestore { output: f.o })
+        .unwrap();
+    assert_eq!(f.c.cameras().center(0), before);
+    assert_eq!(f.c.cameras().zoom(0), zoom);
+    assert_eq!(f.c.cameras().history(0).map(|h| h.len()), Some(0));
 }
 
-/// Navigate with zoom: applies both the canvas position and the zoom level atomically.
+/// Navigate with zoom: applies both the canvas position and the zoom level atomically, recording
+/// history so Back restores both.
 #[test]
 fn navigate_with_zoom_sets_both_centre_and_zoom() {
     let mut f = fixture();
+    let before_center = f.c.cameras().center(0);
+    let before_zoom = f.c.cameras().zoom(0);
     f.c.shell_command(
         &mut f.s,
         ShellCommand::Navigate {
@@ -182,6 +192,11 @@ fn navigate_with_zoom_sets_both_centre_and_zoom() {
         })
     );
     assert_eq!(f.c.cameras().zoom(0), Some(2.5));
+    assert_eq!(f.c.cameras().history(0).map(|h| h.len()), Some(1));
+    f.c.shell_command(&mut f.s, ShellCommand::ViewportRestore { output: f.o })
+        .unwrap();
+    assert_eq!(f.c.cameras().center(0), before_center);
+    assert_eq!(f.c.cameras().zoom(0), before_zoom);
 }
 
 /// Navigate to an element: the centre of its window geometry, exactly.
@@ -537,4 +552,50 @@ fn toplevel_metadata_is_kept_and_bounded() {
     let m = f.c.stage().meta(w).unwrap();
     assert_eq!(m.title.as_deref().map(str::len), Some(4095));
     assert_eq!(m.app_id.as_deref(), Some("org.example.App"));
+}
+
+/// A jump records one step of history only when it moves the camera: a jump to where the camera
+/// already is records nothing, the same jump twice records one step, and Back returns to the start.
+/// (Through the shell's entry point: proofs are minted only there, tools/verify-architecture.)
+#[test]
+fn a_jump_records_history_only_when_the_camera_moves() {
+    let mut f = fixture();
+    let start = (f.c.cameras().center(0), f.c.cameras().zoom(0));
+    let here = start.0.unwrap();
+    let go = |f: &mut Fixture, x: f64, y: f64, zoom: f64| {
+        f.c.shell_command(
+            &mut f.s,
+            ShellCommand::Navigate {
+                output: f.o,
+                to: NavigateTo::Canvas(x, y),
+                zoom: Some(zoom),
+                stream: ShellStream::Atomic,
+            },
+        )
+        .unwrap();
+    };
+    let q = Q as f64;
+    go(
+        &mut f,
+        here.x as f64 / q,
+        here.y as f64 / q,
+        start.1.unwrap(),
+    );
+    assert_eq!(
+        f.c.cameras().history(0).map(|h| h.len()),
+        Some(0),
+        "no move, no step"
+    );
+    go(&mut f, 400.0, -200.0, 1.5);
+    assert_eq!(f.c.cameras().history(0).map(|h| h.len()), Some(1));
+    go(&mut f, 400.0, -200.0, 1.5);
+    assert_eq!(
+        f.c.cameras().history(0).map(|h| h.len()),
+        Some(1),
+        "the same jump twice is one step"
+    );
+    f.c.shell_command(&mut f.s, ShellCommand::ViewportRestore { output: f.o })
+        .unwrap();
+    assert_eq!((f.c.cameras().center(0), f.c.cameras().zoom(0)), start);
+    assert_eq!(f.c.cameras().history(0).map(|h| h.len()), Some(0));
 }

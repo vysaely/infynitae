@@ -148,8 +148,17 @@ PAN_MODE="free"
     #    grab    the canvas moves under a fixed cursor
     #    rts     camera grip (edge-scroll style)
 
+ZOOM_FEEL="smooth"
+    # How camera zooms move (wheel, fit, overview, window slots, back)
+    # default: smooth
+    #   instant  each step written at once
+    #   quick    fast glide (about 100 ms)
+    #   smooth   gentle glide (about 165 ms)
+    #   floaty   slow glide (about 300 ms) with decaying wheel momentum
+
 CANVAS_COLOR="#0b0f14"
-    # Background behind the windows (when no wallpaper)
+    # Background behind the windows when no wallpaper (used with THEME_SCHEME="yours"; built
+    # schemes derive it from the card)
     # default: "#0b0f14"
     # options: "#0b0f14"  · any "#rrggbb"
 
@@ -158,13 +167,18 @@ BORDER_WIDTH="1"
     # default: 1
     # options: 1  · 0 none  · any number
 
-BORDER_ACTIVE="#7aa2f7"
-    # Border of the focused window, and the accent colour apps use (selection, switches, links)
+ACCENT="#7aa2f7"
+    # The accent colour: focused border, switches, selection, folders, apps [reload]
     # default: "#7aa2f7"
     # options: "#7aa2f7"  · any "#rrggbb"
 
+#BORDER_ACTIVE="#7aa2f7"
+    # Override the focused window border when it differs from ACCENT; unset, it follows ACCENT [reload]
+    # default: unset (same as ACCENT)
+    # options: unset (commented)  · any "#rrggbb"
+
 BORDER_INACTIVE="#333b54"
-    # Border of the other windows
+    # Border of the other windows (used with THEME_SCHEME="yours"; built schemes derive it)
     # default: "#333b54"
     # options: "#333b54"  · any "#rrggbb"
 
@@ -196,11 +210,11 @@ WINDOW_CORNERS="8"
     # options: 0 (square) to 28
 
 THEME_SCHEME="yours"
-    # The colours of the panels, widgets, notifications and menus [reload]
+    # Colours of the desktop, panels, widgets, notifications, lock and apps [reload]
     # default: yours
-    #   yours        SURFACE_COLOR, TEXT_COLOR and BORDER_ACTIVE as they are
-    #   monochrome   greys only
-    #   neutral · tonal · vibrant · expressive   built from BORDER_ACTIVE, more colour each
+    #   yours        SURFACE_COLOR, TEXT_COLOR and ACCENT as they are
+    #   monochrome   greys only (light or dark per COLOR_SCHEME)
+    #   neutral · tonal · vibrant · expressive   built from ACCENT, more colour each
 
 CARD_OPACITY="90"
     # How solid the panels' and widgets' cards are, in % [reload]
@@ -234,10 +248,10 @@ FORCE_TRANSPARENT_APPS=""
 LATENCY="direct"
     # When each frame is drawn
     # default: direct
-    #   direct      balanced while a fullscreen game is shown directly (the compositor only flips
-    #               then, so drawing late costs no refreshes), off otherwise
+    #   direct      balanced while a fullscreen game is shown directly, and balanced with a wider
+    #               starting margin for composited desktop frames (backs off to off under GPU load)
     #    off        at once (the most forgiving under heavy GPU load)
-    #    balanced   just in time for the refresh: about a frame less delay (experimental;
+    #    balanced   right before the refresh: about a frame less delay (experimental;
     #               misses more refreshes while the GPU is busy, e.g. a game or AI training)
     #    lowest     tighter still
 
@@ -276,8 +290,9 @@ GAME_MODE="true"
     # options: true  · false
 
 GAME_QUIET="true"
-    # While game mode is on, notifications wait (mako's do-not-disturb) and show when the game
-    # ends: one drawn over a game takes it off its direct path to the screen and stops tearing
+    # While game mode is on, notifications wait (held by the edge, or mako's do-not-disturb)
+    # and show when the game ends: one drawn over a game takes it off its direct path to the
+    # screen and stops tearing
     # default: true
     # options: true  · false
 
@@ -330,7 +345,7 @@ TERMINAL_FONT=""
     # options: ""  · monospace  · any installed family
 
 FONT_SIZE="10"
-    # Font size
+    # Font size in points for apps and terminals (for the desktop and panels, scale with OUTPUT_SCALE)
     # default: 10
     # options: 10  · any number
 
@@ -340,39 +355,42 @@ ICON_THEME="Adwaita"
     # options: Adwaita  · Papirus-Dark  · any installed theme (GTK and Qt apps)
 
 FOLDER_COLOR="accent"
-    # Folders in the file manager: in the theme's colour (BORDER_ACTIVE), following it when it
+    # Folders in the file manager: in the theme's colour (ACCENT), following it when it
     # changes (requires ICON_THEME set to Papirus, Papirus-Dark or Papirus-Light; with Adwaita
     # or other themes this setting has no effect), or the icon theme's own ("theme")
     # default: accent
     # options: accent · theme
 
 COLOR_SCHEME="prefer-dark"
-    # Apps' light or dark look (GTK, Qt, and apps that ask the desktop: Firefox, Chromium, Electron)
+    # Dark or light look (apps, and built THEME_SCHEME cards and text)
     # default: prefer-dark
     # options: prefer-dark  · prefer-light
 
 SURFACE_COLOR="#111317"
     # Background of panels, menus, notifications, lock box, and managed terminals
+    # (used with THEME_SCHEME="yours")
     # default: "#111317"
     # options: "#111317"  · any "#rrggbb"
 
 TEXT_COLOR="#eef2f8"
-    # Primary text color across panels, menus, notifications, and managed apps
+    # Primary text colour across panels, menus, notifications, and managed apps
+    # (used with THEME_SCHEME="yours")
     # default: "#eef2f8"
     # options: "#eef2f8"  · any "#rrggbb"
 
 THEME_SYNC="true"
-    # Synchronize the palette above to Mako, Fuzzel, GTK 3/4, Qt (with qt6ct installed), Foot,
-    # Kitty, and Alacritty [reload]
+    # Apply the colours above to Mako, Fuzzel, GTK 3/4, Qt (with qt6ct installed), Foot,
+    # Kitty, Alacritty, and Firefox [reload]
     # default: true
     # options: true  · false
 
 THEME_FROM_WALLPAPER="false"
-    # Take the colours above from the wallpaper whenever it changes: the accent (BORDER_ACTIVE)
-    # alone, or the accent, backgrounds and borders. Once, by hand: infynitae-settings
-    # wallpaper-colors [reload]
+    # Take the colours above from the wallpaper whenever it changes: the accent (ACCENT)
+    # alone, the accent plus backgrounds and borders ("all"), or a random candidate accent from
+    # the wallpaper on each wallpaper change ("shuffle", never at login). Once, by hand:
+    # infynitae-settings wallpaper-colors [accent|all|accents|shuffle]
     # default: false
-    # options: false  · accent  · all
+    # options: false  · accent  · all  · shuffle
 
 WALLPAPER=""
     # Wallpaper image (PNG, JPG, WebP; "~/…" and "$HOME/…" work) [save]
@@ -399,13 +417,14 @@ OUTPUT_SCALE="1.0"
     # default: 1.0
     # options: 1.0  · 1.25  · 1.5  · 2.0 …
 
-SCALING_FILTER="nearest"
-    # How windows look when not at 100% zoom
-    # default: nearest
-    #   nearest    zoomed in: sharp pixels · zoomed out: averaged, so text stays legible
-    #    linear    zoomed in: smooth      · zoomed out: averaged
-    #    fast      not averaged: the crispest edges zoomed out, but text shimmers while the
-    #              camera moves; the least GPU work (games are never affected)
+SCALING_FILTER="sharp"
+    # How windows look when not at 100% zoom [save]
+    # default: sharp
+    #   sharp      zoomed in: sharp pixels (nearest) · zoomed out: cached averaging
+    #   smooth     zoomed in: smooth (linear) · zoomed out: cached averaging
+    #   fsr        zoomed in: AMD FSR 1 (EASU + mild RCAS) · zoomed out: cached averaging
+    #   fsr-sharp  zoomed in: AMD FSR 1 (EASU + stronger RCAS) · zoomed out: cached averaging
+    #   (nearest and linear are accepted aliases for sharp and smooth)
 
 MAX_APP_SCALE="1"
     # Apps redraw sharper as you zoom in, up to this scale [save]
@@ -564,6 +583,13 @@ CONTROL_MENU="auto"
     # default: auto
     # options: auto  · a command
 
+TRAY_CARD="menu"
+    # The edge from apps: a right click on a tray app's icon shows, in the panel's place, its own
+    # menu, alone or with its card (Steam's games, Discord's messages); a left click stays the
+    # app's own [reload]
+    # default: menu
+    # options: menu  · menu-first (its menu, then its card)  · card-first
+
 NOTIFICATIONS="auto"
     # Who shows notifications [reload]: the edge's own pop-ups (top right, in the system's
     # look; held back during games and Do not disturb, still listed in the Notifications card)
@@ -583,10 +609,11 @@ ENABLE_EDGE="true"
     # options: true  · false (falls back to fuzzel / control-menu)
 
 EDGE_IMPL="rust"
-    # Which edge runs: the new one in Rust (widgets, the canvas) or the C one it replaced, kept for
-    # a while in case something is missing [reload]
+    # Which edge runs: the new one in Rust (widgets, the canvas), "apps" (rebuilt so every card
+    # comes from an app; new, being tested) or the C one, kept for a while in case something is
+    # missing [reload]
     # default: rust
-    # options: rust  · c
+    # options: rust  · apps  · c
 
 EDGE_POSITION="top"
     # The edge the built-in panels open from, unless their PANEL_ line says another [reload]
@@ -610,7 +637,7 @@ FAVORITES=""
 #   MODULES stacked in the order written; one with nothing to show hides itself:
 #           search  favorites  apps  windows  clipboard  clock  volume  media  wifi  bluetooth
 #           dnd  nightlight  keyboard  osk  power  replay  tray  notifications  session
-#           calendar  memory  system  (these three: the Rust edge only)
+#           calendar  memory  system  (these three: not in the C edge)
 #           (clock: a click shows the month; media: the player playing, hidden when none;
 #           nightlight: warmer colours, NIGHT_LIGHT_TEMP; keyboard: the next layout, shown with
 #           more than one in XKB_DEFAULT_LAYOUT; osk: the on-screen keyboard, shown with squeekboard
@@ -657,18 +684,23 @@ IDLE_SLEEP_TIMEOUT_MIN="15"
     # default: 15
     # options: 15  · 0 never  · any number
 
-IDLE_AUTO_LOCK="true"
-    # Lock when the screens go off (Super+Shift+I: stay awake)
+LOCK_WHEN_AWAY="true"
+    # Lock when the screens go off on idle or before sleep / lid close (Super+Shift+I: stay awake) [reload]
     # default: true
     # options: true  · false
 
-SLEEP_LOCK="true"
-    # Lock the screen before the machine sleeps or closes the lid [reload]
-    # default: true
-    # options: true  · false
+#IDLE_AUTO_LOCK="true"
+    # Override lock when idle screens go off (Super+Shift+I: stay awake); unset, it follows LOCK_WHEN_AWAY
+    # default: unset (follows LOCK_WHEN_AWAY)
+    # options: unset (commented)  · true  · false
+
+#SLEEP_LOCK="true"
+    # Override lock before sleep or lid close; unset, it follows LOCK_WHEN_AWAY [reload]
+    # default: unset (follows LOCK_WHEN_AWAY)
+    # options: unset (commented)  · true  · false
 
 SHUTDOWN_SCREEN="true"
-    # Show the clean "Rebooting…" / "Shutting down…" screen on reboot or power off [use]
+    # Show the "Rebooting…" / "Shutting down…" screen on reboot or power off [use]
     # default: true
     # options: true  · false
 
@@ -835,7 +867,7 @@ UPDATE_SIGNING_KEY=""
 #           Super+A  control menu
 #           Super+S  region screenshot    Super+Shift+S  whole screen    Super+V  clipboard
 #           Super+Shift+C  close    Super+Space  centre    Super+1..9  window slots
-#   Rare:   Super+Delete  force close    Super+L  open windows    Super+Shift+L  lock    Super+Shift+Escape  system monitor
+#   Rare:   Super+Shift+Delete  force close    Super+L  open windows    Super+Shift+L  lock    Super+Shift+Escape  system monitor
 #           Super+Shift+O  tearing    Super+Shift+P  privacy
 #           Super+Shift+I  stay awake    Super+Alt+P  record    Super+Alt+C  replay clip
 #           Super+Shift+BackSpace  reload

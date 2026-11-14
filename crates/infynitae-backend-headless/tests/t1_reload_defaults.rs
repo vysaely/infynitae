@@ -5,9 +5,9 @@ mod common;
 use std::time::Duration;
 
 use common::{Lockstep, output};
-use infynitae_wayland::DEFAULT_FRAME_GUARD;
 use infynitae_wayland::cursor::TestTempDir;
 use infynitae_wayland::frame_schedule::LatencyMode;
+use infynitae_wayland::{DEFAULT_FRAME_GUARD, ZoomFilter};
 
 fn write_config(home: &std::path::Path, content: &str) {
     let dir = home.join(".config/infynitae");
@@ -169,4 +169,60 @@ fn wallpaper_parallax_change_triggers_respawn() {
     std::thread::sleep(Duration::from_millis(50));
     let recorded = wait_for_reload_action(&ls.live_dir, 4, Duration::from_millis(50));
     assert_eq!(recorded.len(), 3, "unchanged parallax should not respawn");
+}
+
+#[test]
+fn scaling_filter_resets_to_sharp_when_removed_and_parses_all_modes() {
+    let temp = TestTempDir::new("t1_reload_scaling_filter");
+    let mut ls = Lockstep::new(Some(output((1920, 1080), 120)));
+    assert_eq!(ls.state.scaling_filter, ZoomFilter::Sharp);
+
+    for (val, expected) in [
+        ("smooth", ZoomFilter::Smooth),
+        ("linear", ZoomFilter::Smooth),
+        ("fsr", ZoomFilter::Fsr),
+        ("fsr-sharp", ZoomFilter::FsrSharp),
+        ("fast", ZoomFilter::Fast),
+        ("sharp", ZoomFilter::Sharp),
+        ("nearest", ZoomFilter::Sharp),
+    ] {
+        reload(&mut ls, temp.path(), &format!("SCALING_FILTER=\"{val}\"\n"));
+        assert_eq!(ls.state.scaling_filter, expected, "value {val}");
+    }
+
+    reload(&mut ls, temp.path(), "");
+    assert_eq!(
+        ls.state.scaling_filter,
+        ZoomFilter::Sharp,
+        "removed SCALING_FILTER resets to Sharp"
+    );
+}
+
+#[test]
+fn zoom_feel_parses_all_modes_and_resets_to_smooth_when_removed() {
+    use infynitae_core::navigation::ZoomFeel;
+
+    let temp = TestTempDir::new("t1_reload_zoom_feel");
+    let mut ls = Lockstep::new(Some(output((1920, 1080), 120)));
+
+    for (val, expected) in [
+        ("instant", ZoomFeel::Instant),
+        ("quick", ZoomFeel::Quick),
+        ("smooth", ZoomFeel::Smooth),
+        ("floaty", ZoomFeel::Floaty),
+        ("FLOATY", ZoomFeel::Floaty),
+    ] {
+        reload(&mut ls, temp.path(), &format!("ZOOM_FEEL=\"{val}\"\n"));
+        assert_eq!(ls.state.core().zoom_feel(), expected, "value {val}");
+    }
+
+    reload(&mut ls, temp.path(), "ZOOM_FEEL=\"instant\"\n");
+    assert_eq!(ls.state.core().zoom_feel(), ZoomFeel::Instant);
+
+    reload(&mut ls, temp.path(), "");
+    assert_eq!(
+        ls.state.core().zoom_feel(),
+        ZoomFeel::Smooth,
+        "removed ZOOM_FEEL resets to Smooth"
+    );
 }

@@ -1,5 +1,4 @@
-//! `zwlr_screencopy_v1` protocol implementation for screen capture.
-//! Allows xdg-desktop-portal-wlr to capture output frames for Discord, OBS, WebRTC.
+//! `zwlr_screencopy_v1` frame capture for portals and recording clients such as xdg-desktop-portal-wlr.
 //!
 //! A capture that may wait for a change (`copy_with_damage`, and every ext-image-copy frame) is
 //! served only once the screen differs from that consumer's last capture, with what changed as
@@ -146,7 +145,7 @@ pub struct ScreencopyState {
 /// Resolves whether the cursor should be hidden in screencopy captures.
 /// Unset defaults to true (SCREENCOPY_CURSOR="false", cursor hidden).
 pub fn parse_screencopy_hide_cursor(val: Option<&str>) -> bool {
-    val.is_none_or(|v| matches!(v.to_lowercase().as_str(), "0" | "false" | "off" | "no"))
+    val.is_none_or(|v| crate::parse_bool(v) == Some(false))
 }
 
 impl ScreencopyState {
@@ -259,10 +258,6 @@ impl ScreencopyState {
             .any(|p| p.output_id == output_id)
     }
 }
-
-// -----------------------------------------------------------------------------
-// Manager Dispatch
-// -----------------------------------------------------------------------------
 
 impl GlobalDispatch<ZwlrScreencopyManagerV1, crate::trust::Gate> for WaylandState {
     fn can_view(client: Client, gate: &crate::trust::Gate) -> bool {
@@ -438,10 +433,6 @@ impl Dispatch<ZwlrScreencopyManagerV1, ()> for WaylandState {
     }
 }
 
-// -----------------------------------------------------------------------------
-// Frame Dispatch
-// -----------------------------------------------------------------------------
-
 impl Dispatch<ZwlrScreencopyFrameV1, FrameUserData> for WaylandState {
     fn request(
         state: &mut Self,
@@ -458,66 +449,10 @@ impl Dispatch<ZwlrScreencopyFrameV1, FrameUserData> for WaylandState {
         };
         match request {
             zwlr_screencopy_frame_v1::Request::Copy { buffer } => {
-                if data.used.swap(true, std::sync::atomic::Ordering::SeqCst) {
-                    frame.post_error(
-                        zwlr_screencopy_frame_v1::Error::AlreadyUsed,
-                        "the frame has already been used to copy a wl_buffer",
-                    );
-                    return;
-                }
-                if !state.screencopy.serves_capture()
-                    || !state.outputs.iter().any(|o| o.id == output_id)
-                {
-                    frame.failed();
-                    return;
-                }
-                state.note_capture(client);
-                state.screencopy.pending.lock().unwrap().push(PendingFrame {
-                    frame: CaptureFrame::Wlr(frame.clone()),
-                    output_id,
-                    buffer,
-                    overlay_cursor: data.overlay_cursor,
-                    with_damage: false,
-                    region: data.region,
-                    window: None,
-                    transform: state
-                        .core
-                        .output(output_id)
-                        .map_or(infynitae_core::output::Transform::Normal, |m| m.transform),
-                    consumer: None,
-                    damage: None,
-                });
+                queue_copy(state, client, frame, data, output_id, buffer, false);
             }
             zwlr_screencopy_frame_v1::Request::CopyWithDamage { buffer } => {
-                if data.used.swap(true, std::sync::atomic::Ordering::SeqCst) {
-                    frame.post_error(
-                        zwlr_screencopy_frame_v1::Error::AlreadyUsed,
-                        "the frame has already been used to copy a wl_buffer",
-                    );
-                    return;
-                }
-                if !state.screencopy.serves_capture()
-                    || !state.outputs.iter().any(|o| o.id == output_id)
-                {
-                    frame.failed();
-                    return;
-                }
-                state.note_capture(client);
-                state.screencopy.pending.lock().unwrap().push(PendingFrame {
-                    frame: CaptureFrame::Wlr(frame.clone()),
-                    output_id,
-                    buffer,
-                    overlay_cursor: data.overlay_cursor,
-                    with_damage: true,
-                    region: data.region,
-                    window: None,
-                    transform: state
-                        .core
-                        .output(output_id)
-                        .map_or(infynitae_core::output::Transform::Normal, |m| m.transform),
-                    consumer: Some(Consumer::Client(client.id(), output_id, data.region)),
-                    damage: None,
-                });
+                queue_copy(state, client, frame, data, output_id, buffer, true);
             }
             zwlr_screencopy_frame_v1::Request::Destroy => {
                 state.screencopy.forget(&frame.id());
@@ -525,6 +460,45 @@ impl Dispatch<ZwlrScreencopyFrameV1, FrameUserData> for WaylandState {
             _ => {}
         }
     }
+}
+
+fn queue_copy(
+    state: &mut WaylandState,
+    client: &Client,
+    frame: &ZwlrScreencopyFrameV1,
+    data: &FrameUserData,
+    output_id: OutputId,
+    buffer: WlBuffer,
+    with_damage: bool,
+) {
+    if data.used.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        frame.post_error(
+            zwlr_screencopy_frame_v1::Error::AlreadyUsed,
+            "the frame has already been used to copy a wl_buffer",
+        );
+        return;
+    }
+    if !state.screencopy.serves_capture() || !state.outputs.iter().any(|o| o.id == output_id) {
+        frame.failed();
+        return;
+    }
+    state.note_capture(client);
+    let consumer = with_damage.then(|| Consumer::Client(client.id(), output_id, data.region));
+    state.screencopy.pending.lock().unwrap().push(PendingFrame {
+        frame: CaptureFrame::Wlr(frame.clone()),
+        output_id,
+        buffer,
+        overlay_cursor: data.overlay_cursor,
+        with_damage,
+        region: data.region,
+        window: None,
+        transform: state
+            .core
+            .output(output_id)
+            .map_or(infynitae_core::output::Transform::Normal, |m| m.transform),
+        consumer,
+        damage: None,
+    });
 }
 
 #[cfg(test)]
@@ -547,10 +521,12 @@ mod tests {
     #[test]
     fn screencopy_hide_cursor_defaults_to_true() {
         assert!(parse_screencopy_hide_cursor(None));
-        assert!(parse_screencopy_hide_cursor(Some("false")));
-        assert!(parse_screencopy_hide_cursor(Some("0")));
-        assert!(!parse_screencopy_hide_cursor(Some("true")));
-        assert!(!parse_screencopy_hide_cursor(Some("1")));
+        for v in ["false", "0", "off", "NO"] {
+            assert!(parse_screencopy_hide_cursor(Some(v)), "{v:?}");
+        }
+        for v in ["true", "1", "yes", "on", "unknown"] {
+            assert!(!parse_screencopy_hide_cursor(Some(v)), "{v:?}");
+        }
     }
 
     #[test]

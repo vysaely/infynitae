@@ -1,9 +1,7 @@
 #!/bin/sh
-# ==============================================================================
-# Infynitae screen recorder and replay buffer (the last 20 minutes, saved on demand)
-# Auto-detects and runs on ANY device: AMD, Intel, NVIDIA, Handhelds, Laptops, VMs
-# Uses the GPU video encoder when there is one, else the CPU; no popups.
-# ==============================================================================
+# infynitae-recorder: screen recording and rolling replay buffer (the last 20 minutes).
+# Uses gpu-screen-recorder when available and working (auto), else the compositor's capture
+# with a GPU video encoder or libx264 on CPU.
 
 set -e
 
@@ -87,10 +85,7 @@ notify_toast() {
     fi
 }
 
-# ------------------------------------------------------------------------------
-# The display size
-# Queries Wayland compositor for real output width & height (works on any screen)
-# ------------------------------------------------------------------------------
+# ---- The display size (queried from the Wayland compositor) ----
 detect_screen_geometry() {
     resolve_wayland_display
     for _ in 1 2 3 4 5 6 7 8 9 10; do
@@ -109,10 +104,7 @@ detect_screen_geometry() {
     return 1
 }
 
-# ------------------------------------------------------------------------------
-# The video encoder: the GPU's, when there is one
-# Scans AMD, Intel, NVIDIA, and software CPU fallbacks for any device
-# ------------------------------------------------------------------------------
+# ---- The video encoder (GPU when available, else software fallback) ----
 # The ffmpeg arguments for a VAAPI encoder ($1, with its rate arguments $2), printed when the GPU
 # encodes a test frame. The frames come as BGRX: the GPU converts them to NV12 (scale_vaapi, tagged
 # BT.709), about a fifth of the CPU of converting them before the upload; a driver that cannot
@@ -173,10 +165,7 @@ detect_encoder_pipeline() {
     echo "-c:v libx264 -preset ultrafast -tune zerolatency -crf 22"
 }
 
-# ------------------------------------------------------------------------------
-# The audio input
-# Scans PipeWire, PulseAudio, and ALSA; gracefully falls back if soundcard absent
-# ------------------------------------------------------------------------------
+# ---- The audio input ----
 # RECORD_AUDIO: desktop (the default output's sound) | mic (the default input) | both (mixed) |
 # none. The devices are the system's defaults when recording starts. "true"/"false" are the old
 # spellings of desktop/none. The microphone is only ever recorded when asked for.
@@ -310,8 +299,6 @@ supervisor_loop() {
         ENGINE_PID=$!
         echo $ENGINE_PID > "$REPLAY_PID_FILE"
 
-        # Wait for engine process
-        started=$(date +%s)
         wait $ENGINE_PID || true
         # gpu-screen-recorder that dies within 10 s three times running (a driver it cannot use):
         # the compositor's capture for the rest of the session
@@ -326,7 +313,6 @@ supervisor_loop() {
             gsr_fails=0
         fi
 
-        # If supervisor still running, auto-heal and restart in 1 second
         echo "[infynitae-recorder] Replay buffer exited unexpectedly. Restarting in 1s..."
         sleep 1
     done
@@ -334,15 +320,15 @@ supervisor_loop() {
 
 save_replay_clip() {
     # gpu-screen-recorder saves its own buffer on SIGUSR1 (into CLIPS_DIR)
-    engine=$(cat "$REPLAY_PID_FILE" 2>/dev/null)
+    engine=$(cat "$REPLAY_PID_FILE" 2>/dev/null || true)
     if [ -n "$engine" ] && [ "$(cat "/proc/$engine/comm" 2>/dev/null)" = "gpu-screen-reco" ]; then
         kill -USR1 "$engine"
-        notify_toast "Clip Saved" "Saved to ${CLIPS_DIR##*/}"
+        notify_toast "Clip saved" "Saved to ${CLIPS_DIR##*/}"
         echo "[infynitae-recorder] Asked gpu-screen-recorder (PID $engine) to save its buffer into $CLIPS_DIR"
         return 0
     fi
     if [ ! -d "$REPLAY_DIR" ]; then
-        notify_toast "Replay Buffer Inactive" "No replay buffer directory found."
+        notify_toast "The replay is off" "Turn it on in Settings, Screenshots and recording"
         echo "Error: Replay directory $REPLAY_DIR does not exist" >&2
         return 1
     fi
@@ -355,7 +341,7 @@ save_replay_clip() {
     # Find chunks sorted chronologically by modification time
     CHUNKS=$(command ls -tr "$REPLAY_DIR"/chunk*.mkv 2>/dev/null || true)
     if [ -z "$CHUNKS" ]; then
-        notify_toast "Replay Buffer Empty" "Still buffering first segment, try again in a few seconds."
+        notify_toast "Nothing to save yet" "The replay started a moment ago. Try again in a few seconds."
         echo "Error: No chunks found in $REPLAY_DIR" >&2
         return 1
     fi
@@ -370,7 +356,7 @@ save_replay_clip() {
 
     COUNT=$(wc -l < "$CONCAT_LIST" 2>/dev/null || echo 0)
     if [ "$COUNT" -eq 0 ]; then
-        notify_toast "Replay Buffer Empty" "Waiting for segments..."
+        notify_toast "Nothing to save yet" "The replay started a moment ago. Try again in a few seconds."
         return 1
     fi
 
@@ -381,11 +367,11 @@ save_replay_clip() {
         DURATION_STR="${DURATION_MIN}m"
     fi
 
-    # Instant stream-copy concat (0% CPU, ~0.2s duration)
+    # stream-copy concat (no re-encoding)
     ffmpeg -loglevel error -y -f concat -safe 0 -i "$CONCAT_LIST" -c copy "$OUT_FILE"
     rm -f "$CONCAT_LIST"
 
-    notify_toast "Clip Saved (${DURATION_STR})" "Saved to ${OUT_FILE##*/}"
+    notify_toast "Clip saved (${DURATION_STR})" "Saved to ${OUT_FILE##*/}"
     echo "[infynitae-recorder] Saved $DURATION_STR clip to $OUT_FILE"
 }
 
@@ -420,7 +406,7 @@ start_recording() {
 
     REC_PID=$!
     echo $REC_PID > "$PID_FILE"
-    notify_toast "Recording Started" "Writing to ${OUT_FILE##*/}"
+    notify_toast "Recording" "Writing to ${OUT_FILE##*/}"
     echo "[infynitae-recorder] Started recording to $OUT_FILE (PID $REC_PID)"
 }
 
@@ -433,7 +419,7 @@ stop_recording() {
             pkill -P "$REC_PID" 2>/dev/null || true
             pkill -f "$STREAM_BIN" 2>/dev/null || true
             sleep 1
-            notify_toast "Recording Saved" "Saved to $RECORDINGS_DIR"
+            notify_toast "Recording saved" "Saved to $RECORDINGS_DIR"
             echo "[infynitae-recorder] Recording stopped (PID $REC_PID)"
         fi
         rm -f "$PID_FILE"
@@ -473,26 +459,26 @@ case "$1" in
         toggle_recording
         ;;
     status)
-        echo "=== Infynitae Recorder Status ==="
-        echo "Detected Screen Geometry: $(detect_screen_geometry)"
-        echo "Hardware Encoder Pipeline: $(detect_encoder_pipeline)"
-        echo "Audio Capture Pipeline: $(detect_audio_args)"
+        echo "Recorder status:"
+        echo "Screen: $(detect_screen_geometry)"
+        echo "Video encoder: $(detect_encoder_pipeline)"
+        echo "Audio: $(detect_audio_args)"
         if [ -f "$SUPERVISOR_PID_FILE" ] && kill -0 $(cat "$SUPERVISOR_PID_FILE") 2>/dev/null; then
-            echo "Supervisor: ACTIVE (PID $(cat "$SUPERVISOR_PID_FILE"))"
+            echo "Supervisor: running (PID $(cat "$SUPERVISOR_PID_FILE"))"
         else
-            echo "Supervisor: INACTIVE"
+            echo "Supervisor: stopped"
         fi
         if [ -f "$REPLAY_PID_FILE" ] && kill -0 $(cat "$REPLAY_PID_FILE") 2>/dev/null; then
             COUNT=$(command ls "$REPLAY_DIR"/chunk*.mkv 2>/dev/null | wc -l)
             BUFFERED_MIN=$((COUNT * SEGMENT_SECS / 60))
-            echo "Replay Buffer: ACTIVE (Buffered ~${BUFFERED_MIN} min, $COUNT chunks in $REPLAY_DIR)"
+            echo "Replay buffer: running (~${BUFFERED_MIN} min buffered, $COUNT chunks in $REPLAY_DIR)"
         else
-            echo "Replay Buffer: INACTIVE"
+            echo "Replay buffer: stopped"
         fi
         if [ -f "$PID_FILE" ] && kill -0 $(cat "$PID_FILE") 2>/dev/null; then
-            echo "Continuous Recording: ACTIVE (PID $(cat "$PID_FILE"))"
+            echo "Recording: running (PID $(cat "$PID_FILE"))"
         else
-            echo "Continuous Recording: INACTIVE"
+            echo "Recording: stopped"
         fi
         ;;
     *)

@@ -10,11 +10,14 @@ use crate::input::bindings::Modifiers;
 pub const KEY_ESC: u32 = 1;
 pub const KEY_ENTER: u32 = 28;
 pub const KEY_LEFTCTRL: u32 = 29;
+pub const KEY_RIGHTCTRL: u32 = 97;
 pub const KEY_LEFTALT: u32 = 56;
+pub const KEY_RIGHTALT: u32 = 100;
 pub const KEY_F: u32 = 33;
 pub const KEY_A: u32 = 30;
 pub const KEY_D: u32 = 32;
 pub const KEY_LEFTSHIFT: u32 = 42;
+pub const KEY_RIGHTSHIFT: u32 = 54;
 pub const KEY_B: u32 = 48;
 pub const KEY_TAB: u32 = 15;
 pub const KEY_UP: u32 = 103;
@@ -24,6 +27,7 @@ pub const KEY_DOWN: u32 = 108;
 pub const KEY_DELETE: u32 = 111;
 pub const KEY_SPACE: u32 = 57;
 pub const KEY_LEFTMETA: u32 = 125;
+pub const KEY_RIGHTMETA: u32 = 126;
 pub const KEY_1: u32 = 2;
 pub const KEY_2: u32 = 3;
 pub const KEY_3: u32 = 4;
@@ -130,7 +134,7 @@ pub enum KeyAction {
     Cancel,
     /// F-FIT-1 on the pointer's output, for the element under the pointer.
     FitViewport,
-    /// Restore (M8, OBJ-30) on the pointer's output.
+    /// Restore the previous viewport from navigation history on the active output (`BIND_BACK`).
     ViewportRestore,
     /// Super+Enter (owner decision 2026-10-21): fit the element under the pointer, or, when the
     /// camera already shows exactly that fit, restore the previous camera. Stateless: decided by
@@ -142,7 +146,7 @@ pub enum KeyAction {
     /// Super+Shift+K (2026-11-07): the focused window is kept on top of the others and keeps its
     /// place on the screen when the view moves, or no longer (picture-in-picture is from the start)
     ToggleKeepOnTop,
-    /// Super+Delete (owner, 2026-11-01; Super+Shift+C before, Shift+Delete until 2026-10-25): the focused window's
+    /// Super+Shift+Delete (owner, 2026-11-13; Super+Delete from 2026-11-01, Super+Shift+C before, Shift+Delete until 2026-10-25): the focused window's
     /// client is ended now — its connection is cut and its process killed — for an app that does
     /// not answer a close. The adapter falls back to a close request for an X11 window (all of
     /// them share one client).
@@ -171,6 +175,57 @@ pub enum KeyAction {
 pub struct Chord {
     pub key: u32,
     pub mods: Modifiers,
+}
+
+/// State of an active shortcut capture request in Core.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KeyCapture {
+    Waiting,
+    Captured(Chord),
+    Cancelled,
+}
+
+/// True for pure modifier keys (Left/Right Ctrl, Shift, Alt, Super) that do not finish a chord.
+pub fn is_modifier_key(key: u32) -> bool {
+    matches!(
+        key,
+        KEY_LEFTCTRL
+            | KEY_RIGHTCTRL
+            | KEY_LEFTSHIFT
+            | KEY_RIGHTSHIFT
+            | KEY_LEFTALT
+            | KEY_RIGHTALT
+            | KEY_LEFTMETA
+            | KEY_RIGHTMETA
+    )
+}
+
+/// Canonical config key name for `key`, or `None` if `parse_chord` does not know it.
+pub fn key_name(key: u32) -> Option<&'static str> {
+    KEY_NAMES
+        .iter()
+        .find(|&&(_, code)| code == key)
+        .map(|&(name, _)| name)
+}
+
+/// Formats `chord` in canonical config spelling (`SUPER+CTRL+ALT+SHIFT+KEY`).
+pub fn format_chord(chord: Chord) -> Option<String> {
+    let key = key_name(chord.key)?;
+    let mut out = String::new();
+    if chord.mods.logo {
+        out.push_str("SUPER+");
+    }
+    if chord.mods.ctrl {
+        out.push_str("CTRL+");
+    }
+    if chord.mods.alt {
+        out.push_str("ALT+");
+    }
+    if chord.mods.shift {
+        out.push_str("SHIFT+");
+    }
+    out.push_str(key);
+    Some(out)
 }
 
 /// The user's bindings from the config, checked before the built-in ones: chords and what they
@@ -326,6 +381,7 @@ pub const ACTION_NAMES: &[(&str, KeyAction)] = &[
     ("FORCE_CLOSE", KeyAction::ForceCloseFocused),
     ("RECENTER", KeyAction::Recenter),
     ("RECENTER_KEEP_ZOOM", KeyAction::RecenterKeepZoom),
+    ("BACK", KeyAction::ViewportRestore),
 ];
 
 /// [`resolve_key_binding`] with the user's bindings first: a chord of theirs wins (also over a
@@ -414,14 +470,14 @@ pub fn resolve_key_binding(
         }
         return Some(KeyAction::FocusNext);
     }
-    // Logo+Shift+C closes the focused window, Logo+Delete ends its app (owner, 2026-11-01); the
+    // Logo+Shift+C closes the focused window, Logo+Shift+Delete ends its app (owner, 2026-11-13); the
     // modifiers match exactly
     if key == KEY_C && mods.logo && mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
         return Some(KeyAction::CloseFocused);
     }
     if key == KEY_DELETE
         && mods.logo
-        && !mods.shift
+        && mods.shift
         && !mods.ctrl
         && !mods.alt
         && !interaction_active
@@ -763,9 +819,9 @@ mod tests {
             Some(KeyAction::CloseFocused)
         );
         assert_eq!(
-            resolve_key_binding(KEY_DELETE, m(true, false, false, false), false),
+            resolve_key_binding(KEY_DELETE, m(true, false, false, true), false),
             Some(KeyAction::ForceCloseFocused),
-            "Super+Delete ends the app"
+            "Super+Shift+Delete ends the app"
         );
         assert_eq!(
             resolve_key_binding(KEY_C, m(true, false, true, false), false),
@@ -774,17 +830,17 @@ mod tests {
         );
         for mods in [
             m(false, false, false, false),
-            m(true, false, false, true),
-            m(true, true, false, false),
+            m(true, false, false, false),
+            m(true, true, false, true),
         ] {
             assert_eq!(
                 resolve_key_binding(KEY_DELETE, mods, false),
                 None,
-                "only Super alone: {mods:?}"
+                "only Super+Shift: {mods:?}"
             );
         }
         assert_eq!(
-            resolve_key_binding(KEY_DELETE, m(true, false, false, false), true),
+            resolve_key_binding(KEY_DELETE, m(true, false, false, true), true),
             None,
             "not while an interaction owns the pointer"
         );
@@ -1288,6 +1344,58 @@ mod tests {
                 key: KEY_O,
                 mods: mods(true, false, false, true)
             })
+        );
+    }
+
+    #[test]
+    fn chords_format_to_canonical_config_spelling() {
+        for (raw, expected) in [
+            ("SUPER+SHIFT+Q", "SUPER+SHIFT+Q"),
+            ("shift + super + return", "SUPER+SHIFT+RETURN"),
+            ("control+alt+dot", "CTRL+ALT+PERIOD"),
+            ("win+shift+escape", "SUPER+SHIFT+ESC"),
+            ("F5", "F5"),
+            ("print", "PRINT"),
+        ] {
+            let c = parse_chord(raw).unwrap();
+            let s = format_chord(c).unwrap();
+            assert_eq!(s, expected);
+            assert_eq!(parse_chord(&s), Some(c));
+        }
+        assert_eq!(
+            format_chord(Chord {
+                key: KEY_VOLUMEUP,
+                mods: mods(true, false, false, false),
+            }),
+            None
+        );
+        assert!(is_modifier_key(KEY_LEFTMETA));
+        assert!(is_modifier_key(KEY_RIGHTMETA));
+        assert!(is_modifier_key(KEY_LEFTSHIFT));
+        assert!(is_modifier_key(KEY_RIGHTSHIFT));
+        assert!(is_modifier_key(KEY_LEFTCTRL));
+        assert!(is_modifier_key(KEY_RIGHTCTRL));
+        assert!(is_modifier_key(KEY_LEFTALT));
+        assert!(is_modifier_key(KEY_RIGHTALT));
+        assert!(!is_modifier_key(KEY_Q));
+        assert!(!is_modifier_key(KEY_ESC));
+    }
+
+    #[test]
+    fn back_action_name_resolves_to_viewport_restore() {
+        assert!(ACTION_NAMES.contains(&("BACK", KeyAction::ViewportRestore)));
+        let chord = parse_chord("SUPER+BACKSPACE").unwrap();
+        let action = ACTION_NAMES
+            .iter()
+            .find(|(name, _)| *name == "BACK")
+            .map(|(_, action)| *action);
+        let user = UserBindings {
+            chords: vec![(chord, action)],
+            moved: vec![],
+        };
+        assert_eq!(
+            resolve_key_binding_with(&user, chord.key, chord.mods, false),
+            Some(KeyAction::ViewportRestore)
         );
     }
 }

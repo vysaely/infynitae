@@ -28,7 +28,7 @@ use smithay::reexports::winit::window::Window as WinitWindow;
 /// Options for configuring the nested winit compositor.
 #[derive(Clone, Debug)]
 pub struct WinitCompositorOptions {
-    /// Wayland socket name (e.g. "wayland-1"). If None, automatically selects an available socket.
+    /// Wayland socket name (e.g. "wayland-1"). When `None`, picks an unused socket.
     pub socket_name: Option<String>,
     /// Optional command to execute on compositor startup (e.g. "weston-terminal").
     pub exec: Option<String>,
@@ -42,13 +42,13 @@ pub struct WinitCompositorOptions {
     pub refresh_mhz: u32,
     /// Optional maximum run duration (useful for automated testing / benchmarks).
     pub duration: Option<Duration>,
-    /// Optional maximum frame count before clean exit.
+    /// Optional maximum frame count before exit.
     pub max_frames: Option<u64>,
     /// Path to xwayland-satellite to supervise (M19); `None`: no X11.
     pub xwayland_satellite: Option<std::path::PathBuf>,
     /// Output scale ×120 for every screen (`None`: auto/120, i.e. 1.0).
     pub scale_120: Option<u32>,
-    /// Scaling texture filter ("nearest" for sharp pixels, "linear" for smooth).
+    /// Scaling texture filter ("sharp" / "nearest", "smooth" / "linear", "fsr", "fsr-sharp", "fast").
     pub scaling_filter: Option<String>,
 }
 
@@ -98,6 +98,7 @@ struct LoopData {
     config_path: Option<PathBuf>,
     last_config_check: std::time::Instant,
     last_config_mtime: Option<std::time::SystemTime>,
+    scaling_filter: infynitae_wayland::ZoomFilter,
 }
 
 /// NB-1 (2026-10-17): a submit swaps with the EGL default swap interval, so it waits for the host
@@ -256,9 +257,13 @@ pub fn run_nested_with(
     let (mut backend, winit_event_loop) =
         winit::init_from_attributes::<GlesRenderer>(window_attributes)?;
 
-    // Scaling filter: nearest-neighbor filtering on upscaled surfaces by default
-    let use_nearest = !matches!(options.scaling_filter.as_deref(), Some("linear"));
-    if use_nearest && let Err(e) = backend.renderer().upscale_filter(TextureFilter::Nearest) {
+    // Scaling filter: nearest-neighbor for sharp/fsr/fast, linear for smooth.
+    let filter =
+        infynitae_wayland::ZoomFilter::parse(options.scaling_filter.as_deref().unwrap_or("sharp"));
+    state.scaling_filter = filter;
+    if filter.uses_nearest_upscale()
+        && let Err(e) = backend.renderer().upscale_filter(TextureFilter::Nearest)
+    {
         log_line!("[infynitae] Warning: failed to set upscale filter to Nearest: {e:?}");
     }
 
@@ -313,9 +318,19 @@ pub fn run_nested_with(
         config_path: cfg_path,
         last_config_check: std::time::Instant::now(),
         last_config_mtime: initial_mtime,
+        scaling_filter: filter,
     };
 
     data.state.reload_config();
+    if data.state.scaling_filter != data.scaling_filter {
+        data.scaling_filter = data.state.scaling_filter;
+        let tex_filter = if data.scaling_filter.uses_nearest_upscale() {
+            TextureFilter::Nearest
+        } else {
+            TextureFilter::Linear
+        };
+        let _ = data.backend.renderer().upscale_filter(tex_filter);
+    }
 
     // every host event (input, resize, redraw request) may change what is shown
     event_loop
@@ -354,6 +369,15 @@ pub fn run_nested_with(
                     );
                     data.state.reload_config();
                     data.state.config_changed();
+                    if data.state.scaling_filter != data.scaling_filter {
+                        data.scaling_filter = data.state.scaling_filter;
+                        let tex_filter = if data.scaling_filter.uses_nearest_upscale() {
+                            TextureFilter::Nearest
+                        } else {
+                            TextureFilter::Linear
+                        };
+                        let _ = data.backend.renderer().upscale_filter(tex_filter);
+                    }
                     data.session.request_frame();
                 } else if data.last_config_mtime.is_none() {
                     data.last_config_mtime = Some(mtime);
@@ -436,6 +460,9 @@ pub fn run_nested_with(
         }
 
         // Settle the scale epochs whose deadline has passed, on the session clock.
+        if data.state.core().zoom_gliding() {
+            data.session.request_frame();
+        }
         let now = data.session.now();
         if data
             .state
@@ -482,7 +509,7 @@ pub fn run_nested_with(
     }
     data.session.flush();
 
-    log_line!("[infynitae] Compositor exited cleanly.");
+    log_line!("[infynitae] Compositor exited.");
     Ok(())
 }
 
@@ -642,6 +669,8 @@ fn handle_input_event(
 }
 
 fn render_and_present(data: &mut LoopData) {
+    let tick_now = infynitae_wayland::presentation_clock_now();
+    data.state.zoom_tick(data.output_id, tick_now);
     let age = data.backend.buffer_age().unwrap_or(0);
     let render_res = if let Ok((renderer, mut framebuffer)) = data.backend.bind() {
         convert::render_output(
@@ -686,6 +715,9 @@ fn render_and_present(data: &mut LoopData) {
     // Complete frame callbacks and presentation feedback for clocked elements
     let now = infynitae_wayland::presentation_clock_now();
     data.state.frame_tick(data.output_id, now);
+    if data.state.core().zoom_gliding() {
+        data.session.request_frame();
+    }
     data.session.flush();
 }
 

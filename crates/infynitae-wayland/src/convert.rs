@@ -689,8 +689,8 @@ pub(crate) fn output_location(model: &OutputModel) -> Point<i32, Logical> {
         .into()
 }
 
-/// The opaque colour of the empty Canvas in a host window (a dark grey).
-pub const CANVAS_CLEAR: Color32F = Color32F::new(0.11, 0.11, 0.13, 1.0);
+/// The opaque colour of the empty Canvas in a host window (matches `CANVAS_COLOR` default `#0b0f14`).
+pub const CANVAS_CLEAR: Color32F = Color32F::new(11.0 / 255.0, 15.0 / 255.0, 20.0 / 255.0, 1.0);
 
 /// What a backend's framebuffer is: whether its rows run bottom-up (GL) and what the empty
 /// Canvas is cleared to.
@@ -745,12 +745,34 @@ smithay::backend::renderer::element::render_elements! {
 /// An output's frame elements and the frame's `k`.
 pub type OutputFrame<R> = (Vec<OutputElement<R>>, f64);
 
+#[inline]
+fn mark_phase(mark: &mut Option<&mut dyn FnMut(&'static str)>, name: &'static str) {
+    if let Some(m) = mark.as_mut() {
+        m(name);
+    }
+}
+
 /// What an output's frame is made of, optionally including cursor elements.
 pub fn output_elements_opt<R>(
     state: &mut WaylandState,
     renderer: &mut R,
     output: OutputId,
     include_cursor: bool,
+) -> Result<OutputFrame<R>, RenderOutputError<R::Error>>
+where
+    R: Renderer + ImportAll + ImportMem,
+    R::TextureId: Send + Clone + 'static,
+{
+    output_elements_marked(state, renderer, output, include_cursor, None)
+}
+
+/// Same as `output_elements_opt`, calling `mark` at each stage when provided.
+pub fn output_elements_marked<R>(
+    state: &mut WaylandState,
+    renderer: &mut R,
+    output: OutputId,
+    include_cursor: bool,
+    mut mark: Option<&mut dyn FnMut(&'static str)>,
 ) -> Result<OutputFrame<R>, RenderOutputError<R::Error>>
 where
     R: Renderer + ImportAll + ImportMem,
@@ -771,6 +793,7 @@ where
     }
     let layers = state.core.layer_frame(output);
     let mut elements = Vec::new();
+    mark_phase(&mut mark, "frame list");
     if include_cursor {
         cursor_elements(state, renderer, output, view.k, &mut elements)
             .map_err(RenderOutputError::Renderer)?;
@@ -793,6 +816,7 @@ where
                 }),
         );
     }
+    mark_phase(&mut mark, "cursor");
     input_method_popups(state, renderer, &entries, view.k, &mut elements)
         .map_err(RenderOutputError::Renderer)?;
     elements.extend(
@@ -801,6 +825,7 @@ where
             .into_iter()
             .map(OutputElement::Surface),
     );
+    mark_phase(&mut mark, "layers above");
     state.rounding.clear();
     window_elements(
         state,
@@ -812,6 +837,7 @@ where
         &mut elements,
     )
     .map_err(RenderOutputError::Renderer)?;
+    mark_phase(&mut mark, "windows");
     elements.extend(
         layer_render_elements(renderer, &state.registry, &layers.below, view.k)
             .map_err(RenderOutputError::Renderer)?
@@ -819,6 +845,7 @@ where
             .map(OutputElement::Surface),
     );
     drop_empty(&mut elements, view.k);
+    mark_phase(&mut mark, "layers below");
     Ok((elements, view.k))
 }
 
@@ -1196,6 +1223,20 @@ where
     R::TextureId: Send + Clone + 'static,
 {
     output_elements_opt(state, renderer, output, state.target.draw_cursor)
+}
+
+/// Like `output_elements`, calling `mark` at each element-building stage when provided.
+pub fn output_elements_with_marks<R>(
+    state: &mut WaylandState,
+    renderer: &mut R,
+    output: OutputId,
+    mark: Option<&mut dyn FnMut(&'static str)>,
+) -> Result<OutputFrame<R>, RenderOutputError<R::Error>>
+where
+    R: Renderer + ImportAll + ImportMem,
+    R::TextureId: Send + Clone + 'static,
+{
+    output_elements_marked(state, renderer, output, state.target.draw_cursor, mark)
 }
 
 /// While the session is locked (`lock`): the output's frame is only its lock surface, over the
@@ -1720,5 +1761,28 @@ mod cursor_tests {
         assert_eq!(rect3.loc.y, i32::MIN);
         assert_eq!(rect3.size.w, i32::MAX);
         assert_eq!(rect3.size.h, i32::MAX);
+    }
+
+    #[test]
+    fn canvas_clear_matches_default_canvas_color() {
+        let default_cfg = crate::parse_color_hex("#0b0f14").unwrap();
+        assert_eq!(CANVAS_CLEAR, default_cfg);
+        assert_eq!(CANVAS_CLEAR.a(), 1.0);
+    }
+
+    #[test]
+    fn mark_phase_skips_when_none_and_records_when_some() {
+        let mut seen: Vec<&'static str> = Vec::new();
+        let mut none: Option<&mut dyn FnMut(&'static str)> = None;
+        mark_phase(&mut none, "cursor");
+        assert!(seen.is_empty());
+
+        {
+            let mut push = |name: &'static str| seen.push(name);
+            let mut some: Option<&mut dyn FnMut(&'static str)> = Some(&mut push);
+            mark_phase(&mut some, "cursor");
+            mark_phase(&mut some, "windows");
+        }
+        assert_eq!(seen, ["cursor", "windows"]);
     }
 }

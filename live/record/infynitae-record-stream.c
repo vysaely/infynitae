@@ -1,6 +1,6 @@
 /*
- * Infynitae Screen Capture & Rolling Replay Engine
- * Pure C + Wayland screencopy: raw frames to stdout for the recorder's ffmpeg encoder.
+ * infynitae-record-stream: captures frames with wlr-screencopy and writes raw video to stdout
+ * for infynitae-recorder's ffmpeg pipeline.
  */
 
 #define _GNU_SOURCE
@@ -23,8 +23,6 @@
 #include "wlr-screencopy-protocol.h"
 
 #define DEFAULT_FPS 60
-#define DEFAULT_REPLAY_SECONDS 1200 // 20 minutes
-#define SEGMENT_DURATION 10         // 10s per segment
 
 typedef struct {
     struct wl_display *display;
@@ -50,7 +48,6 @@ typedef struct {
     struct wl_buffer *wl_buffer[2];
     int current_buf;
 
-    bool ready;
     bool running;
     /* the bound zwlr_screencopy_manager_v1 version (buffer_done is v3) */
     uint32_t manager_version;
@@ -61,7 +58,6 @@ typedef struct {
     struct timespec last_frame_time;
 
     int pipe_fd;
-    pid_t ffmpeg_pid;
 } RecorderState;
 
 static RecorderState state;
@@ -149,8 +145,12 @@ static void frame_buffer(void *data, struct zwlr_screencopy_frame_v1 *frame,
 
     size_t size = (size_t)stride * height;
     if (s->shm_size[s->current_buf] != size) {
-        create_shm_buffer(s, 0, size);
-        create_shm_buffer(s, 1, size);
+        if (create_shm_buffer(s, 0, size) < 0 || create_shm_buffer(s, 1, size) < 0) {
+            fprintf(stderr, "[infynitae-record] Failed to allocate screencopy shared-memory buffers.\n");
+            s->running = false;
+            zwlr_screencopy_frame_v1_destroy(frame);
+            return;
+        }
     }
 
     /* from v3 the copy waits for buffer_done, the end of the list of formats */
@@ -168,11 +168,10 @@ static void frame_ready(void *data, struct zwlr_screencopy_frame_v1 *frame,
     (void)tv_sec_hi; (void)tv_sec_lo; (void)tv_nsec;
     RecorderState *s = (RecorderState *)data;
 
-    // 1. Output the current buffer to stdout/pipe
     if (s->pipe_fd >= 0 && s->shm_data[s->current_buf]) {
         size_t row_bytes = (size_t)s->width * 4;
         if ((size_t)s->stride == row_bytes) {
-            // Fast-path: stride matches row width exactly (no padding bytes)
+            /* stride matches row width: write directly without row stripping */
             size_t bytes_to_write = row_bytes * (size_t)s->height;
             ssize_t written = 0;
             char *buf = (char *)s->shm_data[s->current_buf];
@@ -358,14 +357,11 @@ int main(int argc, char **argv) {
         fcntl(STDOUT_FILENO, F_SETPIPE_SZ, 1 << 20);
     }
 
-    // Start first frame
     request_frame(&state);
 
     while (state.running && wl_display_dispatch(state.display) != -1) {
-        // Event loop continues until state.running is false
     }
 
-    // Cleanup
     for (int i = 0; i < 2; i++) {
         if (state.wl_buffer[i]) wl_buffer_destroy(state.wl_buffer[i]);
         if (state.shm_data[i]) munmap(state.shm_data[i], state.shm_size[i]);

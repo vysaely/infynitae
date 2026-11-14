@@ -245,13 +245,6 @@ pub(crate) fn theme_search_paths_with(
     paths
 }
 
-/// Global theme search paths per XDG / Xcursor conventions.
-#[allow(dead_code)]
-pub fn theme_search_paths() -> Vec<PathBuf> {
-    let home = std::env::var("HOME").ok().map(PathBuf::from);
-    theme_search_paths_with(home.as_deref(), None)
-}
-
 /// The themes an `index.theme` inherits from (`Inherits=a,b` or `a;b`), in order.
 fn theme_inherits(theme_dir: &Path) -> Vec<String> {
     theme_inherits_line(theme_dir)
@@ -287,12 +280,6 @@ fn theme_inherits_line(theme_dir: &Path) -> Option<String> {
 /// Whether a cursor theme directory exists in `search_paths`.
 pub(crate) fn theme_exists_in(name: &str, search_paths: &[PathBuf]) -> bool {
     search_paths.iter().any(|p| p.join(name).is_dir())
-}
-
-/// Whether a cursor theme directory exists in any search path.
-#[allow(dead_code)]
-pub fn theme_exists(name: &str) -> bool {
-    theme_exists_in(name, &theme_search_paths())
 }
 
 /// Manages loading, caching, and fallback resolution of Xcursor themes.
@@ -1099,7 +1086,6 @@ mod tests {
         )
         .expect("write");
 
-        // Write static "default" cursor
         let pix_default = vec![0x11; 24 * 24 * 4];
         std::fs::write(
             cursors_dir.join("default"),
@@ -1107,7 +1093,6 @@ mod tests {
         )
         .expect("write default");
 
-        // Write animated "wait" cursor (2 frames: 100ms each)
         let pix_w0 = vec![0x22; 24 * 24 * 4];
         let pix_w1 = vec![0x33; 24 * 24 * 4];
         std::fs::write(

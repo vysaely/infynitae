@@ -1,6 +1,5 @@
 #!/bin/sh
-# Infynitae Live Development & Diagnostic Utility
-# Makes it effortless to tweak the desktop live without crashes or lockouts.
+# dev.sh: tools for changing the desktop while it runs (see its usage below).
 set -e
 umask 077
 
@@ -39,7 +38,7 @@ case "$ACTION" in
                 fi
                 ;;
             *)
-                echo "=== Streaming Infynitae Logs (Ctrl+C to stop) ==="
+                echo "Streaming logs (Ctrl+C to stop)"
                 touch "$STATE_DIR/session.log" "$STATE_DIR/helpers.log"
                 tail -n 30 -f "$STATE_DIR/session.log" "$STATE_DIR/helpers.log" "$STATE_DIR/crash.log" 2>/dev/null
                 ;;
@@ -51,38 +50,37 @@ case "$ACTION" in
             echo "On a TTY console, run:  infynitae-session" >&2
             exit 1
         fi
-        echo "==> Launching Infynitae in a safe nested window..."
-        echo "==> You can test your compositor changes inside this window without touching your live desktop."
+        echo "==> Opening Infynitae in a nested window (the running desktop stays untouched)"
         CARGO_BIN="${CARGO_TARGET_DIR:-$REPO_DIR/target}/release/infynitae"
         if [ ! -f "$CARGO_BIN" ]; then
             CARGO_BIN="$HOME/.local/bin/infynitae"
         fi
-        exec "$CARGO_BIN" --nested --title "Infynitae Live Sandbox" --width 1280 --height 800 "$@"
+        exec "$CARGO_BIN" --nested --title "Infynitae nested" --width 1280 --height 800 "$@"
         ;;
     build|b)
-        echo "==> Compiling Infynitae compositor in release mode..."
+        echo "==> Building infynitae (release)..."
         cd "$REPO_DIR"
         cargo build --release -p infynitae
         cp -f "${CARGO_TARGET_DIR:-target}/release/infynitae" "$HOME/.local/bin/infynitae"
-        echo "==> Successfully installed to ~/.local/bin/infynitae"
+        echo "==> Installed ~/.local/bin/infynitae"
         ;;
     check|test-all)
-        echo "==> Running architecture verification..."
+        echo "==> Checking architecture..."
         cd "$REPO_DIR"
         python3 tools/verify-architecture
-        echo "==> Running core tests..."
+        echo "==> Running slot tests..."
         cargo test -p infynitae-backend-headless --test t1_window_slots
-        echo "==> All checks passed!"
+        echo "==> Checks passed."
         ;;
     *)
-        echo "Infynitae Developer Utility"
+        echo "infynitae-dev"
         echo "Usage: infynitae-dev <command>"
         echo ""
         echo "Commands:"
         echo "  reload, r       Restart the helpers in place: edge, wallpaper, portal… (windows stay)"
-        echo "  test, t         Launch a safe nested compositor window to test live changes"
+        echo "  test, t         Open a nested window to test compositor changes"
         echo "  logs, l [type]  Stream logs (all, helpers, session, crash)"
-        echo "  build, b        Rebuild release binary and deploy to ~/.local/bin/infynitae"
+        echo "  build, b        Build release binary and install to ~/.local/bin/infynitae"
         echo "  check           Verify architecture and run slot tests"
         ;;
 esac

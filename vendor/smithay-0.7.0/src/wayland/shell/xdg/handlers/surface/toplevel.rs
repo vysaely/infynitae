@@ -182,6 +182,12 @@ where
                 let mut guard = states.cached_state.get::<SurfaceCachedState>();
                 *guard.pending() = Default::default();
                 *guard.current() = Default::default();
+
+                let mut last_acked = states
+                    .cached_state
+                    .get::<crate::wayland::shell::xdg::RoleLastAcked<crate::wayland::shell::xdg::ToplevelState>>();
+                *last_acked.pending() = Default::default();
+                *last_acked.current() = Default::default();
             })
         }
     }

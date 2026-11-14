@@ -43,6 +43,13 @@ AUTHORIZED_POINTER_SHA256 = "9c120d4101d7b2d3907d018a400dcd52e32e3be6b6cf6b64c80
 # while a game loads the GPU): that context created with a priority, EGL_IMG_context_priority,
 # and the priority the driver granted read back (patches/0004-egl-context-priority.patch; the
 # owner's AMD GPU grants High). context.rs carries P3 and P4.
+# P5 (2026-11-13): remove five unused tracing::error imports
+# (patches/0005-remove-unused-tracing-error-imports.patch).
+# P6 (2026-11-13, W-SM-18 / PR #1817): track last acked configure in MultiCache and post
+# xdg_surface::Error::UnconfiguredBuffer (3) from pre-commit hooks
+# (patches/0006-xdg-unconfigured-buffer-error.patch).
+# P7 (2026-11-13, W-SM-21): expose pub fn PointerConstraint::lifetime
+# (patches/0007-pointer-constraints-expose-lifetime.patch).
 AUTHORIZED_P3_SHA256 = {
     "src/backend/egl/context.rs": "2084d54ebb1fb89af92d44ca111e2a5aff887fbacfac5129804e16cd09fc3009",
 }
@@ -51,6 +58,22 @@ AUTHORIZED_P2_SHA256 = {
     "src/backend/drm/surface/legacy.rs": "e437ae93290cef7c2c01f3698bfa38a6c06aa88d28aa354a9bc0efa5837fd7c7",
     "src/backend/drm/surface/mod.rs": "b6f4b5dd7b61c6c281051d645d881af4b9c1249255016ce63b47c20639acbd40",
     "src/backend/drm/compositor/mod.rs": "ddca98ca5e6ad057cfb1c1b989c080aa4751a789e8be7ee2e51112d272c6933d",
+}
+AUTHORIZED_P5_SHA256 = {
+    "src/backend/drm/surface/gbm.rs": "ae26bfd82ed67a16dd8be4f9e3a5b5678d6016b16ad8ca2c917953cd45ab8553",
+    "src/backend/session/libseat.rs": "b755e06e069d5565e1ccad33bf734da0a88c395412c1b9d1b27eb9d18e4130aa",
+    "src/backend/winit/mod.rs": "9630745773441f9a47b9a24c4c107a261b1c190dcf58e27391c965effb82bc7d",
+    "src/input/keyboard/mod.rs": "6c821a976d055145048bc865dc03c1eb64e508557949ea899f9f2d794c60bb36",
+    "src/wayland/seat/keyboard.rs": "a4cf248442833c7aa64004b24efc1ee86f835341617e24e81d9f8a1c6f3c5d67",
+}
+AUTHORIZED_P6_SHA256 = {
+    "src/wayland/shell/xdg/handlers/surface.rs": "60d0cd0bb78e058bb110766d839fbd4504c3036abbcc71a2780bd560ecdd7bd2",
+    "src/wayland/shell/xdg/handlers/surface/popup.rs": "e3e937d9b2458d4ef0722ff9f5e896b0d9dacc40a64c1516bc5aa48dcc277e1e",
+    "src/wayland/shell/xdg/handlers/surface/toplevel.rs": "641b1085620b3690bdc1da6b26277f8163e9f11717baa6660e99c47a18b6888c",
+    "src/wayland/shell/xdg/mod.rs": "fe7c10ff4b2612011eacc588ce08a60ea592594e4a6fb9e5619a2927482ba511",
+}
+AUTHORIZED_P7_SHA256 = {
+    "src/wayland/pointer_constraints.rs": "0263d126155c9009b5ba8e79f936c7dfb0be0606fbd2791413f136ba15745e7e",
 }
 
 
@@ -336,10 +359,16 @@ def check_authorized_p1_patch(root, r):
         h = hashlib.sha256(f.read()).hexdigest()
     if h != AUTHORIZED_POINTER_SHA256:
         return r.check(False, "", f"pointer.rs sha256 mismatch (expected authorized P1 {AUTHORIZED_POINTER_SHA256}, got {h})")
-    for rel, want in {**AUTHORIZED_P2_SHA256, **AUTHORIZED_P3_SHA256}.items():
+    for rel, want in {
+        **AUTHORIZED_P2_SHA256,
+        **AUTHORIZED_P3_SHA256,
+        **AUTHORIZED_P5_SHA256,
+        **AUTHORIZED_P6_SHA256,
+        **AUTHORIZED_P7_SHA256,
+    }.items():
         with open(os.path.join(patch_dir, rel), "rb") as f:
             if hashlib.sha256(f.read()).hexdigest() != want:
-                return r.check(False, "", f"{rel} sha256 mismatch (expected the authorized P2-P4)")
+                return r.check(False, "", f"{rel} sha256 mismatch (expected the authorized P2-P7)")
     manifest_path = os.path.join(root, AUTHORIZED_SMITHAY_MANIFEST_REL)
     if not os.path.isfile(manifest_path):
         return r.check(False, "", f"vendor smithay manifest {manifest_path} missing")
@@ -369,8 +398,8 @@ def check_authorized_p1_patch(root, r):
     for rel in sorted(missing):
         mismatches.append(f"missing file: {rel}")
     if mismatches:
-        return r.check(False, "", f"vendor smithay has unauthorized local modifications beyond P1-P4: {mismatches[:5]}")
-    r.ok(f"vendor smithay source matches the authorized patches P1-P4 (zero unauthorized modifications)")
+        return r.check(False, "", f"vendor smithay has unauthorized local modifications beyond P1-P7: {mismatches[:5]}")
+    r.ok(f"vendor smithay source matches the authorized patches P1-P7 (zero unauthorized modifications)")
     return True
 
 

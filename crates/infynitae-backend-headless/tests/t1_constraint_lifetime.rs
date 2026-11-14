@@ -207,3 +207,53 @@ fn persistent_locks_on_multiple_surfaces_persist_and_activate_on_focus() {
         "W2 persistent lock activates again on focus"
     );
 }
+
+#[test]
+fn smithay_exposes_constraint_lifetime() {
+    use smithay::reexports::wayland_protocols::wp::pointer_constraints::zv1::server::zwp_pointer_constraints_v1::Lifetime;
+    use smithay::reexports::wayland_server::WEnum;
+
+    let lifetime_of = |r: &Rig| -> Option<WEnum<Lifetime>> {
+        let w = r.ls.state.elements().next().expect("W");
+        let root =
+            r.ls.state
+                .window(w)
+                .unwrap()
+                .toplevel()
+                .unwrap()
+                .wl_surface()
+                .clone();
+        let ptr = r.ls.state.seat().get_pointer().expect("seat pointer");
+        with_pointer_constraint(&root, &ptr, |c| c.map(|c| c.lifetime()))
+    };
+
+    let mut r = Rig::x8();
+    let w = r.ls.state.elements().next().expect("W");
+    set_focus(&mut r.ls.state, &mut r.ls.input, Some(w)).unwrap();
+    r.ls.pump();
+    r.frame();
+    let qh = r.ls.qh.clone();
+
+    r.ls.probe.lock_pointer(&qh, 0, true);
+    r.ls.pump();
+    r.frame();
+    assert_eq!(lifetime_of(&r), Some(WEnum::Value(Lifetime::Oneshot)));
+
+    r.ls.probe.destroy_lock();
+    r.ls.pump();
+    r.frame();
+
+    r.ls.probe.lock_pointer(&qh, 0, false);
+    r.ls.pump();
+    r.frame();
+    assert_eq!(lifetime_of(&r), Some(WEnum::Value(Lifetime::Persistent)));
+
+    r.ls.probe.destroy_lock();
+    r.ls.pump();
+    r.frame();
+
+    r.ls.probe.confine_pointer(&qh, 0);
+    r.ls.pump();
+    r.frame();
+    assert_eq!(lifetime_of(&r), Some(WEnum::Value(Lifetime::Persistent)));
+}

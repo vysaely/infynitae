@@ -34,14 +34,14 @@ settings() { HOME="$H" CONFIG_FILE="$H/.config/infynitae/config" sh "$REPO_DIR/l
 img "$TMP/red.png" 220 40 50; img "$TMP/grey.png" 128 128 128; img "$TMP/green.png" 40 200 60
 cp "$REPO_DIR/config/config" "$H/.config/infynitae/config"
 settings wallpaper-colors "$TMP/red.png"
-check "a red wallpaper gives a red accent" "$(hue "$(val BORDER_ACTIVE)")" "r"
+check "a red wallpaper gives a red accent" "$(hue "$(val ACCENT)")" "r"
 check "and a red-tinted surface" "$(hue "$(val SURFACE_COLOR)")" "r"
 check "the surface stays dark" "$(python3 -c "import sys; c=sys.argv[1].lstrip('#'); print(max(int(c[i:i+2],16) for i in (0,2,4)) < 40)" "$(val SURFACE_COLOR)")" "True"
-check "the comment under the setting is kept" "$(grep -A1 '^BORDER_ACTIVE=' "$H/.config/infynitae/config" | tail -1 | grep -c '#')" "1"
+check "the comment under the setting is kept" "$(grep -A1 '^ACCENT=' "$H/.config/infynitae/config" | tail -1 | grep -c '#')" "1"
 
 surface=$(val SURFACE_COLOR)
 settings wallpaper-colors accent "$TMP/grey.png"
-check "a grey wallpaper gives the default blue" "$(val BORDER_ACTIVE)" "#7aa2f7"
+check "a grey wallpaper gives the default blue" "$(val ACCENT)" "#7aa2f7"
 check "accent alone leaves the surface" "$(val SURFACE_COLOR)" "$surface"
 
 before=$(cat "$H/.config/infynitae/config")
@@ -50,8 +50,17 @@ check "a missing image changes nothing" "$(cat "$H/.config/infynitae/config")" "
 
 sed -i 's|^THEME_FROM_WALLPAPER=.*|THEME_FROM_WALLPAPER="all"|; s|^WALLPAPER=.*|WALLPAPER="'"$TMP"'/green.png"|' "$H/.config/infynitae/config"
 settings apply
-check "THEME_FROM_WALLPAPER: a new wallpaper recolours on apply" "$(hue "$(val BORDER_ACTIVE)")" "g"
-sed -i 's|^BORDER_ACTIVE=.*|BORDER_ACTIVE="#123456"|' "$H/.config/infynitae/config"
+check "THEME_FROM_WALLPAPER: a new wallpaper recolours on apply" "$(hue "$(val ACCENT)")" "g"
+sed -i 's|^ACCENT=.*|ACCENT="#123456"|' "$H/.config/infynitae/config"
 settings apply
-check "the same wallpaper again: a colour you set stays" "$(val BORDER_ACTIVE)" "#123456"
+check "the same wallpaper again: a colour you set stays" "$(val ACCENT)" "#123456"
+
+cat > "$H/.config/infynitae/config" <<CFG
+THEME_FROM_WALLPAPER="all"
+WALLPAPER="$TMP/red.png"
+BORDER_ACTIVE="#123456"
+CFG
+rm -f "$H/.cache/infynitae/"*
+settings apply
+check "legacy BORDER_ACTIVE-only config gets ACCENT written on wallpaper change" "$(hue "$(val ACCENT)")" "r"
 exit $fail

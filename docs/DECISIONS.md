@@ -58,7 +58,7 @@ these by date, e.g. "(owner, 2026-10-24)".
   (Super+Shift+R, Super+Shift+T, Super+Alt+R) stay as aliases, and a binding of the user's
   (`BIND_*`, `EXEC_*`) still wins over both.
 - **Super+Tab flips between the last two windows** (2026-10-31), most recently used order, so two
-  apps can be switched fast. It never goes further back, even with Super held (2026-11-01, owner:
+  apps can be switched in one press. It never goes further back, even with Super held (2026-11-01, owner:
   the step-through of 2026-10-31 felt like cycling every window). **Super+arrow** goes to the
   nearest window that way on the canvas and brings it into view (2026-11-01). **Attention first:** a
   window that opened without the focus (FOCUS_ON_OPEN "user" or "priority" held it back) or
@@ -70,7 +70,7 @@ these by date, e.g. "(owner, 2026-10-24)".
   as used only after 0.3 s (or a click), so one the pointer just passed is not the "last window".
 - **Super+Q / W / E** start the terminal, launcher and file manager through one dispatcher
   (`live/launch.sh`), so each is a config setting.
-- **Super+Shift+C closes, Super+Delete force-closes** (owner, 2026-11-01; Super+C and Super+Shift+C from 2026-10-25, Super+Delete for closing before). Force close
+- **Super+Shift+C closes, Super+Shift+Delete force-closes** (owner, 2026-11-13: Super+Delete moved to Super+Shift+Delete; 2026-11-01; Super+C and Super+Shift+C from 2026-10-25, Super+Delete for closing before). Force close
   ends the window's client process, pinned by a pidfd so a reused pid is never killed.
 - **Super+Enter maximizes** (the shipped setting): the window takes the screen's size where it
   covers no other window (2026-11-10). `SUPER_ENTER_ACTION="fit"`, the default of a config
@@ -120,7 +120,7 @@ these by date, e.g. "(owner, 2026-10-24)".
 ## Screen and session
 
 - **Everyday basics work out of the box, each one a switch** (2026-10-25): a notification daemon
-  (`NOTIFICATIONS`, mako by default), a keyring (gnome-keyring, started by D-Bus on first use),
+  (`NOTIFICATIONS`, mako when written; the edge by default since 2026-11-13), a keyring (gnome-keyring, started by D-Bus on first use),
   automount (`AUTOMOUNT`, infynitae-automount on udisks2; udiskie before 2026-10-31), the user folders, Noto fonts with emoji, and the control menu
   (`CONTROL_MENU`, Super+A) whose parts appear only when their tool is installed. NetworkManager is
   not installed for you: a machine on iwd or systemd-networkd keeps its networking.

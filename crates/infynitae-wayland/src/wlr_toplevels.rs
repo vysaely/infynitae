@@ -220,7 +220,11 @@ impl WaylandState {
         let pointer = self.pointer_handle().current_focus();
         let keyboard = self.seat.get_keyboard().and_then(|k| k.current_focus());
         let validated = holds(pointer) || holds(keyboard);
-        if let Ok(effects) = self.core.activation_request(id, validated) {
+        if validated {
+            self.virtual_input
+                .queue
+                .push(crate::virtual_input::VirtualInput::JumpToWindow(id));
+        } else if let Ok(effects) = self.core.activation_request(id, false) {
             self.apply(&effects);
         }
     }

@@ -1,12 +1,4 @@
-//! End-to-end integration test of the runnable tiny compositor.
-//!
-//! Validates:
-//! 1. Starting compositor with a real Wayland listening socket.
-//! 2. Connecting a real Wayland client over the socket.
-//! 3. Advertising globals (wl_compositor, wl_shm, xdg_wm_base, wl_seat, etc.).
-//! 4. Mapping an xdg-toplevel surface with a shm buffer.
-//! 5. Frame tick / presentation callback delivery.
-//! 6. Clean client disconnect and compositor shutdown.
+//! End-to-end integration test for mapping a client surface and shutting down the headless compositor.
 
 use std::os::fd::AsFd;
 use std::thread;
@@ -263,13 +255,11 @@ fn test_tiny_compositor_end_to_end_client_session() {
         "frame callback must be completed by compositor vblank"
     );
 
-    // Disconnect client cleanly
     drop(surface);
     drop(xdg_surface);
     drop(toplevel);
     drop(conn);
 
-    // Wait for compositor thread to finish cleanly
     compositor_handle.join().expect("compositor thread join");
 }
 

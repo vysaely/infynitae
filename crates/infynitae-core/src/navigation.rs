@@ -6,8 +6,106 @@
 //! and restore with a bounded navigation history (OBJ-30, INV-CAMERA-5 as amended by C12.F16).
 
 use crate::authority::Authorized;
-use crate::geom::{CANVAS_LIMIT_PX, CanvasPoint, CanvasPos, Q16_ONE, q16};
+use crate::geom::{CANVAS_LIMIT_PX, CanvasPoint, CanvasPos, Q16_ONE, ZOOM_MAX, ZOOM_MIN, q16};
 use crate::output::{OutputId, OutputKey};
+use std::time::Duration;
+
+/// Exponential decay to 95% (`-ln(0.05)`): `1 - exp(-3 * tau / tau) ≈ 0.95`.
+const LN_20: f64 = 2.995_732_273_553_991;
+/// Extra wheel/touchpad coast fraction in `ZoomFeel::Floaty`.
+const FLOATY_MOMENTUM_GAIN: f64 = 0.18;
+/// Decay time constant (seconds) for `ZoomFeel::Floaty` momentum.
+const FLOATY_MOMENTUM_TAU_S: f64 = 0.045;
+const LN_ZOOM_SETTLE_EPS: f64 = 3e-5;
+const CENTER_SETTLE_EPS_PX: f64 = 0.01;
+const VELOCITY_SETTLE_EPS: f64 = 1e-4;
+
+/// Camera zoom glide feel (`ZOOM_FEEL`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum ZoomFeel {
+    /// Immediate camera writes with no animation.
+    #[default]
+    Instant,
+    /// Exponential glide reaching 95% in about 100 ms.
+    Quick,
+    /// Exponential glide reaching 95% in about 165 ms (150-180 ms).
+    Smooth,
+    /// Exponential glide reaching 95% in about 300 ms, plus decaying wheel momentum.
+    Floaty,
+}
+
+impl ZoomFeel {
+    /// Parses a `ZOOM_FEEL` config value, defaulting unrecognized values to `Smooth`.
+    pub fn parse(raw: &str) -> Self {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "instant" => Self::Instant,
+            "quick" => Self::Quick,
+            "floaty" => Self::Floaty,
+            _ => Self::Smooth,
+        }
+    }
+
+    /// Time constant τ in seconds (`None` for `Instant`), where `t_95% = τ · ln(20)`.
+    pub const fn tau_secs(self) -> Option<f64> {
+        match self {
+            Self::Instant => None,
+            Self::Quick => Some(0.100 / LN_20),
+            Self::Smooth => Some(0.165 / LN_20),
+            Self::Floaty => Some(0.300 / LN_20),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ZoomAnchor {
+    /// Logical pointer offset relative to output center (`p - extent / 2`).
+    pointer_rel: (f64, f64),
+    /// Exact unrounded canvas point under `pointer_rel`.
+    canvas_point: (f64, f64),
+}
+
+#[derive(Clone, Debug)]
+struct ZoomGlide {
+    feel: ZoomFeel,
+    center: (f64, f64),
+    ln_zoom: f64,
+    target_center: (f64, f64),
+    target_ln_zoom: f64,
+    /// Verbatim target for unanchored glides (`fit`, `jump`, `restore`), written on settle.
+    exact_target: Option<CameraValue>,
+    anchor: Option<ZoomAnchor>,
+    ln_velocity: f64,
+    primed: bool,
+}
+
+impl ZoomGlide {
+    fn current_zoom(&self) -> f64 {
+        self.ln_zoom.exp().clamp(ZOOM_MIN, ZOOM_MAX)
+    }
+
+    fn target_value(&self) -> CameraValue {
+        if let Some(exact) = self.exact_target {
+            return exact;
+        }
+        let zoom = self.target_ln_zoom.exp().clamp(ZOOM_MIN, ZOOM_MAX);
+        CameraValue {
+            center: canvas_pos_from_f64(self.target_center.0, self.target_center.1),
+            zoom,
+        }
+    }
+}
+
+fn canvas_pos_from_f64(x: f64, y: f64) -> CanvasPos {
+    let limit = CANVAS_LIMIT_PX * Q16_ONE;
+    CanvasPos {
+        x: q16(x).clamp(-limit, limit),
+        y: q16(y).clamp(-limit, limit),
+    }
+}
+
+fn canvas_pos_to_f64(c: CanvasPos) -> (f64, f64) {
+    (c.x as f64 / Q16_ONE as f64, c.y as f64 / Q16_ONE as f64)
+}
 
 #[derive(Debug)]
 struct Camera {
@@ -19,6 +117,8 @@ struct Camera {
     bound: Option<OutputId>,
     /// OBJ-30: the values before the fits of the current binding; emptied at unbinding (C12.F16).
     history: NavigationHistory,
+    glide: Option<ZoomGlide>,
+    last_frame_tick: Option<Duration>,
 }
 
 /// A camera's value, as stored: the centre in Q16 and the zoom. An OBJ-30 entry is a copy of one.
@@ -352,6 +452,8 @@ impl CameraSet {
             key: key.clone(),
             bound: Some(output),
             history: NavigationHistory::default(),
+            glide: None,
+            last_frame_tick: None,
         });
         self.cameras.len() - 1
     }
@@ -367,7 +469,40 @@ impl CameraSet {
         let i = self.camera_for_output(output)?;
         self.cameras[i].bound = None;
         self.cameras[i].history.clear();
+        self.cameras[i].glide = None;
+        self.cameras[i].last_frame_tick = None;
         Some(i)
+    }
+
+    /// Whether `camera` currently has an active zoom glide.
+    pub fn is_gliding(&self, camera: usize) -> bool {
+        self.cameras.get(camera).is_some_and(|c| c.glide.is_some())
+    }
+
+    /// Whether any bound camera currently has an active zoom glide.
+    pub fn any_gliding(&self) -> bool {
+        self.cameras
+            .iter()
+            .any(|c| c.bound.is_some() && c.glide.is_some())
+    }
+
+    /// Current glide velocity in `ln(zoom)/s` when a `Floaty` glide is coasting.
+    pub fn glide_velocity(&self, camera: usize) -> Option<f64> {
+        self.cameras
+            .get(camera)
+            .and_then(|c| c.glide.as_ref().map(|g| g.ln_velocity))
+    }
+
+    /// Target `CameraValue` if `camera` is gliding, otherwise its current value.
+    pub fn effective_value(&self, camera: usize) -> Option<CameraValue> {
+        let c = self.cameras.get(camera)?;
+        Some(match &c.glide {
+            Some(g) => g.target_value(),
+            None => CameraValue {
+                center: c.center,
+                zoom: c.zoom,
+            },
+        })
     }
 
     /// OBJ-30 of a camera: read access (public, like every camera reader).
@@ -380,6 +515,7 @@ impl CameraSet {
     pub(crate) fn fit(&mut self, _proof: Authorized, camera: usize, target: CameraValue) {
         if let Some(c) = self.cameras.get_mut(camera) {
             debug_assert!(crate::geom::zoom_in_domain(target.zoom));
+            c.glide = None;
             c.history.push(CameraValue {
                 center: c.center,
                 zoom: c.zoom,
@@ -399,6 +535,7 @@ impl CameraSet {
         let Some(v) = c.history.pop() else {
             return false;
         };
+        c.glide = None;
         c.center = v.center;
         c.zoom = v.zoom;
         true
@@ -418,6 +555,23 @@ impl CameraSet {
         self.set_center(proof, camera, pan_target_mode(start, sum, mode));
     }
 
+    /// Record the camera's value as the newest history entry before jumping to `target` if either
+    /// center or zoom changes. Consumes a proof (INV-CAMERA-1).
+    pub(crate) fn jump(&mut self, _proof: Authorized, camera: usize, target: CameraValue) {
+        if let Some(c) = self.cameras.get_mut(camera) {
+            debug_assert!(crate::geom::zoom_in_domain(target.zoom));
+            c.glide = None;
+            if c.center != target.center || c.zoom.to_bits() != target.zoom.to_bits() {
+                c.history.push(CameraValue {
+                    center: c.center,
+                    zoom: c.zoom,
+                });
+            }
+            c.center = target.center;
+            c.zoom = target.zoom;
+        }
+    }
+
     /// A shell `Navigate` (C7.2): the camera's centre becomes `center`, its zoom unchanged;
     /// no history entry (OBJ-30 records fits). Consumes a proof (INV-CAMERA-1).
     pub(crate) fn navigate(&mut self, proof: Authorized, camera: usize, center: CanvasPos) {
@@ -435,14 +589,374 @@ impl CameraSet {
     ) {
         if let Some(c) = self.cameras.get_mut(camera) {
             debug_assert!(crate::geom::zoom_in_domain(zoom));
+            c.glide = None;
             c.zoom = zoom;
             c.center = center;
         }
     }
 
+    /// Starts or updates a fit glide (equivalent to [`fit`](Self::fit) when `feel` is `Instant`).
+    pub(crate) fn glide_fit(
+        &mut self,
+        proof: Authorized,
+        camera: usize,
+        target: CameraValue,
+        feel: ZoomFeel,
+    ) {
+        if feel == ZoomFeel::Instant {
+            self.fit(proof, camera, target);
+            return;
+        }
+        if let Some(c) = self.cameras.get_mut(camera) {
+            debug_assert!(crate::geom::zoom_in_domain(target.zoom));
+            c.history.push(CameraValue {
+                center: c.center,
+                zoom: c.zoom,
+            });
+            Self::start_unanchored_glide(c, target, feel);
+        }
+    }
+
+    /// Starts or updates an unanchored glide to `target`, recording history when `record_history`
+    /// is true (`Instant` applies immediately).
+    pub(crate) fn glide_to(
+        &mut self,
+        proof: Authorized,
+        camera: usize,
+        target: CameraValue,
+        record_history: bool,
+        feel: ZoomFeel,
+    ) {
+        if feel == ZoomFeel::Instant {
+            if record_history {
+                self.jump(proof, camera, target);
+            } else {
+                self.set_zoom_and_center(proof, camera, target.zoom, target.center);
+            }
+            return;
+        }
+        if let Some(c) = self.cameras.get_mut(camera) {
+            debug_assert!(crate::geom::zoom_in_domain(target.zoom));
+            if record_history
+                && (c.center != target.center || c.zoom.to_bits() != target.zoom.to_bits())
+            {
+                c.history.push(CameraValue {
+                    center: c.center,
+                    zoom: c.zoom,
+                });
+            }
+            Self::start_unanchored_glide(c, target, feel);
+        }
+    }
+
+    /// Pops the newest history entry and glides back to it (`Instant` applies verbatim immediately).
+    pub(crate) fn glide_restore(
+        &mut self,
+        proof: Authorized,
+        camera: usize,
+        feel: ZoomFeel,
+    ) -> bool {
+        if feel == ZoomFeel::Instant {
+            return self.restore(proof, camera);
+        }
+        let Some(c) = self.cameras.get_mut(camera) else {
+            return false;
+        };
+        let Some(v) = c.history.pop() else {
+            return false;
+        };
+        Self::start_unanchored_glide(c, v, feel);
+        true
+    }
+
+    fn start_unanchored_glide(c: &mut Camera, target: CameraValue, feel: ZoomFeel) {
+        let (center, ln_zoom) = match &c.glide {
+            Some(g) => (g.center, g.ln_zoom),
+            None => (canvas_pos_to_f64(c.center), c.zoom.ln()),
+        };
+        let target_center = canvas_pos_to_f64(target.center);
+        let target_ln_zoom = target.zoom.ln();
+        if (ln_zoom - target_ln_zoom).abs() < LN_ZOOM_SETTLE_EPS
+            && (center.0 - target_center.0).hypot(center.1 - target_center.1) < CENTER_SETTLE_EPS_PX
+        {
+            c.glide = None;
+            c.center = target.center;
+            c.zoom = target.zoom;
+            return;
+        }
+        c.glide = Some(ZoomGlide {
+            feel,
+            center,
+            ln_zoom,
+            target_center,
+            target_ln_zoom,
+            exact_target: Some(target),
+            anchor: None,
+            ln_velocity: 0.0,
+            primed: false,
+        });
+    }
+
+    /// Adds a log-zoom step `d_ln` to an animated pointer-anchored glide, preserving the exact
+    /// unrounded canvas point under `p`. Returns whether the glide changed.
+    pub(crate) fn glide_zoom_step(
+        &mut self,
+        _proof: Authorized,
+        camera: usize,
+        p: (f64, f64),
+        extent: (f64, f64),
+        d_ln: f64,
+        feel: ZoomFeel,
+    ) -> bool {
+        let Some(c) = self.cameras.get_mut(camera) else {
+            return false;
+        };
+        let (ln_min, ln_max) = (ZOOM_MIN.ln(), ZOOM_MAX.ln());
+        let pointer_rel = (p.0 - extent.0 / 2.0, p.1 - extent.1 / 2.0);
+        let (center, ln_zoom, prev_target, prev_anchor, prev_vel) = match &c.glide {
+            Some(g) => (
+                g.center,
+                g.ln_zoom,
+                g.target_ln_zoom,
+                g.anchor,
+                g.ln_velocity,
+            ),
+            None => (
+                canvas_pos_to_f64(c.center),
+                c.zoom.ln(),
+                c.zoom.ln(),
+                None,
+                0.0,
+            ),
+        };
+        let next_target = (prev_target + d_ln).clamp(ln_min, ln_max);
+        if c.glide.is_none() && (next_target - ln_zoom).abs() < 1e-9 {
+            return false;
+        }
+        let anchor = Self::anchor_from_existing(prev_anchor, center, ln_zoom.exp(), pointer_rel);
+        let mut ln_velocity = if feel == ZoomFeel::Floaty {
+            let base = if d_ln * prev_vel < 0.0 { 0.0 } else { prev_vel };
+            let hit_clamp =
+                (next_target <= ln_min && d_ln < 0.0) || (next_target >= ln_max && d_ln > 0.0);
+            if hit_clamp {
+                0.0
+            } else {
+                base + d_ln * FLOATY_MOMENTUM_GAIN / FLOATY_MOMENTUM_TAU_S
+            }
+        } else {
+            0.0
+        };
+        if ln_velocity.abs() < VELOCITY_SETTLE_EPS {
+            ln_velocity = 0.0;
+        }
+        let target_zoom = next_target.exp().clamp(ZOOM_MIN, ZOOM_MAX);
+        let target_center = (
+            anchor.canvas_point.0 - anchor.pointer_rel.0 / target_zoom,
+            anchor.canvas_point.1 - anchor.pointer_rel.1 / target_zoom,
+        );
+        c.glide = Some(ZoomGlide {
+            feel,
+            center,
+            ln_zoom,
+            target_center,
+            target_ln_zoom: next_target,
+            exact_target: None,
+            anchor: Some(anchor),
+            ln_velocity,
+            primed: false,
+        });
+        true
+    }
+
+    /// Starts an animated pointer-anchored glide to `target_zoom` (used by `zoom_reset`).
+    pub(crate) fn glide_zoom_to(
+        &mut self,
+        _proof: Authorized,
+        camera: usize,
+        p: (f64, f64),
+        extent: (f64, f64),
+        target_zoom: f64,
+        feel: ZoomFeel,
+    ) -> bool {
+        let Some(c) = self.cameras.get_mut(camera) else {
+            return false;
+        };
+        let target_zoom = target_zoom.clamp(ZOOM_MIN, ZOOM_MAX);
+        let pointer_rel = (p.0 - extent.0 / 2.0, p.1 - extent.1 / 2.0);
+        let (center, ln_zoom, prev_anchor) = match &c.glide {
+            Some(g) => (g.center, g.ln_zoom, g.anchor),
+            None => (canvas_pos_to_f64(c.center), c.zoom.ln(), None),
+        };
+        let target_ln_zoom = target_zoom.ln();
+        if (ln_zoom - target_ln_zoom).abs() < LN_ZOOM_SETTLE_EPS {
+            return false;
+        }
+        let anchor = Self::anchor_from_existing(prev_anchor, center, ln_zoom.exp(), pointer_rel);
+        let target_center = (
+            anchor.canvas_point.0 - anchor.pointer_rel.0 / target_zoom,
+            anchor.canvas_point.1 - anchor.pointer_rel.1 / target_zoom,
+        );
+        c.glide = Some(ZoomGlide {
+            feel,
+            center,
+            ln_zoom,
+            target_center,
+            target_ln_zoom,
+            exact_target: None,
+            anchor: Some(anchor),
+            ln_velocity: 0.0,
+            primed: false,
+        });
+        true
+    }
+
+    fn anchor_from_existing(
+        existing: Option<ZoomAnchor>,
+        center: (f64, f64),
+        zoom: f64,
+        pointer_rel: (f64, f64),
+    ) -> ZoomAnchor {
+        if let Some(a) = existing
+            && (a.pointer_rel.0 - pointer_rel.0).abs() < 1e-6
+            && (a.pointer_rel.1 - pointer_rel.1).abs() < 1e-6
+        {
+            return a;
+        }
+        ZoomAnchor {
+            pointer_rel,
+            canvas_point: (
+                center.0 + pointer_rel.0 / zoom,
+                center.1 + pointer_rel.1 / zoom,
+            ),
+        }
+    }
+
+    /// Re-anchors an active pointer-anchored glide when the pointer moves. Only mutates an
+    /// already-authorized glide (`c.glide.is_some()`).
+    pub(crate) fn update_glide_pointer(
+        &mut self,
+        camera: usize,
+        p: (f64, f64),
+        extent: (f64, f64),
+    ) {
+        let Some(c) = self.cameras.get_mut(camera) else {
+            return;
+        };
+        let Some(g) = &mut c.glide else {
+            return;
+        };
+        let zoom = g.current_zoom();
+        let Some(a) = &mut g.anchor else {
+            return;
+        };
+        let rel = (p.0 - extent.0 / 2.0, p.1 - extent.1 / 2.0);
+        if (rel.0 - a.pointer_rel.0).abs() < 1e-6 && (rel.1 - a.pointer_rel.1).abs() < 1e-6 {
+            return;
+        }
+        a.pointer_rel = rel;
+        a.canvas_point = (g.center.0 + rel.0 / zoom, g.center.1 + rel.1 / zoom);
+        let tz = g.target_ln_zoom.exp().clamp(ZOOM_MIN, ZOOM_MAX);
+        g.target_center = (a.canvas_point.0 - rel.0 / tz, a.canvas_point.1 - rel.1 / tz);
+    }
+
+    /// Advances an already-authorized active glide (`c.glide.is_some()`) on `camera` to frame
+    /// timestamp `now` (`frame_period` bounds the first step after idle). Returns whether
+    /// `c.center` or `c.zoom` changed.
+    pub(crate) fn tick_glide(
+        &mut self,
+        camera: usize,
+        now: Duration,
+        frame_period: Duration,
+    ) -> bool {
+        let Some(c) = self.cameras.get_mut(camera) else {
+            return false;
+        };
+        let prev_tick = c.last_frame_tick;
+        c.last_frame_tick = Some(now);
+        let Some(g) = c.glide.as_mut() else {
+            return false;
+        };
+        let dt = match (g.primed, prev_tick) {
+            (false, None) => Duration::ZERO,
+            (false, Some(prev)) => {
+                let raw = now.saturating_sub(prev);
+                if raw > frame_period.saturating_mul(2) {
+                    frame_period
+                } else {
+                    raw
+                }
+            }
+            (true, Some(prev)) => now.saturating_sub(prev),
+            (true, None) => Duration::ZERO,
+        };
+        g.primed = true;
+        if dt.is_zero() {
+            return false;
+        }
+        let Some(tau_s) = g.feel.tau_secs() else {
+            c.glide = None;
+            return false;
+        };
+        let dt_s = dt.as_secs_f64();
+        let (ln_min, ln_max) = (ZOOM_MIN.ln(), ZOOM_MAX.ln());
+        if g.feel == ZoomFeel::Floaty && g.ln_velocity.abs() > 0.0 {
+            let mom_remain = (-dt_s / FLOATY_MOMENTUM_TAU_S).exp();
+            let d_coast = g.ln_velocity * FLOATY_MOMENTUM_TAU_S * (1.0 - mom_remain);
+            g.target_ln_zoom = (g.target_ln_zoom + d_coast).clamp(ln_min, ln_max);
+            g.ln_velocity *= mom_remain;
+            if (g.target_ln_zoom <= ln_min && g.ln_velocity < 0.0)
+                || (g.target_ln_zoom >= ln_max && g.ln_velocity > 0.0)
+                || g.ln_velocity.abs() < VELOCITY_SETTLE_EPS
+            {
+                g.ln_velocity = 0.0;
+            }
+            if let Some(a) = g.anchor {
+                let tz = g.target_ln_zoom.exp().clamp(ZOOM_MIN, ZOOM_MAX);
+                g.target_center = (
+                    a.canvas_point.0 - a.pointer_rel.0 / tz,
+                    a.canvas_point.1 - a.pointer_rel.1 / tz,
+                );
+            }
+        }
+
+        let remain = (-dt_s / tau_s).exp();
+        g.ln_zoom = g.target_ln_zoom + (g.ln_zoom - g.target_ln_zoom) * remain;
+        let zoom = g.current_zoom();
+        g.center = if let Some(a) = g.anchor {
+            (
+                a.canvas_point.0 - a.pointer_rel.0 / zoom,
+                a.canvas_point.1 - a.pointer_rel.1 / zoom,
+            )
+        } else {
+            (
+                g.target_center.0 + (g.center.0 - g.target_center.0) * remain,
+                g.target_center.1 + (g.center.1 - g.target_center.1) * remain,
+            )
+        };
+
+        let settled = g.ln_velocity == 0.0
+            && (g.ln_zoom - g.target_ln_zoom).abs() < LN_ZOOM_SETTLE_EPS
+            && (g.center.0 - g.target_center.0).hypot(g.center.1 - g.target_center.1)
+                < CENTER_SETTLE_EPS_PX;
+
+        let (next_center, next_zoom) = if settled {
+            let v = g.target_value();
+            c.glide = None;
+            (v.center, v.zoom)
+        } else {
+            (canvas_pos_from_f64(g.center.0, g.center.1), zoom)
+        };
+        debug_assert!(crate::geom::zoom_in_domain(next_zoom));
+        let changed = c.center != next_center || c.zoom.to_bits() != next_zoom.to_bits();
+        c.center = next_center;
+        c.zoom = next_zoom;
+        changed
+    }
+
     /// Mutation is private to this module and consumes a proof.
     fn set_center(&mut self, _proof: Authorized, camera: usize, center: CanvasPos) {
         if let Some(c) = self.cameras.get_mut(camera) {
+            c.glide = None;
             c.center = center;
         }
     }
@@ -740,5 +1254,22 @@ mod tests {
             recenter_target((1920.0, 1080.0), full, 2.0, (0, 0, 0, 10)),
             None
         );
+    }
+
+    #[test]
+    fn zoom_feel_parses_all_values_and_defaults_to_smooth() {
+        assert_eq!(ZoomFeel::parse("instant"), ZoomFeel::Instant);
+        assert_eq!(ZoomFeel::parse("QUICK"), ZoomFeel::Quick);
+        assert_eq!(ZoomFeel::parse("smooth"), ZoomFeel::Smooth);
+        assert_eq!(ZoomFeel::parse("floaty"), ZoomFeel::Floaty);
+        assert_eq!(ZoomFeel::parse("unknown"), ZoomFeel::Smooth);
+        assert_eq!(ZoomFeel::parse(""), ZoomFeel::Smooth);
+        assert!(ZoomFeel::Instant.tau_secs().is_none());
+        let q = ZoomFeel::Quick.tau_secs().unwrap() * LN_20 * 1000.0;
+        let s = ZoomFeel::Smooth.tau_secs().unwrap() * LN_20 * 1000.0;
+        let f = ZoomFeel::Floaty.tau_secs().unwrap() * LN_20 * 1000.0;
+        assert!((q - 100.0).abs() < 1e-6);
+        assert!((150.0..=180.0).contains(&s));
+        assert!((f - 300.0).abs() < 1e-6);
     }
 }

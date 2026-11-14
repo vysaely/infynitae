@@ -14,8 +14,8 @@ edges on other hardware.
   compositor; the test harness isolates the launcher in a temporary directory so shortcuts and reload actions never reach the live desktop. `tools/verify-test-efficacy` seeds bugs on purpose to prove the tests catch them (sharing build paths so cargo rebuilds only what a seed touched),
   `tools/verify-architecture` checks that the architecture holds, and CI tests config defaults and README shortcuts against the code.
 - **The desktop:** lock screen, wallpaper, screenshots, clipboard history, session restore,
-  recording and a replay buffer (defaulting to hevc), polkit prompts, notifications (mako), a keyring
-  (gnome-keyring, or infynitae-keyring once switched via `tools/switch.sh`), USB automount (infynitae-automount on udisks2: encrypted drives ask for their passphrase, a notification opens or ejects a drive, `infynitae-automount eject` makes every drive safe to pull; right click a drive's folder in PCManFM-Qt, "Format drive...", to erase it as exFAT, FAT32 or ext4, `infynitae-format-drive` from a terminal), the control menu (Super+A: Wi-Fi, Bluetooth, volume
+  recording and a replay buffer (defaulting to hevc), polkit prompts, notifications (the edge by default, else mako, swaync, dunst, or fnott), a keyring
+  (gnome-keyring, or infynitae-keyring once switched via `infynitae-keyring`'s `tools/switch.sh`), USB automount (infynitae-automount on udisks2: encrypted drives ask for their passphrase, a notification opens or ejects a drive, `infynitae-automount eject` makes every drive safe to pull; right click a drive's folder in PCManFM-Qt, "Format drive...", to erase it as exFAT, FAT32 or ext4, `infynitae-format-drive` from a terminal), the control menu (Super+A: Wi-Fi, Bluetooth, volume
   for all sound or one app, sound output, power mode), global shortcuts for
   apps, layer shell for bars, X11 apps through xwayland-satellite (can be disabled with `XWAYLAND=false`), VRR and direct scanout for
   games, idle screen-off and auto-lock. Config defaults match documented settings: `FOCUS_FOLLOWS_MOUSE` is strict, `PAN_MODE` is free, `SQUARE_CORNERS` and `TOUCHPAD_TAP` are true.
@@ -68,7 +68,7 @@ These pass the test suite but have not run on a real screen or device yet:
     invoking a notification action keeps older unread notifications; the memory card protects the
     compositor and session processes; touch-and-hold emits a right click; the control panel
     spells everything out.
-  - **Faster shortcuts** (24 ms of shell setup a press down to 8 ms), the wallpaper no longer
+  - **Shorter shortcut dispatch** (24 ms of shell setup a press down to 8 ms), the wallpaper no longer
     keeps its decoded image (about 70 MB with a large wallpaper); edge system and memory modules
     read GPU telemetry, temperatures, and memory directly from `/proc` and `/sys` without subshells.
 
@@ -106,13 +106,13 @@ These pass the test suite but have not run on a real screen or device yet:
   touchscreen.
 - **Out of GPU memory, windows stay open:** when the GPU resets or refuses the compositor's work
   (seen with a model training on it), the compositor makes a new renderer instead of being
-  aborted by Mesa; the screens freeze until memory frees up. Tested: the robust context on this
+  aborted by Mesa; the screens freeze until memory frees up. Tested: context loss handling on this
   GPU; not yet: a real reset.
 - **Hardware cursor** (`HARDWARE_CURSOR`): the cursor on the GPU's cursor plane, so it moves
   without a redraw and a fullscreen game with a cursor is still shown directly. Where the GPU
   refuses a cursor, it is drawn as before.
 - **Screen sharing only on change:** a remote desktop or a screen share gets a frame when the
-  screen changed since its last one, with just what changed; a still screen costs nothing.
+  screen changed since its last one, sending only changed areas; a still screen costs nothing.
 - **Tearing for games** (`TEARING`, Super+Shift+O; Super+Shift+T too): a fullscreen window
   shown directly flips each frame at once (an async page flip) when its app asks
   (`tearing-control-v1`, a Vulkan or OpenGL game with vsync off; presentation hints apply on the
@@ -126,7 +126,7 @@ These pass the test suite but have not run on a real screen or device yet:
   tear, game content type, an X11 window) is on, notifications wait (`GAME_QUIET`): one drawn
   over a game ends its direct path to the screen and tearing.
 - **Real-time audio and desktop** (`--no-realtime`): real-time scheduling rights (`rtkit`, `realtime` group from `realtime-privileges`).
-- **ntsync**: fast NT synchronisation for Wine and Proton loaded at boot (`/etc/modules-load.d/ntsync.conf`) when the kernel has the module.
+- **ntsync**: NT synchronisation for Wine and Proton loaded at boot (`/etc/modules-load.d/ntsync.conf`) when the kernel has the module.
 - **No background memory compaction**: `vm.compaction_proactiveness = 0` (`/etc/sysctl.d/99-infynitae-memory.conf`) prevents latency spikes under load.
 - **A full GPU slows the windows out of use** (`GPU_RELIEF`): while a game fills a screen, a
   screen missing one refresh in twenty for a second completes the frames of windows that are
@@ -147,7 +147,7 @@ These pass the test suite but have not run on a real screen or device yet:
   in Celluloid, pictures in Ristretto, text in Mousepad, set for the file types with no default of
   yours in `~/.config/mimeapps.list` (install and update). Tested against a stand-in home; not yet
   on a fresh install.
-- **Password store unlocked at login:** gnome-keyring (or infynitae-keyring once enabled with `tools/switch.sh`) starts before the start lock screen, and
+- **Password store unlocked at login:** gnome-keyring (or infynitae-keyring once enabled with `infynitae-keyring`'s `tools/switch.sh`) starts before the start lock screen, and
   the lock screen's password opens it (`pam_gnome_keyring`), so apps no longer ask for a second
   password. Not yet tested on hardware.
 - **Laptop lid:** closing it with another screen connected moves everything to that screen

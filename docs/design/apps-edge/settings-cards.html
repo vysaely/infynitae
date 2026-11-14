@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Settings cards</title>
+<style>
+:root {
+  /* the owner's theme (LOOK_* of ~/.cache/infynitae/look); the running edge reads these, never fixed values */
+  --card-rgb: 23 16 19;              /* #171013 */
+  --card: rgb(var(--card-rgb) / .90);
+  --edge: #452e3c;
+  --text: #eef2f8;
+  --muted: #a9aaaf;
+  --accent: #cc70a9;
+  --track: rgb(238 242 248 / .12);
+  --light: rgb(238 242 248 / .07);   /* the light under the pointer */
+  --r: 8px;
+  --rs: 4px;
+  --page: #0e0a0c;
+  --wall: color-mix(in srgb, var(--accent) 16%, #0b0809);
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--page); color: var(--text);
+  font: 13px/1.4 system-ui, "Segoe UI", "Noto Sans", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+.page { max-width: 1300px; margin: 0 auto; padding: 24px 16px 48px; }
+h1 { font-size: 20px; font-weight: 600; margin: 0 0 4px; }
+h2 { font-size: 15px; font-weight: 600; margin: 28px 0 4px; }
+.lead { color: var(--muted); margin: 0 0 16px; max-width: 80ch; }
+
+.desk {
+  background: var(--wall); border: 1px solid var(--edge); border-radius: var(--r);
+  padding: 24px; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(380px, 100%), 1fr));
+  gap: 12px 24px; align-items: start;
+}
+.desk.one { grid-template-columns: minmax(0, 440px); }
+.slot { min-width: 0; }
+.cap { font-size: 11px; color: var(--muted); margin: 6px 2px 4px; }
+.cap code { font: inherit; color: var(--text); }
+
+.card { background: var(--card); border: 1px solid var(--edge); border-radius: var(--r); padding: 14px 18px 12px; }
+.card + .card { margin-top: 12px; }
+.head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+.head b { font-size: 15px; font-weight: 600; flex: 1; min-width: 0; }
+.head span { font-size: 12px; color: var(--muted); }
+
+.row {
+  display: flex; align-items: center; gap: 10px; margin: 0 -8px; padding: 0 8px;
+  min-height: 40px; border-radius: var(--rs);
+}
+.row:hover { background: var(--light); }
+.row.flat:hover { background: none; }
+.txt { flex: 1; min-width: 0; }
+.txt b { display: block; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.txt small { display: block; font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.state { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.on { color: var(--accent); }
+.more { font-size: 12px; color: var(--muted); padding: 4px 8px; border-radius: var(--rs); opacity: 0; }
+.row:hover .more, .more.open { opacity: 1; }
+.quiet b { color: var(--muted); font-weight: 400; }
+
+.sw { width: 30px; height: 16px; border-radius: 8px; background: var(--track); flex: none; position: relative; }
+.sw::after { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--text); }
+.sw.is { background: var(--accent); }
+.sw.is::after { transform: translateX(14px); background: rgb(var(--card-rgb)); }
+
+/* a slider: the thin bar with a knob, the value in words at the right */
+.slide { flex: 0 0 120px; height: 3px; border-radius: 2px; background: var(--track); position: relative; }
+.slide i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 2px; background: var(--accent); }
+.slide u { position: absolute; top: -4.5px; width: 12px; height: 12px; margin-left: -6px; border-radius: 50%; background: var(--text); }
+.num { flex: 0 0 58px; text-align: right; font-size: 12px; color: var(--muted); }
+
+/* minus, the number, plus */
+.step { display: flex; align-items: center; gap: 2px; }
+.step span { width: 24px; height: 24px; display: grid; place-items: center; border: 1px solid var(--edge); border-radius: var(--rs); color: var(--muted); }
+.step b { min-width: 30px; text-align: center; font-weight: 500; }
+
+/* the setting's own value shown as data */
+.swatch { width: 16px; height: 16px; border-radius: var(--rs); border: 1px solid var(--edge); flex: none; }
+
+/* a list in place */
+.list { background: rgb(238 242 248 / .04); border-radius: var(--rs); margin: 2px -8px 4px; padding: 4px 0; }
+.list div { display: flex; justify-content: space-between; padding: 0 10px; line-height: 32px; border-radius: var(--rs); }
+.list div:hover { background: var(--light); }
+.list .is { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); font-weight: 600; }
+.list small { font-size: 11.5px; color: var(--muted); font-weight: 400; }
+
+/* a choice of words */
+.choice { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 6px; margin: 2px 0 6px; }
+.choice span { text-align: center; padding: 7px 4px; border: 1px solid var(--edge); border-radius: var(--rs); color: var(--muted); font-size: 12px; }
+.choice .is { color: var(--accent); border-color: var(--accent); background: color-mix(in srgb, var(--accent) 18%, transparent); font-weight: 600; }
+.label { font-size: 12px; color: var(--muted); margin: 8px 0 4px; }
+.sub { font-size: 12px; color: var(--muted); margin: 10px 0 0; display: flex; justify-content: space-between; }
+.sub b { color: var(--text); font-weight: 500; }
+.acts { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 0 4px; }
+.act { font-size: 12px; padding: 4px 9px; border-radius: var(--rs); border: 1px solid var(--edge); }
+.act:hover { background: var(--light); }
+.inner { border-left: 1px solid var(--edge); margin: 0 0 6px 0; padding-left: 12px; }
+.search { display: flex; gap: 10px; align-items: center; color: var(--muted); padding: 11px 18px; }
+.search span:last-child { margin-left: auto; font-size: 12px; }
+.ico { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; }
+.fine { color: var(--muted); font-size: 12px; margin-top: 16px; max-width: 80ch; }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>Settings cards</h1>
+  <p class="lead">The cards of <code>docs/EDGE_SETTINGS.md</code> in the version 1 look: a header with the title and "Settings" at the right, rows with a switch, a value or a slider, More for the rest, lists opening in place. Values are the defaults of <code>config/config</code>; the screen, fonts and the PC's parts are examples of what a PC reports. The page is a drawing: nothing on it changes a setting.</p>
+
+  <h2>The Settings panel (Super+I)</h2>
+  <p class="lead">One search field, one index card with a row per group, This PC. A click on a row opens that group in place; here Appearance is open.</p>
+  <div class="desk one"><div class="slot" id="panel"></div></div>
+
+  <h2>Each card on its own, at its default size (S)</h2>
+  <p class="lead">Any of them can be added to any panel. At M the rows under More are always shown.</p>
+  <div class="desk" id="cards"></div>
+
+  <h2>Open question: a row with a few values</h2>
+  <p class="lead">A: the value at the right, a click opens the values in place (40 px a row, the same for 2 values or 6). B: the values always shown as words under the name (about 70 px a row, one click less, long words do not fit).</p>
+  <div class="desk" id="ab"></div>
+
+  <p class="fine">Colours are the theme's: card #171013 at 90%, outline #452e3c, text #eef2f8, muted #a9aaaf, accent #cc70a9, tracks the text colour at 12%. Corners 8 px, small parts 4 px. A value that differs from its default is drawn in the accent; "At the next start" marks a change that waits for a restart. The small squares in Appearance show the setting's own value.</p>
+</div>
+
+<script>
+const sw = (name, on, says) => `<div class="row"><span class="txt"><b>${name}</b>${says ? `<small>${says}</small>` : ""}</span><span class="sw ${on ? "is" : ""}"></span></div>`;
+const val = (name, value, cls = "", says = "") => `<div class="row"><span class="txt"><b>${name}</b>${says ? `<small>${says}</small>` : ""}</span><span class="state ${cls}">${value}</span></div>`;
+const slide = (name, text, part) => `<div class="row"><span class="txt"><b>${name}</b></span><span class="slide"><i style="width:${part}%"></i><u style="left:${part}%"></u></span><span class="num">${text}</span></div>`;
+const step = (name, n) => `<div class="row"><span class="txt"><b>${name}</b></span><span class="step"><span>-</span><b>${n}</b><span>+</span></span></div>`;
+const color = (name, hex) => `<div class="row"><span class="txt"><b>${name}</b></span><span class="swatch" style="background:${hex}"></span><span class="state">${hex}</span></div>`;
+const words = (label, ws, chosen) => `<div class="label">${label}</div><div class="choice">${ws.map((w, i) => `<span class="${i === chosen ? "is" : ""}">${w}</span>`).join("")}</div>`;
+const list = (rows, chosen) => `<div class="list">${rows.map((r, i) => `<div class="${i === chosen ? "is" : ""}">${Array.isArray(r) ? `${r[0]}<small>${r[1]}</small>` : r}</div>`).join("")}</div>`;
+const more = n => `<div class="row quiet"><span class="txt"><b>More</b></span><span class="state">${n} settings</span></div>`;
+const head = t => `<div class="head"><b>${t}</b><span>Settings</span></div>`;
+const card = (t, body) => `<section class="card">${head(t)}${body}</section>`;
+
+const BODY = {
+  appearance: words("Apps look", ["Dark", "Light"], 0)
+    + color("Accent", "#cc70a9")
+    + val("Colours from the wallpaper", "Off")
+    + slide("Corners", "8 px", 33)
+    + val("Panels' colours", "Yours")
+    + more(7),
+  wallpaper: val("Picture", "The first in Pictures/Wallpapers")
+    + val("Fit", "Fill")
+    + more(1),
+  fonts: val("Font", "sans-serif")
+    + step("Size", 10)
+    + val("Icons", "Adwaita")
+    + val("Cursor", "Adwaita")
+    + more(2),
+  display: `<div class="sub"><b>DP-1</b><span>27 inch monitor</span></div>`
+    + val("Resolution", "2560x1440")
+    + val("Refresh rate", "165 Hz")
+    + val("Scale", "1")
+    + `<div class="sub"><b>All screens</b></div>`
+    + val("Variable refresh rate", "In fullscreen")
+    + slide("Night light warmth", "4000 K", 29)
+    + more(4),
+  input: val("Layouts", "The system's")
+    + slide("Repeat starts after", "200 ms", 11)
+    + slide("Repeat speed", "35 a second", 50)
+    + slide("Pointer speed", "0.0", 50)
+    + sw("Acceleration", false, "Off: the pointer moves 1:1")
+    + more(2),
+  windows: val("Focus", "Under the pointer")
+    + val("A new window takes the focus", "Unless you are busy")
+    + val("A new window opens", "Beside the others")
+    + words("Super+Enter", ["Maximize", "Fit"], 0)
+    + more(5),
+  defaults: val("Terminal", "Automatic")
+    + val("Files", "Automatic")
+    + val("Browser", "Automatic")
+    + val("System monitor", "Automatic")
+    + sw("Reopen apps at login", true)
+    + more(3),
+  games: sw("Game mode", true, "The CPU at full speed while a game is fullscreen")
+    + sw("Hold notifications during a game", true)
+    + val("Tearing in fullscreen", "Always")
+    + sw("Slow hidden windows when the GPU is full", true)
+    + more(5),
+  lock: val("Screens off after", "15 minutes")
+    + sw("Lock when the screens go off", true)
+    + sw("Lock before sleep", true)
+    + more(2),
+  privacy: val("When an app shares the screen", "Ask once per app")
+    + val("Show that the screen is captured", "In the edge")
+    + sw("Clipboard history", true, "Kept on disk")
+    + more(3),
+  recording: val("Replay keeps the last", "20 minutes")
+    + val("Sound recorded", "The PC")
+    + val("Frames per second", "60")
+    + sw("Freeze the screen while picking a region", true)
+    + `<div class="acts"><span class="act">Screenshots</span><span class="act">Clips</span><span class="act">Recordings</span></div>`
+    + more(2),
+  about: val("desktop", "Arch Linux, kernel 7.2")
+    + `<div class="acts"><span class="act">Check for updates</span><span class="act">Open the config file</span></div>`,
+};
+const TITLE = {
+  appearance: "Appearance", wallpaper: "Wallpaper", fonts: "Fonts, icons, cursor", display: "Display",
+  input: "Keyboard and mouse", windows: "Windows", defaults: "Apps", games: "Games", lock: "Lock and sleep",
+  privacy: "Privacy", recording: "Screenshots and recording", about: "This PC",
+};
+const SAYS = {
+  appearance: "Dark, corners 8 px", wallpaper: "Fill", fonts: "sans-serif 10, Adwaita",
+  display: "DP-1 2560x1440 165 Hz", input: "Repeat 35 a second, pointer 0.0", windows: "Focus under the pointer",
+  defaults: "Automatic", games: "Game mode on, tearing always", lock: "Screens off after 15 minutes",
+  privacy: "Ask once per app", recording: "Replay off, 20 minutes",
+};
+
+/* the panel: search, the index with Appearance open, This PC */
+document.getElementById("panel").innerHTML =
+  `<section class="card search"><svg class="ico" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/></svg><span>Search settings</span><span>Super+I</span></section>`
+  + card("Settings", Object.keys(SAYS).map(k => k === "appearance"
+      ? `<div class="row"><span class="txt"><b>${TITLE[k]}</b><small>${SAYS[k]}</small></span><span class="more open">Less</span></div><div class="inner">${BODY[k]}</div>`
+      : `<div class="row"><span class="txt"><b>${TITLE[k]}</b><small>${SAYS[k]}</small></span><span class="more">More</span></div>`).join("")
+    + `<div class="row quiet"><span class="txt"><b>Open the config file</b></span><span class="state">every other setting</span></div>`)
+  + card("This PC", BODY.about);
+
+/* each card alone */
+document.getElementById("cards").innerHTML = Object.keys(BODY).map(k =>
+  `<div class="slot"><div class="cap"><code>settings/${k}</code> S</div>${card(TITLE[k], BODY[k])}</div>`).join("")
+  + `<div class="slot"><div class="cap"><code>settings/display</code>: a list open in place, and a change that waits</div>${card("Display",
+      `<div class="sub"><b>DP-1</b><span>27 inch monitor</span></div>`
+      + val("Resolution", "2560x1440")
+      + `<div class="row"><span class="txt"><b>Refresh rate</b></span><span class="state">165 Hz</span></div>`
+      + list([["165 Hz", ""], "144 Hz", "120 Hz", "60 Hz"], 0)
+      + val("Scale", "1")
+      + `<div class="sub"><b>All screens</b></div>`
+      + val("Variable refresh rate", "At the next start", "on", "On"))}</div>`
+  + `<div class="slot"><div class="cap"><code>settings/about</code> M, after two changes</div>${card("This PC",
+      val("desktop", "")
+      + val("System", "Arch Linux, kernel 7.2")
+      + val("Processor", "8 cores")
+      + val("Memory", "32 GB")
+      + val("Time zone", "Europe/Kyiv")
+      + `<div class="acts"><span class="act">Check for updates</span><span class="act">Open the config file</span><span class="act">Undo: Corners was 8 px</span></div>`
+      + `<div class="row flat"><span class="txt"><b>Restart needed</b><small>Variable refresh rate. Ctrl+Alt+Backspace restarts; it closes your windows</small></span></div>`)}</div>`;
+
+/* A and B */
+document.getElementById("ab").innerHTML =
+  `<div class="slot"><div class="cap">A: values at the right, a list in place (Focus is open)</div>${card("Windows",
+      `<div class="row"><span class="txt"><b>Focus</b></span><span class="state">Under the pointer</span></div>`
+      + list(["Under the pointer", "Under the pointer, kept over empty space", "On a click"], 0)
+      + val("A new window takes the focus", "Unless you are busy")
+      + val("A new window opens", "Beside the others")
+      + val("Super+Enter", "Maximize")
+      + more(5))}</div>`
+  + `<div class="slot"><div class="cap">B: the values always shown</div>${card("Windows",
+      words("Focus", ["Under the pointer", "Kept over empty", "On a click"], 0)
+      + words("A new window takes the focus", ["Unless busy", "Ones you opened", "Always", "Never"], 0)
+      + words("A new window opens", ["Beside the others", "In the middle", "At the origin"], 0)
+      + words("Super+Enter", ["Maximize", "Fit"], 0)
+      + more(5))}</div>`;
+</script>
+</body>
+</html>

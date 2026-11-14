@@ -5,8 +5,9 @@
 //! ```text
 //! infynitae msg snapshot                        the compositor's state, as JSON
 //! infynitae msg focus <instance> <element>      focus a window
-//! infynitae msg navigate <x> <y>                the first screen's camera to a canvas point
+//! infynitae msg navigate <x> <y> [zoom]         the first screen's camera to a canvas point
 //! infynitae msg navigate element <inst> <elem>  … to a window
+//! infynitae msg place <name>                    save the active viewport to config
 //! infynitae msg restore [output]                the camera back to where it was
 //! infynitae msg shortcut <name>                 a global shortcut (mute, deafen, …) to apps
 //! infynitae msg overview                        pick a window from a menu and go to it
@@ -23,6 +24,8 @@ use infynitae_ipc::json::{self, Value};
 
 /// How long the compositor has to answer a request.
 const TIMEOUT: Duration = Duration::from_secs(2);
+/// `capture-chord` waits up to 10 s in the compositor; leave headroom for socket framing.
+const CAPTURE_TIMEOUT: Duration = Duration::from_secs(12);
 
 /// The runtime directory: `XDG_RUNTIME_DIR`, else the user's own.
 fn runtime_dir() -> PathBuf {
@@ -41,12 +44,17 @@ pub fn shell_socket() -> PathBuf {
 /// One request on a new connection to `socket`, and its reply; a failure is a reply too
 /// (`{"ok": false, "error": …}`), as the Python helper gave it.
 pub fn request_at(socket: &std::path::Path, req: &Value) -> Value {
+    request_at_timeout(socket, req, TIMEOUT)
+}
+
+/// Sends one request with an explicit read/write timeout.
+pub fn request_at_timeout(socket: &std::path::Path, req: &Value, timeout: Duration) -> Value {
     let fail = |e: &str| Value::obj([("ok", false.into()), ("error", e.into())]);
     let Ok(mut stream) = UnixStream::connect(socket) else {
         return fail("socket_not_found");
     };
-    let _ = stream.set_read_timeout(Some(TIMEOUT));
-    let _ = stream.set_write_timeout(Some(TIMEOUT));
+    let _ = stream.set_read_timeout(Some(timeout));
+    let _ = stream.set_write_timeout(Some(timeout));
     if stream
         .write_all(format!("{}\n", req.to_json()).as_bytes())
         .is_err()
@@ -70,26 +78,222 @@ fn element(inst: u64, elem: u64) -> Value {
     Value::Arr(vec![inst.into(), elem.into()])
 }
 
-/// The first screen's id (1 when the compositor does not say).
-fn first_output() -> u64 {
-    let snap = request(&Value::obj([
-        ("id", 1u64.into()),
-        ("cmd", "snapshot".into()),
-    ]));
+/// The first screen's id from a snapshot reply, if present.
+fn first_output_in(snap: &Value) -> Option<u64> {
     snap.get("snapshot")
         .and_then(|s| s.get("outputs"))
         .and_then(Value::as_array)
         .and_then(|o| o.first())
         .and_then(|o| o.get("id"))
         .and_then(Value::as_u64)
-        .unwrap_or(1)
+}
+
+/// The first screen's id (1 when the compositor does not say).
+fn first_output() -> u64 {
+    let snap = request(&Value::obj([
+        ("id", 1u64.into()),
+        ("cmd", "snapshot".into()),
+    ]));
+    first_output_in(&snap).unwrap_or(1)
 }
 
 fn usage() -> ExitCode {
     eprintln!(
-        "Usage: infynitae msg snapshot | focus <inst> <elem> | navigate <x> <y> | navigate element <inst> <elem> | restore [output] | shortcut <name> | overview | lock | night-light [on|off] | keyboard-layout | osk [on|off]"
+        "Usage: infynitae msg snapshot | focus <inst> <elem> | navigate <x> <y> [zoom] | navigate element <inst> <elem> | place <name> | restore [output] | shortcut <name> | overview | lock | night-light [on|off] | keyboard-layout | osk [on|off] | capture-chord | layers [app]"
     );
     ExitCode::from(2)
+}
+
+fn parse_navigate_args(args: &[String]) -> Option<(Value, Option<f64>)> {
+    let num = |i: usize| args.get(i).and_then(|a| a.parse::<u64>().ok());
+    if args.get(1).map(String::as_str) == Some("element") {
+        return match (num(2), num(3), args.get(4)) {
+            (Some(i), Some(e), None) => Some((Value::obj([("element", element(i, e))]), None)),
+            _ => None,
+        };
+    }
+    if args.len() > 4 {
+        return None;
+    }
+    let finite = |i: usize| {
+        args.get(i)
+            .and_then(|a| a.parse::<f64>().ok())
+            .filter(|v| v.is_finite())
+    };
+    let zoom = match args.get(3) {
+        Some(_) => Some(finite(3).filter(|z| *z > 0.0)?),
+        None => None,
+    };
+    let (x, y) = (finite(1)?, finite(2)?);
+    Some((
+        Value::obj([("canvas", Value::Arr(vec![x.into(), y.into()]))]),
+        zoom,
+    ))
+}
+
+fn valid_place_name(name: &str) -> bool {
+    !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+fn snapshot_camera(snap: &Value) -> Option<(f64, f64, f64)> {
+    let camera = snap
+        .get("snapshot")?
+        .get("outputs")?
+        .as_array()?
+        .first()?
+        .get("camera")?;
+    let center = camera.get("center")?.as_array()?;
+    let x = center.first()?.as_f64()?;
+    let y = center.get(1)?.as_f64()?;
+    let zoom = camera.get("zoom")?.as_f64()?;
+    (x.is_finite() && y.is_finite() && zoom.is_finite() && zoom > 0.0).then_some((x, y, zoom))
+}
+
+fn format_num(v: f64) -> String {
+    let rounded = (v * 10_000.0).round() / 10_000.0;
+    let clean = if rounded == 0.0 { 0.0 } else { rounded };
+    let s = format!("{clean:.4}");
+    s.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
+fn extract_place_chord(raw: &str) -> Option<String> {
+    let t = raw.trim();
+    let inner = if let Some(rest) = t.strip_prefix('"') {
+        rest.split_once('"').map_or(rest, |(s, _)| s)
+    } else if let Some(rest) = t.strip_prefix('\'') {
+        rest.split_once('\'').map_or(rest, |(s, _)| s)
+    } else {
+        t.split('#').next().unwrap_or("").trim()
+    };
+    let mut parts = inner.split_whitespace();
+    let _coords = parts.next()?;
+    let chord: Vec<&str> = parts.collect();
+    (!chord.is_empty()).then(|| chord.join(" "))
+}
+
+fn upsert_place_in_config(text: &str, name: &str, x: f64, y: f64, zoom: f64) -> (String, String) {
+    let key = format!("PLACE_{}", name.to_ascii_uppercase());
+    let prefix = format!("{key}=");
+    let existing_chord = text.lines().find_map(|line| {
+        let rest = line.trim_start().strip_prefix(&prefix)?;
+        extract_place_chord(rest)
+    });
+    let coords = format!("{},{},{}", format_num(x), format_num(y), format_num(zoom));
+    let rhs = match existing_chord {
+        Some(chord) => format!("\"{coords} {chord}\""),
+        None => format!("\"{coords}\""),
+    };
+    let formatted_line = format!("{key}={rhs}");
+
+    let mut out = Vec::new();
+    let mut replaced = false;
+    for line in text.lines() {
+        if line.trim_start().starts_with(&prefix) {
+            if !replaced {
+                out.push(formatted_line.clone());
+                replaced = true;
+            }
+        } else {
+            out.push(line.to_string());
+        }
+    }
+    if !replaced {
+        out.push(formatted_line.clone());
+    }
+    let mut joined = out.join("\n");
+    if text.ends_with('\n') || !replaced {
+        joined.push('\n');
+    }
+    (joined, formatted_line)
+}
+
+fn place_config_path() -> PathBuf {
+    if let Some(p) = std::env::var_os("CONFIG_FILE").filter(|v| !v.is_empty()) {
+        return PathBuf::from(p);
+    }
+    PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".config/infynitae/config")
+}
+
+fn save_place(name: &str) -> ExitCode {
+    if !valid_place_name(name) {
+        eprintln!("infynitae msg place: name must use letters, digits, or underscore");
+        return ExitCode::from(2);
+    }
+    let snap = request(&Value::obj([
+        ("id", 1u64.into()),
+        ("cmd", "snapshot".into()),
+    ]));
+    let Some((x, y, zoom)) = snapshot_camera(&snap) else {
+        eprintln!("infynitae msg place: no active camera in snapshot");
+        return ExitCode::FAILURE;
+    };
+    let path = place_config_path();
+    if let Some(dir) = path.parent()
+        && let Err(e) = std::fs::create_dir_all(dir)
+    {
+        eprintln!("infynitae msg place: {e}");
+        return ExitCode::FAILURE;
+    }
+    let before = std::fs::read_to_string(&path).unwrap_or_default();
+    let (after, line) = upsert_place_in_config(&before, name, x, y, zoom);
+    if let Err(e) = replace_keeping_mode(&path, &after) {
+        eprintln!("infynitae msg place: {e}");
+        return ExitCode::FAILURE;
+    }
+    println!("{line}");
+    ExitCode::SUCCESS
+}
+
+fn edge_running_in(runtime: &std::path::Path, proc_root: &std::path::Path) -> bool {
+    for file in ["infynitae-edge-rs.pid", "infynitae-edge.pid"] {
+        let Ok(text) = std::fs::read_to_string(runtime.join(file)) else {
+            continue;
+        };
+        let Ok(pid) = text.trim().parse::<u32>() else {
+            continue;
+        };
+        if pid <= 1 {
+            continue;
+        }
+        let Ok(comm) = std::fs::read_to_string(proc_root.join(pid.to_string()).join("comm")) else {
+            continue;
+        };
+        let comm = comm.trim();
+        if comm == "infynitae-edge" || comm.starts_with("infynitae-edge-") {
+            return true;
+        }
+    }
+    false
+}
+
+fn capture_chord_from_reply(reply: &Value) -> Result<&str, &str> {
+    if reply.get("ok") == Some(&Value::Bool(true))
+        && let Some(chord) = reply.get("chord").and_then(Value::as_str)
+    {
+        return Ok(chord);
+    }
+    Err(reply
+        .get("error")
+        .and_then(Value::as_str)
+        .unwrap_or("capture_failed"))
+}
+
+fn capture_chord() -> ExitCode {
+    let reply = request_at_timeout(
+        &shell_socket(),
+        &Value::obj([("id", 1u64.into()), ("cmd", "capture-chord".into())]),
+        CAPTURE_TIMEOUT,
+    );
+    match capture_chord_from_reply(&reply) {
+        Ok(chord) => {
+            println!("{chord}");
+            ExitCode::SUCCESS
+        }
+        Err(err) => {
+            eprintln!("{err}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 /// Prints a reply; success when it says `"ok": true`.
@@ -167,28 +371,31 @@ pub fn run(args: &[String]) -> ExitCode {
             _ => usage(),
         },
         Some("navigate") => {
-            let to = if args.get(1).map(String::as_str) == Some("element") {
-                match (num(2), num(3)) {
-                    (Some(i), Some(e)) => Value::obj([("element", element(i, e))]),
-                    _ => return usage(),
-                }
-            } else {
-                let f = |i: usize| args.get(i).and_then(|a| a.parse::<f64>().ok());
-                match (f(1), f(2)) {
-                    (Some(x), Some(y)) => {
-                        Value::obj([("canvas", Value::Arr(vec![x.into(), y.into()]))])
-                    }
-                    _ => return usage(),
-                }
+            let Some((to, zoom)) = parse_navigate_args(args) else {
+                return usage();
             };
             let output = first_output();
-            print_reply(&request(&Value::obj([
-                id,
-                ("cmd", "navigate".into()),
-                ("output", output.into()),
-                ("to", to),
-            ])))
+            let req = match zoom {
+                Some(z) => Value::obj([
+                    id,
+                    ("cmd", "navigate".into()),
+                    ("output", output.into()),
+                    ("to", to),
+                    ("zoom", z.into()),
+                ]),
+                None => Value::obj([
+                    id,
+                    ("cmd", "navigate".into()),
+                    ("output", output.into()),
+                    ("to", to),
+                ]),
+            };
+            print_reply(&request(&req))
         }
+        Some("place") => match (args.get(1), args.get(2)) {
+            (Some(name), None) => save_place(name),
+            _ => usage(),
+        },
         Some("restore" | "viewport_restore") => {
             let output = num(1).unwrap_or_else(first_output);
             print_reply(&request(&Value::obj([
@@ -237,6 +444,7 @@ pub fn run(args: &[String]) -> ExitCode {
             id,
             ("cmd", "keyboard_layout".into()),
         ]))),
+        Some("capture-chord" | "capture_chord") if args.len() == 1 => capture_chord(),
         _ => usage(),
     }
 }
@@ -280,35 +488,84 @@ pub fn overview_lines(snapshot: &Value) -> Vec<(String, (u64, u64))> {
         .collect()
 }
 
-/// The window switcher (Super+Shift+Tab without Quickshell): the windows in a menu (`MENU_PICKER`,
-/// else fuzzel, rofi or wofi); the chosen one is focused and the camera goes to it. No windows:
-/// the launcher.
+fn find_in_path(path_env: Option<&std::ffi::OsStr>, name: &str) -> Option<PathBuf> {
+    path_env.and_then(|path| {
+        std::env::split_paths(path)
+            .map(|d| d.join(name))
+            .find(|p| p.is_file())
+    })
+}
+
+fn find_edge_bin(
+    path_env: Option<&std::ffi::OsStr>,
+    home_env: Option<&std::ffi::OsStr>,
+) -> Option<PathBuf> {
+    find_in_path(path_env, "infynitae-edge").or_else(|| {
+        home_env
+            .map(PathBuf::from)
+            .map(|h| h.join(".local/bin/infynitae-edge"))
+            .filter(|p| p.is_file())
+    })
+}
+
+/// The window switcher (Super+Shift+Tab without Quickshell): asks a running edge for its windows
+/// panel, else falls back to a menu (`MENU_PICKER`, fuzzel, rofi or wofi) and focuses and
+/// navigates to the chosen window (or opens the launcher when there are no windows).
 fn overview() -> ExitCode {
-    use std::process::{Command, Stdio};
-    let snap = request(&Value::obj([
-        ("id", 1u64.into()),
-        ("cmd", "snapshot".into()),
-    ]));
-    let lines = overview_lines(&snap);
-    let have = |p: &str| {
-        std::env::var_os("PATH")
-            .is_some_and(|path| std::env::split_paths(&path).any(|d| d.join(p).is_file()))
-    };
-    if lines.is_empty() {
-        let launcher = std::env::var("LAUNCHER")
-            .ok()
-            .filter(|l| !l.is_empty() && l != "auto")
-            .unwrap_or_else(|| "fuzzel".into());
-        let _ = Command::new("sh").args(["-c", &launcher]).status();
-        return ExitCode::SUCCESS;
-    }
+    let path_env = std::env::var_os("PATH");
+    let home_env = std::env::var_os("HOME");
+    let edge_bin = find_edge_bin(path_env.as_deref(), home_env.as_deref());
     let picker = std::env::var("MENU_PICKER")
         .ok()
         .filter(|p| !p.trim().is_empty());
+    let launcher = std::env::var("LAUNCHER")
+        .ok()
+        .filter(|l| !l.is_empty() && l != "auto")
+        .unwrap_or_else(|| "fuzzel".into());
+    overview_with(
+        &runtime_dir(),
+        std::path::Path::new("/proc"),
+        &shell_socket(),
+        edge_bin.as_deref(),
+        path_env.as_deref(),
+        picker.as_deref(),
+        &launcher,
+    )
+}
+
+fn overview_with(
+    runtime: &std::path::Path,
+    proc_root: &std::path::Path,
+    socket: &std::path::Path,
+    edge_bin: Option<&std::path::Path>,
+    path_env: Option<&std::ffi::OsStr>,
+    picker: Option<&str>,
+    launcher: &str,
+) -> ExitCode {
+    use std::process::{Command, Stdio};
+    if edge_running_in(runtime, proc_root)
+        && let Some(bin) = edge_bin
+        && Command::new(bin)
+            .args(["panel", "windows"])
+            .status()
+            .is_ok_and(|s| s.success())
+    {
+        return ExitCode::SUCCESS;
+    }
+    let snap = request_at(
+        socket,
+        &Value::obj([("id", 1u64.into()), ("cmd", "snapshot".into())]),
+    );
+    let lines = overview_lines(&snap);
+    let have = |p: &str| find_in_path(path_env, p).is_some();
+    if lines.is_empty() {
+        let _ = Command::new("sh").args(["-c", launcher]).status();
+        return ExitCode::SUCCESS;
+    }
     let mut menu = match picker {
         Some(p) => {
             let mut c = Command::new("sh");
-            c.args(["-c", &p]);
+            c.args(["-c", p]);
             c
         }
         None if have("fuzzel") => {
@@ -342,19 +599,49 @@ fn overview() -> ExitCode {
     let Some(&(_, (inst, elem))) = lines.iter().find(|(l, _)| *l == chosen) else {
         return ExitCode::SUCCESS;
     };
-    request(&Value::obj([
-        ("id", 1u64.into()),
-        ("cmd", "focus".into()),
-        ("element", element(inst, elem)),
-    ]));
-    let output = first_output();
-    request(&Value::obj([
-        ("id", 2u64.into()),
-        ("cmd", "navigate".into()),
-        ("output", output.into()),
-        ("to", Value::obj([("element", element(inst, elem))])),
-    ]));
+    request_at(
+        socket,
+        &Value::obj([
+            ("id", 1u64.into()),
+            ("cmd", "focus".into()),
+            ("element", element(inst, elem)),
+        ]),
+    );
+    let output = first_output_in(&snap).unwrap_or(1);
+    request_at(
+        socket,
+        &Value::obj([
+            ("id", 2u64.into()),
+            ("cmd", "navigate".into()),
+            ("output", output.into()),
+            ("to", Value::obj([("element", element(inst, elem))])),
+        ]),
+    );
     ExitCode::SUCCESS
+}
+
+/// Writes `text` over `path` atomically, keeping the file's permissions (0600 for a new file: the config
+/// is private) and writing through a symlink to its target instead of replacing the link.
+fn replace_keeping_mode(path: &std::path::Path, text: &str) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let mode = std::fs::metadata(&target)
+        .map(|m| m.permissions().mode() & 0o7777)
+        .unwrap_or(0o600);
+    let name = target
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("config");
+    let tmp = target.with_file_name(format!(".{name}.tmp.{}", std::process::id()));
+    let res = (|| {
+        std::fs::write(&tmp, text)?;
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(mode))?;
+        std::fs::rename(&tmp, &target)
+    })();
+    if res.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    res
 }
 
 #[cfg(test)]
@@ -386,5 +673,245 @@ mod tests {
             &Value::obj([("cmd", "snapshot".into())]),
         );
         assert_eq!(reply.get("ok"), Some(&Value::Bool(false)));
+    }
+
+    #[test]
+    fn capture_chord_parses_replies_and_errors() {
+        let ok = Value::obj([
+            ("id", 1u64.into()),
+            ("ok", true.into()),
+            ("generation", 2u64.into()),
+            ("chord", "SUPER+SHIFT+Q".into()),
+        ]);
+        assert_eq!(capture_chord_from_reply(&ok), Ok("SUPER+SHIFT+Q"));
+
+        let cancelled = Value::obj([("ok", false.into()), ("error", "cancelled".into())]);
+        assert_eq!(capture_chord_from_reply(&cancelled), Err("cancelled"));
+
+        let timeout = Value::obj([("ok", false.into()), ("error", "timeout".into())]);
+        assert_eq!(capture_chord_from_reply(&timeout), Err("timeout"));
+
+        let missing_chord = Value::obj([("ok", true.into())]);
+        assert_eq!(
+            capture_chord_from_reply(&missing_chord),
+            Err("capture_failed")
+        );
+    }
+
+    #[test]
+    fn request_at_timeout_reads_capture_reply_over_unix_socket() {
+        let dir = std::env::temp_dir().join(format!("infynitae-msg-cap-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let sock_path = dir.join("shell.sock");
+        let _ = std::fs::remove_file(&sock_path);
+
+        let listener = std::os::unix::net::UnixListener::bind(&sock_path).unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut req_line = String::new();
+            BufReader::new(stream.try_clone().unwrap())
+                .read_line(&mut req_line)
+                .unwrap();
+            let req = json::parse(req_line.trim()).unwrap();
+            assert_eq!(
+                req.get("cmd").and_then(Value::as_str),
+                Some("capture-chord")
+            );
+            let reply = infynitae_ipc::protocol::capture_reply(
+                req.get("id").cloned().unwrap_or(Value::Null),
+                7,
+                "SUPER+RETURN",
+            );
+            writeln!(stream, "{reply}").unwrap();
+        });
+
+        let reply = request_at_timeout(
+            &sock_path,
+            &Value::obj([("id", 9u64.into()), ("cmd", "capture-chord".into())]),
+            Duration::from_secs(2),
+        );
+        server.join().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(capture_chord_from_reply(&reply), Ok("SUPER+RETURN"));
+        assert_eq!(reply.get("id").and_then(Value::as_u64), Some(9));
+    }
+
+    #[test]
+    fn navigate_args_accept_optional_zoom_and_reject_invalid_values() {
+        let s = |v: &[&str]| v.iter().map(|x| (*x).to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            parse_navigate_args(&s(&["navigate", "120", "-40.5", "1.5"])),
+            Some((
+                Value::obj([("canvas", Value::Arr(vec![120.0.into(), (-40.5).into()]))]),
+                Some(1.5),
+            ))
+        );
+        assert_eq!(
+            parse_navigate_args(&s(&["navigate", "0", "0"])),
+            Some((
+                Value::obj([("canvas", Value::Arr(vec![0.0.into(), 0.0.into()]))]),
+                None,
+            ))
+        );
+        assert_eq!(
+            parse_navigate_args(&s(&["navigate", "element", "4", "9"])),
+            Some((Value::obj([("element", element(4, 9))]), None))
+        );
+        for bad in [
+            &["navigate", "0", "0", "0"][..],
+            &["navigate", "0", "0", "-1.0"][..],
+            &["navigate", "0", "0", "nan"][..],
+            &["navigate", "inf", "0"][..],
+            &["navigate", "element", "4", "9", "1.5"][..],
+            &["navigate", "1", "2", "1.0", "extra"][..],
+        ] {
+            assert_eq!(parse_navigate_args(&s(bad)), None, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn place_extracts_camera_and_upserts_config_preserving_chord() {
+        let snap = json::parse(
+            r#"{"ok":true,"snapshot":{"outputs":[{"id":1,"camera":{"center":[1250.25,-0.00001],"zoom":1.333333}}]}}"#,
+        )
+        .unwrap();
+        let (x, y, zoom) = snapshot_camera(&snap).unwrap();
+
+        let initial = "# user config\nBORDER=2\nPLACE_WORK=\"0,0,1 SUPER+F1\"\n";
+        let (updated, line) = upsert_place_in_config(initial, "work", x, y, zoom);
+        assert_eq!(line, "PLACE_WORK=\"1250.25,0,1.3333 SUPER+F1\"");
+        assert_eq!(
+            updated,
+            "# user config\nBORDER=2\nPLACE_WORK=\"1250.25,0,1.3333 SUPER+F1\"\n"
+        );
+
+        let (appended, home_line) = upsert_place_in_config(&updated, "Home_2", -300.0, 40.0, 1.0);
+        assert_eq!(home_line, "PLACE_HOME_2=\"-300,40,1\"");
+        assert_eq!(
+            appended,
+            "# user config\nBORDER=2\nPLACE_WORK=\"1250.25,0,1.3333 SUPER+F1\"\nPLACE_HOME_2=\"-300,40,1\"\n"
+        );
+
+        assert!(valid_place_name("work_1"));
+        assert!(!valid_place_name(""));
+        assert!(!valid_place_name("my-place"));
+    }
+
+    #[test]
+    fn edge_running_checks_pid_files_and_proc_comm() {
+        let base = std::env::temp_dir().join(format!("infynitae-msg-edge-{}", std::process::id()));
+        let rt = base.join("rt");
+        let proc_root = base.join("proc");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&rt).unwrap();
+        std::fs::create_dir_all(proc_root.join("4242")).unwrap();
+
+        assert!(!edge_running_in(&rt, &proc_root));
+
+        std::fs::write(rt.join("infynitae-edge-rs.pid"), "4242\n").unwrap();
+        std::fs::write(proc_root.join("4242/comm"), "other-app\n").unwrap();
+        assert!(!edge_running_in(&rt, &proc_root));
+
+        std::fs::write(proc_root.join("4242/comm"), "infynitae-edge-rs\n").unwrap();
+        assert!(edge_running_in(&rt, &proc_root));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn overview_reaches_edge_panel_or_fallback_picker() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let base = std::env::temp_dir().join(format!("infynitae-msg-ov-{}", std::process::id()));
+        let rt = base.join("rt");
+        let proc_root = base.join("proc");
+        let sock_path = base.join("shell.sock");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&rt).unwrap();
+        std::fs::create_dir_all(proc_root.join("4242")).unwrap();
+        std::fs::write(rt.join("infynitae-edge-rs.pid"), "4242\n").unwrap();
+        std::fs::write(proc_root.join("4242/comm"), "infynitae-edge-\n").unwrap();
+
+        let write_script = |path: &std::path::Path, body: &str| {
+            std::fs::write(path, body).unwrap();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        };
+
+        // 1. Live edge + succeeding `panel windows` skips the fallback picker.
+        let edge_log = base.join("edge.log");
+        let picker_log = base.join("picker.log");
+        let edge_ok = base.join("edge-ok.sh");
+        write_script(
+            &edge_ok,
+            &format!(
+                "#!/bin/sh\necho \"$*\" >> '{}'\nexit 0\n",
+                edge_log.display()
+            ),
+        );
+        let picker_cmd = format!(
+            "tee '{}' >/dev/null; printf '[1] kitty — ~\\n'",
+            picker_log.display()
+        );
+        let rc = overview_with(
+            &rt,
+            &proc_root,
+            &sock_path,
+            Some(&edge_ok),
+            None,
+            Some(&picker_cmd),
+            "false",
+        );
+        assert_eq!(rc, ExitCode::SUCCESS);
+        assert_eq!(
+            std::fs::read_to_string(&edge_log).unwrap().trim(),
+            "panel windows"
+        );
+        assert!(!picker_log.exists());
+
+        // 2. Live edge whose `panel windows` fails falls through to the window-pick fallback.
+        let edge_fail = base.join("edge-fail.sh");
+        write_script(&edge_fail, "#!/bin/sh\nexit 1\n");
+
+        let listener = std::os::unix::net::UnixListener::bind(&sock_path).unwrap();
+        let server = std::thread::spawn(move || {
+            let mut cmds = Vec::new();
+            for reply in [
+                r#"{"ok":true,"snapshot":{"outputs":[{"id":2}],"elements":[{"id":[10,3],"app_id":"kitty","title":"~"}]}}"#,
+                r#"{"ok":true}"#,
+                r#"{"ok":true}"#,
+            ] {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut line = String::new();
+                BufReader::new(stream.try_clone().unwrap())
+                    .read_line(&mut line)
+                    .unwrap();
+                let req = json::parse(line.trim()).unwrap();
+                cmds.push(req.get("cmd").and_then(Value::as_str).unwrap().to_string());
+                writeln!(stream, "{reply}").unwrap();
+            }
+            cmds
+        });
+
+        let rc = overview_with(
+            &rt,
+            &proc_root,
+            &sock_path,
+            Some(&edge_fail),
+            None,
+            Some(&picker_cmd),
+            "false",
+        );
+        assert_eq!(rc, ExitCode::SUCCESS);
+        assert_eq!(
+            server.join().unwrap(),
+            vec!["snapshot", "focus", "navigate"]
+        );
+        assert_eq!(
+            std::fs::read_to_string(&picker_log).unwrap().trim(),
+            "[1] kitty — ~"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

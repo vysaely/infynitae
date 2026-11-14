@@ -74,7 +74,7 @@ check("Escape ends editing", wboxes()["state"] == "locked")
 chord("super+a"); wait(1.5)
 check("Super+A still opens the panel", os.path.exists(BOX) and "panel" in open(BOX).read())
 chord("esc"); wait(0.5)
-# no widgets: no surface (zero cost)
+# no widgets: no surface
 sh(f"sed -i '/^WIDGETS=/d' {CFG}"); restart_edge()
 check("no WIDGETS line: no widgets drawn", not wboxes()["modules"])
 print("SUMMARY", sum(1 for _, ok in RES if ok), "of", len(RES), flush=True)

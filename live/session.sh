@@ -181,7 +181,8 @@ fi
 NOTIFY_CMD=""
 edge_notifies() {
     infy_on "${ENABLE_EDGE:-true}" \
-        && [ "$(readlink "$HOME/.local/bin/infynitae-edge" 2>/dev/null)" = infynitae-edge-rs ]
+        && case "$(readlink "$HOME/.local/bin/infynitae-edge" 2>/dev/null)" in
+            infynitae-edge-rs | infynitae-edge-apps) true ;; *) false ;; esac
 }
 case "${NOTIFICATIONS:-auto}" in
     none|off|false|edge) ;;
@@ -212,7 +213,7 @@ Report: $CRASH_REPORT") &
     fi
 fi
 
-# 6c2. Settings the config has that Infynitae skipped (unknown, misspelled, unreadable): each keeps
+# 6c3. Settings the config has that Infynitae skipped (unknown, misspelled, unreadable): each keeps
 # its default, and a notification names them once the daemon is up
 if [ -x "$HOME/infynitae/live/config-check" ]; then
     rm -f "$HOME/.local/state/infynitae/config-problems"
@@ -261,8 +262,8 @@ case "${BATTERY_LIMIT:-off}" in
     *) sh "$HOME/infynitae/live/battery-limit" "$BATTERY_LIMIT" >/dev/null 2>&1 || true ;;
 esac
 
-# 6e2. The screen locks before the machine sleeps (the lid, the power button): it wakes locked (SLEEP_LOCK)
-if infy_on "${SLEEP_LOCK:-true}"; then
+# 6e4. The screen locks before the machine sleeps (the lid, the power button): it wakes locked (LOCK_WHEN_AWAY, fallback SLEEP_LOCK)
+if infy_on "${LOCK_WHEN_AWAY:-${SLEEP_LOCK:-true}}"; then
     SLEEP_LOCK_BIN=$(infy_bin infynitae-sleep-lock || true)
     if [ -n "$SLEEP_LOCK_BIN" ]; then
         "$SLEEP_LOCK_BIN" >/dev/null 2>&1 &
@@ -294,7 +295,7 @@ if systemctl is-active --quiet rustdesk.service 2>/dev/null; then
     fi
 fi
 
-# 7. User autostart script (blank canvas for user's future ricing)
+# 7. User autostart script
 if [ -x "$HOME/.config/infynitae/autostart.sh" ]; then
     "$HOME/.config/infynitae/autostart.sh" &
 fi

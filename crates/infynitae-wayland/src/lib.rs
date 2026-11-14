@@ -99,6 +99,75 @@ pub use idle_notify::IdleNotifyState;
 /// drew; they never re-render for it (a HiDPI screen still gets its own scale). Re-rendering
 /// made a terminal re-flow its text as you zoomed.
 pub const DEFAULT_MAX_APP_SCALE: f64 = 1.0;
+
+/// Compositor-side magnification/minification filter (`SCALING_FILTER`, Display Settings
+/// "Zoomed windows").
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum ZoomFilter {
+    /// Nearest-neighbor magnification when zoomed in; cached area-averaging when zoomed out.
+    /// Default when `SCALING_FILTER` is absent or unrecognized (`nearest` is an alias).
+    #[default]
+    Sharp,
+    /// Bilinear magnification when zoomed in; cached area-averaging when zoomed out (`linear`).
+    Smooth,
+    /// AMD FidelityFX Super Resolution 1 (EASU + mild RCAS) when zoomed in; cached area-averaging
+    /// when zoomed out.
+    Fsr,
+    /// AMD FidelityFX Super Resolution 1 (EASU + stronger RCAS) when zoomed in; cached
+    /// area-averaging when zoomed out.
+    FsrSharp,
+    /// Legacy option: skip zoomed-out averaging as well (no FSR).
+    Fast,
+}
+
+impl ZoomFilter {
+    /// Parse a `SCALING_FILTER` value (trimmed, case-insensitive). Unknown or empty values fall
+    /// back to [`ZoomFilter::Sharp`], preserving today's default behaviour.
+    pub fn parse(raw: &str) -> Self {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "smooth" | "linear" => Self::Smooth,
+            "fsr" => Self::Fsr,
+            "fsr-sharp" => Self::FsrSharp,
+            "fast" => Self::Fast,
+            _ => Self::Sharp,
+        }
+    }
+
+    /// Canonical config token written for each variant.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Sharp => "sharp",
+            Self::Smooth => "smooth",
+            Self::Fsr => "fsr",
+            Self::FsrSharp => "fsr-sharp",
+            Self::Fast => "fast",
+        }
+    }
+
+    /// Whether zoomed-in enlargement runs AMD FSR 1 (`EASU` + `RCAS`).
+    pub const fn is_fsr(self) -> bool {
+        matches!(self, Self::Fsr | Self::FsrSharp)
+    }
+
+    /// Normalized RCAS sharpening strength in `[0.0, 1.0]` (`0.5` mild, `1.0` stronger).
+    pub const fn rcas_sharpness(self) -> f32 {
+        match self {
+            Self::Fsr => 0.5,
+            Self::FsrSharp => 1.0,
+            Self::Sharp | Self::Smooth | Self::Fast => 0.0,
+        }
+    }
+
+    /// Whether zoomed-out windows use area-averaging downsampling.
+    pub const fn averages_zoom_out(self) -> bool {
+        !matches!(self, Self::Fast)
+    }
+
+    /// Whether Smithay's base GLES texture filter for magnification is `Nearest`.
+    pub const fn uses_nearest_upscale(self) -> bool {
+        !matches!(self, Self::Smooth)
+    }
+}
 /// What a backend does to each client buffer as it arrives (`set_dmabuf_mark`).
 pub type DmabufMark = Box<dyn Fn(&smithay::backend::allocator::dmabuf::Dmabuf) + Send>;
 
@@ -440,6 +509,7 @@ pub struct WaylandState {
     pub border_shapes: std::collections::HashMap<infynitae_core::stage::ElementId, [f32; 4]>,
     pub rendered_elements: Vec<infynitae_core::stage::ElementId>,
     pub input_config: InputDeviceConfig,
+    pub scaling_filter: ZoomFilter,
     pub direct_scanout: Option<bool>,
     /// Client buffers may also go on overlay planes (`OVERLAY_PLANES`, off by default: amdgpu
     /// refused page flips for Electron's viewport-scaled subsurfaces there).
@@ -800,7 +870,7 @@ impl WaylandState {
             latency_stats: false,
             gpu_relief: true,
             border_active: smithay::backend::renderer::Color32F::new(0.48, 0.64, 0.97, 1.0),
-            border_inactive: smithay::backend::renderer::Color32F::new(0.20, 0.23, 0.33, 0.8),
+            border_inactive: smithay::backend::renderer::Color32F::new(0.20, 0.23, 0.33, 1.0),
             window_corners: 8.0,
             corners_drawn: false,
             border_shapes: std::collections::HashMap::new(),
@@ -809,6 +879,7 @@ impl WaylandState {
             border_commits: std::collections::HashMap::new(),
             rendered_elements: Vec::new(),
             input_config: InputDeviceConfig::default(),
+            scaling_filter: ZoomFilter::default(),
             direct_scanout: Some(true),
             overlay_planes: false,
             hardware_cursor: true,
@@ -1033,6 +1104,18 @@ impl WaylandState {
         result
     }
 
+    /// Advances any active camera zoom glide on `output` to `now` and applies Core effects.
+    pub fn zoom_tick(
+        &mut self,
+        output: infynitae_core::output::OutputId,
+        now: std::time::Duration,
+    ) {
+        let fx = self.core.zoom_tick(output, now);
+        if !fx.is_empty() {
+            self.apply(&fx);
+        }
+    }
+
     /// A vblank of `output`: Core's frame clock decides which observed elements complete (into
     /// reused storage), and their callbacks complete and their feedback is presented.
     pub fn frame_tick(
@@ -1142,10 +1225,11 @@ impl WaylandState {
                 let (mut tearing, mut tearing_always) = (true, true);
                 let mut fit_is_fullscreen = true;
                 let mut latency_mode = crate::frame_schedule::LatencyMode::Direct;
+                let mut scaling_filter = ZoomFilter::default();
+                let mut zoom_feel = infynitae_core::navigation::ZoomFeel::Smooth;
                 // without a DIRECT_SCANOUT line: the environment's, as at start (main.rs), else on
-                let mut direct_scanout = std::env::var("DIRECT_SCANOUT").map_or(true, |v| {
-                    !matches!(v.to_lowercase().as_str(), "0" | "false" | "off" | "no")
-                });
+                let mut direct_scanout = std::env::var("DIRECT_SCANOUT")
+                    .map_or(true, |v| parse_bool(&v).unwrap_or(true));
                 let mut hardware_cursor = true;
                 let mut overlay_planes = false;
                 let mut wine_transparency = true;
@@ -1155,6 +1239,12 @@ impl WaylandState {
                 // CORNERS, else 8
                 let mut window_corners_given = false;
                 let mut corners: Option<f32> = None;
+                // the edge from apps has a Settings panel of its own: Super+I unless a
+                // PANEL_SETTINGS line says otherwise
+                let mut settings_panel_line = false;
+                let mut edge_from_apps = false;
+                let mut accent_color = None;
+                let mut border_active_color = None;
                 for line in content.lines() {
                     if let Some((key, val)) = config_line(line) {
                         let (key, val) = (key.as_str(), val.as_str());
@@ -1169,6 +1259,7 @@ impl WaylandState {
                         // the edge's panels: a key moves a built-in panel's key or opens the
                         // user's own panel (the edge reads the rest of the line itself)
                         if let Some(name) = key.strip_prefix("PANEL_") {
+                            settings_panel_line |= name.eq_ignore_ascii_case("settings");
                             match panel_key(name, val) {
                                 Some(PanelKey::Bind(action, chord)) => {
                                     bind_lines.push((action.to_string(), chord))
@@ -1179,6 +1270,15 @@ impl WaylandState {
                                 None => {}
                             }
                             continue;
+                        }
+                        if let Some(name) = key.strip_prefix("PLACE_") {
+                            if let Some((line, command)) = place_key(name, val) {
+                                exec_lines.push((line, command));
+                            }
+                            continue;
+                        }
+                        if key == "EDGE_IMPL" {
+                            edge_from_apps = val.trim().eq_ignore_ascii_case("apps");
                         }
                         match key {
                             "CURSOR_THEME" => {
@@ -1203,38 +1303,31 @@ impl WaylandState {
                                     .core
                                     .set_pan_mode(infynitae_core::navigation::PanMode::Grab),
                             },
+                            "ZOOM_FEEL" => {
+                                zoom_feel = infynitae_core::navigation::ZoomFeel::parse(val);
+                            }
                             "SCREENCOPY_CURSOR" => {
-                                let hide = matches!(
-                                    val.to_lowercase().as_str(),
-                                    "0" | "false" | "off" | "no"
-                                );
+                                let hide = !parse_bool(val).unwrap_or(true);
                                 self.screencopy.set_hide_cursor(hide);
                             }
                             "MAX_APP_SCALE" => {
                                 max_app_scale = val.parse::<f64>().ok();
                             }
+                            "SCALING_FILTER" => {
+                                scaling_filter = ZoomFilter::parse(val);
+                            }
                             "GPU_RELIEF" => {
-                                gpu_relief = !matches!(
-                                    val.to_lowercase().as_str(),
-                                    "0" | "false" | "off" | "no"
-                                );
+                                gpu_relief = parse_bool(val).unwrap_or(true);
                             }
                             "BACKGROUND_PRIORITY" => {
-                                background_priority = !matches!(
-                                    val.to_lowercase().as_str(),
-                                    "0" | "false" | "off" | "no"
-                                );
+                                background_priority = parse_bool(val).unwrap_or(true);
                             }
                             "TEARING" => {
-                                let v = val.to_lowercase();
-                                tearing = !matches!(v.as_str(), "0" | "false" | "off" | "no");
-                                tearing_always = v == "always";
+                                tearing = parse_bool(val).unwrap_or(true);
+                                tearing_always = val.trim().eq_ignore_ascii_case("always");
                             }
                             "FIT_IS_FULLSCREEN" => {
-                                fit_is_fullscreen = !matches!(
-                                    val.to_lowercase().as_str(),
-                                    "0" | "false" | "off" | "no"
-                                );
+                                fit_is_fullscreen = parse_bool(val).unwrap_or(true);
                             }
                             "FRAME_GUARD" => {
                                 frame_guard = val
@@ -1242,51 +1335,38 @@ impl WaylandState {
                                     .map_or(DEFAULT_FRAME_GUARD, |p| p.min(90));
                             }
                             "GAME_MODE" => {
-                                game_mode = !matches!(
-                                    val.to_lowercase().as_str(),
-                                    "0" | "false" | "off" | "no"
-                                );
+                                game_mode = parse_bool(val).unwrap_or(true);
                             }
                             "CAPTURE_INDICATOR" => {
                                 self.capture_indicator.mode =
                                     crate::capture_indicator::CaptureMode::parse(val);
                             }
-                            "FOCUS_FOLLOWS_MOUSE" => match val.to_lowercase().as_str() {
-                                "strict" => {
-                                    self.core.set_focus_follows_mouse(true);
-                                    self.core.set_focus_follows_mouse_strict(true);
-                                }
-                                "0" | "false" | "off" | "no" | "click" => {
-                                    self.core.set_focus_follows_mouse(false);
-                                    self.core.set_focus_follows_mouse_strict(false);
-                                }
-                                _ => {
-                                    self.core.set_focus_follows_mouse(true);
-                                    self.core.set_focus_follows_mouse_strict(false);
-                                }
-                            },
+                            "FOCUS_FOLLOWS_MOUSE" => {
+                                let v = val.trim();
+                                let (ffm, strict) = if v.eq_ignore_ascii_case("strict") {
+                                    (true, true)
+                                } else if v.eq_ignore_ascii_case("click")
+                                    || parse_bool(v) == Some(false)
+                                {
+                                    (false, false)
+                                } else {
+                                    (true, false)
+                                };
+                                self.core.set_focus_follows_mouse(ffm);
+                                self.core.set_focus_follows_mouse_strict(strict);
+                            }
                             "FOCUS_CYCLE_NAVIGATE" => {
-                                let enabled = !matches!(
-                                    val.to_lowercase().as_str(),
-                                    "0" | "false" | "off" | "no"
-                                );
-                                self.core.set_focus_cycle_navigate(enabled);
+                                self.core
+                                    .set_focus_cycle_navigate(parse_bool(val).unwrap_or(true));
                             }
                             "FOCUS_ON_OPEN" => {
-                                let enabled = !matches!(
-                                    val.to_lowercase().as_str(),
-                                    "0" | "false" | "off" | "no"
-                                );
-                                self.core.set_focus_on_open(enabled);
+                                self.core.set_focus_on_open(parse_bool(val).unwrap_or(true));
                                 self.focus_open_user_only = val.eq_ignore_ascii_case("user");
                                 self.focus_open_priority = val.eq_ignore_ascii_case("priority");
                             }
                             "TELEPORT_ON_OPEN" => {
-                                let enabled = !matches!(
-                                    val.to_lowercase().as_str(),
-                                    "0" | "false" | "off" | "no"
-                                );
-                                self.core.set_teleport_on_open(enabled);
+                                self.core
+                                    .set_teleport_on_open(parse_bool(val).unwrap_or(true));
                                 self.teleport_open_user_only = val.eq_ignore_ascii_case("user");
                             }
                             "SUPER_ENTER_ACTION" => {
@@ -1309,10 +1389,8 @@ impl WaylandState {
                                 }
                             }
                             "FULLSCREEN_PAN" => {
-                                let enabled = !matches!(
-                                    val.to_lowercase().as_str(),
-                                    "0" | "false" | "off" | "no" | "exclusive"
-                                );
+                                let enabled = !val.trim().eq_ignore_ascii_case("exclusive")
+                                    && parse_bool(val).unwrap_or(true);
                                 self.core.set_fullscreen_pan(enabled);
                             }
                             "KEEP_ON_TOP" => {
@@ -1359,32 +1437,25 @@ impl WaylandState {
                                 latency_mode = crate::frame_schedule::LatencyMode::parse(val);
                             }
                             "LATENCY_STATS" => {
-                                self.latency_stats = matches!(
-                                    val.to_lowercase().as_str(),
-                                    "1" | "true" | "on" | "yes"
-                                );
+                                self.latency_stats = parse_bool(val).unwrap_or(false);
                             }
                             "SQUARE_CORNERS" => {
-                                self.square_corners = !matches!(
-                                    val.to_lowercase().as_str(),
-                                    "0" | "false" | "off" | "no"
-                                );
+                                self.square_corners = parse_bool(val).unwrap_or(true);
                             }
                             "CLIP_TO_GEOMETRY" => {
-                                self.clip_to_geometry = !matches!(
-                                    val.to_lowercase().as_str(),
-                                    "0" | "false" | "off" | "no"
-                                );
+                                self.clip_to_geometry = parse_bool(val).unwrap_or(true);
                             }
                             "BORDER_IGNORE_CSD" => {
-                                self.border_ignore_csd = !matches!(
-                                    val.to_lowercase().as_str(),
-                                    "0" | "false" | "off" | "no"
-                                );
+                                self.border_ignore_csd = parse_bool(val).unwrap_or(true);
+                            }
+                            "ACCENT" => {
+                                if let Some(c) = crate::parse_color_hex(val) {
+                                    accent_color = Some(c);
+                                }
                             }
                             "BORDER_ACTIVE" => {
                                 if let Some(c) = crate::parse_color_hex(val) {
-                                    self.border_active = c;
+                                    border_active_color = Some(c);
                                 }
                             }
                             "BORDER_INACTIVE" => {
@@ -1401,55 +1472,41 @@ impl WaylandState {
                                 }
                             }
                             "TOUCHPAD_TAP" => {
-                                self.input_config.touchpad_tap = Some(matches!(
-                                    val.to_lowercase().as_str(),
-                                    "1" | "true" | "yes" | "on"
-                                ));
+                                self.input_config.touchpad_tap =
+                                    Some(parse_bool(val).unwrap_or(false));
                             }
                             "TOUCHPAD_NATURAL_SCROLL" => {
-                                self.input_config.touchpad_natural_scroll = Some(matches!(
-                                    val.to_lowercase().as_str(),
-                                    "1" | "true" | "yes" | "on"
-                                ));
+                                self.input_config.touchpad_natural_scroll =
+                                    Some(parse_bool(val).unwrap_or(false));
                             }
                             "XWAYLAND_KEYS" => x11_keys_mode = x11_keys::Mode::parse(val),
                             "ZOOM_SHARPEN" => {
                                 zoom_sharpen_after = !val.eq_ignore_ascii_case("live")
                             }
                             "DIRECT_SCANOUT" => {
-                                direct_scanout = !matches!(
-                                    val.to_lowercase().as_str(),
-                                    "0" | "false" | "off" | "no"
-                                );
+                                direct_scanout = parse_bool(val).unwrap_or(true);
                             }
                             "FOCUS_ON_ACTIVATE" => {
                                 use infynitae_core::input::focus::ActivationPolicy;
-                                let v = val.to_lowercase();
-                                self.activate_user_only = v == "user";
-                                self.core.set_activation_policy(match v.as_str() {
-                                    "never" | "0" | "false" | "off" => {
-                                        ActivationPolicy::AttentionOnly
-                                    }
-                                    _ => ActivationPolicy::Strict,
-                                });
+                                let v = val.trim();
+                                self.activate_user_only = v.eq_ignore_ascii_case("user");
+                                let policy = if v.eq_ignore_ascii_case("never")
+                                    || parse_bool(v) == Some(false)
+                                {
+                                    ActivationPolicy::AttentionOnly
+                                } else {
+                                    ActivationPolicy::Strict
+                                };
+                                self.core.set_activation_policy(policy);
                             }
                             "SUPER_FREES_CURSOR" => {
-                                free_cursor_on_super = !matches!(
-                                    val.to_lowercase().as_str(),
-                                    "0" | "false" | "off" | "no"
-                                );
+                                free_cursor_on_super = parse_bool(val).unwrap_or(true);
                             }
                             "HARDWARE_CURSOR" => {
-                                hardware_cursor = !matches!(
-                                    val.to_lowercase().as_str(),
-                                    "0" | "false" | "off" | "no"
-                                );
+                                hardware_cursor = parse_bool(val).unwrap_or(true);
                             }
                             "OVERLAY_PLANES" => {
-                                overlay_planes = matches!(
-                                    val.to_lowercase().as_str(),
-                                    "1" | "true" | "yes" | "on"
-                                );
+                                overlay_planes = parse_bool(val).unwrap_or(false);
                             }
                             "WALLPAPER" => {
                                 let trimmed = val.trim();
@@ -1492,10 +1549,7 @@ impl WaylandState {
                                 self.privacy_titles = parse_titles(val);
                             }
                             "WINE_TRANSPARENCY" => {
-                                wine_transparency = !matches!(
-                                    val.to_lowercase().as_str(),
-                                    "0" | "false" | "off" | "no"
-                                );
+                                wine_transparency = parse_bool(val).unwrap_or(true);
                             }
                             "FORCE_TRANSPARENT_APPS" => {
                                 self.force_transparent_apps = parse_titles(val);
@@ -1504,12 +1558,16 @@ impl WaylandState {
                         }
                     }
                 }
+                if let Some(line) = default_settings_panel(edge_from_apps, settings_panel_line) {
+                    exec_lines.push(line);
+                }
                 let (bindings, commands, problems) = user_key_bindings(&bind_lines, &exec_lines);
                 for p in problems {
                     log_line!("[infynitae] Config key binding ignored: {p}");
                 }
                 self.core.set_key_bindings(bindings);
                 self.core.set_free_cursor_on_super(free_cursor_on_super);
+                self.core.set_zoom_feel(zoom_feel);
                 self.exec_commands = commands;
                 self.set_max_app_scale(max_app_scale);
                 self.x11_keys.mode = x11_keys_mode;
@@ -1521,6 +1579,7 @@ impl WaylandState {
                 self.gpu_relief = gpu_relief;
                 self.fitted.enabled = fit_is_fullscreen;
                 self.latency_mode = latency_mode;
+                self.scaling_filter = scaling_filter;
                 self.direct_scanout = Some(direct_scanout);
                 self.hardware_cursor = hardware_cursor;
                 self.overlay_planes = overlay_planes;
@@ -1530,6 +1589,9 @@ impl WaylandState {
                     window_corners = c.clamp(0.0, 24.0);
                 }
                 self.window_corners = window_corners;
+                if let Some(c) = accent_color.or(border_active_color) {
+                    self.border_active = c;
+                }
                 if !background_priority {
                     self.background_restore_all();
                 }
@@ -1563,11 +1625,9 @@ impl WaylandState {
                                 self.live_dir.join("infynitae-reload")
                             }
                         };
-                        let _ = std::process::Command::new(reload)
-                            .arg("wallpaper")
-                            .stdout(std::process::Stdio::null())
-                            .spawn();
-                        self.spawned_children = true;
+                        let mut cmd = std::process::Command::new(reload);
+                        cmd.arg("wallpaper").stdout(std::process::Stdio::null());
+                        let _ = self.spawn_command("infynitae-reload wallpaper", &mut cmd, false);
                     }
                 }
             }
@@ -1676,7 +1736,7 @@ impl WaylandState {
             if let Some(app) = &app {
                 self.privacy_apps.retain(|p| !app.contains(p.as_str()));
             }
-            log_line!("[infynitae] Privacy capture exemption DISABLED for window {focused:?}");
+            log_line!("[infynitae] Privacy capture exemption disabled for window {focused:?}");
             self.spawn_action("notify-privacy-off");
             self.remember_for_app(focused, "PRIVACY_APPS", false);
         } else {
@@ -1684,9 +1744,7 @@ impl WaylandState {
             if let Some(app) = &app {
                 self.privacy_apps.push(app.clone());
             }
-            log_line!(
-                "[infynitae] Privacy capture exemption ENABLED for window {focused:?} (hidden from screenshots and screenshare)"
-            );
+            log_line!("[infynitae] Privacy capture exemption enabled for window {focused:?}");
             self.spawn_action("notify-privacy-on");
             self.remember_for_app(focused, "PRIVACY_APPS", true);
         }
@@ -1718,10 +1776,10 @@ impl WaylandState {
     pub fn toggle_idle_inhibit(&mut self) {
         self.manual_idle_inhibit = !self.manual_idle_inhibit;
         if self.manual_idle_inhibit {
-            log_line!("[infynitae] Idle sleep & auto-lock INHIBITED (Stay Awake mode)");
+            log_line!("[infynitae] Idle sleep and auto-lock inhibited");
             self.spawn_action("notify-idle-inhibit-on");
         } else {
-            log_line!("[infynitae] Idle sleep & auto-lock RESTORED to normal timeout");
+            log_line!("[infynitae] Idle sleep and auto-lock restored");
             self.spawn_action("notify-idle-inhibit-off");
         }
     }
@@ -2018,6 +2076,26 @@ pub fn config_line(line: &str) -> Option<(String, String)> {
     Some((key.trim().to_string(), out.trim().to_string()))
 }
 
+/// Reads a yes/no config value (`1`/`true`/`yes`/`on` vs `0`/`false`/`off`/`no`).
+pub fn parse_bool(val: &str) -> Option<bool> {
+    let v = val.trim();
+    if v.eq_ignore_ascii_case("1")
+        || v.eq_ignore_ascii_case("true")
+        || v.eq_ignore_ascii_case("yes")
+        || v.eq_ignore_ascii_case("on")
+    {
+        Some(true)
+    } else if v.eq_ignore_ascii_case("0")
+        || v.eq_ignore_ascii_case("false")
+        || v.eq_ignore_ascii_case("off")
+        || v.eq_ignore_ascii_case("no")
+    {
+        Some(false)
+    } else {
+        None
+    }
+}
+
 /// A list of window titles (or names that may be titles) from config: comma separated only, since a title can
 /// hold spaces ("Private Browsing"); lowercased and trimmed.
 pub fn parse_titles(val: &str) -> Vec<String> {
@@ -2071,6 +2149,55 @@ pub fn panel_key(name: &str, value: &str) -> Option<PanelKey> {
             format!("{chord}:\"$HOME/.local/bin/infynitae-edge\" panel {lower}"),
         )),
     }
+}
+
+/// One `PLACE_<NAME>="x,y,zoom [CHORD]"` line from the config: its optional chord bound to jump
+/// to that place via `infynitae msg navigate`.
+pub fn place_key(name: &str, value: &str) -> Option<(String, String)> {
+    let upper = name.to_ascii_uppercase();
+    if upper.is_empty() || !upper.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return None;
+    }
+    let mut tokens = value.split_whitespace();
+    let coords = tokens.next()?;
+    let mut parts = coords.split(',');
+    let parse_f = |s: &str| s.parse::<f64>().ok().filter(|v| v.is_finite());
+    let x = parse_f(parts.next()?)?;
+    let y = parse_f(parts.next()?)?;
+    let zoom = parse_f(parts.next()?).filter(|z| *z > 0.0)?;
+    if parts.next().is_some() {
+        return None;
+    }
+    let chord: Vec<&str> = tokens.collect();
+    if chord.is_empty() {
+        return None;
+    }
+    let chord = chord.join(" ");
+    if chord.eq_ignore_ascii_case("none") {
+        return None;
+    }
+    let norm = |v: f64| if v == 0.0 { 0.0 } else { v };
+    Some((
+        format!("PLACE_{upper}"),
+        format!(
+            "{chord}:\"$HOME/.local/bin/infynitae\" msg navigate {} {} {}",
+            norm(x),
+            norm(y),
+            norm(zoom),
+        ),
+    ))
+}
+
+/// The Settings panel of the edge from apps (EDGE_IMPL="apps") is built into that edge, so no
+/// PANEL_SETTINGS line names its key: Super+I opens it unless such a line exists (then that line
+/// decides, as for any panel). Added after the user's lines, so a key they bound wins. Pure.
+pub fn default_settings_panel(edge_from_apps: bool, line_given: bool) -> Option<(String, String)> {
+    (edge_from_apps && !line_given).then(|| {
+        (
+            "PANEL_SETTINGS".to_string(),
+            "SUPER+I:\"$HOME/.local/bin/infynitae-edge\" panel settings".to_string(),
+        )
+    })
 }
 
 /// The user's key bindings from config lines: `BIND_<ACTION>="CHORD[,CHORD]"` gives an action
@@ -2246,6 +2373,20 @@ mod key_binding_config_tests {
     /// BIND_ moves actions (several chords allowed) or frees them with "none"; EXEC_ adds
     /// commands in order; lines that cannot be understood are reported, not applied.
     #[test]
+    fn the_apps_edge_settings_panel_gets_super_i_unless_a_line_names_its_key() {
+        use super::default_settings_panel;
+        assert_eq!(
+            default_settings_panel(true, false),
+            Some((
+                "PANEL_SETTINGS".to_string(),
+                "SUPER+I:\"$HOME/.local/bin/infynitae-edge\" panel settings".to_string()
+            ))
+        );
+        assert_eq!(default_settings_panel(true, true), None);
+        assert_eq!(default_settings_panel(false, false), None);
+    }
+
+    #[test]
     fn panel_lines_give_keys_to_panels() {
         use super::{PanelKey, panel_key};
         assert_eq!(
@@ -2270,6 +2411,42 @@ mod key_binding_config_tests {
         );
         assert_eq!(panel_key("MINE", "top volume"), None);
         assert_eq!(panel_key("BAD;NAME", "SUPER+X volume"), None);
+    }
+
+    #[test]
+    fn place_lines_bind_chords_and_report_conflicts() {
+        use super::place_key;
+        let line = place_key("work", "-200,150,1.25 SUPER+F1").unwrap();
+        assert_eq!(
+            line,
+            (
+                "PLACE_WORK".into(),
+                "SUPER+F1:\"$HOME/.local/bin/infynitae\" msg navigate -200 150 1.25".into(),
+            )
+        );
+        assert_eq!(place_key("NOTES", "800,-40,1"), None);
+        assert_eq!(place_key("NOTES", "800,-40,1 none"), None);
+        assert_eq!(place_key("BAD", "nan,0,1 SUPER+F2"), None);
+        assert_eq!(place_key("ZERO", "0,0,0 SUPER+F2"), None);
+        assert_eq!(place_key("", "0,0,1 SUPER+F2"), None);
+        assert_eq!(place_key("BAD;NAME", "0,0,1 SUPER+F2"), None);
+
+        let (b, cmds, problems) = user_key_bindings(&[], &[line]);
+        assert_eq!(
+            b.chords,
+            vec![(parse_chord("SUPER+F1").unwrap(), Some(KeyAction::Exec(0)))]
+        );
+        assert_eq!(
+            cmds,
+            vec!["\"$HOME/.local/bin/infynitae\" msg navigate -200 150 1.25".to_string()]
+        );
+        assert!(problems.is_empty(), "{problems:?}");
+
+        let taken = place_key("OTHER", "10,20,1 SUPER+Q").unwrap();
+        let (_, cmds, problems) = user_key_bindings(&kv(&[("CLOSE", "SUPER+Q")]), &[taken]);
+        assert!(cmds.is_empty());
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(problems[0].contains("PLACE_OTHER") && problems[0].contains("BIND_CLOSE"));
     }
 
     #[test]
@@ -2396,6 +2573,145 @@ mod key_binding_config_tests {
             parse_titles("Private Browsing, KeePassXC"),
             vec!["private browsing".to_string(), "keepassxc".to_string()]
         );
+    }
+
+    #[test]
+    fn parse_bool_handles_yes_no_spellings_and_unknowns() {
+        use super::parse_bool;
+        for token in ["1", "true", "TRUE", "True", "yes", "Yes", "on", " ON "] {
+            assert_eq!(parse_bool(token), Some(true), "{token:?}");
+        }
+        for token in ["0", "false", "False", "FALSE", "off", "Off", "no", " NO "] {
+            assert_eq!(parse_bool(token), Some(false), "{token:?}");
+        }
+        for token in [
+            "", "   ", "always", "user", "never", "priority", "click", "2",
+        ] {
+            assert_eq!(parse_bool(token), None, "{token:?}");
+        }
+    }
+
+    #[test]
+    fn default_border_inactive_is_opaque() {
+        use smithay::backend::renderer::Color32F;
+        use smithay::reexports::wayland_server::Display;
+        let (core, _, _, _) =
+            infynitae_core::Core::new(infynitae_core::navigation::PersistedCameras::default());
+        let display: Display<super::WaylandState> = Display::new().unwrap();
+        let state = super::WaylandState::new(&display.handle(), core);
+        assert_eq!(state.border_inactive, Color32F::new(0.20, 0.23, 0.33, 1.0));
+        assert_eq!(state.border_inactive.a(), state.border_active.a());
+        assert_eq!(state.window_corners, 8.0);
+        assert_eq!(state.scaling_filter, super::ZoomFilter::Sharp);
+    }
+
+    #[test]
+    fn zoom_filter_parse_and_properties() {
+        use super::ZoomFilter;
+        assert_eq!(ZoomFilter::default(), ZoomFilter::Sharp);
+        for (input, want) in [
+            ("sharp", ZoomFilter::Sharp),
+            ("nearest", ZoomFilter::Sharp),
+            (" NEAREST ", ZoomFilter::Sharp),
+            ("smooth", ZoomFilter::Smooth),
+            ("linear", ZoomFilter::Smooth),
+            ("Linear", ZoomFilter::Smooth),
+            ("fsr", ZoomFilter::Fsr),
+            (" FSR ", ZoomFilter::Fsr),
+            ("fsr-sharp", ZoomFilter::FsrSharp),
+            ("FSR-SHARP", ZoomFilter::FsrSharp),
+            ("fast", ZoomFilter::Fast),
+            ("", ZoomFilter::Sharp),
+            ("unknown-mode", ZoomFilter::Sharp),
+        ] {
+            assert_eq!(ZoomFilter::parse(input), want, "{input:?}");
+        }
+        assert_eq!(ZoomFilter::Sharp.as_str(), "sharp");
+        assert_eq!(ZoomFilter::Smooth.as_str(), "smooth");
+        assert_eq!(ZoomFilter::Fsr.as_str(), "fsr");
+        assert_eq!(ZoomFilter::FsrSharp.as_str(), "fsr-sharp");
+        assert_eq!(ZoomFilter::Fast.as_str(), "fast");
+
+        assert!(!ZoomFilter::Sharp.is_fsr());
+        assert!(!ZoomFilter::Smooth.is_fsr());
+        assert!(ZoomFilter::Fsr.is_fsr());
+        assert!(ZoomFilter::FsrSharp.is_fsr());
+        assert_eq!(ZoomFilter::Fsr.rcas_sharpness(), 0.5);
+        assert_eq!(ZoomFilter::FsrSharp.rcas_sharpness(), 1.0);
+        assert!(ZoomFilter::Fsr.averages_zoom_out());
+        assert!(!ZoomFilter::Fast.averages_zoom_out());
+        assert!(!ZoomFilter::Smooth.uses_nearest_upscale());
+        assert!(ZoomFilter::Sharp.uses_nearest_upscale());
+        assert!(ZoomFilter::Fsr.uses_nearest_upscale());
+    }
+
+    #[test]
+    fn reload_config_parses_and_resets_scaling_filter() {
+        use smithay::reexports::wayland_server::Display;
+        let temp = super::cursor::TestTempDir::new("wl_scaling_filter_reload");
+        let cfg_dir = temp.path().join(".config/infynitae");
+        std::fs::create_dir_all(&cfg_dir).unwrap();
+        let cfg = cfg_dir.join("config");
+
+        let (core, _, _, _) =
+            infynitae_core::Core::new(infynitae_core::navigation::PersistedCameras::default());
+        let display: Display<super::WaylandState> = Display::new().unwrap();
+        let mut state = super::WaylandState::new(&display.handle(), core);
+        state.set_config_home(temp.path().to_path_buf());
+
+        std::fs::write(&cfg, "SCALING_FILTER=\"fsr\"\n").unwrap();
+        state.reload_config();
+        assert_eq!(state.scaling_filter, super::ZoomFilter::Fsr);
+
+        std::fs::write(&cfg, "SCALING_FILTER=\"fsr-sharp\"\n").unwrap();
+        state.reload_config();
+        assert_eq!(state.scaling_filter, super::ZoomFilter::FsrSharp);
+
+        std::fs::write(&cfg, "SCALING_FILTER=\"linear\"\n").unwrap();
+        state.reload_config();
+        assert_eq!(state.scaling_filter, super::ZoomFilter::Smooth);
+
+        // Removing SCALING_FILTER falls back to Sharp (today's default behaviour).
+        std::fs::write(&cfg, "BORDER_WIDTH=\"1\"\n").unwrap();
+        state.reload_config();
+        assert_eq!(state.scaling_filter, super::ZoomFilter::Sharp);
+    }
+
+    #[test]
+    fn reload_config_prefers_accent_over_border_active_and_falls_back() {
+        use smithay::reexports::wayland_server::Display;
+        let temp = super::cursor::TestTempDir::new("wl_accent_reload");
+        let cfg_dir = temp.path().join(".config/infynitae");
+        std::fs::create_dir_all(&cfg_dir).unwrap();
+        let cfg = cfg_dir.join("config");
+
+        let (core, _, _, _) =
+            infynitae_core::Core::new(infynitae_core::navigation::PersistedCameras::default());
+        let display: Display<super::WaylandState> = Display::new().unwrap();
+        let mut state = super::WaylandState::new(&display.handle(), core);
+        state.set_config_home(temp.path().to_path_buf());
+
+        let old_col = super::parse_color_hex("#cc70a9").unwrap();
+        let new_col = super::parse_color_hex("#1188ee").unwrap();
+
+        // Old key alone behaves identically.
+        std::fs::write(&cfg, "BORDER_ACTIVE=\"#cc70a9\"\n").unwrap();
+        state.reload_config();
+        assert_eq!(state.border_active, old_col);
+
+        // Both present (ACCENT first or BORDER_ACTIVE first): ACCENT wins.
+        std::fs::write(&cfg, "ACCENT=\"#1188ee\"\nBORDER_ACTIVE=\"#cc70a9\"\n").unwrap();
+        state.reload_config();
+        assert_eq!(state.border_active, new_col);
+
+        std::fs::write(&cfg, "BORDER_ACTIVE=\"#cc70a9\"\nACCENT=\"#1188ee\"\n").unwrap();
+        state.reload_config();
+        assert_eq!(state.border_active, new_col);
+
+        // Empty ACCENT falls back to BORDER_ACTIVE.
+        std::fs::write(&cfg, "ACCENT=\"\"\nBORDER_ACTIVE=\"#cc70a9\"\n").unwrap();
+        state.reload_config();
+        assert_eq!(state.border_active, old_col);
     }
 }
 

@@ -1,11 +1,6 @@
 #!/bin/sh
-# tools/test-config-check: tests live/config-check with various valid and invalid settings.
-# Verifies that:
-# 1. Setting families read by the code (OUTPUT_<NAME>_*, PANEL_<NAME>, BIND_<ACTION>, EXEC_<NAME>)
-#    are accepted as valid configuration.
-# 2. Known settings from config/config and config-renames are accepted.
-# 3. Truly unknown or misspelled settings are flagged and reported.
-# 4. Unclosed quotes or invalid syntax are caught and reported.
+# tools/test-config-check: tests live/config-check with valid setting families,
+# known/unknown keys, unclosed quotes, and conflicting layout options.
 set -u
 
 REPO=$(pwd)
@@ -27,7 +22,7 @@ check() {
     fi
 }
 
-# Test 1: Setting families (OUTPUT_*, PANEL_*, BIND_*, EXEC_*) and known settings are accepted
+# Test 1: Setting families (OUTPUT_*, PANEL_*, BIND_*, EXEC_*, PLACE_*) and known settings are accepted
 cat << 'EOF' > "$cfg"
 OUTPUT_DP_1_SCALE="1.25"
 OUTPUT_HDMI_A_1_MODE="1920x1080"
@@ -36,6 +31,8 @@ OUTPUT_eDP_1_TRANSFORM="90"
 BIND_TERMINAL="SUPER+RETURN"
 EXEC_BROWSER="SUPER+B:firefox"
 PANEL_CUSTOM="SUPER+P top center apps"
+PLACE_WORK="-200,150,1.25 SUPER+F1"
+PLACE_NOTES="800,-40,1"
 SURFACE_COLOR="#111317"
 export APP_ENV="test"
 EOF

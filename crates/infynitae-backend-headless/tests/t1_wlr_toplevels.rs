@@ -280,3 +280,118 @@ fn a_window_that_fills_the_screen_is_told_as_fullscreen() {
         "{log:?}"
     );
 }
+
+#[test]
+fn picking_a_window_from_the_bar_moves_the_camera_and_records_history() {
+    use infynitae_core::geom::{CanvasPos, Q16_ONE};
+    use infynitae_core::{NavigateTo, ShellCommand, ShellStream};
+    use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::Layer;
+    use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::{
+        Anchor, KeyboardInteractivity,
+    };
+
+    let (mut s, _, _) = S::new();
+    s.ls.bind_layer_shell();
+    s.bind();
+
+    let o = s.ls.output();
+    let w1 = s.e[1];
+    let a1 = s.ls.state.core().stage().anchor(w1).expect("w1 anchor");
+    let size1 =
+        s.ls.state
+            .core()
+            .stage()
+            .tree(w1)
+            .expect("w1 tree")
+            .geometry
+            .size;
+    let expected_w1_center = CanvasPos {
+        x: a1.x * Q16_ONE + i64::from(size1.w) * (Q16_ONE / 2),
+        y: a1.y * Q16_ONE + i64::from(size1.h) * (Q16_ONE / 2),
+    };
+
+    // Navigate elsewhere first (incrementally so history starts empty), then make sure an
+    // unvalidated client moves neither focus nor camera.
+    let fx =
+        s.ls.state
+            .core_mut()
+            .shell_command(
+                &mut s.ls.shell,
+                ShellCommand::Navigate {
+                    output: o,
+                    to: NavigateTo::Delta(-2400.0, 1200.0),
+                    zoom: None,
+                    stream: ShellStream::Atomic,
+                },
+            )
+            .unwrap();
+    s.ls.state.apply(&fx);
+    let away = s.ls.state.core().cameras().center(0).unwrap();
+    assert_ne!(away, expected_w1_center);
+    assert_eq!(
+        s.ls.state.core().cameras().history(0).map(|h| h.len()),
+        Some(0)
+    );
+
+    s.t += 1000;
+    pointer_motion(
+        &mut s.ls.state,
+        &mut s.ls.input,
+        (900.0, 500.0),
+        (900.0, 500.0),
+        s.t,
+    )
+    .expect("motion");
+    s.pump();
+    s.focus(None);
+    s.ls.probe.wlr_handles[1].activate(s.ls.probe.seat.as_ref().unwrap());
+    s.pump();
+    assert_eq!(s.ls.state.core().cameras().center(0), Some(away));
+    assert_eq!(s.ls.state.core().focus().target(), None);
+    assert_eq!(
+        s.ls.state.core().cameras().history(0).map(|h| h.len()),
+        Some(0)
+    );
+
+    // A layer-shell panel with exclusive keyboard focus (the Windows card) activates the picked
+    // window and closes in the same flush: focus, camera jump, and history entry all land.
+    let panel = s.ls.probe.layer_surface(
+        &s.ls.qh,
+        "windows-card",
+        Layer::Overlay,
+        Anchor::Right,
+        (360, 480),
+        0,
+        KeyboardInteractivity::Exclusive,
+    );
+    s.pump();
+    s.ls.probe.frame_and_draw(&s.ls.qh, panel);
+    s.pump();
+    assert_eq!(s.ls.probe.kb.active.as_deref(), Some("windows-card"));
+
+    s.ls.probe.wlr_handles[1].activate(s.ls.probe.seat.as_ref().unwrap());
+    s.ls.probe.destroy_layer(panel);
+    s.pump();
+
+    assert_eq!(s.ls.state.core().focus().target(), Some(w1));
+    assert_eq!(
+        s.ls.state.core().cameras().center(0),
+        Some(expected_w1_center),
+        "picking a window moves the camera to its centre"
+    );
+    assert_eq!(
+        s.ls.state.core().cameras().history(0).map(|h| h.len()),
+        Some(1),
+        "picking a window pushes the camera history so Back returns"
+    );
+
+    s.ls.state
+        .core_mut()
+        .shell_command(&mut s.ls.shell, ShellCommand::ViewportRestore { output: o })
+        .unwrap();
+    assert_eq!(s.ls.state.core().cameras().center(0), Some(away));
+    assert_eq!(
+        s.ls.state.core().cameras().history(0).map(|h| h.len()),
+        Some(0)
+    );
+}

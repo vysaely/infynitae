@@ -1,15 +1,9 @@
 /*
- * Infynitae Native Wallpaper & Live Background Renderer
- * Part of Infynitae (FOUNDATION_ARCHITECTURE C1.1, zwlr_layer_shell_v1)
- *
- * Lightweight, zero-overhead standalone wallpaper manager written in pure C.
- * Features:
- *   - Direct Wayland layer-shell protocol (ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND)
- *   - Auto-scales across all connected monitors (fill, fit, stretch, center, tile)
- *   - Supports all standard image formats (PNG, JPG, WebP, SVG, BMP, GIF) via GdkPixbuf
- *   - Seamless video background passthrough to hardware mpvpaper
- *   - Zero extra idle memory: sleeps in event loop after surface commit
- *   - Hot swappable: clean SIGTERM instance handover for live config reloading
+ * infynitae-wallpaper: the desktop's wallpaper, one layer-shell background surface per screen
+ * (FOUNDATION_ARCHITECTURE C1.1, zwlr_layer_shell_v1). Images through GdkPixbuf, drawn fill, fit,
+ * stretch, center or tile; a video file is handed to mpvpaper. It waits in its event loop between
+ * changes; a new instance replaces the running one (SIGTERM), so a config reload swaps it.
+ * --colors and --accents print the theme colours taken from an image (theme-colors.h).
  */
 
 #define _GNU_SOURCE
@@ -396,7 +390,6 @@ static void render_output(struct wallpaper_output *out) {
         return;
     }
 
-    // Deep black base canvas
     cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
     cairo_paint(cr);
 
@@ -778,7 +771,6 @@ static void autodetect_wallpaper(char *target, size_t target_sz) {
     DIR *d;
 
     // Only folders meant for wallpapers: never a random picture from ~/Pictures
-    // Standard wallpaper directories
     const char *subdirs[] = {"Pictures/Wallpapers", ".local/share/wallpapers", NULL};
     for (int i = 0; subdirs[i]; i++) {
         char dir_path[512];
@@ -799,7 +791,6 @@ static void autodetect_wallpaper(char *target, size_t target_sz) {
         }
     }
 
-    // 4. System wallpapers
     const char *sys_dirs[] = {"/usr/share/backgrounds", "/usr/share/wallpapers", NULL};
     for (int i = 0; sys_dirs[i]; i++) {
         d = opendir(sys_dirs[i]);
@@ -855,17 +846,32 @@ int main(int argc, char *argv[]) {
             foreground = 1;
         } else if (strcmp(argv[i], "--output") == 0 && i + 1 < argc) {
             snprintf(only_output, sizeof(only_output), "%s", argv[++i]);
-        } else if (strcmp(argv[i], "--colors") == 0 && i + 1 < argc) {
-            /* the theme colours of an image (theme-colors.h), as config lines; nothing is drawn */
-            GdkPixbuf *img = gdk_pixbuf_new_from_file(argv[i + 1], NULL);
-            ThemeColors tc;
-            int rc = theme_colors_from(img, &tc);
-            if (img) g_object_unref(img);
-            if (rc != 0) {
-                fprintf(stderr, "[infynitae-wallpaper] --colors: cannot read %s\n", argv[i + 1]);
+        } else if (strcmp(argv[i], "--colors") == 0 || strcmp(argv[i], "--accents") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "[infynitae-wallpaper] %s needs an image\n", argv[i]);
                 return 1;
             }
-            theme_colors_print(&tc, stdout);
+            /* extract theme data from IMAGE and print it; nothing is drawn */
+            GdkPixbuf *img = gdk_pixbuf_new_from_file(argv[i + 1], NULL);
+            if (strcmp(argv[i], "--colors") == 0) {
+                ThemeColors tc;
+                int rc = theme_colors_from(img, &tc);
+                if (img) g_object_unref(img);
+                if (rc != 0) {
+                    fprintf(stderr, "[infynitae-wallpaper] --colors: cannot read %s\n", argv[i + 1]);
+                    return 1;
+                }
+                theme_colors_print(&tc, stdout);
+            } else {
+                double accents[6][3], pos[6][2];
+                int n = theme_accents_from(img, accents, pos, 6);
+                if (img) g_object_unref(img);
+                if (n <= 0) {
+                    fprintf(stderr, "[infynitae-wallpaper] --accents: cannot read %s\n", argv[i + 1]);
+                    return 1;
+                }
+                theme_accents_print(accents, pos, n, stdout);
+            }
             return 0;
         } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             printf("Usage: infynitae-wallpaper [IMAGE_PATH] [MODE] [OPTIONS]\n");
@@ -877,6 +883,7 @@ int main(int argc, char *argv[]) {
             printf("                     foreground, leaving the wallpaper running\n");
             printf("  --output NAME      Only on the output NAME (e.g. DP-1)\n");
             printf("  --colors IMAGE     Print theme colours taken from IMAGE (config lines)\n");
+            printf("  --accents IMAGE    Print candidate accents and centres from IMAGE (#rrggbb x y)\n");
             printf("  -h, --help         Show this help message\n");
             return 0;
         } else if (target[0] == '\0') {
@@ -921,7 +928,6 @@ int main(int argc, char *argv[]) {
         snprintf(mode, sizeof(mode), "fill");
     }
 
-    // Handle live animated video wallpaper via mpvpaper
     if (is_video_file(target)) {
         kill_other_wallpapers();
         lock_cache_remove("lock-background.png");
@@ -1025,7 +1031,6 @@ int main(int argc, char *argv[]) {
     parallax_connect(&app);
     if (app.ipc_fd < 0) {
         while (wl_display_dispatch(app.display) != -1) {
-            // Sleep on events; consumes 0% CPU
         }
     } else {
         /* the display and the compositor's events: asleep between them */
@@ -1052,9 +1057,9 @@ int main(int argc, char *argv[]) {
     done:;
     }
 
-    // Clean up
     if (!overlay) {
-        if (get_pid_file_path()) unlink(get_pid_file_path());
+        const char *pid_path = get_pid_file_path();
+        if (pid_path) unlink(pid_path);
     }
 
     struct wallpaper_output *curr = app.outputs;

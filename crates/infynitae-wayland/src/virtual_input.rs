@@ -53,6 +53,8 @@ pub enum VirtualInput {
         key: u32,
         pressed: bool,
     },
+    /// Focus, raise and jump to a mapped window chosen by the user in a bar or window list.
+    JumpToWindow(infynitae_core::stage::ElementId),
 }
 
 pub struct VirtualInputState {
@@ -267,6 +269,7 @@ impl WaylandState {
             },
             VirtualInput::Axis(axis) => PhysicalEvent::PointerAxis { axis, time_us },
             VirtualInput::Key { .. } => return None,
+            VirtualInput::JumpToWindow(element) => PhysicalEvent::JumpToWindow { element },
         })
     }
 

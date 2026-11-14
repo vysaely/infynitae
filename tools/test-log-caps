@@ -21,9 +21,7 @@ check() {
     fi
 }
 
-# ----------------------------------------------------------------------
-# 1. log-rotate.sh: 3 MB rotated, 1 MB not rotated, .old replaced
-# ----------------------------------------------------------------------
+# ---- 1. log-rotate.sh: 3 MB rotated, 1 MB not rotated, .old replaced
 TEST_LOG="$TMP/rotate_unit.log"
 
 # (a) 3 MB log rotated to .old
@@ -56,9 +54,7 @@ sh "$REPO_DIR/live/log-rotate.sh" "$TEST_LOG" 5242880
 check "6 MB log over 5 MB cap rotated" "$([ ! -f "$TEST_LOG" ] && [ -f "$TEST_LOG.old" ] && echo yes || echo no)" "yes"
 rm -f "$TEST_LOG" "$TEST_LOG.old"
 
-# ----------------------------------------------------------------------
-# 2. infynitae-session: session.log capped at 5 MB (not 20 MB)
-# ----------------------------------------------------------------------
+# ---- 2. infynitae-session: session.log capped at 5 MB (not 20 MB)
 SESS_HOME="$TMP/sess_home"
 SESS_STATE="$SESS_HOME/.local/state/infynitae"
 mkdir -p "$SESS_STATE" "$SESS_HOME/.local/bin"
@@ -84,9 +80,7 @@ rm -f "$SESS_STATE/session.log.old"
 HOME="$SESS_HOME" sh "$REPO_DIR/live/infynitae-session" >/dev/null 2>&1 || true
 check "session.log 4 MB not rotated under 5 MB cap" "$([ ! -f "$SESS_STATE/session.log.old" ] && echo yes || echo no)" "yes"
 
-# ----------------------------------------------------------------------
-# 3. infynitae-automount: automount.log rotates at 2 MB
-# ----------------------------------------------------------------------
+# ---- 3. infynitae-automount: automount.log rotates at 2 MB
 AUTO_STATE="$TMP/auto_state/infynitae"
 AUTO_RUN="$TMP/auto_run/infynitae"
 mkdir -p "$AUTO_STATE" "$AUTO_RUN"
@@ -112,9 +106,7 @@ INFYNITAE_AUTOMOUNT_MONITOR="exit 0" \
 sh "$REPO_DIR/live/infynitae-automount" >/dev/null 2>&1 || true
 check "automount.log 1 MB not rotated" "$([ ! -f "$AUTO_STATE/automount.log.old" ] && echo yes || echo no)" "yes"
 
-# ----------------------------------------------------------------------
-# 4. infynitae-sleep-lock: sleep-lock.log rotates at 2 MB
-# ----------------------------------------------------------------------
+# ---- 4. infynitae-sleep-lock: sleep-lock.log rotates at 2 MB
 SLEEP_STATE="$TMP/sleep_state/infynitae"
 SLEEP_RUN="$TMP/sleep_run/infynitae"
 mkdir -p "$SLEEP_STATE" "$SLEEP_RUN"
@@ -139,9 +131,7 @@ INFYNITAE_SLEEP_MONITOR="exit 0" \
 sh "$REPO_DIR/live/infynitae-sleep-lock" >/dev/null 2>&1 || true
 check "sleep-lock.log 1 MB not rotated" "$([ ! -f "$SLEEP_STATE/sleep-lock.log.old" ] && echo yes || echo no)" "yes"
 
-# ----------------------------------------------------------------------
-# 5. infynitae-reload: helpers.log rotates at 2 MB
-# ----------------------------------------------------------------------
+# ---- 5. infynitae-reload: helpers.log rotates at 2 MB
 RELOAD_HOME="$TMP/reload_home"
 RELOAD_STATE="$RELOAD_HOME/.local/state/infynitae"
 mkdir -p "$RELOAD_STATE"
@@ -164,9 +154,7 @@ HOME="$RELOAD_HOME" WAYLAND_DISPLAY="wayland-test" \
 sh "$REPO_DIR/live/infynitae-reload" status >/dev/null 2>&1 || true
 check "helpers.log 1 MB not rotated on reload start" "$([ ! -f "$RELOAD_STATE/helpers.log.old" ] && echo yes || echo no)" "yes"
 
-# ----------------------------------------------------------------------
-# 6. autorotate: autorotate.log rotates at 2 MB, removes stale -<pid> state files
-# ----------------------------------------------------------------------
+# ---- 6. autorotate: autorotate.log rotates at 2 MB, removes stale -<pid> state files
 ROT_STATE="$TMP/rot_state/infynitae"
 mkdir -p "$ROT_STATE"
 
