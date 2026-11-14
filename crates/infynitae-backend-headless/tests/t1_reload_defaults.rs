@@ -197,3 +197,32 @@ fn scaling_filter_resets_to_sharp_when_removed_and_parses_all_modes() {
         "removed SCALING_FILTER resets to Sharp"
     );
 }
+
+#[test]
+fn zoom_feel_parses_all_modes_and_resets_to_smooth_when_removed() {
+    use infynitae_core::navigation::ZoomFeel;
+
+    let temp = TestTempDir::new("t1_reload_zoom_feel");
+    let mut ls = Lockstep::new(Some(output((1920, 1080), 120)));
+
+    for (val, expected) in [
+        ("instant", ZoomFeel::Instant),
+        ("quick", ZoomFeel::Quick),
+        ("smooth", ZoomFeel::Smooth),
+        ("floaty", ZoomFeel::Floaty),
+        ("FLOATY", ZoomFeel::Floaty),
+    ] {
+        reload(&mut ls, temp.path(), &format!("ZOOM_FEEL=\"{val}\"\n"));
+        assert_eq!(ls.state.core().zoom_feel(), expected, "value {val}");
+    }
+
+    reload(&mut ls, temp.path(), "ZOOM_FEEL=\"instant\"\n");
+    assert_eq!(ls.state.core().zoom_feel(), ZoomFeel::Instant);
+
+    reload(&mut ls, temp.path(), "");
+    assert_eq!(
+        ls.state.core().zoom_feel(),
+        ZoomFeel::Smooth,
+        "removed ZOOM_FEEL resets to Smooth"
+    );
+}
