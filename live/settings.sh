@@ -420,6 +420,11 @@ archive_validate_and_unpack() {
         function valid_dq(s,    inner) {
             if (length(s) < 2 || substr(s, 1, 1) != "\"" || substr(s, length(s), 1) != "\"") return 0
             inner = substr(s, 2, length(s) - 2)
+            # $HOME (and ${HOME}) is the one variable configs use ("$HOME/Pictures/Screenshots");
+            # any other $, a backquote or a backslash could run or reach something else
+            gsub(/\$\{HOME\}/, "", inner)
+            gsub(/\$HOME\//, "/", inner)
+            sub(/\$HOME$/, "", inner)
             return index(inner, "\"") == 0 && index(inner, "$") == 0 && index(inner, "\140") == 0 && index(inner, "\134") == 0
         }
         {
@@ -428,6 +433,8 @@ archive_validate_and_unpack() {
             sub(/^[ \t]+/, "", line)
             sub(/[ \t]+$/, "", line)
             if (line == "" || substr(line, 1, 1) == "#") next
+            # "export KEY=VALUE" is a plain assignment too; the rest is checked the same way
+            sub(/^export[ \t]+/, "", line)
             eq = index(line, "=")
             if (eq <= 1) { print NR; exit }
             key = substr(line, 1, eq - 1)

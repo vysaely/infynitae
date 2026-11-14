@@ -151,16 +151,20 @@ refuse_cfg_line() {
 
 refuse_cfg_line "bare command injection" 3 "$(printf '# ok comment\nACCENT="#7aa2f7"\ntouch "%s"\n' "$PWN_FILE")"
 refuse_cfg_line "command substitution in double quotes" 2 "$(printf '\nACCENT="$(touch %s)"\n' "$PWN_FILE")"
-refuse_cfg_line "variable expansion in double quotes" 1 'WALLPAPER="$HOME/pic.png"'
+refuse_cfg_line "a variable other than HOME in double quotes" 1 'WALLPAPER="$USER/pic.png"'
+refuse_cfg_line "HOME followed by more name" 1 'WALLPAPER="$HOMEDIR/pic.png"'
+refuse_cfg_line "command after HOME" 1 'WALLPAPER="${HOME}$(id)"'
 refuse_cfg_line "backtick in double quotes" 2 "$(printf '# header\nFONT_NAME="`touch %s`"\n' "$PWN_FILE")"
 refuse_cfg_line "backslash in double quotes" 1 'FONT_NAME="sans\"$(id)"'
 refuse_cfg_line "unclosed single quote with trailing code" 3 "$(printf 'BORDER_WIDTH=1\nPANEL_APPS=\047apps\047\nKEY=\047ok\047;touch %s\n' "$PWN_FILE")"
 refuse_cfg_line "space after equals runs command" 1 'ACCENT= touch /tmp/x'
 refuse_cfg_line "lowercase key name" 2 "$(printf '# comment\naccent="#112233"\n')"
 refuse_cfg_line "unquoted word with semicolon" 1 'BORDER_WIDTH=1;id'
+refuse_cfg_line "export with a command" 1 'export A=$(id)'
 
-# valid blank, comment, single-quoted (with escaped apostrophe), double-quoted, and plain words pass
-printf '\n  # indented comment\nBORDER_WIDTH=2\nACCENT="#7aa2f7"\nFONT_NAME=\047Foo\047\\\047\047s Sans\047\nWALLPAPER=\047$(literal-dollar)\047\n' > "$STAGE_CFG/.config/infynitae/config"
+# valid blank, comment, single-quoted (with escaped apostrophe), double-quoted ($HOME as configs use it), and
+# plain words pass
+printf '\n  # indented comment\nBORDER_WIDTH=2\nACCENT="#7aa2f7"\nFONT_NAME=\047Foo\047\\\047\047s Sans\047\nWALLPAPER=\047$(literal-dollar)\047\nSCREENSHOT_DIR="$HOME/Pictures/Screenshots"\nREPLAY_DIR="${HOME}/Videos"\nexport INFYNITAE_OSK_DEBUG=1\n' > "$STAGE_CFG/.config/infynitae/config"
 tar -czf "$TMP/cfg-ok.tar.gz" -C "$STAGE_CFG" .config/infynitae/config
 rc=0
 HOME="$H" CONFIG_FILE="$CFG" sh "$REPO_DIR/live/settings.sh" import-preview "$TMP/cfg-ok.tar.gz" >/dev/null 2>&1 || rc=$?
