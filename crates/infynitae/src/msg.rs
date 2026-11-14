@@ -232,17 +232,7 @@ fn save_place(name: &str) -> ExitCode {
     }
     let before = std::fs::read_to_string(&path).unwrap_or_default();
     let (after, line) = upsert_place_in_config(&before, name, x, y, zoom);
-    let file_name = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("config");
-    let tmp = path.with_file_name(format!(".{file_name}.tmp.{}", std::process::id()));
-    if let Err(e) = std::fs::write(&tmp, after.as_bytes()) {
-        eprintln!("infynitae msg place: {e}");
-        return ExitCode::FAILURE;
-    }
-    if let Err(e) = std::fs::rename(&tmp, &path) {
-        let _ = std::fs::remove_file(&tmp);
+    if let Err(e) = replace_keeping_mode(&path, &after) {
         eprintln!("infynitae msg place: {e}");
         return ExitCode::FAILURE;
     }
@@ -573,6 +563,30 @@ fn overview() -> ExitCode {
         ("to", Value::obj([("element", element(inst, elem))])),
     ]));
     ExitCode::SUCCESS
+}
+
+/// Writes `text` over `path` atomically, keeping the file's permissions (0600 for a new file: the config
+/// is private) and writing through a symlink to its target instead of replacing the link.
+fn replace_keeping_mode(path: &std::path::Path, text: &str) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let mode = std::fs::metadata(&target)
+        .map(|m| m.permissions().mode() & 0o7777)
+        .unwrap_or(0o600);
+    let name = target
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("config");
+    let tmp = target.with_file_name(format!(".{name}.tmp.{}", std::process::id()));
+    let res = (|| {
+        std::fs::write(&tmp, text)?;
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(mode))?;
+        std::fs::rename(&tmp, &target)
+    })();
+    if res.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    res
 }
 
 #[cfg(test)]

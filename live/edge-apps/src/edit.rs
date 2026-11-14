@@ -1465,9 +1465,31 @@ pub fn write_config_value(path: &Path, key: &str, value: &str) -> std::io::Resul
         Err(e) => return Err(e),
     };
     let updated = rewrite_config(&text, key, value);
-    let tmp = path.with_extension(format!("edge-tmp.{}", std::process::id()));
-    std::fs::write(&tmp, updated)?;
-    std::fs::rename(&tmp, path)
+    replace_keeping_mode(path, &updated)
+}
+
+/// Writes `text` over `path` atomically, keeping the file's permissions (0600 for a new file: the config
+/// is private) and writing through a symlink to its target instead of replacing the link.
+fn replace_keeping_mode(path: &std::path::Path, text: &str) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let mode = std::fs::metadata(&target)
+        .map(|m| m.permissions().mode() & 0o7777)
+        .unwrap_or(0o600);
+    let name = target
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("config");
+    let tmp = target.with_file_name(format!(".{name}.tmp.{}", std::process::id()));
+    let res = (|| {
+        std::fs::write(&tmp, text)?;
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(mode))?;
+        std::fs::rename(&tmp, &target)
+    })();
+    if res.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    res
 }
 
 pub fn save_panel_to(
@@ -1827,6 +1849,32 @@ mod tests {
             "SUPER+A right 420 hover settings/quick=dnd,nightlight@half"
         ));
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The config is private: an edit keeps its 0600, and a symlinked config stays a link to the file
+    /// it points at (review of PR #77: the edge wrote a new 0644 file over it).
+    #[test]
+    fn writing_the_config_keeps_its_mode_and_its_symlink() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("edge-mode-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let real = dir.join("real-config");
+        std::fs::write(&real, "PANEL_A=\"x\"\n").unwrap();
+        std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let link = dir.join("config");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        write_config_value(&link, "PANEL_A", "y").unwrap();
+        assert!(std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(
+            std::fs::metadata(&real).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert!(std::fs::read_to_string(&real).unwrap().contains("PANEL_A"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

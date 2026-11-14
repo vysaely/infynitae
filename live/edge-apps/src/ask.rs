@@ -309,12 +309,6 @@ pub fn run_client<S: AsRef<str>>(args: &[S]) -> u8 {
     };
 
     let req_path = crate::wayland::runtime_path(ASK_FILE);
-    for _ in 0..40 {
-        if !req_path.exists() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
 
     let tmp_path = crate::wayland::runtime_path(&format!("{ASK_FILE}-new.{my_pid}"));
     let fifo_str = fifo_path.to_string_lossy();
@@ -338,9 +332,37 @@ pub fn run_client<S: AsRef<str>>(args: &[S]) -> u8 {
         let _ = std::fs::remove_file(&fifo_path);
         return 3;
     }
-    if std::fs::rename(&tmp_path, &req_path).is_err()
-        || unsafe { libc::kill(pid, libc::SIGRTMIN() + 3) } != 0
-    {
+    // the request slot is claimed atomically (a hard link fails while another question is pending):
+    // a second asker waits its turn instead of replacing a question the edge has not read yet, which
+    // left the first asker waiting forever (review of PR #77). It waits while the edge lives and
+    // until it is told to stop.
+    let claimed = loop {
+        match std::fs::hard_link(&tmp_path, &req_path) {
+            Ok(()) => {
+                let _ = std::fs::remove_file(&tmp_path);
+                break true;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                if unsafe { libc::kill(pid, 0) } != 0 {
+                    break false;
+                }
+                if sig_rd >= 0 {
+                    let mut p = libc::pollfd {
+                        fd: sig_rd,
+                        events: libc::POLLIN,
+                        revents: 0,
+                    };
+                    if unsafe { libc::poll(&mut p, 1, 50) } > 0 {
+                        break false;
+                    }
+                } else {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+            }
+            Err(_) => break false,
+        }
+    };
+    if !claimed || unsafe { libc::kill(pid, libc::SIGRTMIN() + 3) } != 0 {
         let _ = std::fs::remove_file(&tmp_path);
         if let Some(h) = term_hook {
             signal_hook_registry::unregister(h);
