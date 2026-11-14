@@ -2043,6 +2043,9 @@ pub fn run_console_with(
             .screens
             .iter()
             .any(|s| s.deferred.is_some_and(|t| t <= now));
+        if data.state.core().zoom_gliding() {
+            data.session.request_frame();
+        }
         turn.mark("new windows");
         if (data.session.frame_due() || has_screencopy || deferred_due) && data.active {
             // what this turn's input made goes to the clients first: a game reads its mouse motion
@@ -2274,6 +2277,7 @@ fn render(data: &mut LoopData, turn: &mut TurnClock) {
         }
 
         turn.mark("frame schedule");
+        data.state.zoom_tick(id, started);
         if locked {
             data.state.set_fitted_window(id, None);
         }
@@ -2637,7 +2641,7 @@ fn render(data: &mut LoopData, turn: &mut TurnClock) {
     data.zoom_cache.gc();
     confirm_lock(data);
     // a capture copied out of the GPU this turn is handed over at the next one: make sure there is one
-    if !data.capture_copies.is_empty() {
+    if !data.capture_copies.is_empty() || data.state.core().zoom_gliding() {
         data.session.request_frame();
     }
     turn.mark("post render");

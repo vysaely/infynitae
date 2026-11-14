@@ -195,6 +195,7 @@ pub fn bring_into_view(
 /// INV-HIT-1); then Core's frame clock decides which observed elements complete, and the adapter
 /// completes their callbacks and presents their feedback.
 pub fn vblank(state: &mut WaylandState, output: OutputId, now: Duration) {
+    state.zoom_tick(output, now);
     // an output without a view has no frame to produce; the frame clock still ticks
     let _ = render_frame(state, &mut DummyRenderer, output);
     state.frame_tick(output, now);
@@ -574,6 +575,9 @@ pub fn run_headless_with(
             );
             session.count_frame();
             session.flush();
+        }
+        if state.core().zoom_gliding() {
+            session.request_frame();
         }
 
         // M16: withheld callbacks of unobserved elements, on a timer armed only while one is
