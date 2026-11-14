@@ -134,7 +134,43 @@ refuse_case "archive with absolute path" "$TMP/abs.tar.gz"
 tar -czf "$TMP/dotdot.tar.gz" -C "$STAGE_DIR" --transform='s|^|../|' .config/infynitae/config
 refuse_case "archive with parent traversal" "$TMP/dotdot.tar.gz"
 
+# 6. unsafe config lines inside an otherwise valid archive are refused with the bad line number
+PWN_FILE="$TMP/pwned"
+STAGE_CFG="$TMP/cfg_stage"
+mkdir -p "$STAGE_CFG/.config/infynitae"
+refuse_cfg_line() {
+    rc_label="$1" rc_line_no="$2" rc_body="$3"
+    printf '%s' "$rc_body" > "$STAGE_CFG/.config/infynitae/config"
+    tar -czf "$TMP/cfg.tar.gz" -C "$STAGE_CFG" .config/infynitae/config
+    refuse_case "$rc_label" "$TMP/cfg.tar.gz"
+    rc=0
+    err=$(HOME="$H" CONFIG_FILE="$CFG" sh "$REPO_DIR/live/settings.sh" import-preview "$TMP/cfg.tar.gz" 2>&1) || rc=$?
+    check "$rc_label names line $rc_line_no" "$(printf '%s' "$err" | grep -q "line $rc_line_no" && echo yes || echo no)" "yes"
+    check "$rc_label did not run command" "$([ ! -e "$PWN_FILE" ] && echo yes || echo no)" "yes"
+}
+
+refuse_cfg_line "bare command injection" 3 "$(printf '# ok comment\nACCENT="#7aa2f7"\ntouch "%s"\n' "$PWN_FILE")"
+refuse_cfg_line "command substitution in double quotes" 2 "$(printf '\nACCENT="$(touch %s)"\n' "$PWN_FILE")"
+refuse_cfg_line "variable expansion in double quotes" 1 'WALLPAPER="$HOME/pic.png"'
+refuse_cfg_line "backtick in double quotes" 2 "$(printf '# header\nFONT_NAME="`touch %s`"\n' "$PWN_FILE")"
+refuse_cfg_line "backslash in double quotes" 1 'FONT_NAME="sans\"$(id)"'
+refuse_cfg_line "unclosed single quote with trailing code" 3 "$(printf 'BORDER_WIDTH=1\nPANEL_APPS=\047apps\047\nKEY=\047ok\047;touch %s\n' "$PWN_FILE")"
+refuse_cfg_line "space after equals runs command" 1 'ACCENT= touch /tmp/x'
+refuse_cfg_line "lowercase key name" 2 "$(printf '# comment\naccent="#112233"\n')"
+refuse_cfg_line "unquoted word with semicolon" 1 'BORDER_WIDTH=1;id'
+
+# valid blank, comment, single-quoted (with escaped apostrophe), double-quoted, and plain words pass
+printf '\n  # indented comment\nBORDER_WIDTH=2\nACCENT="#7aa2f7"\nFONT_NAME=\047Foo\047\\\047\047s Sans\047\nWALLPAPER=\047$(literal-dollar)\047\n' > "$STAGE_CFG/.config/infynitae/config"
+tar -czf "$TMP/cfg-ok.tar.gz" -C "$STAGE_CFG" .config/infynitae/config
+rc=0
+HOME="$H" CONFIG_FILE="$CFG" sh "$REPO_DIR/live/settings.sh" import-preview "$TMP/cfg-ok.tar.gz" >/dev/null 2>&1 || rc=$?
+check "valid mixed safe config passes import-preview" "$rc" 0
+
 after_hash=$(cksum "$CFG" | awk '{print $1}')
 check "refused imports keep config untouched" "$after_hash" "$before_hash"
+
+rc=0
+HOME="$H" CONFIG_FILE="$CFG" sh "$REPO_DIR/live/settings.sh" import "$TMP/cfg-ok.tar.gz" >/dev/null 2>&1 || rc=$?
+check "valid mixed safe config passes import" "$rc" 0
 
 exit $fail
