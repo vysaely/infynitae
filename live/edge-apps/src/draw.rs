@@ -59,6 +59,14 @@ pub struct Text<'a> {
     pub text: &'a str,
 }
 
+/// Tests that sort pixels by colour: text edges in grey, whatever the machine's font smoothing.
+#[cfg(test)]
+pub fn grey_text_edges(cr: &Context) {
+    let mut fo = cairo::FontOptions::new().unwrap();
+    fo.set_antialias(cairo::Antialias::Gray);
+    cr.set_font_options(&fo);
+}
+
 fn layout(cr: &Context, t: &Text) -> pango::Layout {
     let l = pangocairo::functions::create_layout(cr);
     let mut fd = pango::FontDescription::from_string(FONT);

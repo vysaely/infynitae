@@ -231,7 +231,8 @@ caps_alert = decode(sys.argv[8])
 
 res = []
 res.append("flat_bg=" + str(px(idle_sq, 10, 10) == (16, 32, 48) and px(idle_sq, 200, 350) == (16, 32, 48) and px(idle_sq, 1260, 780) == (16, 32, 48)))
-res.append("small_corner=" + str(px(idle_sq, 481, 555) != (16, 32, 48) and px(idle_rd, 481, 555) == (16, 32, 48)))
+# the field's top-left corner at 1280x800 (the group moved up 28 px on 2026-11-14: avatar 448 -> 420)
+res.append("small_corner=" + str(px(idle_sq, 481, 527) != (16, 32, 48) and px(idle_rd, 481, 527) == (16, 32, 48)))
 res.append("muted=" + str(count_box(idle_sq, (0x33, 0x77, 0xbb), 15) > 20))
 res.append("failed_accent=" + str(count_box(failed, (0x22, 0xcc, 0x44), 25) > 50 and count_box(failed, (247, 118, 142), 15) == 0))
 res.append("caps_accent=" + str(count_box(caps, (0x22, 0xcc, 0x44), 25) > 20 and count_box(caps, (224, 175, 104), 15) == 0))

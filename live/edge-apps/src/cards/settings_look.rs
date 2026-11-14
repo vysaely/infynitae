@@ -5063,6 +5063,9 @@ mod tests {
         let mut hits = Hits::new(None, None);
         {
             let cr = Context::new(&surf).unwrap();
+            // grey edges on text: a CI machine whose fonts are set to subpixel smoothing gave the alert
+            // text blue fringes (34 "accent" pixels) on 2026-11-14
+            crate::draw::grey_text_edges(&cr);
             c.draw(&cr, &cx, (0.0, 0.0, 404.0, h as f64), &mut hits);
         }
         surf.flush();

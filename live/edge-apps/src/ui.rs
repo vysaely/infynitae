@@ -875,6 +875,9 @@ mod tests {
             let mut surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 260, 44).unwrap();
             {
                 let cr = Context::new(&surf).unwrap();
+                // grey edges on text: a CI machine whose fonts are set to subpixel smoothing gave the alert
+                // text blue fringes (34 "accent" pixels) on 2026-11-14
+                crate::draw::grey_text_edges(&cr);
                 let mut hits = Hits::new(None, None);
                 let r = (0.0, 0.0, 260.0, ROW_H);
                 let data = Row {
