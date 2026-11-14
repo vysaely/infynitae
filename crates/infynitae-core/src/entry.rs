@@ -930,9 +930,9 @@ impl Core {
             .fit_plan(output, element)
             .ok()
             .is_some_and(|(camera, target)| {
-                self.cameras.center(camera) == Some(target.center)
-                    && self.cameras.zoom(camera).map(f64::to_bits) == Some(target.zoom.to_bits())
-                    && self.cameras.history(camera).is_some_and(|h| !h.is_empty())
+                self.cameras.effective_value(camera).is_some_and(|v| {
+                    v.center == target.center && v.zoom.to_bits() == target.zoom.to_bits()
+                }) && self.cameras.history(camera).is_some_and(|h| !h.is_empty())
             });
         if at_fit {
             self.viewport_restore(proof, out);
@@ -1145,7 +1145,10 @@ impl Core {
         // it), or less for a window bigger than the screen (all of it shown); Super+Shift+Space
         // keeps it
         let (target_zoom, area) = if keep_zoom {
-            (self.cameras.zoom(camera).unwrap_or(1.0), usable)
+            (
+                self.cameras.effective_value(camera).map_or(1.0, |v| v.zoom),
+                usable,
+            )
         } else {
             crate::navigation::recenter_zoom(extent, usable, g.2, g.3)
         };
@@ -1156,12 +1159,8 @@ impl Core {
             center,
             zoom: target_zoom,
         };
-        if record_history {
-            self.cameras.jump(proof, camera, target);
-        } else {
-            self.cameras
-                .set_zoom_and_center(proof, camera, target.zoom, target.center);
-        }
+        self.cameras
+            .glide_to(proof, camera, target, record_history, self.zoom_feel);
         self.camera_written(output, camera, out);
     }
 
@@ -1395,7 +1394,8 @@ impl Core {
             if let Some(c) = crate::navigation::recenter_target(extent, usable, target.zoom, g) {
                 target.center = c;
             }
-            self.cameras.fit(proof, camera, target);
+            self.cameras
+                .glide_fit(proof, camera, target, self.zoom_feel);
             self.camera_written(output, camera, out);
         }
     }
@@ -1476,10 +1476,10 @@ impl Core {
 
         // where the overview left the camera, not where it would go now: windows move under it.
         // A fullscreen window on top means the overview is not showing, wherever the camera is.
-        let view = (
-            self.cameras.center(camera),
-            self.cameras.zoom(camera).map(f64::to_bits),
-        );
+        let view = self
+            .cameras
+            .effective_value(camera)
+            .map_or((None, None), |v| (Some(v.center), Some(v.zoom.to_bits())));
         let on_top =
             self.presentation(output).is_some() && !self.is_presentation_suppressed(output);
         let at_overview = !on_top
@@ -1500,14 +1500,13 @@ impl Core {
             if self.presentation(output).is_some() {
                 self.suppress_presentation(output, out);
             }
-            self.cameras.fit(proof, camera, target);
-            self.overview_at.push((
-                output,
-                (
-                    self.cameras.center(camera),
-                    self.cameras.zoom(camera).map(f64::to_bits),
-                ),
-            ));
+            self.cameras
+                .glide_fit(proof, camera, target, self.zoom_feel);
+            let stored = self
+                .cameras
+                .effective_value(camera)
+                .map_or((None, None), |v| (Some(v.center), Some(v.zoom.to_bits())));
+            self.overview_at.push((output, stored));
             self.camera_written(output, camera, out);
         }
     }
@@ -1797,7 +1796,8 @@ impl Core {
         out: &mut Vec<Effect>,
     ) -> Result<(), crate::ShellError> {
         let (camera, target) = self.fit_plan(output, element)?;
-        self.cameras.fit(proof, camera, target);
+        self.cameras
+            .glide_fit(proof, camera, target, self.zoom_feel);
         self.camera_written(output, camera, out);
         Ok(())
     }
@@ -1858,11 +1858,29 @@ impl Core {
         if self.cameras.history(camera).is_none_or(|h| h.is_empty()) {
             return;
         }
-        if !self.cameras.restore(proof, camera) {
+        if !self.cameras.glide_restore(proof, camera, self.zoom_feel) {
             return;
         }
         self.overview_at.retain(|o| o.0 != output);
         self.camera_written(output, camera, out);
+    }
+
+    /// Advances any active camera zoom glide on `output` to `now`, emitting consequences when the
+    /// camera changes. Called once per output refresh by backends.
+    pub fn zoom_tick(&mut self, output: OutputId, now: std::time::Duration) -> Vec<Effect> {
+        let Some(camera) = self.cameras.camera_for_output(output) else {
+            return Vec::new();
+        };
+        let refresh_mhz = self
+            .output(output)
+            .map_or(60_000, |m| m.refresh_mhz)
+            .max(1_000);
+        let frame_period = std::time::Duration::from_secs_f64(1000.0 / f64::from(refresh_mhz));
+        let mut out = Vec::new();
+        if self.cameras.tick_glide(camera, now, frame_period) {
+            self.camera_written(output, camera, &mut out);
+        }
+        out
     }
 
     /// After a fit or restore of `camera` on `output`: the lattice reference follows (a zoom change
@@ -1950,6 +1968,17 @@ impl Core {
                 }
                 if let Some(moved) = pointer::moved(&self.outputs, output, p, delta) {
                     self.pointer = moved;
+                    if let PointerState::Located {
+                        output: cur_o,
+                        p: cur_p,
+                    } = self.pointer
+                        && let (Some(camera), Some(extent)) = (
+                            self.cameras.camera_for_output(cur_o),
+                            self.output(cur_o).map(|m| m.logical_extent()),
+                        )
+                    {
+                        self.cameras.update_glide_pointer(camera, cur_p, extent);
+                    }
                 }
                 if self.focus_follows_mouse
                     && let PointerState::Located {
@@ -2283,6 +2312,15 @@ impl Core {
 
         // Each full scroll detent changes zoom by ~15%
         let factor = 1.15_f64.powf(-delta);
+        if self.zoom_feel != crate::navigation::ZoomFeel::Instant {
+            if self
+                .cameras
+                .glide_zoom_step(proof, camera, p, extent, factor.ln(), self.zoom_feel)
+            {
+                self.camera_written(output, camera, out);
+            }
+            return;
+        }
         let new_zoom = (old_zoom * factor).clamp(crate::geom::ZOOM_MIN, crate::geom::ZOOM_MAX);
         if (new_zoom - old_zoom).abs() < 1e-9 {
             return;
@@ -2332,6 +2370,15 @@ impl Core {
             PointerState::NoOutput => (extent.0 / 2.0, extent.1 / 2.0),
         };
         let new_zoom = 1.0;
+        if self.zoom_feel != crate::navigation::ZoomFeel::Instant {
+            if self
+                .cameras
+                .glide_zoom_to(proof, camera, p, extent, new_zoom, self.zoom_feel)
+            {
+                self.camera_written(output, camera, out);
+            }
+            return;
+        }
         let dx = (p.0 - extent.0 / 2.0) * (1.0 / old_zoom - 1.0 / new_zoom);
         let dy = (p.1 - extent.1 / 2.0) * (1.0 / old_zoom - 1.0 / new_zoom);
         let limit = crate::geom::CANVAS_LIMIT_PX * crate::geom::Q16_ONE;
@@ -2766,7 +2813,10 @@ impl Core {
                 if self.cameras.history(camera).is_none_or(|h| h.is_empty()) {
                     return Err(ShellError::Refused);
                 }
-                if self.cameras.restore(authority::Authorized::mint(), camera) {
+                if self
+                    .cameras
+                    .glide_restore(authority::Authorized::mint(), camera, self.zoom_feel)
+                {
                     self.overview_at.retain(|o| o.0 != output);
                     self.camera_written(output, camera, &mut out);
                 }
@@ -6299,5 +6349,213 @@ mod tests {
             .unwrap();
         assert_eq!(c.cameras().center(cam), Some(origin.0));
         assert_eq!(c.cameras().zoom(cam), Some(origin.1));
+    }
+
+    #[test]
+    fn zoom_glide_reaches_95_percent_and_keeps_pointer_point() {
+        use crate::PhysicalEvent;
+        use crate::entry::keys::{KEY_LEFTMETA, KEY_LEFTSHIFT};
+        use crate::geom::Q16_ONE;
+        use crate::input::{Axis, AxisSource};
+        use crate::navigation::ZoomFeel;
+        use crate::protocol::EffectBuf;
+        use std::time::Duration;
+
+        let period = Duration::from_micros(6_060);
+        for (feel, want_ms) in [
+            (ZoomFeel::Quick, 100.0),
+            (ZoomFeel::Smooth, 165.0),
+            (ZoomFeel::Floaty, 300.0),
+        ] {
+            let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+            let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+            c.set_zoom_feel(feel);
+            let cam = camera_of(&c, a);
+            let extent = c.output(a).unwrap().logical_extent();
+            let p = (1317.3, 311.7);
+            let mut fx = EffectBuf::default();
+            // Position pointer and prime tick baseline
+            c.physical_input(
+                &mut i,
+                PhysicalEvent::PointerMotion {
+                    delta: (p.0 - extent.0 / 2.0, p.1 - extent.1 / 2.0),
+                    delta_unaccel: (0.0, 0.0),
+                    time_us: 10,
+                },
+                &mut fx,
+            )
+            .unwrap();
+            c.zoom_tick(a, Duration::ZERO);
+
+            let c0 = c.cameras().center(cam).unwrap();
+            let z0 = c.cameras().zoom(cam).unwrap();
+            let pt0 = (
+                c0.x as f64 / Q16_ONE as f64 + (p.0 - extent.0 / 2.0) / z0,
+                c0.y as f64 / Q16_ONE as f64 + (p.1 - extent.1 / 2.0) / z0,
+            );
+
+            // Trigger wheel zoom (Super+Shift+Wheel)
+            let mods = Modifiers {
+                logo: true,
+                shift: true,
+                ..Default::default()
+            };
+            c.physical_input(
+                &mut i,
+                PhysicalEvent::KeyboardKey {
+                    key: KEY_LEFTMETA,
+                    pressed: true,
+                    modifiers: mods,
+                    mods_changed: true,
+                    time_us: 20,
+                },
+                &mut fx,
+            )
+            .unwrap();
+            c.physical_input(
+                &mut i,
+                PhysicalEvent::KeyboardKey {
+                    key: KEY_LEFTSHIFT,
+                    pressed: true,
+                    modifiers: mods,
+                    mods_changed: true,
+                    time_us: 25,
+                },
+                &mut fx,
+            )
+            .unwrap();
+            c.physical_input(
+                &mut i,
+                PhysicalEvent::PointerAxis {
+                    axis: Axis {
+                        source: AxisSource::Wheel,
+                        amount: (0.0, -30.0),
+                        v120: (0, -240),
+                    },
+                    time_us: 30,
+                },
+                &mut fx,
+            )
+            .unwrap();
+            assert!(c.zoom_gliding());
+
+            let mut now = Duration::ZERO;
+            let mut samples = Vec::new();
+            let mut max_drift = 0.0_f64;
+            for _ in 0..300 {
+                now += period;
+                let _ = c.zoom_tick(a, now);
+                let cp = c.cameras().center(cam).unwrap();
+                let z = c.cameras().zoom(cam).unwrap();
+                let pt = (
+                    cp.x as f64 / Q16_ONE as f64 + (p.0 - extent.0 / 2.0) / z,
+                    cp.y as f64 / Q16_ONE as f64 + (p.1 - extent.1 / 2.0) / z,
+                );
+                max_drift = max_drift.max((pt.0 - pt0.0).hypot(pt.1 - pt0.1));
+                samples.push((now.as_secs_f64() * 1000.0, z.ln()));
+                if !c.zoom_gliding() {
+                    break;
+                }
+            }
+            assert!(!c.zoom_gliding(), "{feel:?} did not settle");
+            assert!(max_drift <= 0.05, "{feel:?} drift {max_drift}");
+            let zf_ln = samples.last().unwrap().1;
+            let total = zf_ln - z0.ln();
+            let t95 = samples
+                .iter()
+                .find(|&&(_, lz)| (lz - z0.ln()) / total >= 0.95)
+                .map(|&(ms, _)| ms)
+                .expect("95% sample");
+            assert!(
+                (t95 - want_ms).abs() <= want_ms * 0.10,
+                "{feel:?} t95={t95:.2}ms vs {want_ms}ms"
+            );
+        }
+    }
+
+    #[test]
+    fn floaty_wheel_momentum_decays_to_rest_and_pan_cancels_glide() {
+        use crate::PhysicalEvent;
+        use crate::entry::keys::{KEY_LEFTMETA, KEY_LEFTSHIFT};
+        use crate::input::{Axis, AxisSource};
+        use crate::navigation::ZoomFeel;
+        use crate::protocol::EffectBuf;
+        use std::time::Duration;
+
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        c.set_zoom_feel(ZoomFeel::Floaty);
+        let cam = camera_of(&c, a);
+        let period = Duration::from_micros(6_060);
+        c.zoom_tick(a, Duration::ZERO);
+
+        let mods = Modifiers {
+            logo: true,
+            shift: true,
+            ..Default::default()
+        };
+        let mut fx = EffectBuf::default();
+        for k in [KEY_LEFTMETA, KEY_LEFTSHIFT] {
+            c.physical_input(
+                &mut i,
+                PhysicalEvent::KeyboardKey {
+                    key: k,
+                    pressed: true,
+                    modifiers: mods,
+                    mods_changed: true,
+                    time_us: 10,
+                },
+                &mut fx,
+            )
+            .unwrap();
+        }
+        c.physical_input(
+            &mut i,
+            PhysicalEvent::PointerAxis {
+                axis: Axis {
+                    source: AxisSource::Wheel,
+                    amount: (0.0, -30.0),
+                    v120: (0, -240),
+                },
+                time_us: 20,
+            },
+            &mut fx,
+        )
+        .unwrap();
+        let v0 = c.cameras().glide_velocity(cam).unwrap();
+        assert!(v0 > 0.0);
+        let mut now = period;
+        let _ = c.zoom_tick(a, now);
+        let v1 = c.cameras().glide_velocity(cam).unwrap();
+        assert!(v1 < v0 && v1 > 0.0);
+
+        // Middle mouse pan cancels active glide cleanly
+        c.physical_input(
+            &mut i,
+            PhysicalEvent::PointerButton {
+                button: BTN_MIDDLE,
+                pressed: true,
+                modifiers: Modifiers {
+                    logo: true,
+                    ..Default::default()
+                },
+                time_us: 30,
+            },
+            &mut fx,
+        )
+        .unwrap();
+        c.physical_input(
+            &mut i,
+            PhysicalEvent::PointerMotion {
+                delta: (20.0, 10.0),
+                delta_unaccel: (20.0, 10.0),
+                time_us: 40,
+            },
+            &mut fx,
+        )
+        .unwrap();
+        assert!(!c.zoom_gliding());
+        now += period;
+        assert!(c.zoom_tick(a, now).is_empty());
     }
 }

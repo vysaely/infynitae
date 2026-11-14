@@ -469,6 +469,8 @@ pub struct Core {
     relief_spared: Vec<(output::OutputId, stage::ElementId)>,
     /// Canvas pan interaction style (Grab vs Rts).
     pub pan_mode: navigation::PanMode,
+    /// Camera zoom glide feel (`ZOOM_FEEL`).
+    pub zoom_feel: navigation::ZoomFeel,
     /// Whether keyboard focus follows pointer hover (Focus Follows Mouse).
     pub focus_follows_mouse: bool,
     /// Whether focus is cleared when pointer hovers over empty canvas (Strict vs Sloppy).
@@ -591,6 +593,7 @@ impl Core {
                 usable: Vec::new(),
                 windowed_placement_pending: Vec::new(),
                 pan_mode: navigation::PanMode::default(),
+                zoom_feel: navigation::ZoomFeel::default(),
                 focus_follows_mouse: false,
                 focus_follows_mouse_strict: false,
                 hover_seen: None,
@@ -746,6 +749,21 @@ impl Core {
         if self.focus.target() != hovered {
             out.extend(self.focus.set_focus(hovered));
         }
+    }
+
+    /// Sets the camera zoom glide feel (`ZOOM_FEEL`).
+    pub fn set_zoom_feel(&mut self, feel: navigation::ZoomFeel) {
+        self.zoom_feel = feel;
+    }
+
+    /// Active camera zoom glide feel.
+    pub fn zoom_feel(&self) -> navigation::ZoomFeel {
+        self.zoom_feel
+    }
+
+    /// Whether any bound camera currently has an active zoom glide.
+    pub fn zoom_gliding(&self) -> bool {
+        self.cameras.any_gliding()
     }
 
     /// Sets whether Super+Tab focus cycling moves the camera to the focused window.

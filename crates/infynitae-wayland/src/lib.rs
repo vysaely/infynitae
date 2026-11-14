@@ -1104,6 +1104,18 @@ impl WaylandState {
         result
     }
 
+    /// Advances any active camera zoom glide on `output` to `now` and applies Core effects.
+    pub fn zoom_tick(
+        &mut self,
+        output: infynitae_core::output::OutputId,
+        now: std::time::Duration,
+    ) {
+        let fx = self.core.zoom_tick(output, now);
+        if !fx.is_empty() {
+            self.apply(&fx);
+        }
+    }
+
     /// A vblank of `output`: Core's frame clock decides which observed elements complete (into
     /// reused storage), and their callbacks complete and their feedback is presented.
     pub fn frame_tick(
@@ -1214,6 +1226,7 @@ impl WaylandState {
                 let mut fit_is_fullscreen = true;
                 let mut latency_mode = crate::frame_schedule::LatencyMode::Direct;
                 let mut scaling_filter = ZoomFilter::default();
+                let mut zoom_feel = infynitae_core::navigation::ZoomFeel::Smooth;
                 // without a DIRECT_SCANOUT line: the environment's, as at start (main.rs), else on
                 let mut direct_scanout = std::env::var("DIRECT_SCANOUT")
                     .map_or(true, |v| parse_bool(&v).unwrap_or(true));
@@ -1290,6 +1303,9 @@ impl WaylandState {
                                     .core
                                     .set_pan_mode(infynitae_core::navigation::PanMode::Grab),
                             },
+                            "ZOOM_FEEL" => {
+                                zoom_feel = infynitae_core::navigation::ZoomFeel::parse(val);
+                            }
                             "SCREENCOPY_CURSOR" => {
                                 let hide = !parse_bool(val).unwrap_or(true);
                                 self.screencopy.set_hide_cursor(hide);
@@ -1551,6 +1567,7 @@ impl WaylandState {
                 }
                 self.core.set_key_bindings(bindings);
                 self.core.set_free_cursor_on_super(free_cursor_on_super);
+                self.core.set_zoom_feel(zoom_feel);
                 self.exec_commands = commands;
                 self.set_max_app_scale(max_app_scale);
                 self.x11_keys.mode = x11_keys_mode;

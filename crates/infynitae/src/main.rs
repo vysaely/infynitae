@@ -337,6 +337,10 @@ fn run() -> ExitCode {
     if let Ok(mode) = std::env::var("PAN_MODE") {
         core.set_pan_mode(parse_pan_mode(&mode));
     }
+    core.set_zoom_feel(infynitae_core::navigation::ZoomFeel::Smooth);
+    if let Ok(feel) = std::env::var("ZOOM_FEEL") {
+        core.set_zoom_feel(infynitae_core::navigation::ZoomFeel::parse(&feel));
+    }
     core.set_focus_follows_mouse(true);
     core.set_focus_follows_mouse_strict(true);
     core.set_focus_cycle_navigate(true);
@@ -394,6 +398,9 @@ fn run() -> ExitCode {
                         }
                     }
                     "PAN_MODE" => core.set_pan_mode(parse_pan_mode(val)),
+                    "ZOOM_FEEL" => {
+                        core.set_zoom_feel(infynitae_core::navigation::ZoomFeel::parse(val))
+                    }
                     "FOCUS_FOLLOWS_MOUSE" => {
                         let (enabled, strict) = parse_focus_follows_mouse(val);
                         core.set_focus_follows_mouse(enabled);

@@ -2067,6 +2067,10 @@ pub fn run_console_with(
             .screens
             .iter()
             .any(|s| s.deferred.is_some_and(|t| t <= now));
+        // a zoom glide draws on every refresh until it rests
+        if data.state.core().zoom_gliding() {
+            data.session.request_frame();
+        }
         if (data.session.frame_due() || has_screencopy || deferred_due) && data.active {
             // what this turn's input made goes to the clients first: a game reads its mouse motion
             // now, not after the compositor's own drawing (review 2026-11-12)
@@ -2319,6 +2323,7 @@ fn render(data: &mut LoopData, turn: &mut TurnClock) {
         }
 
         turn.mark("frame schedule");
+        data.state.zoom_tick(id, started);
         if locked {
             data.state.set_fitted_window(id, None);
         }
@@ -2688,6 +2693,10 @@ fn render(data: &mut LoopData, turn: &mut TurnClock) {
             c.watched = true;
             watch_copy_sync(&data.loop_handle, &c.sync, &mut data.session);
         }
+    }
+    // a zoom glide draws on every refresh until it rests
+    if data.state.core().zoom_gliding() {
+        data.session.request_frame();
     }
     turn.mark("post render");
     data.session.flush();

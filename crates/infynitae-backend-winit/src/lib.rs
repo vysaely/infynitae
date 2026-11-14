@@ -460,6 +460,9 @@ pub fn run_nested_with(
         }
 
         // Settle the scale epochs whose deadline has passed, on the session clock.
+        if data.state.core().zoom_gliding() {
+            data.session.request_frame();
+        }
         let now = data.session.now();
         if data
             .state
@@ -666,6 +669,8 @@ fn handle_input_event(
 }
 
 fn render_and_present(data: &mut LoopData) {
+    let tick_now = infynitae_wayland::presentation_clock_now();
+    data.state.zoom_tick(data.output_id, tick_now);
     let age = data.backend.buffer_age().unwrap_or(0);
     let render_res = if let Ok((renderer, mut framebuffer)) = data.backend.bind() {
         convert::render_output(
@@ -710,6 +715,9 @@ fn render_and_present(data: &mut LoopData) {
     // Complete frame callbacks and presentation feedback for clocked elements
     let now = infynitae_wayland::presentation_clock_now();
     data.state.frame_tick(data.output_id, now);
+    if data.state.core().zoom_gliding() {
+        data.session.request_frame();
+    }
     data.session.flush();
 }
 

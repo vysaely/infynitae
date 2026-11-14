@@ -124,6 +124,20 @@ pub const TABLE: &[Setting] = &[
         more: true,
         needs: &[],
     },
+    Setting {
+        key: "ZOOM_FEEL",
+        name: "Zoom feel",
+        says: "Wheel, fit and overview",
+        control: Control::Pick(&[
+            ("smooth", "Smooth"),
+            ("quick", "Quick"),
+            ("floaty", "Floaty"),
+            ("instant", "Instant"),
+        ]),
+        after: After::Save,
+        more: true,
+        needs: &[],
+    },
 ];
 
 #[cfg(test)]
@@ -429,6 +443,7 @@ mod tests {
                 ("FOCUS_CYCLE_NAVIGATE".into(), "1".into()),
                 ("PAN_MODE".into(), "free".into()),
                 ("FULLSCREEN_PAN".into(), "true".into()),
+                ("ZOOM_FEEL".into(), "smooth".into()),
             ]
             .into(),
             programs: Default::default(),

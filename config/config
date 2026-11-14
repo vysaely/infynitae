@@ -148,6 +148,14 @@ PAN_MODE="free"
     #    grab    the canvas moves under a fixed cursor
     #    rts     camera grip (edge-scroll style)
 
+ZOOM_FEEL="smooth"
+    # How camera zooms move (wheel, fit, overview, window slots, back)
+    # default: smooth
+    #   instant  each step written at once
+    #   quick    fast glide (about 100 ms)
+    #   smooth   gentle glide (about 165 ms)
+    #   floaty   slow glide (about 300 ms) with decaying wheel momentum
+
 CANVAS_COLOR="#0b0f14"
     # Background behind the windows when no wallpaper (used with THEME_SCHEME="yours"; built
     # schemes derive it from the card)
