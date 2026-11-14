@@ -748,6 +748,9 @@ impl Shell {
                 }
             }
         }
+        if was && self.live {
+            crate::cards::settings_about::clear_load_state();
+        }
         self.edit_menu = None;
         self.query.clear();
         self.selected = None;
