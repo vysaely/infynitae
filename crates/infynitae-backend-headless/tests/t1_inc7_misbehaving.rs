@@ -386,3 +386,84 @@ fn a_toplevel_buffer_after_unmap_without_configure() {
     assert_eq!(m.drive(), killed("xdg_surface", UNCONFIGURED_BUFFER));
     m.assert_survived();
 }
+
+#[test]
+fn a_mapped_toplevel_keeps_drawing_while_a_later_configure_is_unacked() {
+    let mut m = M::new();
+    let w = m.offender_window();
+    m.ls.probe.hold_acks = true;
+    m.ls.probe.surfaces[w]
+        .toplevel
+        .as_ref()
+        .expect("toplevel")
+        .set_maximized();
+    assert_eq!(m.drive(), None);
+    assert!(
+        !m.ls.probe.held_acks.is_empty(),
+        "a later configure arrived"
+    );
+    let qh = m.ls.qh.clone();
+    m.ls.probe.draw(&qh, w);
+    assert_eq!(m.drive(), None);
+    assert_eq!(m.ls.state.core().stage().mapped_elements().len(), 1);
+    m.assert_bystander_works();
+}
+
+#[test]
+fn a_null_buffer_before_initial_configure_does_not_disconnect() {
+    let mut m = M::new();
+    let qh = m.ls.qh.clone();
+    let w = m.ls.probe.toplevel_uncommitted(&qh, "W", (200, 100));
+    {
+        let wl = &m.ls.probe.surfaces[w].wl;
+        wl.attach(None, 0, 0);
+        wl.commit();
+    }
+    assert_eq!(m.drive(), None);
+    assert!(m.ls.probe.surfaces[w].configured, "initial configure acked");
+    m.ls.probe.draw(&qh, w);
+    assert_eq!(m.drive(), None);
+    assert_eq!(m.ls.state.core().stage().mapped_elements().len(), 1);
+    m.assert_bystander_works();
+}
+
+#[test]
+fn a_configure_acked_in_the_same_commit_as_the_first_buffer_is_accepted() {
+    let mut m = M::new();
+    m.ls.probe.hold_acks = true;
+    let qh = m.ls.qh.clone();
+    let w = m.ls.probe.toplevel(&qh, "W", (200, 100), 0);
+    assert_eq!(m.drive(), None);
+    let serial =
+        m.ls.probe
+            .held_acks
+            .iter()
+            .rev()
+            .find(|&&(surf, _)| surf == w)
+            .expect("held initial configure")
+            .1;
+    m.ls.probe.surfaces[w]
+        .xdg
+        .as_ref()
+        .expect("xdg")
+        .ack_configure(serial);
+    m.ls.probe.draw(&qh, w);
+    assert_eq!(m.drive(), None);
+    assert_eq!(m.ls.state.core().stage().mapped_elements().len(), 1);
+    m.assert_bystander_works();
+}
+
+#[test]
+fn a_compliant_unmap_then_empty_commit_configure_ack_remaps_cleanly() {
+    let mut m = M::new();
+    let w = m.offender_window();
+    m.ls.probe.unmap(w);
+    assert_eq!(m.drive(), None);
+    m.ls.probe.surfaces[w].wl.commit();
+    assert_eq!(m.drive(), None);
+    let qh = m.ls.qh.clone();
+    m.ls.probe.draw(&qh, w);
+    assert_eq!(m.drive(), None);
+    assert_eq!(m.ls.state.core().stage().mapped_elements().len(), 1);
+    m.assert_bystander_works();
+}
