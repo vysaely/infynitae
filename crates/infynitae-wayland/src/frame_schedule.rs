@@ -76,6 +76,14 @@ const MARGIN_MAX: Duration = Duration::from_millis(4);
 /// margin is as wide as it goes, so the render times measured do not tell when a frame is really
 /// ready (a GPU still busy after the submission); late scheduling stops for a while.
 const PAUSE_REFRESHES: u32 = 600;
+/// Composited saturation detection: pause at >= 5% misses over 100 non-settling frames (or >= 2 in
+/// 40 while recovering), doubling the pause up to ~16x and resetting after 600 clean frames.
+const SAT_WINDOW: u32 = 100;
+const SAT_MISSES: u32 = 5;
+const RECOVERY_WINDOW: u32 = 40;
+const RECOVERY_MISSES: u32 = 2;
+const PAUSE_MAX: u32 = PAUSE_REFRESHES * 16;
+const PAUSE_RESET_AFTER: u32 = 600;
 /// How long after a refresh its successors' times are trusted for [`FrameSchedule`]'s guard.
 const GUARD_TRUSTED: Duration = Duration::from_secs(1);
 /// A guarded frame starts this long after the refresh it waited for.
@@ -91,9 +99,13 @@ struct Lane {
     made_in_a_row: u32,
     /// Refreshes left in which a miss does not widen the margin (SETTLE_REFRESHES after a switch).
     settling: u32,
-    /// Refreshes left drawn at once (PAUSE_REFRESHES).
+    /// Refreshes left drawn at once (PAUSE_REFRESHES, or doubled while saturated).
     paused: u32,
     pauses: u64,
+    /// Recent non-settling late-scheduled misses (bit 0 = newest).
+    miss_bits: u128,
+    pause_hold: u32,
+    clean_since_pause: u32,
 }
 
 impl Lane {
@@ -107,6 +119,9 @@ impl Lane {
             settling: 0,
             paused: 0,
             pauses: 0,
+            miss_bits: 0,
+            pause_hold: PAUSE_REFRESHES,
+            clean_since_pause: 0,
         }
     }
 
@@ -141,6 +156,7 @@ impl Lane {
         late_scheduled: bool,
         missed: bool,
         (start_margin, floor): (Duration, Duration),
+        backoff: bool,
     ) {
         if missed {
             self.made_in_a_row = 0;
@@ -149,19 +165,44 @@ impl Lane {
         self.settling = self.settling.saturating_sub(1);
         if late_scheduled && missed && settling {
             // the switch's own frames: counted as missed, the margin left alone
-        } else if late_scheduled && missed {
-            if self.margin >= MARGIN_MAX {
-                self.paused = PAUSE_REFRESHES;
-                self.pauses += 1;
-                self.margin = start_margin;
-            } else {
-                self.margin = (self.margin + MISS_STEP).min(MARGIN_MAX);
-            }
         } else if late_scheduled {
-            self.made_in_a_row += 1;
-            if self.made_in_a_row >= SHRINK_AFTER {
-                self.made_in_a_row = 0;
-                self.margin = self.margin.saturating_sub(MISS_STEP).max(floor);
+            let sat_mask = (1u128 << SAT_WINDOW) - 1;
+            let rec_mask = (1u128 << RECOVERY_WINDOW) - 1;
+            self.miss_bits = ((self.miss_bits << 1) | u128::from(missed)) & sat_mask;
+            if missed {
+                self.clean_since_pause = 0;
+                let saturated = backoff
+                    && (self.miss_bits.count_ones() >= SAT_MISSES
+                        || (self.pause_hold > PAUSE_REFRESHES
+                            && (self.miss_bits & rec_mask).count_ones() >= RECOVERY_MISSES));
+                if self.margin >= MARGIN_MAX || saturated {
+                    self.paused = if backoff {
+                        self.pause_hold
+                    } else {
+                        PAUSE_REFRESHES
+                    };
+                    self.pauses += 1;
+                    self.margin = start_margin;
+                    self.miss_bits = 0;
+                    if backoff {
+                        self.pause_hold = (self.pause_hold * 2).min(PAUSE_MAX);
+                    }
+                } else {
+                    self.margin = (self.margin + MISS_STEP).min(MARGIN_MAX);
+                }
+            } else {
+                self.made_in_a_row += 1;
+                if self.made_in_a_row >= SHRINK_AFTER {
+                    self.made_in_a_row = 0;
+                    self.margin = self.margin.saturating_sub(MISS_STEP).max(floor);
+                }
+                if backoff && self.pause_hold > PAUSE_REFRESHES {
+                    self.clean_since_pause += 1;
+                    if self.clean_since_pause >= PAUSE_RESET_AFTER {
+                        self.pause_hold = PAUSE_REFRESHES;
+                        self.clean_since_pause = 0;
+                    }
+                }
             }
         }
     }
@@ -351,9 +392,12 @@ impl FrameSchedule {
         }
         let lane = self.active();
         if self.skip_late || lane.paused > 0 {
-            return None;
+            return self.guarded_start(now);
         }
-        let (last, budget) = (self.last_vblank?, lane.budget(self.period)?);
+        let last = self.last_vblank?;
+        let Some(budget) = lane.budget(self.period) else {
+            return self.guarded_start(now);
+        };
         let period = self.period.max(Duration::from_micros(1));
         // the first refresh after `now` that the frame can still make
         let mut refresh = last + period;
@@ -361,7 +405,11 @@ impl FrameSchedule {
             refresh += period;
         }
         let start = refresh - budget;
-        (start > now).then_some(start)
+        if start > now {
+            Some(start)
+        } else {
+            self.guarded_start(now)
+        }
     }
 
     /// [`Self::start_at`] for a frame that may already be held back until `held`: once that
@@ -435,8 +483,12 @@ impl FrameSchedule {
                 }
                 let late_scheduled = !paused && !skipped && self.mode != LatencyMode::Off;
                 let bounds = self.mode.margins_for(in_flight_direct);
-                self.lane_mut(in_flight_direct)
-                    .vblank_outcome(late_scheduled, missed, bounds);
+                self.lane_mut(in_flight_direct).vblank_outcome(
+                    late_scheduled,
+                    missed,
+                    bounds,
+                    !in_flight_direct,
+                );
             }
         }
         self.last_vblank = Some(time);
@@ -534,6 +586,9 @@ impl FrameRelief {
     }
 }
 
+/// Maximum time a pending input stays attached across empty renders while waiting for an app frame.
+const PENDING_MAX_AGE: Duration = Duration::from_millis(100);
+
 /// Input-to-screen times: from an input event to the refresh that first showed a frame drawn
 /// after it (LATENCY_STATS logs a summary).
 #[derive(Debug, Default)]
@@ -548,19 +603,33 @@ pub struct LatencyStats {
 impl LatencyStats {
     /// An input event arrived at `time`.
     pub fn input(&mut self, time: Duration) {
-        if self.pending.is_none() {
+        if self
+            .pending
+            .is_none_or(|t| time.saturating_sub(t) > PENDING_MAX_AGE)
+        {
             self.pending = Some(time);
         }
     }
 
-    /// A frame was drawn: it carries the inputs before it.
-    pub fn drawn(&mut self) {
+    /// A frame was drawn at `now`: it carries pending inputs within [`PENDING_MAX_AGE`].
+    pub fn drawn(&mut self, now: Duration) {
+        self.expire_pending(now);
         if self.in_flight.is_none() {
             self.in_flight = self.pending.take();
         }
     }
 
-    /// A turn after the input found nothing to draw: drop it so it is not charged to a later frame.
+    /// Expires a pending input older than [`PENDING_MAX_AGE`] on an empty render turn.
+    pub fn expire_pending(&mut self, now: Duration) {
+        if self
+            .pending
+            .is_some_and(|t| now.saturating_sub(t) > PENDING_MAX_AGE)
+        {
+            self.pending = None;
+        }
+    }
+
+    /// Drops any pending input unconditionally (e.g. while powered off).
     pub fn drop_pending(&mut self) {
         self.pending = None;
     }
@@ -839,10 +908,10 @@ mod tests {
         let mut l = LatencyStats::default();
         l.input(ms(10.0));
         l.input(ms(11.0));
-        l.drawn();
+        l.drawn(ms(12.0));
         l.shown(ms(14.0));
         l.input(ms(20.0));
-        l.drawn();
+        l.drawn(ms(21.0));
         l.shown(ms(22.0));
         let (p50, _, max, n) = l.take_summary().unwrap();
         assert_eq!(n, 2);
@@ -924,14 +993,14 @@ mod tests {
         let mut l = LatencyStats::default();
         // Frame already in flight is kept while an idle input after it is dropped.
         l.input(ms(10.0));
-        l.drawn();
+        l.drawn(ms(10.5));
         l.input(ms(11.0));
         l.drop_pending();
         l.shown(ms(15.0));
 
         // Later frame without another dropped input starts fresh from its own input.
         l.input(ms(1000.0));
-        l.drawn();
+        l.drawn(ms(1001.0));
         l.shown(ms(1003.0));
 
         let (_, _, max, n) = l.take_summary().unwrap();
@@ -1020,5 +1089,166 @@ mod tests {
 
         s.set_skip_late(false);
         assert!(s.start_at(t + ms(0.2)).is_some(), "late start resumes");
+    }
+
+    #[test]
+    fn skipped_or_paused_composited_frames_keep_frame_guard_protection() {
+        let mut s = warmed(LatencyMode::Direct, 1.0);
+        s.set_guard_percent(20);
+        let t = ms(100.0);
+        s.vblank(t);
+
+        s.set_skip_late(true);
+        let near_end = t + P - ms(0.3);
+        assert_eq!(
+            s.start_at(near_end),
+            Some(t + P + AFTER_REFRESH),
+            "skipped frame 0.3 ms before vblank waits until after refresh"
+        );
+        assert_eq!(
+            s.start_at(t + ms(0.5)),
+            None,
+            "skipped frame early in refresh draws at once"
+        );
+
+        s.set_skip_late(false);
+        s.composited.paused = 10;
+        assert_eq!(
+            s.start_at(near_end),
+            Some(t + P + AFTER_REFRESH),
+            "paused composited frame near vblank still gets guarded start"
+        );
+
+        let mut cold = FrameSchedule::new(LatencyMode::Direct, P);
+        cold.set_guard_percent(20);
+        cold.vblank(t);
+        assert_eq!(
+            cold.start_at(near_end),
+            Some(t + P + AFTER_REFRESH),
+            "unwarmed frame without budget near vblank still gets guarded start"
+        );
+    }
+
+    #[test]
+    fn composited_gpu_saturation_backs_off_escalates_and_keeps_direct_game_untouched() {
+        let mut s = warmed(LatencyMode::Direct, 1.0);
+        let mut t = ms(100.0);
+        s.vblank(t);
+
+        // 1 miss every 16 frames (~6.25% rate) saturates the desktop lane without hitting MARGIN_MAX first.
+        for frame in 1..=100 {
+            let miss = frame % 16 == 0;
+            s.rendered(t + ms(0.5), t + ms(1.5));
+            t += if miss { P * 2 } else { P };
+            s.vblank(t);
+            if s.pauses().1 {
+                break;
+            }
+        }
+        assert_eq!(
+            s.pauses(),
+            (1, true),
+            "desktop backed off at >=5% miss rate"
+        );
+
+        for _ in 0..PAUSE_REFRESHES {
+            assert_eq!(s.start_at(t + ms(0.2)), None, "paused");
+            t += P;
+            s.vblank(t);
+        }
+        assert!(!s.pauses().1, "first pause lasted PAUSE_REFRESHES");
+
+        // Renewed misses during recovery escalate the pause to 2x.
+        for _ in 0..RECOVERY_MISSES {
+            s.rendered(t + ms(1.0), t + ms(2.0));
+            t += P * 2;
+            s.vblank(t);
+        }
+        assert_eq!(s.pauses(), (2, true), "escalated pause");
+        for _ in 0..PAUSE_REFRESHES {
+            t += P;
+            s.vblank(t);
+        }
+        assert!(s.pauses().1, "second pause holds for 2x PAUSE_REFRESHES");
+        for _ in 0..PAUSE_REFRESHES {
+            t += P;
+            s.vblank(t);
+        }
+        assert!(!s.pauses().1, "second pause ends at 2x PAUSE_REFRESHES");
+
+        // 600 clean composited frames reset escalation back to 1x PAUSE_REFRESHES.
+        for _ in 0..PAUSE_RESET_AFTER {
+            s.rendered(t + P - ms(3.0), t + P - ms(1.0));
+            t += P;
+            s.vblank(t);
+        }
+        assert_eq!(s.composited.pause_hold, PAUSE_REFRESHES);
+
+        // Switching to direct scanout keeps the fullscreen game lane untouched.
+        s.set_scanned_out(true);
+        for _ in 0..SETTLE_REFRESHES {
+            s.rendered(t + P - ms(2.0), t + P - ms(1.0));
+            t += P;
+            s.vblank(t);
+        }
+        assert!(s.start_at(t + ms(0.2)).is_some());
+        // Direct lane still requires MARGIN_MAX (5 misses) and keeps a flat PAUSE_REFRESHES hold.
+        for _ in 0..5 {
+            s.rendered(t + ms(1.0), t + ms(2.0));
+            t += P * 2;
+            s.vblank(t);
+        }
+        assert_eq!(s.direct.pauses, 1);
+        assert_eq!(s.direct.paused, PAUSE_REFRESHES);
+        for _ in 0..PAUSE_REFRESHES {
+            t += P;
+            s.vblank(t);
+        }
+        for _ in 0..5 {
+            s.rendered(t + ms(1.0), t + ms(2.0));
+            t += P * 2;
+            s.vblank(t);
+        }
+        assert_eq!(s.direct.pauses, 2);
+        assert_eq!(
+            s.direct.paused, PAUSE_REFRESHES,
+            "direct fullscreen game lane never escalates pause hold"
+        );
+    }
+
+    #[test]
+    fn pending_input_stays_across_empty_renders_up_to_limit() {
+        let mut l = LatencyStats::default();
+        // Kept across empty renders within 100 ms until the app commits a frame.
+        l.input(ms(10.0));
+        l.expire_pending(ms(20.0));
+        l.expire_pending(ms(105.0));
+        l.drawn(ms(108.0));
+        l.shown(ms(112.0));
+        let (_, _, max, n) = l.take_summary().unwrap();
+        assert_eq!(n, 1);
+        assert_eq!(max, ms(102.0));
+
+        // Expired after 100 ms of empty renders, so unrelated later frames do not count it.
+        l.input(ms(200.0));
+        l.expire_pending(ms(301.0));
+        l.drawn(ms(310.0));
+        l.shown(ms(316.0));
+        assert!(l.take_summary().is_none());
+
+        // Also expired on drawn() if > 100 ms passed without empty renders.
+        l.input(ms(400.0));
+        l.drawn(ms(550.0));
+        l.shown(ms(556.0));
+        assert!(l.take_summary().is_none());
+
+        // Stale pending > 100 ms old is replaced by a fresh input rather than suppressing it.
+        l.input(ms(600.0));
+        l.input(ms(750.0));
+        l.drawn(ms(752.0));
+        l.shown(ms(755.0));
+        let (_, _, max, n) = l.take_summary().unwrap();
+        assert_eq!(n, 1);
+        assert_eq!(max, ms(5.0));
     }
 }

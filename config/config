@@ -248,8 +248,8 @@ FORCE_TRANSPARENT_APPS=""
 LATENCY="direct"
     # When each frame is drawn
     # default: direct
-    #   direct      balanced while a fullscreen game is shown directly (the compositor only flips
-    #               then, so drawing late costs no refreshes), off otherwise
+    #   direct      balanced while a fullscreen game is shown directly, and balanced with a wider
+    #               starting margin for composited desktop frames (backs off to off under GPU load)
     #    off        at once (the most forgiving under heavy GPU load)
     #    balanced   right before the refresh: about a frame less delay (experimental;
     #               misses more refreshes while the GPU is busy, e.g. a game or AI training)
