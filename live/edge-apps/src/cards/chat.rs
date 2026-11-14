@@ -565,6 +565,7 @@ mod tests {
             notes: &[],
             list_above: false,
             editing: false,
+            room: f64::INFINITY,
         }
     }
 

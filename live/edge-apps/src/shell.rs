@@ -222,6 +222,7 @@ impl Shell {
             notes: &self.notes,
             list_above,
             editing: self.editing(),
+            room: f64::INFINITY,
         }
     }
 
@@ -233,8 +234,11 @@ impl Shell {
 
     /// A card's whole height (its box: header, body, padding) at `width`; 0 when it hides, or a
     /// placeholder's height while editing.
-    fn card_h(&self, pc: &Placed, width: f64, list_above: bool) -> f64 {
-        let cx = self.cx(pc.size, pc.app_id.as_deref(), list_above);
+    fn card_h(&self, pc: &Placed, width: f64, list_above: bool, room: f64) -> f64 {
+        let cx = Cx {
+            room,
+            ..self.cx(pc.size, pc.app_id.as_deref(), list_above)
+        };
         let head = if pc.card.header(&cx) { HEAD_H } else { 0.0 };
         match pc.card.status(&cx) {
             Status::Hidden if cx.editing => crate::edit::PLACEHOLDER_H,
@@ -249,6 +253,57 @@ impl Shell {
     /// Panel `idx` on a screen of `w x h`: its box on screen, panel-local card rectangles (without
     /// `panel_scroll`), and total content height.
     pub fn layout_local(&self, idx: usize, w: f64, h: f64) -> (Rect, Vec<(usize, Rect)>, f64) {
+        let rooms = self.rooms(idx, w, h);
+        self.layout_with(idx, w, h, &rooms)
+    }
+
+    /// The body room of each card of panel `idx` (by card index): infinite, unless the panel
+    /// would be taller than the screen; then the flexible cards, bottom one first, give up what
+    /// is over (a card is never cut at the screen's edge just because it is long: 2026-11-14,
+    /// the control panel's notifications ran under the screen's bottom).
+    pub fn rooms(&self, idx: usize, w: f64, h: f64) -> Vec<f64> {
+        let ps = &self.panels[idx];
+        let mut rooms = vec![f64::INFINITY; ps.cards.len()];
+        if self.editing() {
+            return rooms;
+        }
+        let avail = h - 2.0 * MARGIN;
+        let (_, _, content_h) = self.layout_with(idx, w, h, &rooms);
+        let mut over = content_h - avail;
+        if over <= 0.0 {
+            return rooms;
+        }
+        let above = ps.panel.side == Side::Bottom;
+        let pw = self.width_of(idx, w);
+        let body_w = pw - 2.0 * (PAD_X - 8.0);
+        for (i, pc) in ps.cards.iter().enumerate().rev() {
+            if over <= 0.0 {
+                break;
+            }
+            if !pc.card.flexible() {
+                continue;
+            }
+            let cx = self.cx(pc.size, pc.app_id.as_deref(), above);
+            if pc.card.status(&cx) != Status::Ready {
+                continue;
+            }
+            let body = pc.card.height(&cx, body_w);
+            let room = (body - over).max(0.0);
+            let given = pc.card.height(&Cx { room, ..cx }, body_w);
+            rooms[i] = room;
+            over -= body - given;
+        }
+        rooms
+    }
+
+    /// `layout_local` with each card's body room given.
+    fn layout_with(
+        &self,
+        idx: usize,
+        w: f64,
+        h: f64,
+        rooms: &[f64],
+    ) -> (Rect, Vec<(usize, Rect)>, f64) {
         let editing = self.editing();
         let ps = &self.panels[idx];
         let pw = self.width_of(idx, w);
@@ -265,12 +320,12 @@ impl Shell {
             {
                 let half = (pw - GAP) / 2.0;
                 rows.push(vec![
-                    (i, self.card_h(a, half, above)),
-                    (i + 1, self.card_h(next.unwrap(), half, above)),
+                    (i, self.card_h(a, half, above, rooms[i])),
+                    (i + 1, self.card_h(next.unwrap(), half, above, rooms[i + 1])),
                 ]);
                 i += 2;
             } else {
-                rows.push(vec![(i, self.card_h(a, pw, above))]);
+                rows.push(vec![(i, self.card_h(a, pw, above, rooms[i]))]);
                 i += 1;
             }
         }
@@ -291,10 +346,50 @@ impl Shell {
                 + heights.iter().sum::<f64>()
                 + (GAP + strip) * rows.len().saturating_sub(1) as f64
         };
-        let ph = content_h.min(h - 2.0 * MARGIN);
+        // Taller than the screen: the rows flow into more columns side by side (first column on
+        // the left), when they fit across the screen; otherwise one column that scrolls.
+        let avail = h - 2.0 * MARGIN;
+        let mut col_of = vec![0usize; rows.len()];
+        let mut cols = 1usize;
+        if !editing && content_h > avail && rows.len() > 1 {
+            let mut y = 0.0;
+            let mut c = 0usize;
+            for (k, rh) in heights.iter().enumerate() {
+                if y > 0.0 && y + rh > avail {
+                    c += 1;
+                    y = 0.0;
+                }
+                col_of[k] = c;
+                y += rh + GAP;
+            }
+            if (c + 1) as f64 * pw + c as f64 * GAP <= w - 2.0 * MARGIN {
+                cols = c + 1;
+            } else {
+                col_of.fill(0);
+            }
+        }
+        let content_h = if cols > 1 {
+            let mut tallest: f64 = 0.0;
+            for c in 0..cols {
+                let rows_in: Vec<f64> = heights
+                    .iter()
+                    .zip(&col_of)
+                    .filter(|(_, k)| **k == c)
+                    .map(|(rh, _)| *rh)
+                    .collect();
+                tallest = tallest.max(
+                    rows_in.iter().sum::<f64>() + GAP * rows_in.len().saturating_sub(1) as f64,
+                );
+            }
+            tallest
+        } else {
+            content_h
+        };
+        let tw = cols as f64 * pw + (cols - 1) as f64 * GAP;
+        let ph = content_h.min(avail);
         let p = &ps.panel;
         let (along_w, size) = if p.side.horizontal() {
-            (w, pw)
+            (w, tw)
         } else {
             (h, ph)
         };
@@ -308,21 +403,27 @@ impl Shell {
             Side::Top => (along, MARGIN),
             Side::Bottom => (along, h - ph - MARGIN),
             Side::Left => (MARGIN, along),
-            Side::Right => (w - pw - MARGIN, along),
+            Side::Right => (w - tw - MARGIN, along),
         };
         let mut out = Vec::new();
         let mut y = strip;
-        for (row, rh) in rows.iter().zip(&heights) {
+        let mut col = 0usize;
+        for ((row, rh), c) in rows.iter().zip(&heights).zip(&col_of) {
+            if *c != col {
+                col = *c;
+                y = strip;
+            }
+            let x0 = col as f64 * (pw + GAP);
             if row.len() == 2 {
                 let half = (pw - GAP) / 2.0;
-                out.push((row[0].0, (0.0, y, half, row[0].1)));
-                out.push((row[1].0, (half + GAP, y, half, row[1].1)));
+                out.push((row[0].0, (x0, y, half, row[0].1)));
+                out.push((row[1].0, (x0 + half + GAP, y, half, row[1].1)));
             } else {
-                out.push((row[0].0, (0.0, y, pw, row[0].1)));
+                out.push((row[0].0, (x0, y, pw, row[0].1)));
             }
             y += rh + GAP + strip;
         }
-        ((ox, oy, pw, ph), out, content_h)
+        ((ox, oy, tw, ph), out, content_h)
     }
 
     /// Panel `idx` on a screen of `w x h`: its box, and each shown card's screen rectangle (halves
@@ -1234,6 +1335,12 @@ impl Shell {
             (pc.size, pc.app_id.clone())
         };
         let theme = self.theme.clone();
+        let (w, h) = self.last_screen;
+        let room = self
+            .rooms(idx, w, h)
+            .get(ci)
+            .copied()
+            .unwrap_or(f64::INFINITY);
         let cx = Cx {
             theme: &theme,
             now: self.now,
@@ -1246,6 +1353,7 @@ impl Shell {
             notes: &self.notes,
             list_above: above,
             editing,
+            room,
         };
         let mut out = Vec::new();
         let pc = &mut self.panels[idx].cards[ci];
@@ -1649,7 +1757,8 @@ impl Shell {
         }
         let idx = self.open?;
         let editing = self.editing();
-        let (pbox, local_rects, content_h) = self.layout_local(idx, w, h);
+        let rooms = self.rooms(idx, w, h);
+        let (pbox, local_rects, content_h) = self.layout_with(idx, w, h, &rooms);
         let max_scroll = (content_h - pbox.3).max(0.0);
         let scroll = self.panel_scroll.clamp(0.0, max_scroll);
         let rects: Vec<(usize, Rect)> = local_rects
@@ -1671,7 +1780,10 @@ impl Shell {
         cr.clip();
         for (ci, r) in &rects {
             let pc = &ps.cards[*ci];
-            let cx = self.cx(pc.size, pc.app_id.as_deref(), above);
+            let cx = Cx {
+                room: rooms[*ci],
+                ..self.cx(pc.size, pc.app_id.as_deref(), above)
+            };
             let status = pc.card.status(&cx);
             let sel = if editing {
                 None
@@ -1936,6 +2048,83 @@ mod tests {
         assert!(sh.open_panel(idx, false, Instant::now()));
         sh.open_ms = f64::INFINITY;
         (sh, idx)
+    }
+
+    #[test]
+    fn a_panel_taller_than_the_screen_shows_fewer_notifications_instead_of_cutting_the_card() {
+        // 2026-11-14: the control panel ran under the screen's bottom edge and cut the
+        // notifications card in half (the panel scrolled, but nothing showed it)
+        let mut sh = shell("SUPER+A bottom right 380 notifications/list");
+        sh.notes = (0..8)
+            .map(|i| crate::card::Note {
+                id: i,
+                app: format!("App{i}"),
+                summary: format!("Title {i}"),
+                body: "body".into(),
+                actions: vec![],
+                urgency: 1,
+                time: "12:00".into(),
+            })
+            .collect();
+        let idx = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "control")
+            .unwrap();
+        // room for everything: nothing is limited
+        assert!(sh
+            .rooms(idx, 1920.0, 1080.0)
+            .iter()
+            .all(|r| r.is_infinite()));
+        let (_, _, tall) = sh.layout_local(idx, 1920.0, 1080.0);
+        // a short screen: the list gives up whole notifications until the panel fits
+        let h = 300.0;
+        let rooms = sh.rooms(idx, 1920.0, h);
+        assert!(rooms[0].is_finite());
+        let (pbox, rects, content_h) = sh.layout_local(idx, 1920.0, h);
+        assert!(content_h < tall);
+        assert!(
+            content_h <= h - 2.0 * MARGIN,
+            "{content_h} > {}",
+            h - 2.0 * MARGIN
+        );
+        assert!(rects.iter().all(|(_, r)| r.1 + r.3 <= pbox.3 + 0.5));
+        // the title counts the ones left out
+        let pc = &sh.panels[idx].cards[0];
+        let cx = Cx {
+            room: rooms[0],
+            ..sh.cx(pc.size, None, true)
+        };
+        assert!(pc.card.title(&cx).is_some_and(|t| t.contains("more")));
+    }
+
+    #[test]
+    fn a_panel_taller_than_the_screen_flows_into_a_second_column() {
+        let sh = shell("SUPER+A bottom right 380 calendar/clock settings/network settings/bluetooth settings/power settings/session");
+        let idx = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "control")
+            .unwrap();
+        let (one, rects1, h1) = sh.layout_local(idx, 1920.0, 1080.0);
+        assert!(
+            rects1.iter().all(|(_, r)| r.0 == 0.0),
+            "one column when it fits"
+        );
+        // a screen too short for the cards in one column
+        let h = h1 * 0.7 + 2.0 * MARGIN;
+        let (pbox, rects, content_h) = sh.layout_local(idx, 1920.0, h);
+        assert!(content_h <= h - 2.0 * MARGIN);
+        assert!(rects.iter().any(|(_, r)| r.0 > 0.0), "a second column");
+        assert!(pbox.2 > one.2, "the panel is wider");
+        // right-aligned: it still ends at the screen's right margin, and every card is inside it
+        assert!((pbox.0 + pbox.2 - (1920.0 - MARGIN)).abs() < 0.5);
+        assert!(rects
+            .iter()
+            .all(|(_, r)| r.1 + r.3 <= pbox.3 + 0.5 && r.0 + r.2 <= pbox.2 + 0.5));
+        // too narrow for two columns: one column that scrolls, as before
+        let (narrow, rects_n, _) = sh.layout_local(idx, 600.0, h);
+        assert!(rects_n.iter().all(|(_, r)| r.0 == 0.0) && narrow.2 <= 600.0);
     }
 
     /// Draws once, as a frame would: the hits keyboard moves go over.
