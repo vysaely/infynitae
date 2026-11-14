@@ -33,7 +33,7 @@ pub const KIND_APPEARANCE: CardKind = CardKind {
     sizes: &[Size::S, Size::M],
     default: Size::S,
     half: false,
-    sources: &["config", "look"],
+    sources: &["config", "look", "face"],
 };
 
 pub const KIND_WALLPAPER: CardKind = CardKind {
@@ -73,6 +73,11 @@ const H_CAND_SQ_BASE: u32 = PICKER + 30;
 const H_WP_MODE_OPT_BASE: u32 = PICKER + 40;
 const H_RECENT_BASE: u32 = PICKER + 50;
 const H_SCHEME_BASE: u32 = PICKER + 70;
+const FACE_ROW: u32 = 900;
+const FACE_THUMB: u32 = 30_000;
+const FACE_ROW_THUMB: i32 = 24;
+const FACE_GRID_THUMB: i32 = 96;
+const FACE_MAX_THUMBS: usize = MAX_WALLPAPERS;
 const SLIDE_H: f64 = 22.0;
 const SWATCH: f64 = 16.0;
 const MAX_LIST_ROWS: usize = 8;
@@ -418,6 +423,113 @@ fn decode_wallpaper_thumbs(files: &[WallpaperFile]) -> (ThumbList, ThumbList) {
         .map(|f| icons::cached_wallpaper_thumb(Path::new(&f.path), THUMB_M.0, THUMB_M.1))
         .collect();
     (thumbs_s, thumbs_m)
+}
+
+/// Current user picture (`~/.face`) and candidate pictures from `~/Pictures` and
+/// `~/Pictures/Wallpapers`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct FaceData {
+    pub current: Option<Arc<DecodedImage>>,
+    pub files: Vec<WallpaperFile>,
+    pub thumbs: ThumbList,
+}
+
+/// Scans `~/.face` and `~/Pictures` / `~/Pictures/Wallpapers` off the UI thread, reusing
+/// `icons::ThumbCache` via `icons::cached_wallpaper_thumb`.
+pub struct FaceSource {
+    pub home: PathBuf,
+}
+
+impl FaceSource {
+    pub fn system() -> FaceSource {
+        FaceSource { home: env_home() }
+    }
+}
+
+impl Source for FaceSource {
+    fn fetch(&mut self) -> Data {
+        if let Some(raw) = render_value("face") {
+            let mut current_path: Option<PathBuf> = None;
+            let mut files = Vec::new();
+            let home_s = self.home.to_string_lossy().into_owned();
+            for line in raw.lines() {
+                let l = line.trim();
+                if l.is_empty() {
+                    continue;
+                }
+                if let Some(p) = l.strip_prefix("current=") {
+                    if !p.is_empty() {
+                        current_path = Some(PathBuf::from(expand_home(p, &home_s)));
+                    }
+                    continue;
+                }
+                let expanded = expand_home(l, &home_s);
+                let name = Path::new(&expanded)
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or(l)
+                    .to_string();
+                files.push(WallpaperFile {
+                    name,
+                    path: expanded,
+                });
+            }
+            let current = current_path
+                .filter(|p| p.is_file())
+                .and_then(|p| icons::cached_wallpaper_thumb(&p, FACE_ROW_THUMB, FACE_ROW_THUMB));
+            let thumbs = decode_face_thumbs(&files);
+            return Box::new(FaceData {
+                current,
+                files,
+                thumbs,
+            });
+        }
+        let face_path = self.home.join(".face");
+        let current = face_path
+            .is_file()
+            .then(|| icons::cached_wallpaper_thumb(&face_path, FACE_ROW_THUMB, FACE_ROW_THUMB))
+            .flatten();
+        let dirs = [
+            self.home.join("Pictures"),
+            self.home.join("Pictures/Wallpapers"),
+        ];
+        let files = scan_wallpapers(&dirs);
+        let thumbs = decode_face_thumbs(&files);
+        Box::new(FaceData {
+            current,
+            files,
+            thumbs,
+        })
+    }
+
+    fn every(&self) -> Option<Duration> {
+        None
+    }
+}
+
+fn decode_face_thumbs(files: &[WallpaperFile]) -> ThumbList {
+    files[..files.len().min(FACE_MAX_THUMBS)]
+        .iter()
+        .map(|f| {
+            icons::cached_wallpaper_thumb(Path::new(&f.path), FACE_GRID_THUMB, FACE_GRID_THUMB)
+        })
+        .collect()
+}
+
+/// Shell command to crop `src` into `~/.face` (256x256 PNG), keep `~/.face.bak`, and log `FACE`.
+pub fn face_command(src: &str) -> String {
+    let q = sq(src);
+    format!(
+        "E=\"${{INFYNITAE_EDGE_APPS:-$HOME/.local/bin/infynitae-edge-apps}}\"; \
+         [ -x \"$E\" ] || E=infynitae-edge-apps; \
+         f=\"$HOME/.face\"; b=\"$HOME/.face.bak\"; \
+         if [ -e \"$f\" ]; then old=.face.bak; else old=-; fi; \
+         if \"$E\" --crop-face {q} \"$f.new\"; then \
+         if [ -e \"$f\" ]; then cp -f \"$f\" \"$b\"; fi; \
+         mv -f \"$f.new\" \"$f\" && \
+         sh \"$HOME/infynitae/live/settings.sh\" log FACE \"$old\" >/dev/null 2>&1; \
+         else rm -f \"$f.new\"; false; fi"
+    )
 }
 
 /// Lists installed font families from `fc-list`.
@@ -1052,6 +1164,9 @@ pub struct LookCard {
     config: Option<ConfigData>,
     look: Option<LookData>,
     wallpapers: Option<WallpapersData>,
+    face: Option<FaceData>,
+    face_open: bool,
+    face_preview: Option<Arc<DecodedImage>>,
     found: HashMap<&'static str, Vec<String>>,
     pending: HashMap<&'static str, String>,
     pick: Option<usize>,
@@ -1091,6 +1206,9 @@ impl LookCard {
             config: None,
             look: None,
             wallpapers: None,
+            face: None,
+            face_open: false,
+            face_preview: None,
             found: HashMap::new(),
             pending: HashMap::new(),
             pick: None,
@@ -2723,6 +2841,169 @@ fn draw_swatch(cr: &Context, cx: &Cx, x: f64, r: Rect, rgb: [u8; 3]) {
     let _ = cr.stroke();
 }
 
+impl LookCard {
+    fn show_face_row(&self, cx: &Cx) -> bool {
+        let _ = cx;
+        if self.kind != LookKind::Appearance || self.config.is_none() {
+            return false;
+        }
+        if self.query.trim().is_empty() {
+            return true;
+        }
+        let hay = "your picture face avatar photo";
+        self.query
+            .split_whitespace()
+            .all(|w| hay.contains(&w.to_lowercase()))
+    }
+
+    fn face_grid_geom(cx: &Cx, width: f64) -> (usize, f64) {
+        let cols = if cx.size == Size::S { 3 } else { 4 };
+        let avail =
+            (width - 2.0 * THUMB_PAD_X - (cols - 1) as f64 * THUMB_GAP).max(cols as f64 * 32.0);
+        let cell = (avail / cols as f64).floor();
+        (cols, cell)
+    }
+
+    fn face_h(&self, cx: &Cx, width: f64) -> f64 {
+        if !self.show_face_row(cx) {
+            return 0.0;
+        }
+        if !self.face_open {
+            return ui::ROW_H;
+        }
+        let n = self
+            .face
+            .as_ref()
+            .map_or(0, |f| f.files.len().min(FACE_MAX_THUMBS));
+        if n == 0 {
+            return ui::ROW_H * 2.0;
+        }
+        let (cols, cell) = Self::face_grid_geom(cx, width);
+        let rows = n.div_ceil(cols);
+        ui::ROW_H + THUMB_TOP_PAD + rows as f64 * cell + rows.saturating_sub(1) as f64 * THUMB_GAP
+    }
+
+    fn draw_face_section(&self, cr: &Context, cx: &Cx, hits: &mut Hits, body: Rect, y: f64) -> f64 {
+        let r = (body.0, y, body.2, ui::ROW_H);
+        let right = body.0 + body.2 - 8.0;
+        let current = self
+            .face_preview
+            .as_ref()
+            .or_else(|| self.face.as_ref().and_then(|f| f.current.as_ref()));
+        let right_pad = if current.is_some() { 32.0 } else { 44.0 };
+        ui::row(
+            cr,
+            cx,
+            hits,
+            FACE_ROW,
+            r,
+            &Row {
+                icon: None,
+                name: "Your picture",
+                state: "",
+                on: self.face_open,
+                right: right_pad,
+            },
+        );
+        if let Some(img) = current {
+            let rad = 12.0;
+            let cx_c = right - rad;
+            let cy_c = y + ui::ROW_H / 2.0;
+            let _ = cr.save();
+            cr.arc(cx_c, cy_c, rad, 0.0, std::f64::consts::TAU);
+            cr.clip();
+            if let Some(surf) = thumb_surface(img) {
+                let sw = surf.width() as f64;
+                let sh = surf.height() as f64;
+                let d = 2.0 * rad;
+                cr.translate(cx_c - rad, cy_c - rad);
+                cr.scale(d / sw, d / sh);
+                let _ = cr.set_source_surface(&surf, 0.0, 0.0);
+                let _ = cr.paint();
+            } else {
+                draw::set(cr, cx.theme.track.alpha(0.35));
+                let _ = cr.paint();
+            }
+            let _ = cr.restore();
+        } else {
+            value_at_right_capped(cr, cx, r, right, body.2 * 0.4, "None", false);
+        }
+
+        if !self.face_open {
+            return ui::ROW_H;
+        }
+        let grid_y = y + ui::ROW_H;
+        let files = self
+            .face
+            .as_ref()
+            .map(|f| &f.files[..f.files.len().min(FACE_MAX_THUMBS)])
+            .unwrap_or(&[]);
+        if files.is_empty() {
+            draw::text_max(
+                cr,
+                body.0 + 8.0,
+                grid_y + (ui::ROW_H - 15.0) / 2.0,
+                (body.2 - 16.0).max(20.0),
+                &Text {
+                    size: 12.0,
+                    bold: false,
+                    color: cx.theme.muted,
+                    text: "No pictures in ~/Pictures",
+                },
+            );
+            return ui::ROW_H * 2.0;
+        }
+        let (cols, cell) = Self::face_grid_geom(cx, body.2);
+        let thumbs = self.face.as_ref().map(|f| f.thumbs.as_slice());
+        for idx in 0..files.len() {
+            let row = idx / cols;
+            let col = idx % cols;
+            let tx = body.0 + THUMB_PAD_X + col as f64 * (cell + THUMB_GAP);
+            let ty = grid_y + THUMB_TOP_PAD + row as f64 * (cell + THUMB_GAP);
+            let cell_r = (tx, ty, cell, cell);
+            let id = FACE_THUMB + idx as u32;
+            let hover = hits.add(id, cell_r);
+            let sel = hits.selected(id);
+
+            let _ = cr.save();
+            draw::round_rect(cr, tx, ty, cell, cell, THUMB_RADIUS);
+            cr.clip();
+            if let Some(surf) = thumbs
+                .and_then(|t| t.get(idx))
+                .and_then(|o| o.as_ref())
+                .and_then(thumb_surface)
+            {
+                let sw = surf.width() as f64;
+                let sh = surf.height() as f64;
+                if (sw - cell).abs() > 1.0 || (sh - cell).abs() > 1.0 {
+                    cr.translate(tx, ty);
+                    cr.scale(cell / sw, cell / sh);
+                    let _ = cr.set_source_surface(&surf, 0.0, 0.0);
+                } else {
+                    let _ = cr.set_source_surface(&surf, tx, ty);
+                }
+                let _ = cr.paint();
+            } else {
+                draw::set(cr, cx.theme.track.alpha(0.28));
+                let _ = cr.paint();
+            }
+            if hover {
+                draw::set(cr, cx.theme.text.alpha(ui::LIGHT_ALPHA));
+                let _ = cr.paint();
+            }
+            let _ = cr.restore();
+
+            if sel {
+                cr.set_line_width(2.0);
+                draw::set(cr, cx.theme.accent);
+                draw::round_rect(cr, tx, ty, cell, cell, THUMB_RADIUS);
+                let _ = cr.stroke();
+            }
+        }
+        self.face_h(cx, body.2)
+    }
+}
+
 impl Card for LookCard {
     fn apply(&mut self, key: &str, data: &dyn Any) -> bool {
         match key {
@@ -2754,6 +3035,15 @@ impl Card for LookCard {
                 self.wallpapers = Some(d.clone());
                 changed
             }
+            "face" => {
+                let Some(d) = data.downcast_ref::<FaceData>() else {
+                    return false;
+                };
+                let changed = self.face.as_ref() != Some(d) || self.face_preview.is_some();
+                self.face = Some(d.clone());
+                self.face_preview = None;
+                changed
+            }
             "fonts" | "fonts-mono" | "icons" | "cursors" => {
                 let Some(d) = data.downcast_ref::<FoundNames>() else {
                     return false;
@@ -2776,7 +3066,7 @@ impl Card for LookCard {
     fn status(&self, cx: &Cx) -> Status {
         if !self.ready_for_status() {
             Status::Loading
-        } else if self.shown(cx).0.is_empty() {
+        } else if self.shown(cx).0.is_empty() && !self.show_face_row(cx) {
             Status::Hidden
         } else {
             Status::Ready
@@ -2786,6 +3076,7 @@ impl Card for LookCard {
     fn height(&self, cx: &Cx, width: f64) -> f64 {
         let (rows, more) = self.shown(cx);
         rows.iter().map(|&i| self.row_h(cx, i, width)).sum::<f64>()
+            + self.face_h(cx, width)
             + if more { ui::ROW_H } else { 0.0 }
     }
 
@@ -2985,6 +3276,9 @@ impl Card for LookCard {
             }
             y += h;
         }
+        if self.show_face_row(cx) {
+            y += self.draw_face_section(cr, cx, hits, body, y);
+        }
         if more {
             let r = (body.0, y, body.2, ui::ROW_H);
             ui::row(
@@ -3056,6 +3350,35 @@ impl Card for LookCard {
                 let hit = *hit;
                 if hit == MORE {
                     self.more = !self.more;
+                    return true;
+                }
+                if hit == FACE_ROW {
+                    if !self.show_face_row(cx) {
+                        return false;
+                    }
+                    self.face_open = !self.face_open;
+                    if self.face_open {
+                        self.pick = None;
+                        self.list.open = false;
+                        self.wp_mode_open = false;
+                    }
+                    return true;
+                }
+                if (FACE_THUMB..FACE_THUMB + FACE_MAX_THUMBS as u32).contains(&hit) {
+                    if !self.face_open || !self.show_face_row(cx) {
+                        return false;
+                    }
+                    let idx = (hit - FACE_THUMB) as usize;
+                    let Some(face) = &self.face else {
+                        return false;
+                    };
+                    let Some(file) = face.files.get(idx) else {
+                        return false;
+                    };
+                    let path = file.path.clone();
+                    self.face_preview = face.thumbs.get(idx).and_then(|o| o.clone());
+                    self.face_open = false;
+                    out.push(Action::Run(face_command(&path)));
                     return true;
                 }
                 if hit >= PICKER {
@@ -3347,6 +3670,12 @@ impl Card for LookCard {
 
     fn show_list(&mut self) {
         if self.kind == LookKind::Appearance {
+            if std::env::var_os("INFYNITAE_EDGE_RENDER_FACE")
+                .is_some_and(|v| v == "1" || v == "true")
+            {
+                self.face_open = true;
+                return;
+            }
             if let Ok(tab) = std::env::var("INFYNITAE_EDGE_RENDER_ACCENT_TAB") {
                 if tab == "wallpaper" || tab == "any" {
                     self.open_accent_pick(ACCENT_ROW);
@@ -3374,6 +3703,10 @@ impl Card for LookCard {
             self.list.settle();
             self.list_scroll = 0;
         }
+    }
+
+    fn panel_closed(&mut self) {
+        self.face_open = false;
     }
 }
 
@@ -4246,6 +4579,7 @@ mod tests {
         }
         for key in [
             "look",
+            "face",
             "wallpapers",
             "fonts",
             "fonts-mono",
@@ -4758,6 +5092,193 @@ mod tests {
         assert_eq!(
             blue_dom, 0,
             "expected no accent blue pixels on Not a colour row"
+        );
+    }
+
+    fn write_png_rgba(path: &Path, w: i32, h: i32, rgba: [u8; 4]) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        let surf = ImageSurface::create(Format::ARgb32, w, h).unwrap();
+        {
+            let cr = Context::new(&surf).unwrap();
+            cr.set_source_rgba(
+                rgba[0] as f64 / 255.0,
+                rgba[1] as f64 / 255.0,
+                rgba[2] as f64 / 255.0,
+                rgba[3] as f64 / 255.0,
+            );
+            let _ = cr.paint();
+        }
+        let mut f = fs::File::create(path).unwrap();
+        surf.write_to_png(&mut f).unwrap();
+    }
+
+    fn has_hit(hits: &Hits, id: u32) -> bool {
+        hits.list.iter().any(|(h, _)| *h == id)
+    }
+
+    #[test]
+    fn face_row_visibility_query_filter_and_panel_close() {
+        let th = test_theme();
+        let cx = test_cx(&th);
+
+        // Wallpaper card never draws Your picture.
+        let wall = init_wallpaper(&[], true, &[]);
+        let (wall_hits, _) = draw_card(&wall, &cx, 404.0);
+        assert!(!has_hit(&wall_hits, FACE_ROW));
+
+        // Appearance shows Your picture at bottom; None when empty.
+        let mut card = init_appearance(&[], true, &[]);
+        assert!(!card.face_open);
+        let (hits, h_closed) = draw_card(&card, &cx, 404.0);
+        assert!(has_hit(&hits, FACE_ROW));
+
+        // Clicking opens the empty grid with an honest empty state, and panel_closed closes it.
+        let mut out = Vec::new();
+        assert!(card.event(&press(FACE_ROW), &cx, &mut out));
+        assert!(card.face_open);
+        assert!(out.is_empty());
+        let h_empty_open = card.height(&cx, 404.0);
+        assert!((h_empty_open - (h_closed + ui::ROW_H)).abs() < 0.01);
+
+        card.panel_closed();
+        assert!(!card.face_open);
+
+        // Query matching "picture" keeps the card visible with Your picture shown.
+        assert!(card.event(&Event::Text("picture"), &cx, &mut out));
+        assert_eq!(card.status(&cx), Status::Ready);
+        let (q_hits, _) = draw_card(&card, &cx, 404.0);
+        assert!(has_hit(&q_hits, FACE_ROW));
+
+        // Non-matching query hides Appearance completely.
+        assert!(card.event(&Event::Text("zzz-missing-zzz"), &cx, &mut out));
+        assert_eq!(card.status(&cx), Status::Hidden);
+    }
+
+    #[test]
+    fn face_source_scans_and_grid_picks_image_with_quoted_command() {
+        let dir = TempDir::new("face-source");
+        let home = &dir.0;
+        write_png_rgba(&home.join(".face"), 32, 32, [30, 80, 200, 255]);
+        let pic1 = home.join("Pictures/avatar 'one'.png");
+        let pic2 = home.join("Pictures/Wallpapers/wide.png");
+        write_png_rgba(&pic1, 64, 32, [220, 40, 40, 255]);
+        write_png_rgba(&pic2, 32, 80, [40, 200, 60, 255]);
+
+        let mut src = FaceSource { home: home.clone() };
+        let data = src.fetch();
+        let face = data.downcast_ref::<FaceData>().unwrap();
+        assert!(face.current.is_some());
+        assert_eq!(face.files.len(), 2);
+        assert_eq!(face.thumbs.len(), 2);
+        assert!(face.thumbs.iter().all(|t| t.is_some()));
+
+        let th = test_theme();
+        let cx = test_cx(&th);
+        let mut card = init_appearance(&[], true, &[]);
+        let h_no_face = card.height(&cx, 404.0);
+        card.apply("face", &*data);
+        let h_with_face = card.height(&cx, 404.0);
+        assert!((h_no_face - h_with_face).abs() < 0.01);
+
+        let mut out = Vec::new();
+        assert!(card.event(&press(FACE_ROW), &cx, &mut out));
+        assert!(card.face_open);
+
+        let (hits, h_open) = draw_card(&card, &cx, 404.0);
+        assert!(h_open > h_with_face + ui::ROW_H);
+        assert!(has_hit(&hits, FACE_THUMB));
+        assert!(has_hit(&hits, FACE_THUMB + 1));
+
+        let pic1_idx = face
+            .files
+            .iter()
+            .position(|f| f.path.contains("avatar 'one'.png"))
+            .unwrap() as u32;
+        assert!(card.event(&press(FACE_THUMB + pic1_idx), &cx, &mut out));
+        assert!(!card.face_open);
+        assert!(card.face_preview.is_some());
+        assert_eq!(out.len(), 1);
+        match &out[0] {
+            Action::Run(cmd) => {
+                assert!(cmd.contains("--crop-face"));
+                assert!(cmd.contains(&sq(&pic1.to_string_lossy())));
+                assert!(cmd.contains("log FACE"));
+            }
+            other => panic!("expected Action::Run, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn face_command_backs_up_existing_face_and_logs_undo_entry() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = TempDir::new("face-cmd");
+        let home = &dir.0;
+        let tricky = home.join("Pictures/it's \"me\" (1).png");
+        write_png_rgba(&tricky, 100, 60, [200, 30, 50, 255]);
+
+        let bin = dir.0.join("fake-edge");
+        let log_file = dir.0.join("log.txt");
+        fs::write(
+            &bin,
+            format!(
+                "#!/bin/sh\nif [ \"$1\" != \"--crop-face\" ]; then exit 2; fi\nprintf 'crop:%s\\n' \"$2\" >> '{}'\ncp \"$2\" \"$3\"\n",
+                log_file.display()
+            ),
+        )
+        .unwrap();
+        let mut perm = fs::metadata(&bin).unwrap().permissions();
+        perm.set_mode(0o755);
+        fs::set_permissions(&bin, perm).unwrap();
+
+        let sh_path = home.join("infynitae/live/settings.sh");
+        fs::create_dir_all(sh_path.parent().unwrap()).unwrap();
+        fs::write(
+            &sh_path,
+            format!(
+                "#!/bin/sh\nprintf 'sh:%s %s %s\\n' \"$1\" \"$2\" \"$3\" >> '{}'\n",
+                log_file.display()
+            ),
+        )
+        .unwrap();
+
+        let run_face = |src: &Path| {
+            let cmd = face_command(&src.to_string_lossy());
+            std::process::Command::new("sh")
+                .args(["-c", &cmd])
+                .env("HOME", home)
+                .env("INFYNITAE_EDGE_APPS", &bin)
+                .status()
+                .unwrap()
+        };
+
+        // First set when ~/.face does not exist -> old is "-".
+        assert!(run_face(&tricky).success());
+        assert!(home.join(".face").is_file());
+        assert!(!home.join(".face.bak").exists());
+        let first_bytes = fs::read(home.join(".face")).unwrap();
+        assert_eq!(first_bytes, fs::read(&tricky).unwrap());
+
+        // Second set when ~/.face exists -> old backed up to ~/.face.bak and old is ".face.bak".
+        let second = home.join("Pictures/second.png");
+        write_png_rgba(&second, 40, 40, [20, 200, 40, 255]);
+        assert!(run_face(&second).success());
+        assert_eq!(fs::read(home.join(".face.bak")).unwrap(), first_bytes);
+        assert_eq!(
+            fs::read(home.join(".face")).unwrap(),
+            fs::read(&second).unwrap()
+        );
+
+        let logged = fs::read_to_string(&log_file).unwrap();
+        assert_eq!(
+            logged,
+            format!(
+                "crop:{}\nsh:log FACE -\ncrop:{}\nsh:log FACE .face.bak\n",
+                tricky.display(),
+                second.display()
+            )
         );
     }
 }

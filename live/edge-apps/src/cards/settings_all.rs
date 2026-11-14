@@ -107,6 +107,7 @@ pub const KIND: CardKind = CardKind {
         "config",
         "look",
         "wallpapers",
+        "face",
         "fonts",
         "fonts-mono",
         "icons",
@@ -1134,6 +1135,19 @@ impl Card for SettingsAllCard {
         }
         if !GROUPS.is_empty() {
             self.open = Some(0);
+            if std::env::var_os("INFYNITAE_EDGE_RENDER_FACE")
+                .is_some_and(|v| v == "1" || v == "true")
+            {
+                if let Some(&i) = GROUPS[0].children.first() {
+                    self.children[i].show_list();
+                }
+            }
+        }
+    }
+
+    fn panel_closed(&mut self) {
+        for c in &mut self.children {
+            c.panel_closed();
         }
     }
 }

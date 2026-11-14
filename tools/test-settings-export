@@ -1,0 +1,140 @@
+#!/bin/sh
+# tools/test-settings-export: tests export, import-preview, and import in live/settings.sh.
+set -eu
+
+REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
+TMP=$(mktemp -d "/tmp/infynitae-test-settings-export.XXXXXX")
+trap 'rm -rf "$TMP"' EXIT INT TERM
+
+fail=0
+check() {
+    if [ "$2" = "$3" ]; then
+        echo "ok   $1"
+    else
+        echo "FAIL $1: expected '$3', got '$2'"
+        fail=1
+    fi
+}
+
+BIN="$TMP/bin"
+mkdir -p "$BIN"
+cat > "$BIN/notify-send" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" > "$TMP/notify.log"
+EOF
+chmod +x "$BIN/notify-send"
+PATH="$BIN:$PATH"
+
+H="$TMP/home"
+CFG_DIR="$H/.config/infynitae"
+CFG="$CFG_DIR/config"
+mkdir -p "$CFG_DIR" "$H/.local/share/keyrings" "$H/.mozilla/firefox" "$H/.local/state/infynitae"
+printf 'ACCENT="#7aa2f7"\nFONT_SIZE="11"\n' > "$CFG"
+printf 'SECRET=do-not-export\n' > "$H/.local/share/keyrings/login.keyring"
+printf 'user_pref("a", 1);\n' > "$H/.mozilla/firefox/prefs.js"
+printf '100\tACCENT\t#111111\n' > "$H/.local/state/infynitae/settings-changes"
+
+# 1. export without panels.backup or .face + notification check
+arch1=$(HOME="$H" CONFIG_FILE="$CFG" PATH="$PATH" sh "$REPO_DIR/live/settings.sh" export)
+check "export creates archive in Documents/Infynitae" \
+    "$(case "$arch1" in "$H"/Documents/Infynitae/settings-[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-[0-9][0-9][0-9][0-9].tar.gz) [ -f "$arch1" ] && echo yes || echo no ;; *) echo no ;; esac)" \
+    "yes"
+check "export sends notification naming archive" \
+    "$(grep -F -c "$arch1" "$TMP/notify.log" 2>/dev/null || true)" \
+    1
+check "export contains only config when optional files are absent" \
+    "$(tar -tzf "$arch1" | tr '\n' '|')" \
+    ".config/infynitae/config|"
+
+# 2. export with panels.backup, .face, and secrets present
+printf '2026-11-14 PANEL_CONTROL="clock"\n' > "$CFG_DIR/panels.backup"
+printf 'PNGFACE1' > "$H/.face"
+arch2="$TMP/full.tar.gz"
+HOME="$H" CONFIG_FILE="$CFG" PATH="$PATH" sh "$REPO_DIR/live/settings.sh" export "$arch2" >/dev/null
+check "full export holds only config, panels.backup, and .face" \
+    "$(tar -tzf "$arch2" | LC_ALL=C sort | tr '\n' '|')" \
+    ".config/infynitae/config|.config/infynitae/panels.backup|.face|"
+check "full export excludes keyring, browser data, and state" \
+    "$(tar -tzf "$arch2" | grep -E -c 'keyring|mozilla|settings-changes' || true)" \
+    0
+
+# 3. import-preview detects added/removed/changed keys, treats matching quotes as equal, avoids eval
+rm -f "$TMP/pwn"
+printf 'ACCENT=\047#cc70a9\047\nFONT_SIZE=\04711\047\nGAME_MODE=\047true\047\nWALLPAPER=\047$(touch "%s/pwn")\047\n' "$TMP" > "$CFG"
+# Build clean preview archive from modified current config vs arch2 (arch2 has ACCENT="#7aa2f7", FONT_SIZE="11")
+keys=$(HOME="$H" CONFIG_FILE="$CFG" sh "$REPO_DIR/live/settings.sh" import-preview "$arch2")
+check "import-preview lists only keys that differ (and ignores identical quote-differing FONT_SIZE)" \
+    "$(printf '%s\n' "$keys" | tr '\n' '|')" \
+    "ACCENT|GAME_MODE|WALLPAPER|"
+check "import-preview never executes command substitution in config" \
+    "$([ -e "$TMP/pwn" ] && echo yes || echo no)" \
+    "no"
+
+# 4. import backs up to config.before-load, restores config + panels.backup + .face, and runs apply
+printf 'NEWFACE' > "$H/.face"
+rm -f "$CFG_DIR/panels.backup" "$CFG_DIR/config.before-load"
+HOME="$H" CONFIG_FILE="$CFG" sh "$REPO_DIR/live/settings.sh" import "$arch2" >/dev/null
+check "import copies previous config to config.before-load" \
+    "$(grep -c 'GAME_MODE' "$CFG_DIR/config.before-load" 2>/dev/null || true)" \
+    1
+check "import installs saved config" \
+    "$(grep '^ACCENT=' "$CFG")" \
+    'ACCENT="#7aa2f7"'
+check "import restores panels.backup and .face" \
+    "$([ -f "$CFG_DIR/panels.backup" ] && [ "$(cat "$H/.face")" = "PNGFACE1" ] && echo yes || echo no)" \
+    "yes"
+check "import applies look cache via apply" \
+    "$(grep -F -c 'LOOK_ACCENT="#7aa2f7"' "$H/.cache/infynitae/look" 2>/dev/null || true)" \
+    1
+
+# 5. invalid and malicious archives are refused cleanly without touching config
+before_hash=$(cksum "$CFG" | awk '{print $1}')
+refuse_case() {
+    rc=0
+    err=$(HOME="$H" CONFIG_FILE="$CFG" sh "$REPO_DIR/live/settings.sh" import-preview "$2" 2>&1) || rc=$?
+    check "$1 preview exits non-zero" "$([ "$rc" -ne 0 ] && [ -n "$err" ] && echo yes || echo no)" "yes"
+    rc=0
+    err=$(HOME="$H" CONFIG_FILE="$CFG" sh "$REPO_DIR/live/settings.sh" import "$2" 2>&1) || rc=$?
+    check "$1 import exits non-zero" "$([ "$rc" -ne 0 ] && [ -n "$err" ] && echo yes || echo no)" "yes"
+}
+
+printf 'not a tar\n' > "$TMP/plain.txt"
+refuse_case "plain text file" "$TMP/plain.txt"
+
+STAGE_BAD="$TMP/bad_stage"
+mkdir -p "$STAGE_BAD/.config/infynitae"
+printf 'ACCENT="#000000"\n' > "$STAGE_BAD/.config/infynitae/config"
+printf 'extra\n' > "$STAGE_BAD/evil.txt"
+tar -cf "$TMP/uncompressed.tar" -C "$STAGE_BAD" .config/infynitae/config
+refuse_case "uncompressed tar" "$TMP/uncompressed.tar"
+
+tar -czf "$TMP/extra.tar.gz" -C "$STAGE_BAD" .config/infynitae/config evil.txt
+refuse_case "archive with extra file" "$TMP/extra.tar.gz"
+
+printf 'FACE\n' > "$STAGE_BAD/.face"
+tar -czf "$TMP/nocfg.tar.gz" -C "$STAGE_BAD" .face
+refuse_case "archive missing config" "$TMP/nocfg.tar.gz"
+
+STAGE_SYM="$TMP/sym_stage"
+mkdir -p "$STAGE_SYM/.config/infynitae"
+printf 'ACCENT="#000000"\n' > "$STAGE_SYM/.config/infynitae/config"
+ln -s /etc/passwd "$STAGE_SYM/.face"
+tar -czf "$TMP/symlink.tar.gz" -C "$STAGE_SYM" .config/infynitae/config .face
+refuse_case "archive with symlink" "$TMP/symlink.tar.gz"
+
+STAGE_DIR="$TMP/dir_stage"
+mkdir -p "$STAGE_DIR/.config/infynitae"
+printf 'ACCENT="#000000"\n' > "$STAGE_DIR/.config/infynitae/config"
+tar -czf "$TMP/dir.tar.gz" -C "$STAGE_DIR" .config
+refuse_case "archive with directory entry" "$TMP/dir.tar.gz"
+
+tar -czf "$TMP/abs.tar.gz" -C "$STAGE_DIR" --transform='s|^|/|' .config/infynitae/config
+refuse_case "archive with absolute path" "$TMP/abs.tar.gz"
+
+tar -czf "$TMP/dotdot.tar.gz" -C "$STAGE_DIR" --transform='s|^|../|' .config/infynitae/config
+refuse_case "archive with parent traversal" "$TMP/dotdot.tar.gz"
+
+after_hash=$(cksum "$CFG" | awk '{print $1}')
+check "refused imports keep config untouched" "$after_hash" "$before_hash"
+
+exit $fail

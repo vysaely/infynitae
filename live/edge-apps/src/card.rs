@@ -111,6 +111,8 @@ pub trait Card {
     }
     /// For a still picture (`--render` with INFYNITAE_EDGE_RENDER_SUB): its list shown fully open.
     fn show_list(&mut self) {}
+    /// Called when the panel containing this card closes.
+    fn panel_closed(&mut self) {}
 }
 
 /// The clickable rectangles of one card in one frame, with the pointer and the keyboard's selection.
