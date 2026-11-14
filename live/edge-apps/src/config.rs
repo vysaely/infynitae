@@ -466,23 +466,30 @@ fn parse_rect(s: &str) -> Option<(i32, i32, i32, i32)> {
     Some((x, y, w, h))
 }
 
-/// `text` (the config) with `key` set to `value`: its first `KEY=` line replaced (the comment
-/// lines under it kept), else the line added at the end.
+/// `text` (the config) with `key` set to `value`: its last `KEY=` line replaced (earlier
+/// duplicates dropped, the comment lines under the last kept), else the line added at the end.
 pub fn with_value(text: &str, key: &str, value: &str) -> String {
     let line = format!("{key}=\"{value}\"");
     let prefix = format!("{key}=");
+    let last = text
+        .lines()
+        .enumerate()
+        .filter(|(_, l)| l.trim_start().starts_with(&prefix))
+        .map(|(i, _)| i)
+        .last();
     let mut out = String::with_capacity(text.len() + line.len() + 1);
-    let mut done = false;
-    for l in text.lines() {
-        if !done && l.starts_with(&prefix) {
+    for (i, l) in text.lines().enumerate() {
+        if last == Some(i) {
             out.push_str(&line);
-            done = true;
+            out.push('\n');
+        } else if l.trim_start().starts_with(&prefix) {
+            continue;
         } else {
             out.push_str(l);
+            out.push('\n');
         }
-        out.push('\n');
     }
-    if !done {
+    if last.is_none() {
         out.push_str(&line);
         out.push('\n');
     }
@@ -799,6 +806,16 @@ mod tests {
         for bad in ["a\"b", "$(x)", "`x`", "a;b", "a\nb", "a'b"] {
             assert!(!writable(bad), "{bad}");
         }
+    }
+
+    #[test]
+    fn duplicate_keys_keep_only_the_last_assignment() {
+        let text =
+            "PANELS_SNAP=\"true\"\nOTHER=\"1\"\n# keep me\nPANELS_SNAP=\"yes\"\n# under last\n";
+        assert_eq!(
+            with_value(text, "PANELS_SNAP", "false"),
+            "OTHER=\"1\"\n# keep me\nPANELS_SNAP=\"false\"\n# under last\n"
+        );
     }
 
     use super::*;
