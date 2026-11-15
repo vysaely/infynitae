@@ -4813,6 +4813,12 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "AUDIT_CONFIG: parse_lock_when_away ignores SLEEP_LOCK fallback read by shell helpers"]
+    fn audit_config_lock_when_away_honors_sleep_lock_fallback() {
+        assert!(!super::parse_lock_when_away("SLEEP_LOCK=\"false\"\n"));
+    }
+
+    #[test]
     fn take_ready_leaves_unsignaled_fences_pending() {
         use smithay::backend::renderer::sync::{Fence, Interrupted, SyncPoint};
         use std::os::unix::io::OwnedFd;

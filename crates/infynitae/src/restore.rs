@@ -1453,4 +1453,13 @@ mod tests {
         assert!(!session_restore_from(None, Some("SESSION_RESTORE=NO\n")));
         assert!(session_restore_from(None, Some("OTHER=1\n")));
     }
+
+    #[test]
+    #[ignore = "AUDIT_CONFIG: SESSION_RESTORE uses first-wins instead of shell last-wins"]
+    fn audit_config_session_restore_last_line_wins() {
+        assert!(session_restore_from(
+            None,
+            Some("SESSION_RESTORE=\"false\"\nSESSION_RESTORE=\"true\"\n"),
+        ));
+    }
 }
