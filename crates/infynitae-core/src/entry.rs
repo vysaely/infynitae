@@ -6637,4 +6637,586 @@ mod tests {
         now += period;
         assert!(c.zoom_tick(a, now).is_empty());
     }
+
+    #[test]
+    #[ignore = "AUDIT_FOCUS_HOVER: hover_focus steals keyboard focus while a client button is held"]
+    fn audit_hover_focus_steals_keyboard_focus_while_client_button_held() {
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        c.set_focus_follows_mouse(true);
+        let ws = map_windows(&mut c, a, 2);
+        let mut fx = Vec::new();
+        c.place_by_user(
+            ws[0],
+            crate::geom::CanvasPoint { x: -450, y: -150 },
+            &mut fx,
+        )
+        .unwrap();
+        c.place_by_user(ws[1], crate::geom::CanvasPoint { x: 50, y: -150 }, &mut fx)
+            .unwrap();
+        c.render_list(a).unwrap();
+        c.pointer = PointerState::Located {
+            output: a,
+            p: (700.0, 540.0),
+        };
+        c.hover_seen = Some(ws[0]);
+        c.set_focus(&mut i, Some(ws[0])).unwrap();
+
+        let press_fx = mouse_button(&mut c, &mut i, true);
+        assert!(
+            press_fx
+                .iter()
+                .any(|e| matches!(e, Effect::PointerButton { pressed: true, .. })),
+            "expected client to own the pressed button"
+        );
+        assert!(c.input.ownership.client_owns_any());
+
+        mouse_move(&mut c, &mut i, (400.0, 0.0));
+        assert_eq!(
+            c.focus().target(),
+            Some(ws[0]),
+            "keyboard focus should stay with the window holding the pressed mouse button"
+        );
+    }
+
+    #[test]
+    #[ignore = "AUDIT_FOCUS_HOVER: hover_focus omits reconcile_constraints so pending constraints stay inactive"]
+    fn audit_hover_focus_does_not_activate_pending_pointer_constraint() {
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        c.set_focus_follows_mouse(true);
+        let ws = map_windows(&mut c, a, 2);
+        let mut fx = Vec::new();
+        c.place_by_user(
+            ws[0],
+            crate::geom::CanvasPoint { x: -450, y: -150 },
+            &mut fx,
+        )
+        .unwrap();
+        c.place_by_user(ws[1], crate::geom::CanvasPoint { x: 50, y: -150 }, &mut fx)
+            .unwrap();
+        c.render_list(a).unwrap();
+        c.pointer = PointerState::Located {
+            output: a,
+            p: (700.0, 540.0),
+        };
+        c.hover_seen = Some(ws[0]);
+        c.set_focus(&mut i, Some(ws[0])).unwrap();
+
+        let w1_surf = crate::snapshot::SurfaceKey::from_raw(std::num::NonZeroU64::new(2).unwrap());
+        let pending_fx = c.request_pointer_constraint(
+            w1_surf,
+            crate::pointer::ConstraintKind::Lock,
+            crate::pointer::ConstraintLifetime::Persistent,
+            None,
+            None,
+        );
+        assert!(pending_fx.is_empty());
+
+        let move_fx = c
+            .physical_input_vec(
+                &mut i,
+                crate::PhysicalEvent::PointerMotion {
+                    delta: (400.0, 0.0),
+                    delta_unaccel: (400.0, 0.0),
+                    time_us: 2000,
+                },
+            )
+            .unwrap();
+        assert_eq!(c.focus().target(), Some(ws[1]));
+        assert!(
+            move_fx.iter().any(|e| matches!(
+                e,
+                Effect::ConstraintActivate { surface, .. } if *surface == w1_surf
+            )) && c.constraint().is_some(),
+            "hover-focusing ws[1] should reconcile and activate its pending pointer constraint"
+        );
+    }
+
+    #[test]
+    #[ignore = "AUDIT_FOCUS_HOVER: above-canvas layer leaves hover_seen stale and traps OnDemand layer focus on return"]
+    fn audit_layer_hover_leaves_hover_seen_stale_and_traps_on_demand_layer_focus() {
+        use crate::geom::{LocalPoint, LocalRect, LocalSize};
+        use crate::layer::{Anchors, KeyboardInteractivity, Layer, LayerState};
+        use crate::snapshot::{InputRegion, SnapshotSurface, SurfaceKey, SurfaceRole, SurfaceTree};
+        let layer_tree = |k: u64, w: i32, h: i32, mapped: bool| SurfaceTree {
+            geometry: LocalRect {
+                loc: LocalPoint::default(),
+                size: LocalSize { w, h },
+            },
+            surfaces: vec![SnapshotSurface {
+                key: SurfaceKey::from_raw(std::num::NonZeroU64::new(k).unwrap()),
+                role: SurfaceRole::Root,
+                size: if mapped {
+                    LocalSize { w, h }
+                } else {
+                    LocalSize::default()
+                },
+                mapped,
+                input: InputRegion::Infinite,
+                frame_requested: false,
+            }],
+        };
+
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        c.set_focus_follows_mouse(true);
+        let ws = map_windows(&mut c, a, 1);
+        let mut fx = Vec::new();
+        c.place_by_user(
+            ws[0],
+            crate::geom::CanvasPoint { x: -200, y: -540 },
+            &mut fx,
+        )
+        .unwrap();
+        c.render_list(a).unwrap();
+
+        let panel = c.layer_created(Some(a)).unwrap();
+        let lstate = LayerState {
+            layer: Some(Layer::Top),
+            anchors: Anchors {
+                top: true,
+                bottom: false,
+                left: true,
+                right: true,
+            },
+            size: (0, 80),
+            margins: (0, 0, 0, 0),
+            exclusive_zone: 0,
+            keyboard: KeyboardInteractivity::OnDemand,
+        };
+        let lfx = c
+            .layer_committed(panel, lstate, layer_tree(99, 0, 0, false))
+            .unwrap();
+        let lsize = lfx
+            .iter()
+            .find_map(|e| match e {
+                Effect::LayerConfigure { layer, size } if *layer == panel => Some(*size),
+                _ => None,
+            })
+            .expect("layer configure");
+        c.layer_committed(panel, lstate, layer_tree(99, lsize.w, lsize.h, true))
+            .unwrap();
+
+        c.pointer = PointerState::Located {
+            output: a,
+            p: (960.0, 150.0),
+        };
+        mouse_move(&mut c, &mut i, (0.0, 1.0));
+        assert_eq!(c.focus().target(), Some(ws[0]));
+        assert_eq!(c.hover_seen, Some(ws[0]));
+
+        // Move onto the Top layer strip and click it (OnDemand layer keyboard focus)
+        mouse_move(&mut c, &mut i, (0.0, -110.0));
+        assert!(c.layer_hit(a, (960.0, 41.0), true).is_some());
+        mouse_button(&mut c, &mut i, true);
+        mouse_button(&mut c, &mut i, false);
+        assert_eq!(c.focus().layer(), Some(panel));
+
+        // Move off the panel back onto ws[0]
+        mouse_move(&mut c, &mut i, (0.0, 110.0));
+        assert_eq!(
+            (c.focus().layer(), c.focus().target()),
+            (None, Some(ws[0])),
+            "leaving the OnDemand layer back onto ws[0] should clear layer focus and focus ws[0]"
+        );
+    }
+
+    #[test]
+    #[ignore = "AUDIT_FOCUS_HOVER: route_pointer_hit_local ignores above-canvas layers so an obscured window activates Lock"]
+    fn audit_overlay_layer_over_window_still_activates_pointer_constraint() {
+        use crate::geom::{LocalPoint, LocalRect, LocalSize};
+        use crate::layer::{Anchors, KeyboardInteractivity, Layer, LayerState};
+        use crate::snapshot::{InputRegion, SnapshotSurface, SurfaceKey, SurfaceRole, SurfaceTree};
+        let layer_tree = |k: u64, w: i32, h: i32, mapped: bool| SurfaceTree {
+            geometry: LocalRect {
+                loc: LocalPoint::default(),
+                size: LocalSize { w, h },
+            },
+            surfaces: vec![SnapshotSurface {
+                key: SurfaceKey::from_raw(std::num::NonZeroU64::new(k).unwrap()),
+                role: SurfaceRole::Root,
+                size: if mapped {
+                    LocalSize { w, h }
+                } else {
+                    LocalSize::default()
+                },
+                mapped,
+                input: InputRegion::Infinite,
+                frame_requested: false,
+            }],
+        };
+
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        let ws = map_windows(&mut c, a, 1);
+        let mut fx = Vec::new();
+        c.place_by_user(
+            ws[0],
+            crate::geom::CanvasPoint { x: -200, y: -150 },
+            &mut fx,
+        )
+        .unwrap();
+        c.render_list(a).unwrap();
+        c.set_focus(&mut i, Some(ws[0])).unwrap();
+
+        let overlay = c.layer_created(Some(a)).unwrap();
+        let lstate = LayerState {
+            layer: Some(Layer::Overlay),
+            anchors: Anchors {
+                top: true,
+                bottom: true,
+                left: true,
+                right: true,
+            },
+            size: (0, 0),
+            margins: (0, 0, 0, 0),
+            exclusive_zone: -1,
+            keyboard: KeyboardInteractivity::None,
+        };
+        let lfx = c
+            .layer_committed(overlay, lstate, layer_tree(99, 0, 0, false))
+            .unwrap();
+        let lsize = lfx
+            .iter()
+            .find_map(|e| match e {
+                Effect::LayerConfigure { layer, size } if *layer == overlay => Some(*size),
+                _ => None,
+            })
+            .expect("layer configure");
+        c.layer_committed(overlay, lstate, layer_tree(99, lsize.w, lsize.h, true))
+            .unwrap();
+
+        c.pointer = PointerState::Located {
+            output: a,
+            p: (960.0, 540.0),
+        };
+        let routed = c
+            .route_pointer()
+            .and_then(|(tgt, _)| tgt)
+            .map(|t| t.surface);
+        let overlay_surf = SurfaceKey::from_raw(std::num::NonZeroU64::new(99).unwrap());
+        assert_eq!(routed, Some(overlay_surf));
+
+        let w0_surf = SurfaceKey::from_raw(std::num::NonZeroU64::new(1).unwrap());
+        let cfx = c.request_pointer_constraint(
+            w0_surf,
+            crate::pointer::ConstraintKind::Lock,
+            crate::pointer::ConstraintLifetime::Persistent,
+            None,
+            None,
+        );
+        assert!(
+            cfx.is_empty() && c.constraint().is_none(),
+            "an Overlay layer covering the pointer must block constraint activation on the window underneath"
+        );
+    }
+
+    #[test]
+    #[ignore = "AUDIT_FOCUS_HOVER: zoom_tick glide after FocusNext leaves hover_seen stale so a 1px nudge steals focus"]
+    fn audit_zoom_glide_after_focus_next_leaves_hover_seen_stale_so_nudge_steals_focus() {
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        c.set_focus_follows_mouse(true);
+        c.set_focus_cycle_navigate(true);
+        c.set_zoom_feel(crate::navigation::ZoomFeel::Floaty);
+        let ws = map_windows(&mut c, a, 3);
+        let mut fx = Vec::new();
+        c.place_by_user(
+            ws[0],
+            crate::geom::CanvasPoint { x: 1800, y: -150 },
+            &mut fx,
+        )
+        .unwrap();
+        c.place_by_user(ws[1], crate::geom::CanvasPoint { x: 800, y: -150 }, &mut fx)
+            .unwrap();
+        c.place_by_user(ws[2], crate::geom::CanvasPoint { x: -10, y: -150 }, &mut fx)
+            .unwrap();
+        c.render_list(a).unwrap();
+
+        c.set_focus(&mut i, Some(ws[1])).unwrap();
+        c.set_focus(&mut i, Some(ws[0])).unwrap();
+        c.pointer = PointerState::Located {
+            output: a,
+            p: (150.0, 540.0),
+        };
+        c.hover_seen = None;
+        let _ = c.zoom_tick(a, std::time::Duration::ZERO);
+
+        super_tab(&mut c, &mut i);
+        assert_eq!(c.focus().target(), Some(ws[1]));
+        let mut now = std::time::Duration::from_millis(16);
+        for _ in 0..240 {
+            if !c.zoom_gliding() {
+                break;
+            }
+            let _ = c.zoom_tick(a, now);
+            now += std::time::Duration::from_millis(16);
+        }
+        assert!(!c.zoom_gliding());
+        c.render_list(a).unwrap();
+        assert_eq!(c.hovered_window(), Some(ws[2]));
+        assert_eq!(c.focus().target(), Some(ws[1]));
+
+        // Pointer did not cross into ws[2] — the glide brought ws[2] underneath it.
+        mouse_move(&mut c, &mut i, (1.0, 0.0));
+        assert_eq!(
+            c.focus().target(),
+            Some(ws[1]),
+            "a 1px nudge inside ws[2] after a camera glide must not steal focus from ws[1]"
+        );
+    }
+
+    #[test]
+    #[ignore = "AUDIT_FOCUS_HOVER: pan_step and end_interaction leave hover_seen stale so a 1px nudge steals focus"]
+    fn audit_camera_pan_leaves_hover_seen_stale_so_nudge_steals_focus() {
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        c.set_focus_follows_mouse(true);
+        let ws = map_windows(&mut c, a, 2);
+        let mut fx = Vec::new();
+        c.place_by_user(
+            ws[0],
+            crate::geom::CanvasPoint { x: -400, y: -150 },
+            &mut fx,
+        )
+        .unwrap();
+        c.place_by_user(ws[1], crate::geom::CanvasPoint { x: 800, y: -150 }, &mut fx)
+            .unwrap();
+        c.render_list(a).unwrap();
+
+        c.set_focus(&mut i, Some(ws[0])).unwrap();
+        c.pointer = PointerState::Located {
+            output: a,
+            p: (960.0, 540.0),
+        };
+        c.hover_seen = None;
+
+        // Pan camera right by 1000 px (in Grab mode, moving pointer left pans camera right)
+        c.physical_input_vec(
+            &mut i,
+            crate::PhysicalEvent::PointerButton {
+                button: crate::input::bindings::BTN_MIDDLE,
+                pressed: true,
+                modifiers: Modifiers {
+                    logo: true,
+                    ..Default::default()
+                },
+                time_us: 1000,
+            },
+        )
+        .unwrap();
+        c.physical_input_vec(
+            &mut i,
+            crate::PhysicalEvent::PointerMotion {
+                delta: (-1000.0, 0.0),
+                delta_unaccel: (-1000.0, 0.0),
+                time_us: 2000,
+            },
+        )
+        .unwrap();
+        c.physical_input_vec(
+            &mut i,
+            crate::PhysicalEvent::PointerButton {
+                button: crate::input::bindings::BTN_MIDDLE,
+                pressed: false,
+                modifiers: Modifiers {
+                    logo: true,
+                    ..Default::default()
+                },
+                time_us: 3000,
+            },
+        )
+        .unwrap();
+        c.render_list(a).unwrap();
+        assert_eq!(c.hovered_window(), Some(ws[1]));
+        assert_eq!(c.focus().target(), Some(ws[0]));
+
+        mouse_move(&mut c, &mut i, (1.0, 0.0));
+        assert_eq!(
+            c.focus().target(),
+            Some(ws[0]),
+            "a 1px nudge inside ws[1] after panning must not steal focus from ws[0]"
+        );
+    }
+
+    #[test]
+    #[ignore = "AUDIT_FOCUS_HOVER: strict_successor runs after target_lost, emitting double KeyboardFocus and clearing MRU attention"]
+    fn audit_strict_successor_emits_double_focus_and_clears_attention() {
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        c.set_focus_follows_mouse(true);
+        c.set_focus_follows_mouse_strict(true);
+        let ws = map_windows(&mut c, a, 2);
+        let mut fx = Vec::new();
+        c.place_by_user(ws[0], crate::geom::CanvasPoint { x: 2000, y: 0 }, &mut fx)
+            .unwrap();
+        c.place_by_user(ws[1], crate::geom::CanvasPoint { x: 3000, y: 0 }, &mut fx)
+            .unwrap();
+        c.render_list(a).unwrap();
+        c.set_focus(&mut i, Some(ws[0])).unwrap();
+        c.set_focus(&mut i, Some(ws[1])).unwrap();
+        c.focus.mark_attention(ws[0]);
+        c.pointer = PointerState::Located {
+            output: a,
+            p: (100.0, 100.0),
+        };
+        assert_eq!(c.hovered_window(), None);
+
+        let destroy_fx = c.toplevel_destroyed(ws[1]);
+        assert!(
+            !destroy_fx.contains(&Effect::KeyboardFocus(Some(ws[0]))),
+            "strict_successor should not emit transient KeyboardFocus(Some(ws[0])) before KeyboardFocus(None): {destroy_fx:?}"
+        );
+        assert!(
+            c.focus().attention().contains(&ws[0]),
+            "ws[0]'s attention mark should survive when strict mode focuses None instead"
+        );
+    }
+
+    #[test]
+    #[ignore = "AUDIT_FOCUS_HOVER: strict_successor calls set_focus(hovered) which steals OnDemand layer focus"]
+    fn audit_strict_successor_steals_on_demand_layer_focus() {
+        use crate::geom::{LocalPoint, LocalRect, LocalSize};
+        use crate::layer::{Anchors, KeyboardInteractivity, Layer, LayerState};
+        use crate::snapshot::{InputRegion, SnapshotSurface, SurfaceKey, SurfaceRole, SurfaceTree};
+        let layer_tree = |k: u64, w: i32, h: i32, mapped: bool| SurfaceTree {
+            geometry: LocalRect {
+                loc: LocalPoint::default(),
+                size: LocalSize { w, h },
+            },
+            surfaces: vec![SnapshotSurface {
+                key: SurfaceKey::from_raw(std::num::NonZeroU64::new(k).unwrap()),
+                role: SurfaceRole::Root,
+                size: if mapped {
+                    LocalSize { w, h }
+                } else {
+                    LocalSize::default()
+                },
+                mapped,
+                input: InputRegion::Infinite,
+                frame_requested: false,
+            }],
+        };
+
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        c.set_focus_follows_mouse(true);
+        c.set_focus_follows_mouse_strict(true);
+
+        let panel = c.layer_created(Some(a)).unwrap();
+        let lstate = LayerState {
+            layer: Some(Layer::Top),
+            anchors: Anchors {
+                top: true,
+                bottom: false,
+                left: true,
+                right: false,
+            },
+            size: (200, 80),
+            margins: (0, 0, 0, 0),
+            exclusive_zone: 0,
+            keyboard: KeyboardInteractivity::OnDemand,
+        };
+        let lfx = c
+            .layer_committed(panel, lstate, layer_tree(99, 0, 0, false))
+            .unwrap();
+        let lsize = lfx
+            .iter()
+            .find_map(|e| match e {
+                Effect::LayerConfigure { layer, size } if *layer == panel => Some(*size),
+                _ => None,
+            })
+            .expect("layer configure");
+        c.layer_committed(panel, lstate, layer_tree(99, lsize.w, lsize.h, true))
+            .unwrap();
+        let ws = map_windows(&mut c, a, 2);
+        let mut fx = Vec::new();
+        c.place_by_user(ws[0], crate::geom::CanvasPoint { x: 3000, y: 0 }, &mut fx)
+            .unwrap();
+        c.place_by_user(ws[1], crate::geom::CanvasPoint { x: 4000, y: 0 }, &mut fx)
+            .unwrap();
+        c.render_list(a).unwrap();
+        c.set_focus(&mut i, Some(ws[0])).unwrap();
+        c.set_focus(&mut i, Some(ws[1])).unwrap();
+        c.pointer = PointerState::Located {
+            output: a,
+            p: (50.0, 40.0),
+        };
+        mouse_button(&mut c, &mut i, true);
+        mouse_button(&mut c, &mut i, false);
+        assert_eq!(c.focus().layer(), Some(panel));
+
+        let _ = c.toplevel_destroyed(ws[1]);
+        assert_eq!(
+            c.focus().layer(),
+            Some(panel),
+            "closing underlying target window should not strip OnDemand layer keyboard focus"
+        );
+    }
+
+    #[test]
+    #[ignore = "AUDIT_FOCUS_HOVER: settle_hover is omitted on non-keyboard focus switches so >=300ms hovered window is dropped from history"]
+    fn audit_hover_over_300ms_before_non_keyboard_focus_switch_is_dropped_from_history() {
+        use crate::ShellCommand;
+        use crate::stage::ElementRef;
+        let (mut c, mut i, mut s, mut t) = Core::new(PersistedCameras::default());
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        c.set_focus_follows_mouse(true);
+        let ws = map_windows(&mut c, a, 3);
+        let mut fx = Vec::new();
+        c.place_by_user(
+            ws[0],
+            crate::geom::CanvasPoint { x: -450, y: -150 },
+            &mut fx,
+        )
+        .unwrap();
+        c.place_by_user(ws[1], crate::geom::CanvasPoint { x: 50, y: -150 }, &mut fx)
+            .unwrap();
+        c.place_by_user(ws[2], crate::geom::CanvasPoint { x: 500, y: -150 }, &mut fx)
+            .unwrap();
+        c.render_list(a).unwrap();
+
+        c.set_focus(&mut i, Some(ws[0])).unwrap();
+        c.set_focus(&mut i, Some(ws[1])).unwrap();
+        c.pointer = PointerState::Located {
+            output: a,
+            p: (1455.0, 540.0),
+        };
+        c.hover_seen = None;
+        // Hover enters ws[2] at t = 1.0s
+        c.physical_input_vec(
+            &mut i,
+            crate::PhysicalEvent::PointerMotion {
+                delta: (10.0, 0.0),
+                delta_unaccel: (10.0, 0.0),
+                time_us: 1_000_000,
+            },
+        )
+        .unwrap();
+        assert_eq!(c.focus().target(), Some(ws[2]));
+        // 500ms later (>= 300ms HOVER_SETTLES_US) without keyboard input
+        c.physical_input_vec(
+            &mut i,
+            crate::PhysicalEvent::PointerMotion {
+                delta: (1.0, 0.0),
+                delta_unaccel: (1.0, 0.0),
+                time_us: 1_500_000,
+            },
+        )
+        .unwrap();
+
+        let cref = ElementRef {
+            instance: c.stage().instance(),
+            element: ws[0],
+        };
+        c.shell_command(&mut s, ShellCommand::Focus { element: cref })
+            .unwrap();
+        assert_eq!(c.focus().target(), Some(ws[0]));
+        assert_eq!(
+            c.focus().history().get(1).copied(),
+            Some(ws[2]),
+            "ws[2] stayed hover-focused for 500ms before ShellCommand::Focus and should be in Super+Tab history"
+        );
+    }
 }
