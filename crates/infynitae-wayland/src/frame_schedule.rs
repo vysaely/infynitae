@@ -364,6 +364,13 @@ impl FrameSchedule {
         }
     }
 
+    /// When a frame started at `now` reaches the screen: the next refresh, counted from the last real
+    /// one. Motion drawn for this time moves the same distance every refresh, however early or late
+    /// in it the frame started (a zoom glide timed from the start time judders, owner 2026-11-15).
+    pub fn shown_at(&self, now: Duration) -> Duration {
+        now + self.until_next_refresh(now)
+    }
+
     /// LATENCY off: a frame that would start too close to the refresh's end waits until just after
     /// it (with the newest buffers then), as a late start only misses the refresh and blocks the
     /// next frame too. Only near a refresh seen lately: long after the last one its time is a guess.
@@ -952,6 +959,18 @@ mod tests {
         s.vblank(t);
         assert_eq!(s.until_next_refresh(t + P / 4), P - P / 4);
         assert_eq!(s.until_next_refresh(t + P * 3 + P / 4), P - P / 4);
+    }
+
+    #[test]
+    fn frames_started_anywhere_in_a_refresh_are_shown_at_its_end() {
+        let mut s = FrameSchedule::new(LatencyMode::Off, P);
+        let t = Duration::from_secs(5);
+        s.vblank(t);
+        // starts that jitter inside one refresh all land on the same one, so the motion stays even
+        for start in [t + P / 10, t + P / 2, t + P * 9 / 10] {
+            assert_eq!(s.shown_at(start), t + P);
+        }
+        assert_eq!(s.shown_at(t + P * 2 + P / 3), t + P * 3);
     }
 
     #[test]
