@@ -48,6 +48,9 @@ pub struct WlrToplevelsState {
     last_focus: Option<ElementId>,
     last_stage_generation: u64,
     last_output_count: usize,
+    /// What each screen shows in front (a fullscreen window not stepped aside), as last told:
+    /// a step aside or back changes what is reported without changing focus or the stage.
+    last_presenting: Vec<Option<ElementId>>,
     sync_count: u64,
 }
 
@@ -64,6 +67,7 @@ impl WlrToplevelsState {
             last_focus: None,
             last_stage_generation: u64::MAX,
             last_output_count: usize::MAX,
+            last_presenting: Vec::new(),
             sync_count: 0,
         }
     }
@@ -94,7 +98,10 @@ impl WaylandState {
         }
         // a window that fills a screen and counts as fullscreen there (`FIT_IS_FULLSCREEN`, fitted.rs) is told
         // as one too: taskbars and the edge treat it the same (the edge unmaps its closed panels over it)
-        if current.contains(xdg_toplevel::State::Fullscreen)
+        // a fullscreen window the user stepped aside from covers nothing: told as fullscreen, the
+        // edge kept its panels unmapped over the desktop (AUDIT_LAYERS finding 4, owner 2026-11-15:
+        // panels lagged and dead after leaving fullscreen)
+        if (current.contains(xdg_toplevel::State::Fullscreen) && self.presents_in_front(id))
             || self.fitted_windows.values().any(|&w| w == id)
         {
             told.states.push(State::Fullscreen as u32);
@@ -103,6 +110,26 @@ impl WaylandState {
             told.states.push(State::Minimized as u32);
         }
         told
+    }
+
+    /// Whether `id` is in front of some screen as its fullscreen window (not stepped aside).
+    fn presents_in_front(&self, id: ElementId) -> bool {
+        self.core.outputs().iter().any(|o| {
+            self.core.presentation(o.id) == Some(id) && !self.core.is_presentation_suppressed(o.id)
+        })
+    }
+
+    /// What each screen shows in front now (see `last_presenting`).
+    fn presenting_now(&self) -> Vec<Option<ElementId>> {
+        self.core
+            .outputs()
+            .iter()
+            .map(|o| {
+                self.core
+                    .presentation(o.id)
+                    .filter(|_| !self.core.is_presentation_suppressed(o.id))
+            })
+            .collect()
     }
 
     /// Creates the handle of `id` for one manager and tells it everything.
@@ -146,7 +173,9 @@ impl WaylandState {
         let current_focus = self.core.focus().target();
         let stage_gen = self.core.stage().map_generation();
         let output_count = self.outputs.len();
+        let presenting = self.presenting_now();
         if !self.wlr_toplevels.dirty
+            && self.wlr_toplevels.last_presenting == presenting
             && self.wlr_toplevels.last_focus == current_focus
             && self.wlr_toplevels.last_stage_generation == stage_gen
             && self.wlr_toplevels.last_output_count == output_count
@@ -157,6 +186,7 @@ impl WaylandState {
         self.wlr_toplevels.last_focus = current_focus;
         self.wlr_toplevels.last_stage_generation = stage_gen;
         self.wlr_toplevels.last_output_count = output_count;
+        self.wlr_toplevels.last_presenting = presenting;
         self.wlr_toplevels.sync_count = self.wlr_toplevels.sync_count.wrapping_add(1);
 
         // in the order the windows were opened (ids only grow): the bar lists them so

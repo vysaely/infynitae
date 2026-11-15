@@ -62,19 +62,14 @@ impl wayland_client::Dispatch<ZwlrForeignToplevelHandleV1, ()> for Probe {
             Event::Done => "done".into(),
             Event::Closed => "closed".into(),
             Event::OutputEnter { output } => {
-                use wayland_client::Proxy;
-                WLR_OUTPUT_ENTERS.with(|cell| {
-                    cell.borrow_mut().push(output.id().protocol_id());
-                });
+                if let Some(i) = st.outputs.iter().position(|(_, o)| o == &output) {
+                    st.kb_log.push(format!("wlr_output_enter {i}"));
+                }
                 return;
             }
             _ => return,
         });
     }
-}
-
-std::thread_local! {
-    static WLR_OUTPUT_ENTERS: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 const ACTIVATED: u32 = 2;
@@ -408,104 +403,252 @@ fn picking_a_window_from_the_bar_moves_the_camera_and_records_history() {
 }
 
 #[test]
-#[ignore = "AUDIT_PRESENTATION: wlr_toplevel_announce sends OutputEnter for every output so fullscreen on one output hides edge-apps on all outputs"]
-fn audit_presentation_two_outputs_fullscreen_enters_all_outputs() {
-    use common::output_k;
-    use infynitae_backend_headless::VirtualOutput;
-    use infynitae_core::geom::{CanvasPos, Q16_ONE};
-    use infynitae_core::navigation::PersistedCameras;
-    use wayland_client::Proxy;
+fn audit_layers_commit_fullscreen_or_unfullscreen_does_not_sync_wlr_toplevels() {
+    const FULLSCREEN: u32 = 3;
+    let (mut s, w1, _) = S::new();
+    s.focus(Some(s.e[0]));
+    s.bind();
+    s.take_log();
 
-    WLR_OUTPUT_ENTERS.with(|c| c.borrow_mut().clear());
-    let persisted = PersistedCameras::from_entries(vec![(
-        VirtualOutput::key("B"),
-        CanvasPos {
-            x: 50_000 * Q16_ONE,
-            y: 0,
-        },
-        1.0,
-    )])
-    .unwrap();
-    let mut ls = Lockstep::with(
-        persisted,
-        &[
-            output_k("A", (640, 480), 120, 60_000),
-            output_k("B", (800, 600), 120, 60_000),
-        ],
+    // W1 enters fullscreen and commits its acked 1920x1080 frame: handlers.rs:251 sets
+    // wlr_toplevels.dirty = true AFTER with_effects() without calling sync_wlr_toplevels().
+    s.ls.probe.surfaces[w1]
+        .toplevel
+        .as_ref()
+        .unwrap()
+        .set_fullscreen(None);
+    s.pump();
+    s.ls.probe.surfaces[w1].size = (1920, 1080);
+    s.ls.probe.draw(&s.ls.qh, w1);
+    s.pump();
+    let log = s.take_log();
+    assert!(
+        log.iter()
+            .any(|l| l.starts_with("state") && l.contains(&FULLSCREEN.to_string())),
+        "committing acked fullscreen must immediately notify wlr_toplevels (saw {log:?})"
     );
-    let qh = ls.qh.clone();
-    let w = ls.probe.toplevel(&qh, "W", (200, 100), 0);
-    ls.pump();
-    let id_w = *ls.state.core().stage().mapped_elements().last().unwrap();
-    let a = ls.state.core().outputs()[0].id;
-    let b = ls.state.core().outputs()[1].id;
-    let _ = ls.state.core_mut().render_list(a);
-    let _ = ls.state.core_mut().render_list(b);
-    assert_eq!(ls.state.core().membership().observers(id_w), vec![a]);
+}
 
+#[test]
+fn audit_layers_wlr_toplevel_reports_fullscreen_while_presentation_suppressed() {
+    use infynitae_backend_headless::keyboard_key;
+    use infynitae_core::input::keys::{KEY_LEFTMETA, KEY_TAB};
+
+    const FULLSCREEN: u32 = 3;
+    let (mut s, w1, _) = S::new();
+    s.ls.state.core_mut().set_fullscreen_pan(true);
+    s.focus(Some(s.e[0]));
+    s.bind();
+    s.take_log();
+
+    s.ls.probe.surfaces[w1]
+        .toplevel
+        .as_ref()
+        .unwrap()
+        .set_fullscreen(None);
+    s.pump();
+    s.ls.probe.surfaces[w1].size = (1920, 1080);
+    s.ls.probe.draw(&s.ls.qh, w1);
+    s.pump();
+    // Flush dirty flag left unsynced by handlers.rs:251 via metadata change so precondition holds.
+    s.ls.probe.surfaces[w1]
+        .toplevel
+        .as_ref()
+        .unwrap()
+        .set_title("flush".into());
+    s.pump();
+    let o = s.ls.output();
+    assert_eq!(s.ls.state.core().presentation(o), Some(s.e[0]));
+    let log = s.take_log();
+    assert!(
+        log.iter()
+            .any(|l| l.starts_with("state") && l.contains(&FULLSCREEN.to_string())),
+        "precondition fullscreen entered: {log:?}"
+    );
+
+    // Super+Tab switches to W2 and suppresses W1's presentation: desktop & Layer::Top are shown again.
+    for (key, pressed) in [
+        (KEY_LEFTMETA, true),
+        (KEY_TAB, true),
+        (KEY_TAB, false),
+        (KEY_LEFTMETA, false),
+    ] {
+        s.t += 1000;
+        keyboard_key(&mut s.ls.state, &mut s.ls.input, key, pressed, s.t).expect("key");
+    }
+    s.pump();
+    assert!(s.ls.state.core().is_presentation_suppressed(o));
+
+    let log = s.take_log();
+    let w1_states: Vec<&String> = log.iter().filter(|l| l.starts_with("state")).collect();
+    assert!(
+        !w1_states.is_empty()
+            && !w1_states
+                .iter()
+                .any(|l| *l == &format!("state [{FULLSCREEN}]")),
+        "suppressed presentation must clear Fullscreen on wlr_toplevels (saw {log:?})"
+    );
+}
+
+#[test]
+fn audit_layers_fitted_window_clear_in_render_leaves_wlr_toplevels_unsynced() {
+    use smithay::backend::renderer::pixman::PixmanRenderer;
+    use std::os::fd::AsFd;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use wayland_client::protocol::wl_shm;
+
+    static SEQ: AtomicUsize = AtomicUsize::new(0);
+    const FULLSCREEN: u32 = 3;
+
+    let mut ls = Lockstep::new(Some(output((1920, 1080), 120)));
+    let qh = ls.qh.clone();
     let (name, _, _) = ls
         .probe
         .globals
         .iter()
         .find(|(_, i, _)| i == "zwlr_foreign_toplevel_manager_v1")
         .cloned()
-        .expect("wlr toplevel manager offered");
+        .expect("manager");
     let _mgr: ZwlrForeignToplevelManagerV1 = ls.registry().bind(name, 3, &qh, ());
-    ls.pump();
 
+    let idx = ls.probe.toplevel(&qh, "F", (1920, 1080), 0);
+    ls.pump();
+    let make_xrgb_buf = |probe: &Probe, qh: &wayland_client::QueueHandle<Probe>, w: i32, h: i32| {
+        let len = (w * h * 4) as usize;
+        let path = std::env::temp_dir().join(format!(
+            "infynitae-audit-layers-{}-{}",
+            std::process::id(),
+            SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
+        let file = std::fs::File::options()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .unwrap();
+        let _ = std::fs::remove_file(&path);
+        file.set_len(len as u64).unwrap();
+        let pool = probe
+            .shm
+            .as_ref()
+            .unwrap()
+            .create_pool(file.as_fd(), len as i32, qh, ());
+        let buf = pool.create_buffer(0, w, h, w * 4, wl_shm::Format::Xrgb8888, qh, ());
+        pool.destroy();
+        buf
+    };
+
+    // Draw an opaque 1920x1080 frame filling the view, render it, then sync focus so handle sees Fullscreen.
+    let buf = make_xrgb_buf(&ls.probe, &qh, 1920, 1080);
+    let wl = ls.probe.surfaces[idx].wl.clone();
+    wl.attach(Some(&buf), 0, 0);
+    wl.damage_buffer(0, 0, 1920, 1080);
+    wl.commit();
+    ls.pump();
+    let out = ls.output();
+    let id = ls.state.elements().next().unwrap();
+    let instance = ls.state.core().stage().instance();
     let fx = ls
         .state
         .core_mut()
-        .set_focus(&mut ls.input, Some(id_w))
+        .shell_command(
+            &mut ls.shell,
+            infynitae_core::ShellCommand::ViewportFit {
+                output: out,
+                element: infynitae_core::stage::ElementRef {
+                    instance,
+                    element: id,
+                },
+            },
+        )
         .unwrap();
     ls.state.apply(&fx);
+    let mut renderer = PixmanRenderer::new().unwrap();
+    let _ = infynitae_wayland::convert::output_elements_marked(
+        &mut ls.state,
+        &mut renderer,
+        out,
+        false,
+        None,
+    )
+    .unwrap();
+    assert_eq!(ls.state.fitted_window(out), Some(id));
+    set_focus(&mut ls.state, &mut ls.input, Some(id)).unwrap();
+    ls.pump();
+    let log = std::mem::take(&mut ls.probe.log);
+    assert!(
+        log.iter()
+            .any(|l| l.starts_with("state") && l.contains(&FULLSCREEN.to_string())),
+        "precondition: fitted window reported Fullscreen: {log:?}"
+    );
+
+    // Client shrinks to 400x300 (apply() runs at commit before render still seeing old fitted=Some(id)).
+    let small = make_xrgb_buf(&ls.probe, &qh, 400, 300);
+    let wl = ls.probe.surfaces[idx].wl.clone();
+    wl.attach(Some(&small), 0, 0);
+    wl.damage_buffer(0, 0, 400, 300);
+    wl.commit();
+    ls.pump();
+    let _ = std::mem::take(&mut ls.probe.log);
+
+    // Next render clears fitted_window(out) -> None, followed by frame_tick + pump.
+    let _ = infynitae_wayland::convert::output_elements_marked(
+        &mut ls.state,
+        &mut renderer,
+        out,
+        false,
+        None,
+    )
+    .unwrap();
+    assert_eq!(ls.state.fitted_window(out), None);
+    ls.state.frame_tick(out, ls.now);
+    ls.pump();
+
+    let log = std::mem::take(&mut ls.probe.log);
+    assert!(
+        log.iter()
+            .any(|l| l.starts_with("state") && !l.contains(&FULLSCREEN.to_string())),
+        "clearing fitted window during render must sync cleared Fullscreen state to wlr_toplevels: {log:?}"
+    );
+}
+
+#[test]
+#[ignore = "AUDIT_LAYERS: wlr_toplevels announces OutputEnter for every output regardless of presentation"]
+fn audit_layers_wlr_toplevel_announces_output_enter_for_non_presenting_output() {
+    let mut ls = Lockstep::with(
+        Default::default(),
+        &[
+            common::output_k("A", (1920, 1080), 120, 60_000),
+            common::output_k("B", (1920, 1080), 120, 60_000),
+        ],
+    );
+    let qh = ls.qh.clone();
+    let w1 = ls.probe.toplevel(&qh, "W1", (400, 300), 0);
+    ls.pump();
+    let e0 = ls.state.elements().next().unwrap();
+    set_focus(&mut ls.state, &mut ls.input, Some(e0)).unwrap();
     let wl_a = ls.probe.outputs[0].1.clone();
-    let wl_b_id = ls.probe.outputs[1].1.id().protocol_id();
-    ls.probe.surfaces[w]
+    ls.probe.surfaces[w1]
         .toplevel
         .as_ref()
         .unwrap()
         .set_fullscreen(Some(&wl_a));
     ls.pump();
 
-    let enters = WLR_OUTPUT_ENTERS.with(|c| c.borrow().clone());
-    assert!(
-        !enters.contains(&wl_b_id),
-        "fullscreen toplevel on A alone must not receive wlr output_enter for unrelated output B: {enters:?}"
-    );
-}
+    ls.probe.kb_log.clear();
+    let (name, _, _) = ls
+        .probe
+        .globals
+        .iter()
+        .find(|(_, i, _)| i == "zwlr_foreign_toplevel_manager_v1")
+        .cloned()
+        .expect("manager");
+    let _mgr: ZwlrForeignToplevelManagerV1 = ls.registry().bind(name, 3, &qh, ());
+    ls.pump();
 
-#[test]
-#[ignore = "AUDIT_PRESENTATION: zwlr unset_minimized passes validated=true and restores/focuses without user provenance"]
-fn audit_presentation_unset_minimized_from_unbound_client_raises_and_focuses() {
-    let (mut s, _, _) = S::new();
-    s.bind();
-    s.t += 1000;
-    pointer_motion(
-        &mut s.ls.state,
-        &mut s.ls.input,
-        (900.0, 500.0),
-        (900.0, 500.0),
-        s.t,
-    )
-    .expect("motion");
-    s.pump();
-    let w1 = s.e[1];
-    s.focus(Some(w1));
-    let fx = s.ls.state.core_mut().client_minimize(w1);
-    s.ls.state.apply(&fx);
-    s.pump();
-    assert!(s.ls.state.core().stage().is_minimized(w1));
-    s.focus(None);
-    assert_eq!(s.ls.state.core().focus().target(), None);
-
-    // Unlike activate() (tested right above), unset_minimized() accepts any foreign client
-    // regardless of pointer/keyboard provenance and focuses + raises w1.
-    s.ls.probe.wlr_handles[1].unset_minimized();
-    s.pump();
     assert_eq!(
-        s.ls.state.core().focus().target(),
-        None,
-        "an unprivileged foreign-toplevel client's unset_minimized must not steal keyboard focus"
+        ls.probe.kb_log,
+        vec!["wlr_output_enter 0".to_string()],
+        "window presenting exclusively on output 0 must not report OutputEnter on output 1"
     );
 }

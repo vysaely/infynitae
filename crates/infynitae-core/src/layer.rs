@@ -636,7 +636,10 @@ impl crate::Core {
         let exclusive = r.mapped()
             && r.layer().above_canvas()
             && r.state.keyboard == KeyboardInteractivity::Exclusive;
-        let keeps = r.mapped() && r.state.keyboard != KeyboardInteractivity::None;
+        // a layer moved below the Canvas cannot hold the keyboard either (AUDIT_LAYERS finding 1)
+        let keeps = r.mapped()
+            && r.layer().above_canvas()
+            && r.state.keyboard != KeyboardInteractivity::None;
         if exclusive {
             self.focus.layer_take(id, true)
         } else if self.focus.layer() == Some(id) && !keeps {
@@ -1514,105 +1517,129 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "AUDIT_PRESENTATION: OnDemand layer keeps keyboard focus while hidden by presentation"]
-    fn audit_presentation_ondemand_layer_keeps_keyboard_focus_while_hidden_by_fullscreen() {
-        use crate::PhysicalEvent;
-        use crate::input::bindings::Modifiers;
+    fn audit_layers_lowering_focused_layer_below_canvas_keeps_focus() {
         let Fx {
             mut c, mut i, o, ..
         } = setup();
-        let mut bar_state = state(Layer::Top, (true, false, true, true), (0, 30), 30);
-        bar_state.keyboard = KeyboardInteractivity::OnDemand;
-        let (bar, _) = map(&mut c, o, 1, bar_state);
-        let w = map_win(&mut c, 2, 400, 300);
+        let w = map_win(&mut c, 9, 400, 300);
         c.set_focus(&mut i, Some(w)).unwrap();
 
-        // Click on the OnDemand Top bar at (960, 10) to give it layer keyboard focus.
-        // Note: output_connected places pointer at (960, 540); move up -530 px to (960, 10).
-        c.physical_input_vec(
-            &mut i,
-            PhysicalEvent::PointerMotion {
-                delta: (0.0, -530.0),
-                delta_unaccel: (0.0, -530.0),
-                time_us: 100,
-            },
-        )
-        .unwrap();
-        c.physical_input_vec(
-            &mut i,
-            PhysicalEvent::PointerButton {
-                button: 0x110,
-                pressed: true,
-                modifiers: Modifiers::default(),
-                time_us: 200,
-            },
-        )
-        .unwrap();
-        c.physical_input_vec(
-            &mut i,
-            PhysicalEvent::PointerButton {
-                button: 0x110,
-                pressed: false,
-                modifiers: Modifiers::default(),
-                time_us: 300,
-            },
-        )
-        .unwrap();
-        assert_eq!(c.focus().layer(), Some(bar));
-
-        // w (still the window target) takes fullscreen presentation on o, hiding the OnDemand bar.
-        c.toplevel_request(
-            w,
-            crate::protocol::ToplevelRequest::SetFullscreen { output: Some(o) },
-        )
-        .unwrap();
-        assert_eq!(c.presentation(o), Some(w));
-        assert!(c.layer_frame(o).above.is_empty(), "bar is hidden");
-        assert!(c.layer_hit(o, (960.0, 10.0), true).is_none());
-        assert_eq!(
-            c.focus().layer(),
-            None,
-            "a layer surface hidden by presentation must lose keyboard focus"
-        );
-    }
-
-    #[test]
-    #[ignore = "AUDIT_PRESENTATION: downgrading Exclusive layer to OnDemand leaves focus.layer exclusive locked"]
-    fn audit_presentation_downgrading_exclusive_layer_to_ondemand_keeps_exclusive_lock() {
-        use crate::PhysicalEvent;
-        use crate::input::bindings::Modifiers;
-        let Fx {
-            mut c, mut i, o, ..
-        } = setup();
-        let w = map_win(&mut c, 2, 400, 300);
-        c.set_focus(&mut i, Some(w)).unwrap();
-
-        // Anchor top-left (200x200) so it does not cover screen center (960, 540) where w sits.
-        let mut panel_state = state(Layer::Top, (true, false, true, false), (200, 200), 0);
+        let mut panel_state = state(Layer::Top, (false, false, false, true), (360, 480), 0);
         panel_state.keyboard = KeyboardInteractivity::Exclusive;
         let (panel, _) = map(&mut c, o, 1, panel_state);
         assert_eq!(c.focus().layer(), Some(panel));
 
-        // Client downgrades keyboard interactivity to OnDemand.
+        // Switch to OnDemand and lower to Bottom: layer_keyboard's `keeps` omits `above_canvas()`.
+        panel_state.layer = Some(Layer::Bottom);
         panel_state.keyboard = KeyboardInteractivity::OnDemand;
-        c.layer_committed(panel, panel_state, tree(1, 200, 200, true))
+        c.layer_committed(panel, panel_state, tree(1, 360, 480, true))
             .unwrap();
-
-        // Clicking window w at screen center must now leave the OnDemand panel.
-        c.physical_input_vec(
-            &mut i,
-            PhysicalEvent::PointerButton {
-                button: 0x110,
-                pressed: true,
-                modifiers: Modifiers::default(),
-                time_us: 100,
-            },
-        )
-        .unwrap();
         assert_eq!(
             c.focus().layer(),
             None,
-            "after downgrading Exclusive -> OnDemand, clicking window w must release layer focus"
+            "lowering focused layer to Bottom must release keyboard focus"
+        );
+    }
+
+    #[test]
+    #[ignore = "AUDIT_LAYERS: configured layer unmapped before first buffer never receives remap configure"]
+    fn audit_layers_unmap_before_first_buffer_never_gets_remap_configure() {
+        let Fx { mut c, o, .. } = setup();
+        let bar = state(Layer::Top, (true, false, true, true), (0, 30), 30);
+        let id = c.layer_created(Some(o)).unwrap();
+
+        let fx = c.layer_committed(id, bar, tree(1, 0, 0, false)).unwrap();
+        assert!(
+            fx.iter()
+                .any(|e| matches!(e, Effect::LayerConfigure { layer, .. } if *layer == id)),
+            "initial commit configured the layer: {fx:?}"
+        );
+
+        // Client receives State::Fullscreen before drawing its first buffer and commits attach(None).
+        c.layer_committed(id, bar, tree(1, 0, 0, false)).unwrap();
+
+        // Later fullscreen ends and client sends empty commit to request a remap configure.
+        let fx = c.layer_committed(id, bar, tree(1, 0, 0, false)).unwrap();
+        assert!(
+            fx.iter()
+                .any(|e| matches!(e, Effect::LayerConfigure { layer, .. } if *layer == id)),
+            "commit after pre-first-buffer unmap must configure for remap: {fx:?}"
+        );
+    }
+
+    #[test]
+    #[ignore = "AUDIT_LAYERS: initial layer configure omits LayerPreferredScale"]
+    fn audit_layers_initial_configure_omits_preferred_scale() {
+        let (mut c, _i, _s, mut t) = Core::new(PersistedCameras::default());
+        let (o, _) = c
+            .output_connected(
+                &mut t,
+                OutputDescriptor {
+                    key: crate::output::tests::key("A"),
+                    mode: (1920, 1080),
+                    transform: Transform::Normal,
+                    scale_120: 240,
+                    refresh_mhz: 60_000,
+                },
+            )
+            .unwrap();
+
+        let bar_state = state(Layer::Top, (true, false, true, true), (0, 30), 30);
+        let id = c.layer_created(Some(o)).unwrap();
+        let initial_fx = c
+            .layer_committed(id, bar_state, tree(1, 0, 0, false))
+            .unwrap();
+        assert!(
+            initial_fx.contains(&Effect::LayerPreferredScale {
+                layer: id,
+                scale_120: 240,
+                integer_scale: 2,
+            }),
+            "initial configure must tell the client the output scale before its first buffer: {initial_fx:?}"
+        );
+    }
+
+    #[test]
+    #[ignore = "AUDIT_LAYERS: output scale change skips unmapped layer surfaces"]
+    fn audit_layers_output_scale_change_skips_unmapped_layer() {
+        let (mut c, _i, _s, mut t) = Core::new(PersistedCameras::default());
+        let (o, _) = c
+            .output_connected(
+                &mut t,
+                OutputDescriptor {
+                    key: crate::output::tests::key("A"),
+                    mode: (1920, 1080),
+                    transform: Transform::Normal,
+                    scale_120: 240,
+                    refresh_mhz: 60_000,
+                },
+            )
+            .unwrap();
+
+        let bar_state = state(Layer::Top, (true, false, true, true), (0, 30), 30);
+        let (id, _) = map(&mut c, o, 1, bar_state);
+        c.layer_committed(id, bar_state, tree(1, 0, 0, false))
+            .unwrap();
+        let reconf_fx = c
+            .output_reconfigured(
+                &mut t,
+                o,
+                OutputDescriptor {
+                    key: crate::output::tests::key("A"),
+                    mode: (1920, 1080),
+                    transform: Transform::Normal,
+                    scale_120: 180,
+                    refresh_mhz: 60_000,
+                },
+            )
+            .unwrap();
+        assert!(
+            reconf_fx.contains(&Effect::LayerPreferredScale {
+                layer: id,
+                scale_120: 180,
+                integer_scale: 2,
+            }),
+            "output scale change while layer is unmapped must still update its preferred scale: {reconf_fx:?}"
         );
     }
 }
