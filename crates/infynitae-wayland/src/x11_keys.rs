@@ -198,7 +198,10 @@ mod tests {
         let (server_end, _client_end) = std::os::unix::net::UnixStream::pair().expect("socketpair");
         let client = display
             .handle()
-            .insert_client(server_end, std::sync::Arc::new(crate::ClientState::default()))
+            .insert_client(
+                server_end,
+                std::sync::Arc::new(crate::ClientState::default()),
+            )
             .expect("insert x11 client");
         state.note_x11_client(&client);
 

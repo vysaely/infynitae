@@ -10,9 +10,7 @@ use std::time::Duration;
 
 use common::input::*;
 use common::{Lockstep, PopupSpec, Probe, delta_to, hit_under_pointer, output};
-use infynitae_backend_headless::{
-    keyboard_key, pointer_button, pointer_motion, set_focus,
-};
+use infynitae_backend_headless::{keyboard_key, pointer_button, pointer_motion, set_focus};
 use infynitae_core::PhysicalEvent;
 use infynitae_core::input::bindings::{BTN_LEFT, BTN_MIDDLE};
 use infynitae_core::input::keys::{KEY_K, KEY_LEFTMETA, KEY_TAB};
@@ -378,7 +376,12 @@ fn super_tab_leaves_super_depressed_on_leaving_client_wire() {
     b.drive(&mut ls);
     let _bi = b.probe.toplevel(&b.qh, "B", (400, 300), 0);
     b.drive(&mut ls);
-    let eb = ls.state.elements().into_iter().find(|id| *id != ew).unwrap();
+    let eb = ls
+        .state
+        .elements()
+        .into_iter()
+        .find(|id| *id != ew)
+        .unwrap();
 
     set_focus(&mut ls.state, &mut ls.input, Some(ew)).unwrap();
     b.drive(&mut ls);
@@ -450,7 +453,12 @@ fn refuse_client_drags_drops_click_grab_and_delivers_unmatched_release_to_second
     b.drive(&mut ls);
     let _bi = b.probe.toplevel(&b.qh, "B", (200, 200), 0);
     b.drive(&mut ls);
-    let eb = ls.state.elements().into_iter().find(|id| *id != ew).unwrap();
+    let eb = ls
+        .state
+        .elements()
+        .into_iter()
+        .find(|id| *id != ew)
+        .unwrap();
     let t = ls.now + Duration::from_millis(20);
     ls.run_until(t);
     b.drive(&mut ls);
@@ -509,10 +517,7 @@ fn refuse_client_drags_drops_click_grab_and_delivers_unmatched_release_to_second
     b.drive(&mut ls);
 
     assert!(
-        !b.probe
-            .ptr
-            .iter()
-            .any(|l| l == "button 272 released"),
+        !b.probe.ptr.iter().any(|l| l == "button 272 released"),
         "client B received unmatched button 272 released without pressed: B.ptr={:?}",
         b.probe.ptr
     );
@@ -541,7 +546,12 @@ fn popup_pointer_grab_ended_mid_press_delivers_unmatched_release_to_second_clien
     b.drive(&mut ls);
     let _bi = b.probe.toplevel(&b.qh, "B", (200, 200), 0);
     b.drive(&mut ls);
-    let eb = ls.state.elements().into_iter().find(|id| *id != ew).unwrap();
+    let eb = ls
+        .state
+        .elements()
+        .into_iter()
+        .find(|id| *id != ew)
+        .unwrap();
     let t = ls.now + Duration::from_millis(20);
     ls.run_until(t);
     b.drive(&mut ls);
@@ -603,10 +613,7 @@ fn popup_pointer_grab_ended_mid_press_delivers_unmatched_release_to_second_clien
     b.drive(&mut ls);
 
     assert!(
-        !b.probe
-            .ptr
-            .iter()
-            .any(|l| l == "button 272 released"),
+        !b.probe.ptr.iter().any(|l| l == "button 272 released"),
         "client B received unmatched button 272 released without pressed: B.ptr={:?}",
         b.probe.ptr
     );
@@ -639,7 +646,14 @@ fn camera_pan_with_layer_popup_and_no_window_focus_does_not_dismiss_popup_grab()
     assert_eq!(ls.state.core().focus().target(), None);
 
     // Move pointer from view center (960, 540) to layer surface L at (60, 60).
-    pointer_motion(&mut ls.state, &mut ls.input, (-900.0, -480.0), (-810.0, -432.0), 1).unwrap();
+    pointer_motion(
+        &mut ls.state,
+        &mut ls.input,
+        (-900.0, -480.0),
+        (-810.0, -432.0),
+        1,
+    )
+    .unwrap();
     ls.pump();
     pointer_button(&mut ls.state, &mut ls.input, BTN_LEFT, true, none(), 2).unwrap();
     ls.pump();
@@ -660,7 +674,10 @@ fn camera_pan_with_layer_popup_and_no_window_focus_does_not_dismiss_popup_grab()
         Some(serial),
     );
     ls.pump();
-    assert!(ls.state.is_pointer_grabbed(), "layer popup grab should be active");
+    assert!(
+        ls.state.is_pointer_grabbed(),
+        "layer popup grab should be active"
+    );
 
     // Start CameraPan (Super + MMB).
     keyboard_key(&mut ls.state, &mut ls.input, KEY_LEFTMETA, true, 4).unwrap();
@@ -819,7 +836,12 @@ fn two_disjoint_windows() -> (
     b.drive(&mut ls);
     let _bi = b.probe.toplevel(&b.qh, "B", (200, 200), 0);
     b.drive(&mut ls);
-    let eb = ls.state.elements().into_iter().find(|id| *id != ew).unwrap();
+    let eb = ls
+        .state
+        .elements()
+        .into_iter()
+        .find(|id| *id != ew)
+        .unwrap();
     let t = ls.now + Duration::from_millis(20);
     ls.run_until(t);
     b.drive(&mut ls);
@@ -953,38 +975,34 @@ fn session_lock_leaves_core_touch_state_active_across_unlock() {
     r.ls.pump();
 
     // Lock the session (triggers SessionLockHandler::lock) and immediately unlock.
-    let (name, _, _) = r
-        .ls
-        .probe
-        .globals
-        .iter()
-        .find(|(_, i, _)| i == "ext_session_lock_manager_v1")
-        .cloned()
-        .expect("ext_session_lock_manager_v1");
+    let (name, _, _) =
+        r.ls.probe
+            .globals
+            .iter()
+            .find(|(_, i, _)| i == "ext_session_lock_manager_v1")
+            .cloned()
+            .expect("ext_session_lock_manager_v1");
     let manager: ExtSessionLockManagerV1 = r.ls.registry().bind(name, 1, &qh, ());
     let lock = manager.lock(&qh, 1);
-    let lock_surface = r
-        .ls
-        .probe
-        .compositor
-        .as_ref()
-        .expect("compositor")
-        .create_surface(&qh, ());
+    let lock_surface =
+        r.ls.probe
+            .compositor
+            .as_ref()
+            .expect("compositor")
+            .create_surface(&qh, ());
     let wl_out = r.ls.probe.outputs[0].1.clone();
     lock.get_lock_surface(&lock_surface, &wl_out, &qh, ());
     r.ls.pump();
-    let size = r
-        .ls
-        .probe
-        .log
-        .iter()
-        .rev()
-        .find_map(|l| l.strip_prefix("lock surface ").map(str::to_owned));
+    let size =
+        r.ls.probe
+            .log
+            .iter()
+            .rev()
+            .find_map(|l| l.strip_prefix("lock surface ").map(str::to_owned));
     if let Some((lw, lh)) = size.as_deref().and_then(|s| s.split_once('x')) {
-        let buffer = r
-            .ls
-            .probe
-            .buffer(&qh, lw.parse().unwrap(), lh.parse().unwrap());
+        let buffer =
+            r.ls.probe
+                .buffer(&qh, lw.parse().unwrap(), lh.parse().unwrap());
         lock_surface.attach(Some(&buffer), 0, 0);
         lock_surface.commit();
         r.ls.pump();
@@ -995,11 +1013,10 @@ fn session_lock_leaves_core_touch_state_active_across_unlock() {
 
     lock.unlock_and_destroy();
     r.ls.pump();
-    let releases = r
-        .ls
-        .state
-        .take_unlock_releases()
-        .expect("an unlock happened");
+    let releases =
+        r.ls.state
+            .take_unlock_releases()
+            .expect("an unlock happened");
     for k in releases {
         r.t += 1000;
         keyboard_key(&mut r.ls.state, &mut r.ls.input, k, false, r.t).expect("release");
