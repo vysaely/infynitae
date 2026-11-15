@@ -1,5 +1,7 @@
 # Audit: config readers and settings that do nothing (`AUDIT_CONFIG`)
 
+Status (Claude's review, 2026-11-15): fixed in fix/config-audit-small: finding 3 for PAN_MODE, LATENCY and TOUCHPAD_TAP (an empty value is unset; PANELS_OVERLAP in edge-apps still open) and finding 4 (display table in (value, word) order). Finding 7 does not affect the owner's config (LOCK_WHEN_AWAY is set); it touches locking, so left for a daytime review. Open: 1, 2, 5-14 (reproducers ignored).
+
 Scope: every reader and writer of `~/.config/infynitae/config` across the compositor crates, `live/` scripts, C helpers, GTK/Cairo edge panels/settings, and `config/config` (2026-11-15, `docs/POLISH_PLAN.md` section 4.3).
 
 ## Summary of findings

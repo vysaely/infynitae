@@ -1299,7 +1299,8 @@ impl WaylandState {
                                 "rts" => self
                                     .core
                                     .set_pan_mode(infynitae_core::navigation::PanMode::Rts),
-                                "free" => self
+                                // empty is unset: the default, as at start (AUDIT_CONFIG finding 3)
+                                "free" | "" => self
                                     .core
                                     .set_pan_mode(infynitae_core::navigation::PanMode::Free),
                                 _ => self
@@ -1437,7 +1438,12 @@ impl WaylandState {
                                 }
                             }
                             "LATENCY" => {
-                                latency_mode = crate::frame_schedule::LatencyMode::parse(val);
+                                // empty is unset: the default (finding 3)
+                                latency_mode = if val.is_empty() {
+                                    crate::frame_schedule::LatencyMode::Direct
+                                } else {
+                                    crate::frame_schedule::LatencyMode::parse(val)
+                                };
                             }
                             "LATENCY_STATS" => {
                                 self.latency_stats = parse_bool(val).unwrap_or(false);
@@ -1475,8 +1481,9 @@ impl WaylandState {
                                 }
                             }
                             "TOUCHPAD_TAP" => {
+                                // empty is unset: the device's own default (finding 3)
                                 self.input_config.touchpad_tap =
-                                    Some(parse_bool(val).unwrap_or(false));
+                                    (!val.is_empty()).then(|| parse_bool(val).unwrap_or(false));
                             }
                             "TOUCHPAD_NATURAL_SCROLL" => {
                                 self.input_config.touchpad_natural_scroll =
@@ -2801,7 +2808,6 @@ mod key_binding_config_tests {
     }
 
     #[test]
-    #[ignore = "AUDIT_CONFIG: PAN_MODE=\"\" flips to Grab in reload_config vs Free in main/default"]
     fn audit_config_pan_mode_empty_keeps_free_default() {
         use smithay::reexports::wayland_server::Display;
         let temp = super::cursor::TestTempDir::new("wl_audit_pan_mode");
@@ -2822,7 +2828,6 @@ mod key_binding_config_tests {
     }
 
     #[test]
-    #[ignore = "AUDIT_CONFIG: TOUCHPAD_TAP=\"\" disables touchpad tapping via unwrap_or(false)"]
     fn audit_config_touchpad_tap_empty_keeps_default_true() {
         use smithay::reexports::wayland_server::Display;
         let temp = super::cursor::TestTempDir::new("wl_audit_touchpad_tap");
@@ -2840,7 +2845,6 @@ mod key_binding_config_tests {
     }
 
     #[test]
-    #[ignore = "AUDIT_CONFIG: LATENCY=\"\" parses as Balanced instead of Direct default"]
     fn audit_config_latency_empty_keeps_direct_default() {
         use smithay::reexports::wayland_server::Display;
         let temp = super::cursor::TestTempDir::new("wl_audit_latency");

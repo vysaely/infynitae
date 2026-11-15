@@ -2200,7 +2200,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "AUDIT_CONFIG: settings_display::TABLE uses (label, value) order instead of (value, label)"]
     fn audit_config_display_shown_word_tuple_order() {
         assert!(shown_word("VRR_ENABLED", "on").is_some());
         assert!(shown_word("MAX_APP_SCALE", "2").is_some());

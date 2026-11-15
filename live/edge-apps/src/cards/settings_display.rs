@@ -27,12 +27,14 @@ pub const KIND: CardKind = CardKind {
 };
 
 /// Global ("All screens") settings shared with `ConfigData` and `config/config`.
+// Pick choices are (value, word), as every settings table (settings_rows::Control::Pick):
+// the settings search reads them so (AUDIT_CONFIG finding 4)
 pub const TABLE: &[Setting] = &[
     Setting {
         name: "Variable refresh rate",
         says: "",
         key: "VRR_ENABLED",
-        control: Control::Pick(&[("In fullscreen", "auto"), ("On", "on"), ("Off", "off")]),
+        control: Control::Pick(&[("auto", "In fullscreen"), ("on", "On"), ("off", "Off")]),
         after: After::Restart,
         more: false,
         needs: &[],
@@ -64,7 +66,7 @@ pub const TABLE: &[Setting] = &[
         name: "Sharper when zoomed in",
         says: "",
         key: "MAX_APP_SCALE",
-        control: Control::Pick(&[("Never", "1"), ("2x", "2"), ("3x", "3")]),
+        control: Control::Pick(&[("1", "Never"), ("2", "2x"), ("3", "3x")]),
         after: After::Save,
         more: true,
         needs: &[],
@@ -74,10 +76,10 @@ pub const TABLE: &[Setting] = &[
         says: "",
         key: "SCALING_FILTER",
         control: Control::Pick(&[
-            ("Sharp", "sharp"),
-            ("Smooth", "smooth"),
-            ("FSR", "fsr"),
-            ("FSR sharp", "fsr-sharp"),
+            ("sharp", "Sharp"),
+            ("smooth", "Smooth"),
+            ("fsr", "FSR"),
+            ("fsr-sharp", "FSR sharp"),
         ]),
         after: After::Save,
         more: true,
@@ -1241,7 +1243,7 @@ impl DisplayCard {
                 Control::Pick(choices) => {
                     let opts = choices
                         .iter()
-                        .map(|(l, v)| OptionItem {
+                        .map(|(v, l)| OptionItem {
                             active: v.eq_ignore_ascii_case(&norm_cur),
                             label: (*l).to_string(),
                             value: (*v).to_string(),
@@ -1249,8 +1251,8 @@ impl DisplayCard {
                         .collect::<Vec<_>>();
                     let shown = choices
                         .iter()
-                        .find(|(_, v)| v.eq_ignore_ascii_case(&norm_cur))
-                        .map(|(l, _)| (*l).to_string())
+                        .find(|(v, _)| v.eq_ignore_ascii_case(&norm_cur))
+                        .map(|(_, l)| (*l).to_string())
                         .unwrap_or_else(|| cur.to_string());
                     DisplayRow {
                         id: RowId::Global(st.key),
@@ -2089,7 +2091,7 @@ mod tests {
             match st.control {
                 Control::Pick(choices) => {
                     assert!(
-                        choices.iter().any(|(_, v)| v.eq_ignore_ascii_case(val)),
+                        choices.iter().any(|(v, _)| v.eq_ignore_ascii_case(val)),
                         "key {} default {:?} is not in Pick choices {:?}",
                         st.key,
                         val,
