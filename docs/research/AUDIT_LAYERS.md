@@ -1,5 +1,7 @@
 # Audit: layer surfaces against presentation, fit and lock (AUDIT_LAYERS)
 
+Status (Claude's review, 2026-11-15): fixed in fix/layers-after-fullscreen: finding 1 for a layer lowered below the Canvas (its first half, an exclusive Top panel over a presentation, is the intended behaviour since PR #82, so those two reproducers were removed), finding 3, finding 4 (fullscreen while stepped aside; the per-output OutputEnter part is open). Open: 2 (the obvious fix, a configure for every bufferless commit, could loop with the edge's hidden mode; needs a null-attach signal), 4b, 5-11.
+
 | Rank | Kind | Finding | Evidence (`file:line`) | How sure | What the user would see | Fix | Size |
 |---|---|---|---|---|---|---|---|
 | 1 | Bug | Hidden `Layer::Top` steals or retains keyboard focus under active presentation (and lowering a focused layer keeps focus) | `crates/infynitae-core/src/layer.rs:343-348, 625-639`; `crates/infynitae-core/src/lib.rs:843-862`; `crates/infynitae-core/src/protocol.rs:732-753` | Proved by 4 tests in `layer.rs` and `t1_layer_shell.rs` | Opening an exclusive `Layer::Top` panel over a fullscreen window hides it yet gives it the keyboard; starting presentation keeps focus on a `Top` layer; moving a focused layer to `Bottom` keeps focus | Gate `exclusive` and `keeps` in `layer_keyboard` on `r.layer().above_canvas()` and visibility (`Overlay` or not presenting), and release/re-evaluate layer focus when presentation starts or unsuppresses | S |

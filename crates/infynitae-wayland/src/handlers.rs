@@ -248,7 +248,10 @@ impl WaylandState {
             self.core.toplevel_size_drawn(id, acked, drawn);
         }
         if window.toplevel().is_some() {
+            // an acked fullscreen or unfullscreen changes the states the edge reads: told now, not at
+            // the next unrelated change (AUDIT_LAYERS finding 3)
             self.wlr_toplevels.dirty = true;
+            self.sync_wlr_toplevels();
         }
         self.list_toplevel(id, mapped);
         if opens && !acked_fullscreen {

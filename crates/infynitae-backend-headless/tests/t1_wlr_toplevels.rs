@@ -403,7 +403,6 @@ fn picking_a_window_from_the_bar_moves_the_camera_and_records_history() {
 }
 
 #[test]
-#[ignore = "AUDIT_LAYERS: wlr_toplevels misses dirty sync when client commits acked fullscreen/unfullscreen"]
 fn audit_layers_commit_fullscreen_or_unfullscreen_does_not_sync_wlr_toplevels() {
     const FULLSCREEN: u32 = 3;
     let (mut s, w1, _) = S::new();
@@ -431,7 +430,6 @@ fn audit_layers_commit_fullscreen_or_unfullscreen_does_not_sync_wlr_toplevels() 
 }
 
 #[test]
-#[ignore = "AUDIT_LAYERS: wlr_toplevels reports Fullscreen while presentation is suppressed"]
 fn audit_layers_wlr_toplevel_reports_fullscreen_while_presentation_suppressed() {
     use infynitae_backend_headless::keyboard_key;
     use infynitae_core::input::keys::{KEY_LEFTMETA, KEY_TAB};
@@ -493,7 +491,6 @@ fn audit_layers_wlr_toplevel_reports_fullscreen_while_presentation_suppressed() 
 }
 
 #[test]
-#[ignore = "AUDIT_LAYERS: clearing fitted window in render leaves wlr_toplevels unsynced"]
 fn audit_layers_fitted_window_clear_in_render_leaves_wlr_toplevels_unsynced() {
     use smithay::backend::renderer::pixman::PixmanRenderer;
     use std::os::fd::AsFd;
