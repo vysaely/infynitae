@@ -876,16 +876,12 @@ impl CameraSet {
         let Some(g) = c.glide.as_mut() else {
             return false;
         };
+        // the first step of a glide is one refresh: it starts moving at the first frame drawn
+        // after the input, by a normal step whether or not the camera had been ticked lately (it
+        // used to stand still for a frame, or jump up to two steps after a quiet moment;
+        // AUDIT_FRAME_TIMING finding 2); after that it follows the real time between refreshes
         let dt = match (g.primed, prev_tick) {
-            (false, None) => Duration::ZERO,
-            (false, Some(prev)) => {
-                let raw = now.saturating_sub(prev);
-                if raw > frame_period.saturating_mul(2) {
-                    frame_period
-                } else {
-                    raw
-                }
-            }
+            (false, _) => frame_period,
             (true, Some(prev)) => now.saturating_sub(prev),
             (true, None) => Duration::ZERO,
         };
@@ -1271,5 +1267,126 @@ mod tests {
         assert!((q - 100.0).abs() < 1e-6);
         assert!((150.0..=180.0).contains(&s));
         assert!((f - 300.0).abs() < 1e-6);
+    }
+
+    /// One 165 Hz screen with a Quick glide; the input port stays with the test (an authority
+    /// value is never returned from a helper).
+    #[cfg(test)]
+    fn prepare_gliding(
+        c: &mut crate::Core,
+        t: &mut crate::OutputLifecycleToken,
+    ) -> (crate::output::OutputId, usize) {
+        let (a, _) = c
+            .output_connected(
+                t,
+                crate::output::OutputDescriptor {
+                    key: key("A"),
+                    mode: (1920, 1080),
+                    transform: crate::output::Transform::Normal,
+                    scale_120: 120,
+                    refresh_mhz: 165_000,
+                },
+            )
+            .unwrap();
+        c.set_zoom_feel(ZoomFeel::Quick);
+        let cam = c.cameras().camera_for_output(a).unwrap();
+        (a, cam)
+    }
+
+    fn trigger_wheel_zoom(c: &mut crate::Core, i: &mut crate::InputPort, t_us: u64) {
+        use crate::PhysicalEvent;
+        use crate::input::bindings::Modifiers;
+        use crate::input::keys::{KEY_LEFTMETA, KEY_LEFTSHIFT};
+        use crate::input::{Axis, AxisSource};
+        use crate::protocol::EffectBuf;
+
+        let mut fx = EffectBuf::default();
+        let mods = Modifiers {
+            logo: true,
+            shift: true,
+            ..Default::default()
+        };
+        c.physical_input(
+            i,
+            PhysicalEvent::KeyboardKey {
+                key: KEY_LEFTMETA,
+                pressed: true,
+                modifiers: mods,
+                mods_changed: true,
+                time_us: t_us,
+            },
+            &mut fx,
+        )
+        .unwrap();
+        c.physical_input(
+            i,
+            PhysicalEvent::KeyboardKey {
+                key: KEY_LEFTSHIFT,
+                pressed: true,
+                modifiers: mods,
+                mods_changed: true,
+                time_us: t_us + 1,
+            },
+            &mut fx,
+        )
+        .unwrap();
+        c.physical_input(
+            i,
+            PhysicalEvent::PointerAxis {
+                axis: Axis {
+                    source: AxisSource::Wheel,
+                    amount: (0.0, -30.0),
+                    v120: (0, -240),
+                },
+                time_us: t_us + 2,
+            },
+            &mut fx,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn tick_glide_first_tick_without_prior_frame_moves_camera() {
+        use std::time::Duration;
+
+        let (mut c, mut i, _, mut t) = crate::Core::new(PersistedCameras::default());
+        let (a, cam) = prepare_gliding(&mut c, &mut t);
+        trigger_wheel_zoom(&mut c, &mut i, 10);
+        assert!(c.zoom_gliding());
+
+        let moved = c.zoom_tick(a, Duration::from_micros(6_060));
+        let zoom = c.cameras().zoom(cam).unwrap();
+        assert!(
+            !moved.is_empty() && zoom > 1.0,
+            "first tick after glide trigger should move camera, got zoom={zoom}"
+        );
+    }
+
+    #[test]
+    fn tick_glide_first_step_after_quiet_gap_does_not_exceed_one_refresh() {
+        use std::time::Duration;
+
+        // Control: primed 1 frame_period before first glide tick.
+        let period = Duration::from_micros(6_060);
+        let (mut ctrl, mut ctrl_i, _, mut ctrl_t) = crate::Core::new(PersistedCameras::default());
+        let (ctrl_a, ctrl_cam) = prepare_gliding(&mut ctrl, &mut ctrl_t);
+        ctrl.zoom_tick(ctrl_a, Duration::ZERO);
+        trigger_wheel_zoom(&mut ctrl, &mut ctrl_i, 100);
+        ctrl.zoom_tick(ctrl_a, period);
+        let ctrl_step = ctrl.cameras().zoom(ctrl_cam).unwrap().ln();
+
+        // Idle for 1.9 * period before the wheel event; next vblank is at 1.9 * period.
+        let (mut c, mut i, _, mut t) = crate::Core::new(PersistedCameras::default());
+        let (a, cam) = prepare_gliding(&mut c, &mut t);
+        c.zoom_tick(a, Duration::from_micros(6_060));
+        let quiet_tick = Duration::from_micros(6_060 + 11_514);
+        trigger_wheel_zoom(&mut c, &mut i, quiet_tick.as_micros() as u64 - 500);
+        c.zoom_tick(a, quiet_tick);
+        let gap_step = c.cameras().zoom(cam).unwrap().ln();
+
+        assert!(
+            gap_step <= ctrl_step * 1.05,
+            "first frame after quiet gap stepped {gap_step:.5} vs 1-refresh {ctrl_step:.5}"
+        );
     }
 }

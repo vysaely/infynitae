@@ -1299,7 +1299,8 @@ impl WaylandState {
                                 "rts" => self
                                     .core
                                     .set_pan_mode(infynitae_core::navigation::PanMode::Rts),
-                                "free" => self
+                                // empty is unset: the default, as at start (AUDIT_CONFIG finding 3)
+                                "free" | "" => self
                                     .core
                                     .set_pan_mode(infynitae_core::navigation::PanMode::Free),
                                 _ => self
@@ -1437,7 +1438,12 @@ impl WaylandState {
                                 }
                             }
                             "LATENCY" => {
-                                latency_mode = crate::frame_schedule::LatencyMode::parse(val);
+                                // empty is unset: the default (finding 3)
+                                latency_mode = if val.is_empty() {
+                                    crate::frame_schedule::LatencyMode::Direct
+                                } else {
+                                    crate::frame_schedule::LatencyMode::parse(val)
+                                };
                             }
                             "LATENCY_STATS" => {
                                 self.latency_stats = parse_bool(val).unwrap_or(false);
@@ -1475,8 +1481,9 @@ impl WaylandState {
                                 }
                             }
                             "TOUCHPAD_TAP" => {
+                                // empty is unset: the device's own default (finding 3)
                                 self.input_config.touchpad_tap =
-                                    Some(parse_bool(val).unwrap_or(false));
+                                    (!val.is_empty()).then(|| parse_bool(val).unwrap_or(false));
                             }
                             "TOUCHPAD_NATURAL_SCROLL" => {
                                 self.input_config.touchpad_natural_scroll =
@@ -2715,6 +2722,146 @@ mod key_binding_config_tests {
         std::fs::write(&cfg, "ACCENT=\"\"\nBORDER_ACTIVE=\"#cc70a9\"\n").unwrap();
         state.reload_config();
         assert_eq!(state.border_active, old_col);
+    }
+
+    #[test]
+    #[ignore = "AUDIT_CONFIG: config_line trims quoted leading/trailing whitespace"]
+    fn audit_config_line_preserves_quoted_whitespace() {
+        assert_eq!(
+            super::config_line("WALLPAPER=\"  leading.png  \"\n"),
+            Some(("WALLPAPER".to_string(), "  leading.png  ".to_string()))
+        );
+    }
+
+    #[test]
+    #[ignore = "AUDIT_CONFIG: WaylandState::new initializes border_width to 0 instead of config/config default 1"]
+    fn audit_config_wayland_state_new_border_width_is_one() {
+        use smithay::reexports::wayland_server::Display;
+        let (core, _, _, _) =
+            infynitae_core::Core::new(infynitae_core::navigation::PersistedCameras::default());
+        let display: Display<super::WaylandState> = Display::new().unwrap();
+        let state = super::WaylandState::new(&display.handle(), core);
+        assert_eq!(state.border_width, 1);
+    }
+
+    #[test]
+    #[ignore = "AUDIT_CONFIG: reload_config does not reset removed [save] keys back to defaults"]
+    fn audit_config_reload_resets_removed_save_keys_to_defaults() {
+        use smithay::reexports::wayland_server::Display;
+        let temp = super::cursor::TestTempDir::new("wl_audit_save_reset");
+        let cfg_dir = temp.path().join(".config/infynitae");
+        std::fs::create_dir_all(&cfg_dir).unwrap();
+        let cfg = cfg_dir.join("config");
+
+        let (core, _, _, _) =
+            infynitae_core::Core::new(infynitae_core::navigation::PersistedCameras::default());
+        let display: Display<super::WaylandState> = Display::new().unwrap();
+        let mut state = super::WaylandState::new(&display.handle(), core);
+        state.set_config_home(temp.path().to_path_buf());
+
+        std::fs::write(
+            &cfg,
+            "BORDER_WIDTH=\"5\"\n\
+             ACCENT=\"#ff2244\"\n\
+             BORDER_INACTIVE=\"#445566\"\n\
+             SQUARE_CORNERS=\"false\"\n\
+             CLIP_TO_GEOMETRY=\"false\"\n\
+             BORDER_IGNORE_CSD=\"false\"\n\
+             PAN_MODE=\"rts\"\n\
+             FOCUS_FOLLOWS_MOUSE=\"off\"\n\
+             FULLSCREEN_PAN=\"false\"\n\
+             FOCUS_ON_OPEN=\"false\"\n\
+             TELEPORT_ON_OPEN=\"false\"\n\
+             TOUCHPAD_TAP=\"false\"\n\
+             KEYBOARD_REPEAT_DELAY=\"500\"\n\
+             PRIVACY_APPS=\"secret\"\n",
+        )
+        .unwrap();
+        state.reload_config();
+
+        std::fs::write(&cfg, "").unwrap();
+        state.reload_config();
+
+        assert_eq!(state.border_width, 1);
+        assert_eq!(
+            state.border_active,
+            super::parse_color_hex("#7aa2f7").unwrap()
+        );
+        assert_eq!(
+            state.border_inactive,
+            super::parse_color_hex("#333b54").unwrap()
+        );
+        assert!(state.square_corners);
+        assert!(state.clip_to_geometry);
+        assert!(state.border_ignore_csd);
+        assert_eq!(
+            state.core.pan_mode,
+            infynitae_core::navigation::PanMode::Free
+        );
+        assert!(state.core.focus_follows_mouse);
+        assert!(state.core.fullscreen_pan);
+        assert!(state.core.focus_on_open);
+        assert!(state.core.teleport_on_open);
+        assert_ne!(state.input_config.touchpad_tap, Some(false));
+        assert_eq!(state.keyboard_repeat_delay, 200);
+        assert!(state.privacy_apps.is_empty());
+    }
+
+    #[test]
+    fn audit_config_pan_mode_empty_keeps_free_default() {
+        use smithay::reexports::wayland_server::Display;
+        let temp = super::cursor::TestTempDir::new("wl_audit_pan_mode");
+        let cfg_dir = temp.path().join(".config/infynitae");
+        std::fs::create_dir_all(&cfg_dir).unwrap();
+        std::fs::write(cfg_dir.join("config"), "PAN_MODE=\"\"\n").unwrap();
+
+        let (core, _, _, _) =
+            infynitae_core::Core::new(infynitae_core::navigation::PersistedCameras::default());
+        let display: Display<super::WaylandState> = Display::new().unwrap();
+        let mut state = super::WaylandState::new(&display.handle(), core);
+        state.set_config_home(temp.path().to_path_buf());
+        state.reload_config();
+        assert_eq!(
+            state.core.pan_mode,
+            infynitae_core::navigation::PanMode::Free
+        );
+    }
+
+    #[test]
+    fn audit_config_touchpad_tap_empty_keeps_default_true() {
+        use smithay::reexports::wayland_server::Display;
+        let temp = super::cursor::TestTempDir::new("wl_audit_touchpad_tap");
+        let cfg_dir = temp.path().join(".config/infynitae");
+        std::fs::create_dir_all(&cfg_dir).unwrap();
+        std::fs::write(cfg_dir.join("config"), "TOUCHPAD_TAP=\"\"\n").unwrap();
+
+        let (core, _, _, _) =
+            infynitae_core::Core::new(infynitae_core::navigation::PersistedCameras::default());
+        let display: Display<super::WaylandState> = Display::new().unwrap();
+        let mut state = super::WaylandState::new(&display.handle(), core);
+        state.set_config_home(temp.path().to_path_buf());
+        state.reload_config();
+        assert_ne!(state.input_config.touchpad_tap, Some(false));
+    }
+
+    #[test]
+    fn audit_config_latency_empty_keeps_direct_default() {
+        use smithay::reexports::wayland_server::Display;
+        let temp = super::cursor::TestTempDir::new("wl_audit_latency");
+        let cfg_dir = temp.path().join(".config/infynitae");
+        std::fs::create_dir_all(&cfg_dir).unwrap();
+        std::fs::write(cfg_dir.join("config"), "LATENCY=\"\"\n").unwrap();
+
+        let (core, _, _, _) =
+            infynitae_core::Core::new(infynitae_core::navigation::PersistedCameras::default());
+        let display: Display<super::WaylandState> = Display::new().unwrap();
+        let mut state = super::WaylandState::new(&display.handle(), core);
+        state.set_config_home(temp.path().to_path_buf());
+        state.reload_config();
+        assert_eq!(
+            state.latency_mode,
+            super::frame_schedule::LatencyMode::Direct
+        );
     }
 }
 

@@ -1036,4 +1036,29 @@ pub(crate) mod tests {
             );
         }
     }
+
+    #[test]
+    #[ignore = "AUDIT_CONFIG: Switch row only matches exact `on` token instead of bool aliases"]
+    fn audit_config_switch_accepts_shell_bool_tokens() {
+        let th = Theme::from_config(&crate::config::Config::from_text(""));
+        let cx = test_cx(&th);
+        let mut c = TableCard::new(T);
+        c.apply(
+            "config",
+            &data(&[("GAME_MODE", "1")], &[], &["gamemoded"]) as &dyn Any,
+        );
+        let mut out = Vec::new();
+        assert!(c.event(&press(ROW + 1), &cx, &mut out));
+        assert!(out
+            .iter()
+            .any(|a| matches!(a, Action::Run(cmd) if cmd.contains("set GAME_MODE 'false'"))));
+    }
+
+    #[test]
+    #[ignore = "AUDIT_CONFIG: parse_config truncates settings.sh '\\'' escapes and drops export lines"]
+    fn audit_config_parse_config_handles_escaped_single_quote_and_export() {
+        let m = parse_config("BROWSER='O'\\''Reilly'\nexport ACCENT=\"#112233\"\n");
+        assert_eq!(m.get("BROWSER").map(String::as_str), Some("O'Reilly"));
+        assert_eq!(m.get("ACCENT").map(String::as_str), Some("#112233"));
+    }
 }
