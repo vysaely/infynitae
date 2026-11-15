@@ -608,4 +608,22 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    #[ignore = "AUDIT_CONFIG: LockCard only treats exact \"true\" as enabled"]
+    fn audit_config_lock_card_accepts_shell_bool_tokens() {
+        let th = Theme::from_config(&crate::config::Config::from_text(""));
+        let cx = test_cx(&th);
+        let mut c = LockCard::default();
+        c.apply("battery_limit", &supported(false) as &dyn Any);
+        c.apply(
+            "config",
+            &data(&[("LOCK_WHEN_AWAY", "1")], &[], &[]) as &dyn Any,
+        );
+        let mut out = Vec::new();
+        assert!(c.event(&press(ROW + 10 + 1), &cx, &mut out));
+        assert!(out
+            .iter()
+            .any(|a| matches!(a, Action::Run(cmd) if cmd.contains("set LOCK_WHEN_AWAY 'false'"))));
+    }
 }

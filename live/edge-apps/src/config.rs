@@ -950,4 +950,38 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    #[ignore = "AUDIT_CONFIG: Config::from_text default accent is BORDER_INACTIVE (#333b54) instead of #7aa2f7"]
+    fn audit_config_edge_default_accent_is_7aa2f7() {
+        assert_eq!(Config::from_text("").accent, [0x7a, 0xa2, 0xf7]);
+    }
+
+    #[test]
+    #[ignore = "AUDIT_CONFIG: value_text truncates settings.sh single-quote escapes ('\\'\\'')"]
+    fn audit_config_edge_value_text_decodes_escaped_single_quote() {
+        assert_eq!(value_text("'O'\\''Reilly'"), "O'Reilly");
+    }
+
+    #[test]
+    #[ignore = "AUDIT_CONFIG: empty PANELS_OVERLAP flips default false to true"]
+    fn audit_config_edge_panels_overlap_empty_stays_false() {
+        assert!(!Config::from_text("PANELS_OVERLAP=\"\"\n").overlap);
+    }
+
+    #[test]
+    #[ignore = "AUDIT_CONFIG: parse_hex rejects #RRGGBBAA and from_text ignores export prefix"]
+    fn audit_config_edge_parse_hex_and_export() {
+        assert_eq!(parse_hex("\"#11223380\""), Some([0x11, 0x22, 0x33]));
+        assert_eq!(
+            Config::from_text("export ACCENT=\"#112233\"\n").accent,
+            [0x11, 0x22, 0x33]
+        );
+    }
+
+    #[test]
+    #[ignore = "AUDIT_CONFIG: edge-apps clamps WINDOW_CORNERS to 28.0 vs compositor 24.0"]
+    fn audit_config_edge_window_corners_clamp_matches_compositor_24() {
+        assert_eq!(Config::from_text("WINDOW_CORNERS=\"28\"\n").corners, 24.0);
+    }
 }

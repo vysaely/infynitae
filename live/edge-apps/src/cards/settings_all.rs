@@ -2198,4 +2198,23 @@ mod tests {
         apply_all_sources(&mut card, &dir, &lock_cfg);
         assert!(card.summary(7, &cx).contains("lock when away"));
     }
+
+    #[test]
+    #[ignore = "AUDIT_CONFIG: settings_display::TABLE uses (label, value) order instead of (value, label)"]
+    fn audit_config_display_shown_word_tuple_order() {
+        assert!(shown_word("VRR_ENABLED", "on").is_some());
+        assert!(shown_word("MAX_APP_SCALE", "2").is_some());
+        assert!(shown_word("SCALING_FILTER", "fsr").is_some());
+    }
+
+    #[test]
+    #[ignore = "AUDIT_CONFIG: lock_when_away_on only accepts exact \"true\" instead of compositor/shell bool tokens"]
+    fn audit_config_lock_when_away_on_accepts_shell_bool_tokens() {
+        let cfg = crate::cards::settings_rows::ConfigData {
+            now: parse_config("LOCK_WHEN_AWAY=\"1\"\n"),
+            default: HashMap::new(),
+            programs: Default::default(),
+        };
+        assert!(lock_when_away_on(&cfg));
+    }
 }
