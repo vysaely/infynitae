@@ -747,7 +747,13 @@ impl Core {
         }
         let hovered = self.hovered_window().filter(|&e| e != gone);
         if self.focus.target() != hovered {
-            out.extend(self.focus.set_focus(hovered));
+            // a panel the user is typing in keeps the keyboard: the window under the pointer is
+            // the focus it goes back to (AUDIT_FOCUS_HOVER finding 7)
+            if self.focus.layer().is_some() {
+                out.extend(self.focus.set_target_under_layer(hovered));
+            } else {
+                out.extend(self.focus.set_focus(hovered));
+            }
         }
     }
 

@@ -7088,7 +7088,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "AUDIT_FOCUS_HOVER: strict_successor calls set_focus(hovered) which steals OnDemand layer focus"]
     fn audit_strict_successor_steals_on_demand_layer_focus() {
         use crate::geom::{LocalPoint, LocalRect, LocalSize};
         use crate::layer::{Anchors, KeyboardInteractivity, Layer, LayerState};
