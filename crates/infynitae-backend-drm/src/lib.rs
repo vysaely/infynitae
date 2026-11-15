@@ -2285,6 +2285,7 @@ fn render(data: &mut LoopData, turn: &mut TurnClock) {
         // window on it tears, a fullscreen game runs under VRR, or a composited frame in Direct
         // mode hits a safety guard (GPU relief, a game on another screen, or a slow previous turn)
         let started = infynitae_wayland::presentation_clock_now();
+        let glide_at;
         let relief_active = data.state.gpu_relief && data.screens.iter().any(|sc| sc.relief_on);
         let game_on_other = data
             .screens
@@ -2315,6 +2316,13 @@ fn render(data: &mut LoopData, turn: &mut TurnClock) {
             });
             let may_tear = data.state.tears(id) && s.tearing_refused < TEARING_REFUSALS;
             let immediate = may_tear || (s.vrr_on && data.state.exclusive_window(id).is_some());
+            // a glide is drawn where it is when the frame is shown; a frame that tears or runs
+            // under VRR is shown as soon as it is done
+            glide_at = if immediate {
+                started
+            } else {
+                s.schedule.shown_at(started)
+            };
             match s
                 .schedule
                 .start_for(started, s.deferred)
@@ -2329,7 +2337,7 @@ fn render(data: &mut LoopData, turn: &mut TurnClock) {
         }
 
         turn.mark("frame schedule");
-        data.state.zoom_tick(id, started);
+        data.state.zoom_tick(id, glide_at);
         if locked {
             data.state.set_fitted_window(id, None);
         }
