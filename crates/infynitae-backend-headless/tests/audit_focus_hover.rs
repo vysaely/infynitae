@@ -93,7 +93,6 @@ fn adv(ls: &mut Lockstep) {
 }
 
 #[test]
-#[ignore = "AUDIT_FOCUS_HOVER: stepped-aside fullscreen game (space.bigrat.mocktail) flips keyboard focus while holding a mouse button"]
 fn roblox_stepped_aside_flips_keyboard_focus_between_game_and_other_while_button_held() {
     let mut ls = Lockstep::new(Some(a_1080()));
     ls.state.core_mut().set_focus_follows_mouse(true);

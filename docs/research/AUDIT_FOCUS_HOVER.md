@@ -1,5 +1,7 @@
 # Audit: FOCUS_FOLLOWS_MOUSE and game hover (`AUDIT_FOCUS_HOVER`)
 
+Status (Claude's review, 2026-11-15): fixed in fix/hover-focus-held-button: finding 1 (no hover focus while an app holds a mouse button; the crossing counts after the release) and finding 4 (constraints reconciled after a hover focus). Open: 2, 3, 5-8 and improvements 9-12 (reproducers ignored).
+
 - **Scope**: `FOCUS_FOLLOWS_MOUSE` (`off` / `sloppy` / `strict`), `hover_seen`, `hovered_window`, `strict_successor`, `settle_hover`, pointer constraint reconciliation/validity, `Layer` interactivity/occlusion, camera pans and glides, and stepped-aside/windowed game focus oscillation (`app_id = "space.bigrat.mocktail"`).
 - **Files audited**: `crates/infynitae-core/src/entry.rs`, `crates/infynitae-core/src/input/focus.rs`, `crates/infynitae-core/src/lib.rs`, `crates/infynitae-core/src/layer.rs`, `crates/infynitae-core/src/protocol.rs`, `crates/infynitae-wayland/src/handlers.rs`, `crates/infynitae-wayland/src/outputs.rs`, `vendor/smithay-0.7.0/src/wayland/pointer_constraints.rs`.
 - **Not checked**: live DRM/libinput session and real desktop compositor runtime (prohibited by audit constraints), `xwayland-satellite` C/X11 pointer-warp translation, and Roblox/Sober client internals (external binary). XWayland wire handling in `crates/infynitae-wayland/src/xwayland.rs` was checked and contains only X11 socket/supervisor management.

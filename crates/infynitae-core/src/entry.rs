@@ -1986,7 +1986,19 @@ impl Core {
                         self.cameras.update_glide_pointer(camera, cur_p, extent);
                     }
                 }
+                // a button an app holds is the user working in that app (turning a game's camera
+                // with the right button, dragging a slider): crossing another window then is no
+                // reason to move the focus. The crossing counts after the release (owner,
+                // 2026-11-15: a game lost and regained the focus several times a second;
+                // AUDIT_FOCUS_HOVER finding 1)
+                let client_holds_button = self
+                    .input
+                    .ownership
+                    .pressed()
+                    .iter()
+                    .any(|(_, owner)| *owner == Owner::Client);
                 if self.focus_follows_mouse
+                    && !client_holds_button
                     && let PointerState::Located {
                         output: cur_o,
                         p: cur_p,
@@ -2009,6 +2021,9 @@ impl Core {
                                 && target.is_some()
                         {
                             out.extend(self.focus.hover_focus(under, time_us));
+                            // a pointer lock or confine the newly focused window asked for
+                            // starts now, as after any focus change (finding 4)
+                            out.extend(self.reconcile_constraints());
                         }
                     }
                 }
@@ -6639,7 +6654,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "AUDIT_FOCUS_HOVER: hover_focus steals keyboard focus while a client button is held"]
     fn audit_hover_focus_steals_keyboard_focus_while_client_button_held() {
         let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
         let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
@@ -6680,7 +6694,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "AUDIT_FOCUS_HOVER: hover_focus omits reconcile_constraints so pending constraints stay inactive"]
     fn audit_hover_focus_does_not_activate_pending_pointer_constraint() {
         let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
         let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
