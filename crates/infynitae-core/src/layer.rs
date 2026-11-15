@@ -1512,4 +1512,107 @@ mod tests {
         );
         assert_eq!(c.layer_preferred_scale(bar), Some((120, 1)));
     }
+
+    #[test]
+    #[ignore = "AUDIT_PRESENTATION: OnDemand layer keeps keyboard focus while hidden by presentation"]
+    fn audit_presentation_ondemand_layer_keeps_keyboard_focus_while_hidden_by_fullscreen() {
+        use crate::PhysicalEvent;
+        use crate::input::bindings::Modifiers;
+        let Fx {
+            mut c, mut i, o, ..
+        } = setup();
+        let mut bar_state = state(Layer::Top, (true, false, true, true), (0, 30), 30);
+        bar_state.keyboard = KeyboardInteractivity::OnDemand;
+        let (bar, _) = map(&mut c, o, 1, bar_state);
+        let w = map_win(&mut c, 2, 400, 300);
+        c.set_focus(&mut i, Some(w)).unwrap();
+
+        // Click on the OnDemand Top bar at (960, 10) to give it layer keyboard focus.
+        // Note: output_connected places pointer at (960, 540); move up -530 px to (960, 10).
+        c.physical_input_vec(
+            &mut i,
+            PhysicalEvent::PointerMotion {
+                delta: (0.0, -530.0),
+                delta_unaccel: (0.0, -530.0),
+                time_us: 100,
+            },
+        )
+        .unwrap();
+        c.physical_input_vec(
+            &mut i,
+            PhysicalEvent::PointerButton {
+                button: 0x110,
+                pressed: true,
+                modifiers: Modifiers::default(),
+                time_us: 200,
+            },
+        )
+        .unwrap();
+        c.physical_input_vec(
+            &mut i,
+            PhysicalEvent::PointerButton {
+                button: 0x110,
+                pressed: false,
+                modifiers: Modifiers::default(),
+                time_us: 300,
+            },
+        )
+        .unwrap();
+        assert_eq!(c.focus().layer(), Some(bar));
+
+        // w (still the window target) takes fullscreen presentation on o, hiding the OnDemand bar.
+        c.toplevel_request(
+            w,
+            crate::protocol::ToplevelRequest::SetFullscreen { output: Some(o) },
+        )
+        .unwrap();
+        assert_eq!(c.presentation(o), Some(w));
+        assert!(c.layer_frame(o).above.is_empty(), "bar is hidden");
+        assert!(c.layer_hit(o, (960.0, 10.0), true).is_none());
+        assert_eq!(
+            c.focus().layer(),
+            None,
+            "a layer surface hidden by presentation must lose keyboard focus"
+        );
+    }
+
+    #[test]
+    #[ignore = "AUDIT_PRESENTATION: downgrading Exclusive layer to OnDemand leaves focus.layer exclusive locked"]
+    fn audit_presentation_downgrading_exclusive_layer_to_ondemand_keeps_exclusive_lock() {
+        use crate::PhysicalEvent;
+        use crate::input::bindings::Modifiers;
+        let Fx {
+            mut c, mut i, o, ..
+        } = setup();
+        let w = map_win(&mut c, 2, 400, 300);
+        c.set_focus(&mut i, Some(w)).unwrap();
+
+        // Anchor top-left (200x200) so it does not cover screen center (960, 540) where w sits.
+        let mut panel_state = state(Layer::Top, (true, false, true, false), (200, 200), 0);
+        panel_state.keyboard = KeyboardInteractivity::Exclusive;
+        let (panel, _) = map(&mut c, o, 1, panel_state);
+        assert_eq!(c.focus().layer(), Some(panel));
+
+        // Client downgrades keyboard interactivity to OnDemand.
+        panel_state.keyboard = KeyboardInteractivity::OnDemand;
+        c.layer_committed(panel, panel_state, tree(1, 200, 200, true))
+            .unwrap();
+
+        // Clicking window w at screen center must now leave the OnDemand panel.
+        c.physical_input_vec(
+            &mut i,
+            PhysicalEvent::PointerButton {
+                button: 0x110,
+                pressed: true,
+                modifiers: Modifiers::default(),
+                time_us: 100,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            c.focus().layer(),
+            None,
+            "after downgrading Exclusive -> OnDemand, clicking window w must release layer focus"
+        );
+    }
 }
