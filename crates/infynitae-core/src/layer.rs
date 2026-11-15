@@ -334,7 +334,9 @@ impl crate::Core {
     /// The layer entries of `output` to draw and hit-test (L2, L3, L6): above the Canvas
     /// `overlay` then `top`, below it `bottom` then `background`, each front to back (a later
     /// surface of the same layer in front). While the output presents a protocol-fullscreen
-    /// element only `overlay` surfaces are shown.
+    /// element only `overlay` surfaces are shown, and a `top` one that asks for the keyboard
+    /// (an open panel: Super+A over a game). Hidden, such a panel took the keys and waited for
+    /// frames that never came, frozen and out of reach (owner, 2026-11-15).
     pub fn layer_frame(&self, output: OutputId) -> LayerFrame {
         let mut frame = LayerFrame::default();
         let Some(model) = self.output(output) else {
@@ -343,7 +345,7 @@ impl crate::Core {
         let presenting =
             self.presentation(output).is_some() && !self.is_presentation_suppressed(output);
         for layer in [Layer::Overlay, Layer::Top, Layer::Bottom, Layer::Background] {
-            if presenting && layer != Layer::Overlay {
+            if presenting && !matches!(layer, Layer::Overlay | Layer::Top) {
                 continue;
             }
             let into = if layer.above_canvas() {
@@ -352,7 +354,13 @@ impl crate::Core {
                 &mut frame.below
             };
             for r in self.layers.iter().rev() {
-                if r.output == output && r.layer() == layer && r.mapped() {
+                let shown_over_presentation =
+                    layer == Layer::Overlay || r.state.keyboard == KeyboardInteractivity::Exclusive;
+                if r.output == output
+                    && r.layer() == layer
+                    && r.mapped()
+                    && (!presenting || shown_over_presentation)
+                {
                     entries_of(r, model.scale, into);
                 }
             }
@@ -1011,6 +1019,40 @@ mod tests {
         assert_eq!(c.presentation(o), Some(w));
         let shown: Vec<SurfaceKey> = c.layer_frame(o).above.iter().map(|e| e.surface).collect();
         assert_eq!(shown, [key(2)]);
+    }
+
+    /// An open panel (a `top` surface asking for the keyboard: Super+A over a game) is shown,
+    /// clickable and takes the keys over a presentation; a closed one stays hidden (owner,
+    /// 2026-11-15: a panel opened in fullscreen was invisible, then frozen).
+    #[test]
+    fn an_open_panel_is_shown_over_a_presentation() {
+        let Fx {
+            mut c, mut i, o, ..
+        } = setup();
+        let mut open = state(Layer::Top, (true, true, true, true), (0, 0), -1);
+        open.keyboard = KeyboardInteractivity::Exclusive;
+        let (panel, _) = map(&mut c, o, 1, open);
+        let (_closed, _) = map(
+            &mut c,
+            o,
+            2,
+            state(Layer::Top, (true, false, true, true), (0, 30), 30),
+        );
+        let w = map_win(&mut c, 9, 400, 300);
+        c.set_focus(&mut i, Some(w)).unwrap();
+        c.toplevel_request(
+            w,
+            crate::protocol::ToplevelRequest::SetFullscreen { output: Some(o) },
+        )
+        .unwrap();
+        assert_eq!(c.presentation(o), Some(w));
+        let shown: Vec<SurfaceKey> = c.layer_frame(o).above.iter().map(|e| e.surface).collect();
+        assert_eq!(shown, [key(1)], "the open panel, not the closed bar");
+        assert_eq!(c.focus().layer(), Some(panel), "and it has the keyboard");
+        assert!(
+            c.layer_hit(o, (10.0, 10.0), true).is_some(),
+            "and takes clicks"
+        );
     }
 
     /// INV-OUTPUT-1: an output's layer surfaces leave and are closed before the global goes.
