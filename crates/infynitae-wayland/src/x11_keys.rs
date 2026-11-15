@@ -178,4 +178,71 @@ mod tests {
         assert!(!Mode::parse("off").passes(54, NONE));
         assert_eq!(Mode::parse("bogus"), Mode::Modifiers);
     }
+
+    fn dummy_wayland_state() -> (
+        smithay::reexports::wayland_server::Display<WaylandState>,
+        WaylandState,
+    ) {
+        let (core, _, _, _) =
+            infynitae_core::Core::new(infynitae_core::navigation::PersistedCameras::default());
+        let display: smithay::reexports::wayland_server::Display<WaylandState> =
+            smithay::reexports::wayland_server::Display::new().expect("display");
+        let state = WaylandState::new(&display.handle(), core);
+        (display, state)
+    }
+
+    #[test]
+    #[ignore = "AUDIT_INPUT_LIFECYCLE: start_locked and lock_key swallow release of x11-forwarded key"]
+    fn lock_swallows_release_of_x11_forwarded_key() {
+        let (display, mut state) = dummy_wayland_state();
+        let (server_end, _client_end) = std::os::unix::net::UnixStream::pair().expect("socketpair");
+        let client = display
+            .handle()
+            .insert_client(server_end, std::sync::Arc::new(crate::ClientState::default()))
+            .expect("insert x11 client");
+        state.note_x11_client(&client);
+
+        state.forward_key_to_x11(125, true, NONE, 1);
+        assert!(state.x11_keys.pressed.contains(&125));
+
+        state.start_locked();
+        let swallowed = state.lock_key(125, false, 2);
+        if !swallowed {
+            state.forward_key_to_x11(125, false, NONE, 2);
+        }
+
+        assert!(
+            !state.x11_keys.pressed.contains(&125),
+            "release of x11-forwarded key 125 while locked was swallowed (swallowed={swallowed}), leaving pressed={:?}",
+            state.x11_keys.pressed
+        );
+    }
+
+    #[test]
+    #[ignore = "AUDIT_INPUT_LIFECYCLE: note_x11_client keeps stale pressed set across satellite replacement"]
+    fn note_x11_client_clears_pressed_keys_on_satellite_replacement() {
+        let (display, mut state) = dummy_wayland_state();
+        let (s1, _c1) = std::os::unix::net::UnixStream::pair().expect("socketpair 1");
+        let (s2, _c2) = std::os::unix::net::UnixStream::pair().expect("socketpair 2");
+        let client1 = display
+            .handle()
+            .insert_client(s1, std::sync::Arc::new(crate::ClientState::default()))
+            .expect("insert x11 client 1");
+        let client2 = display
+            .handle()
+            .insert_client(s2, std::sync::Arc::new(crate::ClientState::default()))
+            .expect("insert x11 client 2");
+
+        state.note_x11_client(&client1);
+        state.forward_key_to_x11(125, true, NONE, 1);
+        assert!(state.x11_keys.pressed.contains(&125));
+
+        state.note_x11_client(&client2);
+
+        assert!(
+            !state.x11_keys.pressed.contains(&125),
+            "note_x11_client retained client1 pressed keys for replacement client2: {:?}",
+            state.x11_keys.pressed
+        );
+    }
 }

@@ -1332,6 +1332,7 @@ impl<D: SeatHandler + 'static> KeyboardInnerHandle<'_, D> {
                 }
                 (focus, Some((old_focus, _))) => {
                     trace!("Focus set to new surface");
+                    self.release_modifiers_of(&old_focus, data, serial);
                     let keys = self
                         .inner
                         .forwarded_pressed_keys
@@ -1363,8 +1364,29 @@ impl<D: SeatHandler + 'static> KeyboardInnerHandle<'_, D> {
             }
         } else if let Some((old_focus, _)) = self.inner.focus.take() {
             trace!("Focus unset");
+            self.release_modifiers_of(&old_focus, data, serial);
             old_focus.leave(self.seat, data, serial);
         }
+    }
+
+    /// The focus that is leaving saw the held modifiers go down and will not see them come up:
+    /// it is told none are held (locks and layout kept) before it leaves, or a client that keeps
+    /// its state across a leave (an X11 app through Xwayland, a game) acts as if they still are.
+    fn release_modifiers_of(&mut self, old_focus: &<D as SeatHandler>::KeyboardFocus, data: &mut D, serial: Serial) {
+        let held = self.inner.mods_state;
+        if held.serialized.depressed == 0 && held.serialized.latched == 0 {
+            return;
+        }
+        let mut none = held;
+        none.ctrl = false;
+        none.alt = false;
+        none.shift = false;
+        none.logo = false;
+        none.iso_level3_shift = false;
+        none.iso_level5_shift = false;
+        none.serialized.depressed = 0;
+        none.serialized.latched = 0;
+        old_focus.modifiers(self.seat, data, none, serial);
     }
 }
 

@@ -1,6 +1,6 @@
 # Vendored Dependency Patches
 
-All `0001`–`0007` patches apply cleanly on top of published `smithay = "=0.7.0"` inside `vendor/smithay-0.7.0`. Every file hash is pinned in `enforcement/smithay-0.7.0.sha256` and checked by `tools/verify-architecture`.
+All `0001`–`0008` patches apply cleanly on top of published `smithay = "=0.7.0"` inside `vendor/smithay-0.7.0`. Every file hash is pinned in `enforcement/smithay-0.7.0.sha256` and checked by `tools/verify-architecture`.
 
 ## Smithay 0.7.0 (`vendor/smithay-0.7.0`)
 
@@ -13,6 +13,7 @@ All `0001`–`0007` patches apply cleanly on top of published `smithay = "=0.7.0
 | P5 | `0005-remove-unused-tracing-error-imports.patch` | 73 | `src/backend/drm/surface/gbm.rs` (`19`), `src/backend/session/libseat.rs` (`28`), `src/backend/winit/mod.rs` (`27`), `src/input/keyboard/mod.rs` (`15`), `src/wayland/seat/keyboard.rs` (`3`) | Remove five unused `tracing::error` imports that emitted compiler warnings on every build (applied 2026-11-13). | Not sent yet; whether upstream `Smithay/smithay` already removed them on `master` was not confirmed offline. |
 | P6 | `0006-xdg-unconfigured-buffer-error.patch` | 497 | `src/wayland/shell/xdg/handlers/surface.rs` (`107`, `189`, `209`, `305`), `src/wayland/shell/xdg/handlers/surface/popup.rs` (`90`), `src/wayland/shell/xdg/handlers/surface/toplevel.rs` (`182`), `src/wayland/shell/xdg/mod.rs` (`209`, `309`, `1089`, `1680`, `1725`, `1749`, `2063`, `2130`, `2155`) | Track acknowledged configures in `RoleLastAcked<S>` (`MultiCache`) across commits, unmaps, and destruction; post `xdg_surface::Error::UnconfiguredBuffer` (`3`) in `pre_commit_hook` when a buffer is attached before `ack_configure` (W-SM-18, applied 2026-11-13). Non-erroring `ensure_configured` compatibility helpers remain temporarily until `crates/infynitae-wayland` migrates in batch 4. | Fixed upstream in `Smithay/smithay` PR #1817 (commit `641d2ad`, 2025-09-17); not in `0.7.0`. |
 | P7 | `0007-pointer-constraints-expose-lifetime.patch` | 23 | `src/wayland/pointer_constraints.rs` (`179–180`) | Expose `pub fn lifetime(&self) -> WEnum<Lifetime>` on `PointerConstraint` so callers can read `Oneshot` vs `Persistent` on `new_constraint` instead of assuming `Persistent` and dropping after deactivation (W-SM-21, applied 2026-11-13). | Not sent yet; candidate for upstream `Smithay/smithay`. |
+| P8 | `0008-keyboard-leave-clears-held-modifiers.patch` | 50 | `src/input/keyboard/mod.rs` (`1335`, `1366`, `1370–1389`) | Before the old keyboard focus leaves, send it `modifiers` with depressed and latched cleared (locks and layout kept): a client that pressed Super and lost the focus to a compositor shortcut (Super+Tab, Super+A) acted as if Super were still held (owner report 2026-11-15, AUDIT_INPUT_LIFECYCLE finding 1). | Not sent yet; candidate for upstream `Smithay/smithay`. |
 
 ## External Patches
 

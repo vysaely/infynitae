@@ -50,6 +50,8 @@ AUTHORIZED_POINTER_SHA256 = "9c120d4101d7b2d3907d018a400dcd52e32e3be6b6cf6b64c80
 # (patches/0006-xdg-unconfigured-buffer-error.patch).
 # P7 (2026-11-13, W-SM-21): expose pub fn PointerConstraint::lifetime
 # (patches/0007-pointer-constraints-expose-lifetime.patch).
+# P8 (2026-11-15, owner report, AUDIT_INPUT_LIFECYCLE finding 1): the old keyboard focus is told
+# no modifier is held before it leaves (patches/0008-keyboard-leave-clears-held-modifiers.patch).
 AUTHORIZED_P3_SHA256 = {
     "src/backend/egl/context.rs": "2084d54ebb1fb89af92d44ca111e2a5aff887fbacfac5129804e16cd09fc3009",
 }
@@ -63,7 +65,7 @@ AUTHORIZED_P5_SHA256 = {
     "src/backend/drm/surface/gbm.rs": "ae26bfd82ed67a16dd8be4f9e3a5b5678d6016b16ad8ca2c917953cd45ab8553",
     "src/backend/session/libseat.rs": "b755e06e069d5565e1ccad33bf734da0a88c395412c1b9d1b27eb9d18e4130aa",
     "src/backend/winit/mod.rs": "9630745773441f9a47b9a24c4c107a261b1c190dcf58e27391c965effb82bc7d",
-    "src/input/keyboard/mod.rs": "6c821a976d055145048bc865dc03c1eb64e508557949ea899f9f2d794c60bb36",
+    "src/input/keyboard/mod.rs": "d5792bb52133655463063931904b8dbf8ebf6fe371621f85bd4e8973b88f0c3b",
     "src/wayland/seat/keyboard.rs": "a4cf248442833c7aa64004b24efc1ee86f835341617e24e81d9f8a1c6f3c5d67",
 }
 AUTHORIZED_P6_SHA256 = {
@@ -368,7 +370,7 @@ def check_authorized_p1_patch(root, r):
     }.items():
         with open(os.path.join(patch_dir, rel), "rb") as f:
             if hashlib.sha256(f.read()).hexdigest() != want:
-                return r.check(False, "", f"{rel} sha256 mismatch (expected the authorized P2-P7)")
+                return r.check(False, "", f"{rel} sha256 mismatch (expected the authorized P2-P8)")
     manifest_path = os.path.join(root, AUTHORIZED_SMITHAY_MANIFEST_REL)
     if not os.path.isfile(manifest_path):
         return r.check(False, "", f"vendor smithay manifest {manifest_path} missing")
