@@ -1,5 +1,7 @@
 # Audit: fullscreen presentation and stacking state machine (`AUDIT_PRESENTATION`)
 
+Status (Claude's review, 2026-11-15): fixed in fix/presentation-audit-small: B11 (window list focus raises), B13 (overview skips minimized windows; agy's reproducer never minimized the window, because client_minimize needs focus, so it failed for another reason; corrected). B4 overlaps AUDIT_INPUT_LIFECYCLE finding 2 and B7 overlaps AUDIT_LAYERS finding 4b. Owner decisions: B1 (a premap fullscreen from a new app: a game the user just launched should take the screen, a background app should not) and B12 (INV-STAGE-5 / D-B5-REMAP says a remap comes back on top; the owner reports fullscreen apps showing over other windows). Open: B2, B3, B5, B6, B8-B10, I1, I2.
+
 ## Ranked findings
 
 ### Bugs

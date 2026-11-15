@@ -1426,7 +1426,13 @@ impl Core {
             return;
         };
 
-        let mapped = self.stage.mapped_elements();
+        // a minimized window is not shown: the overview does not frame where it was (B13)
+        let mapped: Vec<_> = self
+            .stage
+            .mapped_elements()
+            .into_iter()
+            .filter(|&e| !self.stage.is_minimized(e))
+            .collect();
         if mapped.is_empty() {
             out.push(Effect::ToggleOverview);
             return;
@@ -2832,8 +2838,9 @@ impl Core {
                 // a window picked from the list is the user's choice: a fullscreen window steps
                 // aside for it (owner, 2026-11-02; A-8 still holds for focus nobody asked for)
                 self.show_chosen(id, &mut out);
-                out.extend(self.focus.set_focus(Some(id)));
-                out.extend(self.reconcile_constraints());
+                // and comes to the front: focused while buried, the window over it kept the clicks
+                // where they overlap (AUDIT_PRESENTATION B11)
+                self.raise_and_focus(id, &mut out);
             }
             ShellCommand::AcknowledgeAttention { element } => {
                 let id = self
@@ -6865,7 +6872,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "AUDIT_PRESENTATION: ShellCommand::Focus leaves target buried behind obscuring window"]
     fn audit_presentation_shell_focus_does_not_raise_buried_window() {
         let (mut c, _, mut s, mut t) = Core::new(PersistedCameras::default());
         let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
@@ -6888,7 +6894,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "AUDIT_PRESENTATION: overview_toggle includes minimized windows via stage.mapped_elements"]
     fn audit_presentation_overview_toggle_includes_minimized_window() {
         let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
         let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
@@ -6897,7 +6902,10 @@ mod tests {
         let mut fx = Vec::new();
         c.place_by_user(w2, crate::geom::CanvasPoint { x: 20_000, y: 0 }, &mut fx)
             .unwrap();
+        // an app minimizes only itself while focused (client_minimize)
+        c.set_focus(&mut i, Some(w2)).unwrap();
         c.client_minimize(w2);
+        assert!(c.stage().is_minimized(w2), "the test needs w2 minimized");
 
         press_overview(&mut c, &mut i);
         let cam = c.cameras().camera_for_output(a).unwrap();
