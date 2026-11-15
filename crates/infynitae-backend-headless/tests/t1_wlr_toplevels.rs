@@ -61,9 +61,20 @@ impl wayland_client::Dispatch<ZwlrForeignToplevelHandleV1, ()> for Probe {
             }
             Event::Done => "done".into(),
             Event::Closed => "closed".into(),
+            Event::OutputEnter { output } => {
+                use wayland_client::Proxy;
+                WLR_OUTPUT_ENTERS.with(|cell| {
+                    cell.borrow_mut().push(output.id().protocol_id());
+                });
+                return;
+            }
             _ => return,
         });
     }
+}
+
+std::thread_local! {
+    static WLR_OUTPUT_ENTERS: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 const ACTIVATED: u32 = 2;
@@ -393,5 +404,108 @@ fn picking_a_window_from_the_bar_moves_the_camera_and_records_history() {
     assert_eq!(
         s.ls.state.core().cameras().history(0).map(|h| h.len()),
         Some(0)
+    );
+}
+
+#[test]
+#[ignore = "AUDIT_PRESENTATION: wlr_toplevel_announce sends OutputEnter for every output so fullscreen on one output hides edge-apps on all outputs"]
+fn audit_presentation_two_outputs_fullscreen_enters_all_outputs() {
+    use common::output_k;
+    use infynitae_backend_headless::VirtualOutput;
+    use infynitae_core::geom::{CanvasPos, Q16_ONE};
+    use infynitae_core::navigation::PersistedCameras;
+    use wayland_client::Proxy;
+
+    WLR_OUTPUT_ENTERS.with(|c| c.borrow_mut().clear());
+    let persisted = PersistedCameras::from_entries(vec![(
+        VirtualOutput::key("B"),
+        CanvasPos {
+            x: 50_000 * Q16_ONE,
+            y: 0,
+        },
+        1.0,
+    )])
+    .unwrap();
+    let mut ls = Lockstep::with(
+        persisted,
+        &[
+            output_k("A", (640, 480), 120, 60_000),
+            output_k("B", (800, 600), 120, 60_000),
+        ],
+    );
+    let qh = ls.qh.clone();
+    let w = ls.probe.toplevel(&qh, "W", (200, 100), 0);
+    ls.pump();
+    let id_w = *ls.state.core().stage().mapped_elements().last().unwrap();
+    let a = ls.state.core().outputs()[0].id;
+    let b = ls.state.core().outputs()[1].id;
+    let _ = ls.state.core_mut().render_list(a);
+    let _ = ls.state.core_mut().render_list(b);
+    assert_eq!(ls.state.core().membership().observers(id_w), vec![a]);
+
+    let (name, _, _) = ls
+        .probe
+        .globals
+        .iter()
+        .find(|(_, i, _)| i == "zwlr_foreign_toplevel_manager_v1")
+        .cloned()
+        .expect("wlr toplevel manager offered");
+    let _mgr: ZwlrForeignToplevelManagerV1 = ls.registry().bind(name, 3, &qh, ());
+    ls.pump();
+
+    let fx = ls
+        .state
+        .core_mut()
+        .set_focus(&mut ls.input, Some(id_w))
+        .unwrap();
+    ls.state.apply(&fx);
+    let wl_a = ls.probe.outputs[0].1.clone();
+    let wl_b_id = ls.probe.outputs[1].1.id().protocol_id();
+    ls.probe.surfaces[w]
+        .toplevel
+        .as_ref()
+        .unwrap()
+        .set_fullscreen(Some(&wl_a));
+    ls.pump();
+
+    let enters = WLR_OUTPUT_ENTERS.with(|c| c.borrow().clone());
+    assert!(
+        !enters.contains(&wl_b_id),
+        "fullscreen toplevel on A alone must not receive wlr output_enter for unrelated output B: {enters:?}"
+    );
+}
+
+#[test]
+#[ignore = "AUDIT_PRESENTATION: zwlr unset_minimized passes validated=true and restores/focuses without user provenance"]
+fn audit_presentation_unset_minimized_from_unbound_client_raises_and_focuses() {
+    let (mut s, _, _) = S::new();
+    s.bind();
+    s.t += 1000;
+    pointer_motion(
+        &mut s.ls.state,
+        &mut s.ls.input,
+        (900.0, 500.0),
+        (900.0, 500.0),
+        s.t,
+    )
+    .expect("motion");
+    s.pump();
+    let w1 = s.e[1];
+    s.focus(Some(w1));
+    let fx = s.ls.state.core_mut().client_minimize(w1);
+    s.ls.state.apply(&fx);
+    s.pump();
+    assert!(s.ls.state.core().stage().is_minimized(w1));
+    s.focus(None);
+    assert_eq!(s.ls.state.core().focus().target(), None);
+
+    // Unlike activate() (tested right above), unset_minimized() accepts any foreign client
+    // regardless of pointer/keyboard provenance and focuses + raises w1.
+    s.ls.probe.wlr_handles[1].unset_minimized();
+    s.pump();
+    assert_eq!(
+        s.ls.state.core().focus().target(),
+        None,
+        "an unprivileged foreign-toplevel client's unset_minimized must not steal keyboard focus"
     );
 }
