@@ -1,5 +1,7 @@
 # Audit: Animation and Frame Timing (`AUDIT_FRAME_TIMING`)
 
+Status (Claude's review, 2026-11-15): finding 1 for the zoom glide was fixed by PR #84 (FrameSchedule::shown_at; the animated cursor part is open). Finding 2 fixed in fix/glide-first-step (a glide's first step is one refresh). Open: 1 (cursor), 3-11.
+
 ## Ranked Findings Table
 
 | # | Finding | Evidence (`file:line`) | How sure | What the user would see | Fix (1–2 sentences) | Size |

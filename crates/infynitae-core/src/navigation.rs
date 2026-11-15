@@ -876,16 +876,12 @@ impl CameraSet {
         let Some(g) = c.glide.as_mut() else {
             return false;
         };
+        // the first step of a glide is one refresh: it starts moving at the first frame drawn
+        // after the input, by a normal step whether or not the camera had been ticked lately (it
+        // used to stand still for a frame, or jump up to two steps after a quiet moment;
+        // AUDIT_FRAME_TIMING finding 2); after that it follows the real time between refreshes
         let dt = match (g.primed, prev_tick) {
-            (false, None) => Duration::ZERO,
-            (false, Some(prev)) => {
-                let raw = now.saturating_sub(prev);
-                if raw > frame_period.saturating_mul(2) {
-                    frame_period
-                } else {
-                    raw
-                }
-            }
+            (false, _) => frame_period,
             (true, Some(prev)) => now.saturating_sub(prev),
             (true, None) => Duration::ZERO,
         };
@@ -1351,7 +1347,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "AUDIT_FRAME_TIMING: first zoom_tick with last_frame_tick == None stalls 1 refresh"]
     fn tick_glide_first_tick_without_prior_frame_moves_camera() {
         use std::time::Duration;
 
@@ -1368,7 +1363,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "AUDIT_FRAME_TIMING: first zoom_tick after quiet gap steps up to 2x frame_period"]
     fn tick_glide_first_step_after_quiet_gap_does_not_exceed_one_refresh() {
         use std::time::Duration;
 
