@@ -211,8 +211,20 @@ fn a_snapshot_element_says_whether_it_wants_attention() {
             .and_then(|s| s.get("elements"))
             .and_then(Value::as_array)
             .unwrap()
-            .iter()
-            .map(|e| e.get("attention").cloned())
+            .to_vec()
+    };
+    // the snapshot lists windows in stacking order, which a focus from the list changes (it
+    // raises the window): each window's mark is read by its id, in a, b, c order
+    let ids = [eref(&core, a), eref(&core, b), eref(&core, c)];
+    let marks = |shell: &mut Shell, server: &mut ShellServer, core: &mut Core| {
+        let elements = marks(shell, server, core);
+        ids.iter()
+            .map(|id| {
+                elements
+                    .iter()
+                    .find(|e| e.get("id").map(Value::to_json).as_deref() == Some(id.as_str()))
+                    .and_then(|e| e.get("attention").cloned())
+            })
             .collect::<Vec<_>>()
     };
     let t = Some(Value::Bool(true));
