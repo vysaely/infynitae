@@ -395,3 +395,36 @@ fn a_bar_that_unmaps_dismisses_its_menu() {
     let o = r.ls.output();
     assert!(r.ls.state.core().layer_frame(o).above.is_empty());
 }
+
+#[test]
+#[ignore = "AUDIT_LAYERS: pre-first-buffer unmap never receives remap configure"]
+fn audit_layers_unmap_before_first_buffer_never_configures_on_remap() {
+    let mut r = setup();
+    let idx = r.ls.probe.layer_surface(
+        &r.ls.qh,
+        "panel",
+        Layer::Top,
+        Anchor::Top | Anchor::Left | Anchor::Right,
+        (0, 30),
+        30,
+        KeyboardInteractivity::None,
+    );
+    r.ls.pump();
+    assert!(
+        r.ls.probe.layer_configures.iter().any(|(i, _)| *i == idx),
+        "initial configure arrived"
+    );
+
+    // Client unmaps (attach(None)) before drawing a first buffer, as edge-apps does under fullscreen.
+    r.ls.probe.unmap(idx);
+    r.ls.pump();
+    r.ls.probe.layer_configures.clear();
+
+    // Client later commits empty to remap, as edge-apps does after fullscreen ends.
+    r.ls.probe.surfaces[idx].wl.commit();
+    r.ls.pump();
+    assert!(
+        r.ls.probe.layer_configures.iter().any(|(i, _)| *i == idx),
+        "layer waiting to remap after pre-first-buffer unmap must receive configure"
+    );
+}
