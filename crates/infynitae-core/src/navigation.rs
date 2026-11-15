@@ -1269,17 +1269,16 @@ mod tests {
         assert!((f - 300.0).abs() < 1e-6);
     }
 
+    /// One 165 Hz screen with a Quick glide; the input port stays with the test (an authority
+    /// value is never returned from a helper).
     #[cfg(test)]
-    fn setup_gliding_core() -> (
-        crate::Core,
-        crate::InputPort,
-        crate::output::OutputId,
-        usize,
-    ) {
-        let (mut c, i, _, mut t) = crate::Core::new(PersistedCameras::default());
+    fn prepare_gliding(
+        c: &mut crate::Core,
+        t: &mut crate::OutputLifecycleToken,
+    ) -> (crate::output::OutputId, usize) {
         let (a, _) = c
             .output_connected(
-                &mut t,
+                t,
                 crate::output::OutputDescriptor {
                     key: key("A"),
                     mode: (1920, 1080),
@@ -1291,7 +1290,7 @@ mod tests {
             .unwrap();
         c.set_zoom_feel(ZoomFeel::Quick);
         let cam = c.cameras().camera_for_output(a).unwrap();
-        (c, i, a, cam)
+        (a, cam)
     }
 
     fn trigger_wheel_zoom(c: &mut crate::Core, i: &mut crate::InputPort, t_us: u64) {
@@ -1350,7 +1349,8 @@ mod tests {
     fn tick_glide_first_tick_without_prior_frame_moves_camera() {
         use std::time::Duration;
 
-        let (mut c, mut i, a, cam) = setup_gliding_core();
+        let (mut c, mut i, _, mut t) = crate::Core::new(PersistedCameras::default());
+        let (a, cam) = prepare_gliding(&mut c, &mut t);
         trigger_wheel_zoom(&mut c, &mut i, 10);
         assert!(c.zoom_gliding());
 
@@ -1368,14 +1368,16 @@ mod tests {
 
         // Control: primed 1 frame_period before first glide tick.
         let period = Duration::from_micros(6_060);
-        let (mut ctrl, mut ctrl_i, ctrl_a, ctrl_cam) = setup_gliding_core();
+        let (mut ctrl, mut ctrl_i, _, mut ctrl_t) = crate::Core::new(PersistedCameras::default());
+        let (ctrl_a, ctrl_cam) = prepare_gliding(&mut ctrl, &mut ctrl_t);
         ctrl.zoom_tick(ctrl_a, Duration::ZERO);
         trigger_wheel_zoom(&mut ctrl, &mut ctrl_i, 100);
         ctrl.zoom_tick(ctrl_a, period);
         let ctrl_step = ctrl.cameras().zoom(ctrl_cam).unwrap().ln();
 
         // Idle for 1.9 * period before the wheel event; next vblank is at 1.9 * period.
-        let (mut c, mut i, a, cam) = setup_gliding_core();
+        let (mut c, mut i, _, mut t) = crate::Core::new(PersistedCameras::default());
+        let (a, cam) = prepare_gliding(&mut c, &mut t);
         c.zoom_tick(a, Duration::from_micros(6_060));
         let quiet_tick = Duration::from_micros(6_060 + 11_514);
         trigger_wheel_zoom(&mut c, &mut i, quiet_tick.as_micros() as u64 - 500);
