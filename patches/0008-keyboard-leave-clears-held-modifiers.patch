@@ -1,0 +1,50 @@
+What failed:
+`KeyboardInnerHandle::set_focus` sent `wl_keyboard.leave` to the old focus while modifiers were held, with no `wl_keyboard.modifiers` clearing them. A client that pressed Super and then lost the focus to a compositor shortcut (Super+Tab, Super+A opening a panel) never saw Super come up; clients that keep their state across a leave (X11 apps through Xwayland, games) acted as if it were still held (owner report 2026-11-15; AUDIT_INPUT_LIFECYCLE finding 1).
+
+Change:
+Before the old focus leaves (focus replaced or unset), when any modifier is depressed or latched, it gets one `modifiers` event with depressed and latched cleared; locked modifiers (Caps Lock, Num Lock) and the layout are kept. The new focus gets the real state on enter as before.
+
+Upstream status:
+Not sent yet; candidate for upstream `Smithay/smithay`.
+
+--- a/src/input/keyboard/mod.rs
++++ b/src/input/keyboard/mod.rs
+@@ -1332,6 +1332,7 @@
+                 }
+                 (focus, Some((old_focus, _))) => {
+                     trace!("Focus set to new surface");
++                    self.release_modifiers_of(&old_focus, data, serial);
+                     let keys = self
+                         .inner
+                         .forwarded_pressed_keys
+@@ -1363,9 +1364,30 @@
+             }
+         } else if let Some((old_focus, _)) = self.inner.focus.take() {
+             trace!("Focus unset");
++            self.release_modifiers_of(&old_focus, data, serial);
+             old_focus.leave(self.seat, data, serial);
+         }
+     }
++
++    /// The focus that is leaving saw the held modifiers go down and will not see them come up:
++    /// it is told none are held (locks and layout kept) before it leaves, or a client that keeps
++    /// its state across a leave (an X11 app through Xwayland, a game) acts as if they still are.
++    fn release_modifiers_of(&mut self, old_focus: &<D as SeatHandler>::KeyboardFocus, data: &mut D, serial: Serial) {
++        let held = self.inner.mods_state;
++        if held.serialized.depressed == 0 && held.serialized.latched == 0 {
++            return;
++        }
++        let mut none = held;
++        none.ctrl = false;
++        none.alt = false;
++        none.shift = false;
++        none.logo = false;
++        none.iso_level3_shift = false;
++        none.iso_level5_shift = false;
++        none.serialized.depressed = 0;
++        none.serialized.latched = 0;
++        old_focus.modifiers(self.seat, data, none, serial);
++    }
+ }
+ 
+ // The default grab, the behavior when no particular grab is in progress
