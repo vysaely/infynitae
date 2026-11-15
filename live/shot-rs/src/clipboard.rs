@@ -26,21 +26,52 @@ impl ClipboardState {
             return;
         }
         let mut file = File::from(fd);
-        let _ = write_all_ignoring_pipe(&mut file, &self.png_bytes);
+        if let Err(e) = write_all_ignoring_pipe(&mut file, &self.png_bytes) {
+            eprintln!("infynitae-shot: the clipboard reader got a cut-off picture: {e}");
+        }
     }
 }
 
+/// Writes all of `data`, waiting while the reader's pipe is full: readers may hand over a
+/// non-blocking pipe (wl-clip-persist does), whose 64 KiB buffer fills before a screenshot is
+/// written, and giving up there left the clipboard holding the first 64 KiB of the PNG.
 fn write_all_ignoring_pipe(file: &mut File, mut data: &[u8]) -> io::Result<()> {
     while !data.is_empty() {
         match file.write(data) {
             Ok(0) => return Ok(()),
             Ok(n) => data = &data[n..],
             Err(e) if e.kind() == ErrorKind::Interrupted => continue,
+            Err(e) if e.kind() == ErrorKind::WouldBlock => wait_writable(file)?,
             Err(e) if e.kind() == ErrorKind::BrokenPipe => return Ok(()),
             Err(e) => return Err(e),
         }
     }
     Ok(())
+}
+
+/// Waits until `file` takes more data (or its reader went away, which the next write reports).
+fn wait_writable(file: &File) -> io::Result<()> {
+    use std::os::fd::AsRawFd;
+    let mut pfd = libc::pollfd {
+        fd: file.as_raw_fd(),
+        events: libc::POLLOUT,
+        revents: 0,
+    };
+    loop {
+        // SAFETY: one valid pollfd for the call's duration
+        let r = unsafe { libc::poll(&mut pfd, 1, 10_000) };
+        match r {
+            1.. => return Ok(()),
+            0 => {
+                return Err(io::Error::new(
+                    ErrorKind::TimedOut,
+                    "the reader stopped reading for 10 s",
+                ))
+            }
+            _ if io::Error::last_os_error().kind() == ErrorKind::Interrupted => continue,
+            _ => return Err(io::Error::last_os_error()),
+        }
+    }
 }
 
 impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for ClipboardState {
@@ -314,4 +345,44 @@ pub fn publish_and_fork_clipboard(output_path: &Path, png_bytes: Vec<u8>) -> ! {
         }
     }
     std::process::exit(0);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Read;
+    use std::os::fd::FromRawFd;
+
+    /// A screenshot larger than a pipe's buffer reaches a reader that handed over a
+    /// non-blocking pipe whole (it used to stop at 64 KiB).
+    #[test]
+    fn whole_picture_through_a_nonblocking_pipe() {
+        let mut fds = [0; 2];
+        // SAFETY: pipe2 fills two descriptors we then own
+        assert_eq!(
+            unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_NONBLOCK | libc::O_CLOEXEC) },
+            0
+        );
+        let (mut reader, mut writer) =
+            unsafe { (File::from_raw_fd(fds[0]), File::from_raw_fd(fds[1])) };
+        let data: Vec<u8> = (0..300_000u32).map(|i| (i % 251) as u8).collect();
+        let expected = data.clone();
+        let slow_reader = std::thread::spawn(move || {
+            let mut got = Vec::new();
+            let mut buf = [0u8; 8192];
+            loop {
+                match reader.read(&mut buf) {
+                    Ok(0) => return got,
+                    Ok(n) => got.extend_from_slice(&buf[..n]),
+                    Err(e) if e.kind() == ErrorKind::WouldBlock => {
+                        std::thread::sleep(std::time::Duration::from_millis(2))
+                    }
+                    Err(e) => panic!("{e}"),
+                }
+            }
+        });
+        write_all_ignoring_pipe(&mut writer, &data).unwrap();
+        drop(writer);
+        assert_eq!(slow_reader.join().unwrap(), expected);
+    }
 }
