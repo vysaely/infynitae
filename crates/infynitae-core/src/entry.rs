@@ -789,15 +789,16 @@ impl Core {
                 }
                 return;
             }
-            KeyAction::Recenter => {
+            // Super+Space / Super+Shift+Space: the window under the pointer is focused and raised
+            // first, so the recenter is on it (owner, 2026-11-15); off a window, the focused one
+            KeyAction::Recenter | KeyAction::RecenterKeepZoom => {
                 if let Some(p) = proof {
-                    self.recenter(p, false, false, out);
-                }
-                return;
-            }
-            KeyAction::RecenterKeepZoom => {
-                if let Some(p) = proof {
-                    self.recenter(p, true, false, out);
+                    if let Some(element) = self.hovered_window() {
+                        self.raise_and_focus(element, out);
+                    }
+                    self.recenter(p, action == KeyAction::RecenterKeepZoom, false, out);
+                    // what is under the pointer now is not a crossing: the camera moved, not the hand
+                    self.hover_seen = self.hovered_window();
                 }
                 return;
             }
@@ -1280,6 +1281,16 @@ impl Core {
                 self.suppress_presentation(output, out);
             }
         }
+        self.raise_and_focus(element, out);
+        if let Some(p) = proof {
+            self.recenter(p, false, true, out);
+        }
+        // what is under the pointer now is not a crossing: the camera moved, not the hand
+        self.hover_seen = self.hovered_window();
+    }
+
+    /// Raises `element` and gives it keyboard focus, as a user's pick of that window.
+    fn raise_and_focus(&mut self, element: crate::stage::ElementId, out: &mut Vec<Effect>) {
         let raised = self.raise_by_user(element);
         out.extend(self.focus.set_focus(Some(element)));
         out.extend(self.reconcile_constraints());
@@ -1290,11 +1301,6 @@ impl Core {
         {
             self.true_position_into(out);
         }
-        if let Some(p) = proof {
-            self.recenter(p, false, true, out);
-        }
-        // what is under the pointer now is not a crossing: the camera moved, not the hand
-        self.hover_seen = self.hovered_window();
     }
 
     /// Super+Shift+1..9: focus, raise primary window, and frame/recenter camera on cluster at slot `slot` (0-indexed creation order).
@@ -6086,6 +6092,32 @@ mod tests {
         assert_eq!(c.focus().target(), Some(ws[1]));
     }
 
+    /// A game stepped aside that asks for fullscreen again (games do when they get focus, as by
+    /// focus following the mouse) stays aside, under the window the user chose (owner,
+    /// 2026-11-15: "fullscreen apps still appear above other windows").
+    #[test]
+    fn a_repeated_fullscreen_request_does_not_bring_a_stepped_aside_game_back_on_top() {
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let (a, ws) = fullscreen_rig(&mut c, &mut i, &mut t);
+        c.show_opened(&mut i, ws[1]).unwrap();
+        assert!(c.is_presentation_suppressed(a));
+        c.set_focus(&mut i, Some(ws[0])).unwrap();
+        let fx = c
+            .toplevel_request(
+                ws[0],
+                crate::protocol::ToplevelRequest::SetFullscreen { output: Some(a) },
+            )
+            .unwrap();
+        assert!(!fx.1.is_empty(), "the request is still answered");
+        assert!(c.is_presentation_suppressed(a), "the game stays aside");
+        assert_eq!(c.presentation(a), Some(ws[0]), "and stays fullscreen");
+        assert_eq!(*c.stage.mapped_elements().last().unwrap(), ws[1]);
+        // the user going back to it brings it in front, on top
+        let mut fx = Vec::new();
+        c.unsuppress_presentation(a, &mut fx);
+        assert_eq!(*c.stage.mapped_elements().last().unwrap(), ws[0]);
+    }
+
     /// A fullscreen window stepped aside goes behind its neighbours: at the screen's size it
     /// would cover them on the canvas, and they could not be seen or clicked.
     #[test]
@@ -6211,6 +6243,53 @@ mod tests {
         let _ = c.toplevel_destroyed(w2);
         c.opened_without_focus(w2);
         assert!(c.focus().attention().is_empty());
+    }
+
+    /// Super+Space focuses and raises the window under the pointer and centres on it; off any
+    /// window it centres the focused one, which keeps focus (owner, 2026-11-15).
+    #[test]
+    fn super_space_focuses_the_window_under_the_pointer() {
+        use crate::input::keys::{KEY_LEFTMETA, KEY_SPACE};
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let ws = window_under_pointer(&mut c, &mut i, &mut t);
+        let super_space = |c: &mut Core, i: &mut crate::InputPort| {
+            press(c, i, KEY_LEFTMETA, true, true);
+            press(c, i, KEY_SPACE, true, true);
+            press(c, i, KEY_SPACE, false, true);
+            press(c, i, KEY_LEFTMETA, false, false);
+        };
+        // the far window has focus; the pointer is over ws[0]
+        c.set_focus(&mut i, Some(ws[1])).unwrap();
+        super_space(&mut c, &mut i);
+        assert_eq!(
+            c.focus().target(),
+            Some(ws[0]),
+            "the hovered window takes focus"
+        );
+        let a = c.outputs.first().unwrap().id;
+        let cam = camera_of(&c, a);
+        let anchor = c.stage().anchor(ws[0]).unwrap();
+        let size = c.stage().tree(ws[0]).unwrap().geometry.size;
+        let centre = c.cameras().center(cam).unwrap();
+        assert_eq!(
+            (centre.x >> 16, centre.y >> 16),
+            (
+                anchor.x + i64::from(size.w) / 2,
+                anchor.y + i64::from(size.h) / 2
+            ),
+            "the camera is on the hovered window"
+        );
+
+        // off every window: the focused window keeps focus
+        c.set_focus(&mut i, Some(ws[1])).unwrap();
+        c.pointer = PointerState::Located {
+            output: a,
+            p: (1.0, 1.0),
+        };
+        if c.hovered_window().is_none() {
+            super_space(&mut c, &mut i);
+            assert_eq!(c.focus().target(), Some(ws[1]));
+        }
     }
 
     #[test]
