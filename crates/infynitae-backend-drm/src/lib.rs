@@ -514,6 +514,11 @@ struct LoopData {
     taken: Vec<u32>,
     /// Pointer buttons physically down (every button event, locked or not).
     buttons_down: Vec<u32>,
+    /// Which device holds which button or key down: (device sysname, code, is a key). A device
+    /// that goes away (unplugged, a macro's virtual mouse closed) with one down never sends its
+    /// release; it is released for it, or every click went to the window that had the press
+    /// (owner, 2026-11-15: "I can interact only with AEAM").
+    held_by_device: Vec<(String, u32, bool)>,
     /// Active keyboard devices for hardware LED synchronization (Caps Lock, Num Lock).
     keyboards: Vec<smithay::reexports::input::Device>,
     /// All active input devices (keyboards, mice, touchpads) for live config updates.
@@ -1590,6 +1595,7 @@ pub fn run_console_with(
         quit: false,
         taken: Vec::new(),
         buttons_down: Vec::new(),
+        held_by_device: Vec::new(),
         keyboards: Vec::new(),
         input_devices: Vec::new(),
         last_abs_pointer: None,
@@ -3616,6 +3622,7 @@ fn user_activity(data: &mut LoopData) {
 
 fn handle_input(data: &mut LoopData, event: InputEvent<LibinputInputBackend>) {
     user_activity(data);
+    track_held(data, &event);
     if let InputEvent::PointerButton { event } = &event {
         let button = event.button_code();
         data.buttons_down.retain(|b| *b != button);
@@ -3842,6 +3849,7 @@ fn handle_input(data: &mut LoopData, event: InputEvent<LibinputInputBackend>) {
             data.input_devices.push(device);
         }
         InputEvent::DeviceRemoved { device } => {
+            release_held_by(data, device.sysname());
             data.keyboards.retain(|k| k.sysname() != device.sysname());
             data.input_devices
                 .retain(|d| d.sysname() != device.sysname());
@@ -3856,6 +3864,79 @@ fn handle_input(data: &mut LoopData, event: InputEvent<LibinputInputBackend>) {
             }
         }
         _ => {}
+    }
+}
+
+/// Notes which device holds which button or key down ([`LoopData::held_by_device`]).
+fn track_held(data: &mut LoopData, event: &InputEvent<LibinputInputBackend>) {
+    let (device, code, is_key, pressed) = match event {
+        InputEvent::PointerButton { event } => (
+            event.device(),
+            event.button_code(),
+            false,
+            matches!(event.state(), ButtonState::Pressed),
+        ),
+        InputEvent::Keyboard { event } => (
+            event.device(),
+            event.key_code().raw().saturating_sub(8),
+            true,
+            matches!(event.state(), KeyState::Pressed),
+        ),
+        _ => return,
+    };
+    let name = device.sysname();
+    data.held_by_device
+        .retain(|(d, c, k)| !(d == name && *c == code && *k == is_key));
+    if pressed {
+        data.held_by_device.push((name.to_owned(), code, is_key));
+    }
+}
+
+/// A device went away: what it still held down is released, unless another device holds the
+/// same button or key.
+fn release_held_by(data: &mut LoopData, sysname: &str) {
+    let (gone, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut data.held_by_device)
+        .into_iter()
+        .partition(|(d, _, _)| d == sysname);
+    data.held_by_device = kept;
+    let now_us = infynitae_wayland::presentation_clock_now().as_micros() as u64;
+    for (_, code, is_key) in gone {
+        if data
+            .held_by_device
+            .iter()
+            .any(|(_, c, k)| *c == code && *k == is_key)
+        {
+            continue;
+        }
+        log_line!(
+            "[infynitae] {sysname} went away holding {} {code}: released",
+            if is_key { "key" } else { "button" }
+        );
+        if is_key {
+            // as the key path: a console key's release is the console's; the lock takes keys first
+            if let Some(i) = data.taken.iter().position(|&k| k == code) {
+                data.taken.swap_remove(i);
+            } else if !data.state.lock_key(code, false, now_us) {
+                core_key(data, code, false, now_us);
+            }
+        } else {
+            data.buttons_down.retain(|b| *b != code);
+            if data.state.is_locked() {
+                // released after the unlock, as any button let go while locked
+                continue;
+            }
+            data.last_abs_pointer = None;
+            let phys = PhysicalEvent::PointerButton {
+                button: code,
+                pressed: false,
+                modifiers: data.state.seat_modifiers(),
+                time_us: now_us,
+            };
+            let port = &mut data.input_port;
+            let _ = data
+                .state
+                .with_effects(|core, fx| core.physical_input(port, phys, fx));
+        }
     }
 }
 
