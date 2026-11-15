@@ -1130,6 +1130,9 @@ impl WaylandState {
         self.ticked = ticked;
         self.complete_layer_frames(output, now);
         self.complete_lock_frames(output, now);
+        // a fitted window set or cleared while drawing (fitted.rs) marks the window states dirty
+        // after the last sync: told at this refresh (AUDIT_LAYERS finding 3)
+        self.sync_wlr_toplevels();
         if self.target.draw_cursor
             && let Some(o) = self.smithay_output(output).cloned()
         {

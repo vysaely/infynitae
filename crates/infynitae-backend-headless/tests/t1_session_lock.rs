@@ -485,3 +485,43 @@ fn a_locker_that_never_takes_the_lock_is_started_again() {
     );
     assert!(r.ls.state.is_locked(), "still locked while no locker holds");
 }
+
+#[test]
+#[ignore = "AUDIT_LAYERS: locked session completes layer surface frame callbacks on vblank"]
+fn audit_layers_locked_still_completes_layer_frame_callbacks() {
+    use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::Layer;
+    use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::{
+        Anchor, KeyboardInteractivity,
+    };
+
+    let (mut r, _) = focused_w();
+    r.ls.bind_layer_shell();
+    let qh = r.ls.qh.clone();
+    let bar = r.ls.probe.layer_surface(
+        &qh,
+        "bar",
+        Layer::Top,
+        Anchor::Top | Anchor::Left | Anchor::Right,
+        (0, 30),
+        30,
+        KeyboardInteractivity::None,
+    );
+    r.ls.pump();
+    r.ls.probe.frame_and_draw(&qh, bar);
+    r.ls.pump();
+    r.frame();
+
+    let (_lock, _lock_surface) = lock(&mut r, 1);
+    assert!(r.ls.state.is_locked());
+
+    r.ls.probe.frames.clear();
+    r.ls.probe.frame_and_draw(&qh, bar);
+    r.ls.pump();
+    r.frame();
+
+    assert!(
+        !r.ls.probe.frames.iter().any(|(_, l)| *l == "bar"),
+        "hidden layer surface must not receive frame callbacks while locked: {:?}",
+        r.ls.probe.frames
+    );
+}
