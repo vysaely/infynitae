@@ -1908,6 +1908,11 @@ impl Core {
         self.on_top_follow(camera, out);
         self.visibility_pass_camera(camera, out);
         let on_it = matches!(self.pointer, PointerState::Located { output: o, .. } if o == output);
+        if on_it {
+            // what is under the pointer now is not a crossing: the camera moved, not the hand. Left
+            // stale, the next 1 px nudge moved the focus to it (AUDIT_FOCUS_HOVER finding 5)
+            self.hover_seen = self.hovered_window();
+        }
         if on_it && !self.input.interaction.active() {
             out.extend(self.reconcile_constraints());
             if !self.locked() {
@@ -2707,6 +2712,8 @@ impl Core {
         );
         self.input.cluster_drag.clear();
         self.input.interaction = Interaction::Idle;
+        // a pan or a move put other windows under the pointer: no crossing either (finding 5)
+        self.hover_seen = self.hovered_window();
         let mut fx = Vec::new();
         if resized {
             self.end_resize(&mut fx);
@@ -6926,7 +6933,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "AUDIT_FOCUS_HOVER: zoom_tick glide after FocusNext leaves hover_seen stale so a 1px nudge steals focus"]
     fn audit_zoom_glide_after_focus_next_leaves_hover_seen_stale_so_nudge_steals_focus() {
         let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
         let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
@@ -6981,7 +6987,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "AUDIT_FOCUS_HOVER: pan_step and end_interaction leave hover_seen stale so a 1px nudge steals focus"]
     fn audit_camera_pan_leaves_hover_seen_stale_so_nudge_steals_focus() {
         let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
         let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
