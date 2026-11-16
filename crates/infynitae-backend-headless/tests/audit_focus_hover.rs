@@ -250,8 +250,7 @@ fn roblox_stepped_aside_flips_keyboard_focus_between_game_and_other_while_button
 }
 
 #[test]
-#[ignore = "AUDIT_FOCUS_HOVER: stale hover_seen over Top layer traps OnDemand keyboard focus on Wayland wire"]
-fn top_layer_on_demand_panel_traps_keyboard_on_reentry_wire() {
+fn top_layer_on_demand_panel_gives_the_keyboard_back_on_reentry_wire() {
     let mut ls = Lockstep::new(Some(a_1080()));
     ls.bind_layer_shell();
     let mut r = Rig::new(ls);

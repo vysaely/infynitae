@@ -789,26 +789,25 @@ impl Core {
             .map(|h| h.element)
     }
 
-    /// Strict focus after the focused window went away: the window under the pointer, or none,
-    /// never the last one used elsewhere on the canvas (Super+Shift+C next would close that one).
-    pub(crate) fn strict_successor(
+    /// The focused window `gone` went away (unmapped, destroyed, minimized; `live`: the windows
+    /// that may take the focus). Strict focus: the successor is the window under the pointer, or
+    /// none, never the last one used elsewhere on the canvas (Super+Shift+C next would close that
+    /// one); chosen before the focus moves, so it moves once. A panel holding the keyboard keeps
+    /// it (finding 7). Other modes: the last used live window.
+    pub(crate) fn lose_focus_target(
         &mut self,
         gone: stage::ElementId,
-        out: &mut Vec<protocol::Effect>,
-    ) {
-        if !(self.focus_follows_mouse && self.focus_follows_mouse_strict) {
-            return;
-        }
-        let hovered = self.hovered_window().filter(|&e| e != gone);
-        if self.focus.target() != hovered {
-            // a panel the user is typing in keeps the keyboard: the window under the pointer is
-            // the focus it goes back to (AUDIT_FOCUS_HOVER finding 7)
-            if self.focus.layer().is_some() {
-                out.extend(self.focus.set_target_under_layer(hovered));
-            } else {
-                out.extend(self.focus.set_focus(hovered));
-            }
-        }
+        live: &[stage::ElementId],
+    ) -> Vec<protocol::Effect> {
+        let strict = self.focus_follows_mouse && self.focus_follows_mouse_strict;
+        let chosen = (strict && self.focus.target() == Some(gone)).then(|| {
+            let hovered = self
+                .hovered_window()
+                .filter(|&e| e != gone && live.contains(&e));
+            self.hover_seen = hovered;
+            hovered
+        });
+        self.focus.target_lost_to(gone, live, chosen)
     }
 
     /// Sets the camera zoom glide feel (`ZOOM_FEEL`).
@@ -1037,7 +1036,7 @@ impl Core {
         if target.is_some_and(|id| self.hidden_by_presentation(id)) {
             return Ok(Vec::new());
         }
-        let mut fx = self.focus.set_focus(target);
+        let mut fx = self.focus.set_focus_at(self.input.clock.now_us(), target);
         fx.extend(self.reconcile_constraints());
         Ok(fx)
     }
@@ -1232,7 +1231,10 @@ impl Core {
         let live = self.focusable_elements();
         let (mut fx, attention) = match self.focus.focus_attention(&live) {
             Some(fx) => (fx, true),
-            None => (self.focus.focus_next(&live), false),
+            None => (
+                self.focus.focus_next_at(self.input.clock.now_us(), &live),
+                false,
+            ),
         };
         // Super+Tab brings the newly focused window to the front; what lies under the pointer may
         // have changed, so it gets one true-position event (M10), as after a camera write

@@ -100,6 +100,20 @@ impl FocusModel {
         fx
     }
 
+    /// [`Self::set_focus`] at input time `now_us`: a window the pointer focused and kept long
+    /// enough is recorded as used first, so a click or a shell command moving focus away does
+    /// not drop it from the Super+Tab history (AUDIT_FOCUS_HOVER finding 8).
+    pub fn set_focus_at(&mut self, now_us: u64, next: Option<ElementId>) -> Vec<Effect> {
+        self.settle_hover(now_us);
+        self.set_focus(next)
+    }
+
+    /// [`Self::focus_next`] at input time `now_us`, settling a hover first (as [`Self::set_focus_at`]).
+    pub fn focus_next_at(&mut self, now_us: u64, live_elements: &[ElementId]) -> Vec<Effect> {
+        self.settle_hover(now_us);
+        self.focus_next(live_elements)
+    }
+
     /// The pointer crossed into `next` (focus follows the mouse) at `now_us`: the focus moves, and
     /// `next` counts as used only once it stayed focused a moment ([`Self::settle_hover`]).
     pub fn hover_focus(&mut self, next: Option<ElementId>, now_us: u64) -> Vec<Effect> {
@@ -220,6 +234,18 @@ impl FocusModel {
     /// Target loss (K7, M11): focused element was destroyed or unmapped.
     /// The successor policy selects the most recently focused live element.
     pub fn target_lost(&mut self, dead: ElementId, live_elements: &[ElementId]) -> Vec<Effect> {
+        self.target_lost_to(dead, live_elements, None)
+    }
+
+    /// [`Self::target_lost`] with the successor already chosen (`Some(next)`, strict focus: the
+    /// window under the pointer or none), so the focus moves once instead of first to the last
+    /// used window and then again (AUDIT_FOCUS_HOVER finding 6). `None`: the last used live one.
+    pub fn target_lost_to(
+        &mut self,
+        dead: ElementId,
+        live_elements: &[ElementId],
+        chosen: Option<Option<ElementId>>,
+    ) -> Vec<Effect> {
         self.history.retain(|&e| e != dead);
         if live_elements.is_empty() {
             self.initial_eligible = true;
@@ -229,11 +255,12 @@ impl FocusModel {
             return Vec::new();
         }
         self.hovered_since = None;
-        let successor = self
-            .history
-            .iter()
-            .copied()
-            .find(|e| live_elements.contains(e));
+        let successor = chosen.unwrap_or_else(|| {
+            self.history
+                .iter()
+                .copied()
+                .find(|e| live_elements.contains(e))
+        });
         let prev = self.target;
         self.target = successor;
         // the successor is focused: its attention mark goes
@@ -280,6 +307,11 @@ impl FocusModel {
     /// The layer surface holding the keyboard, if any (L5).
     pub fn layer(&self) -> Option<crate::layer::LayerId> {
         self.layer.map(|(l, _)| l)
+    }
+
+    /// An on-demand layer (a panel the user clicked) holds the keyboard.
+    pub fn layer_on_demand(&self) -> bool {
+        matches!(self.layer, Some((_, false)))
     }
 
     fn layer_exclusive(&self) -> bool {

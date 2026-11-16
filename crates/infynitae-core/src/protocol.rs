@@ -1671,11 +1671,7 @@ impl Core {
                     .collect();
                 // M1: "fullscreen dropped (M9)"; the client must request it again after a remap
                 self.drop_fullscreen(id);
-                let had = self.focus.target() == Some(id);
-                out.extend(self.focus.target_lost(id, &live));
-                if had {
-                    self.strict_successor(id, out);
-                }
+                out.extend(self.lose_focus_target(id, &live));
             }
         }
         self.membership_pass_element(id, out);
@@ -1784,11 +1780,7 @@ impl Core {
         }
         self.frame_liveness.destroyed(id);
         let live: Vec<ElementId> = self.focusable_elements();
-        let had = self.focus.target() == Some(id);
-        fx.extend(self.focus.target_lost(id, &live));
-        if had {
-            self.strict_successor(id, &mut fx);
-        }
+        fx.extend(self.lose_focus_target(id, &live));
         self.drop_fullscreen(id);
         let ended: Vec<OutputId> = before
             .iter()
@@ -2413,11 +2405,13 @@ impl Core {
             .into_iter()
             .filter(|&e| e != id)
             .collect();
-        out.extend(self.focus.target_lost(id, &live));
-        self.strict_successor(id, &mut out);
+        out.extend(self.lose_focus_target(id, &live));
         self.invalidate_all_frames();
         self.membership_pass_element(id, &mut out);
         out.extend(self.visibility_pass());
+        // the window now focused may have asked for a pointer lock or confine: it starts now, not
+        // at the next motion (AUDIT_FOCUS_HOVER improvement 10)
+        out.extend(self.reconcile_constraints());
         out
     }
 
@@ -2977,6 +2971,11 @@ impl Core {
         let pointer::PointerState::Located { output, p } = self.pointer else {
             return None;
         };
+        // a panel or overlay that takes input above the canvas covers the window (as in
+        // `route_pointer`); click-through overlays have no input region there
+        if self.layer_hit(output, p, true).is_some() {
+            return None;
+        }
         let pt = geom::OutputLogicalPoint { x: p.0, y: p.1 };
         let hit = self.hit_test(output, pt)?;
         if hit.surface == surface {
@@ -3038,9 +3037,13 @@ impl Core {
 
         match c.kind {
             crate::pointer::ConstraintKind::Lock => {
-                let pointer::PointerState::Located { output, .. } = self.pointer else {
+                let pointer::PointerState::Located { output, p } = self.pointer else {
                     return false;
                 };
+                // an input-taking layer opened over the locked pointer ends the lock
+                if self.layer_hit(output, p, true).is_some() {
+                    return false;
+                }
                 let Some(model) = self.output(output) else {
                     return false;
                 };
