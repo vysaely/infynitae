@@ -37,6 +37,20 @@ fn render(name: &str, size: &str, out: &str) -> Result<(), String> {
         sh.ask.ask.load_render_env();
         return paint(&sh, w, h, out);
     }
+    if name == "window-menu"
+        || name == "window_menu"
+        || std::env::var_os("INFYNITAE_EDGE_RENDER_WINDOW_MENU").is_some_and(|v| !v.is_empty())
+    {
+        let raw = std::env::var("INFYNITAE_EDGE_RENDER_WINDOW_MENU").unwrap_or_default();
+        sh.open_window_menu(shell::WindowMenu::from_render_env(&raw));
+        sh.pointer = std::env::var("INFYNITAE_EDGE_RENDER_POINTER")
+            .ok()
+            .and_then(|v| {
+                let (a, b) = v.split_once(',')?;
+                Some((a.trim().parse().ok()?, b.trim().parse().ok()?))
+            });
+        return paint(&sh, w, h, out);
+    }
     let idx = sh
         .panels
         .iter()
@@ -200,5 +214,33 @@ fn main() -> ExitCode {
             eprintln!("usage: infynitae-edge-apps [PANEL | ask ... | stop | --print-panels | --print-theme | --render PANEL WxH FILE.png]");
             ExitCode::from(2)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn render_window_menu_writes_png() {
+        let dir = std::env::temp_dir().join(format!(
+            "infynitae-edge-apps-render-wm-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let png = dir.join("window-menu.png");
+
+        std::env::set_var(
+            "INFYNITAE_EDGE_RENDER_WINDOW_MENU",
+            "240,160,on_top,maximized",
+        );
+        render("window-menu", "1280x800", png.to_str().unwrap()).unwrap();
+        std::env::remove_var("INFYNITAE_EDGE_RENDER_WINDOW_MENU");
+
+        let meta = std::fs::metadata(&png).unwrap();
+        assert!(meta.len() > 200);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

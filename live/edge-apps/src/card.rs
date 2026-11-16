@@ -215,6 +215,8 @@ pub enum Action {
     /// these cards (words, as in a panel line) in the open panel's place until it closes: a tray
     /// app's menu and card
     ShowCards(Vec<String>),
+    /// a JSON request line sent to `$XDG_RUNTIME_DIR/infynitae/shell.sock`
+    ShellCommand(String),
 }
 
 /// The fixture's values (`INFYNITAE_EDGE_RENDER_DATA`: `key=value` lines, `\n` and `\t` escaped),

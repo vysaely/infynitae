@@ -798,9 +798,13 @@ impl XdgShellHandler for WaylandState {
         surface: ToplevelSurface,
         _seat: wl_seat::WlSeat,
         _serial: Serial,
-        _location: convert::WindowMenuLocation,
+        location: convert::WindowMenuLocation,
     ) {
         self.toplevel_request(&surface, ToplevelRequest::ShowWindowMenu);
+        if let Some(i) = self.element_index_by_root(surface.wl_surface()) {
+            self.core
+                .show_window_menu(self.elements[i].id, convert::local_point(location));
+        }
     }
 
     fn new_popup(&mut self, surface: PopupSurface, positioner: PositionerState) {

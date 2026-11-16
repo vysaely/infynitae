@@ -238,7 +238,8 @@ impl ShellServer {
             }
         }
         if self.conns.iter().any(|c| c.subscribed) {
-            if self.next_refresh.is_some_and(|t| Instant::now() < t) {
+            if core.window_menu().is_none() && self.next_refresh.is_some_and(|t| Instant::now() < t)
+            {
                 self.refresh_owed = true;
             } else {
                 self.refresh(core, &mut done);
@@ -369,6 +370,20 @@ impl ShellServer {
             }
         }
         self.model = Some(next);
+        if let Some((id, pos)) = core.take_window_menu() {
+            let ev = crate::model::window_menu_event(core, id, pos);
+            self.generation += 1;
+            let line = protocol::event_line(ev, self.generation);
+            let subscribers: Vec<u64> = self
+                .conns
+                .iter()
+                .filter(|c| c.subscribed)
+                .map(|c| c.id)
+                .collect();
+            for sub in subscribers {
+                self.send(sub, line.clone(), core, done);
+            }
+        }
         self.generation
     }
 

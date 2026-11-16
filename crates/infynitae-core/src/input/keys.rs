@@ -164,6 +164,8 @@ pub enum KeyAction {
     /// Super+Shift+Space (owner, 2026-10-24): centre the camera on the focused window and keep
     /// the zoom.
     RecenterKeepZoom,
+    /// Opens the window menu for the window under the pointer (or the focused window).
+    WindowMenu,
     /// A user command from the config (`EXEC_<NAME>="CHORD:command"`), by its index in the
     /// adapter's command list.
     Exec(u16),
@@ -317,6 +319,12 @@ const KEY_NAMES: &[(&str, u32)] = &[
     ("PAGEDOWN", 109),
     ("INSERT", 110),
     ("DELETE", 111),
+    ("BTN_LEFT", 0x110),
+    ("MOUSE_LEFT", 0x110),
+    ("BTN_RIGHT", 0x111),
+    ("MOUSE_RIGHT", 0x111),
+    ("BTN_MIDDLE", 0x112),
+    ("MOUSE_MIDDLE", 0x112),
 ];
 
 /// Parses a config chord such as `SUPER+SHIFT+Q` (modifiers SUPER/LOGO/WIN, CTRL/CONTROL, ALT,
@@ -382,6 +390,7 @@ pub const ACTION_NAMES: &[(&str, KeyAction)] = &[
     ("RECENTER", KeyAction::Recenter),
     ("RECENTER_KEEP_ZOOM", KeyAction::RecenterKeepZoom),
     ("BACK", KeyAction::ViewportRestore),
+    ("WINDOW_MENU", KeyAction::WindowMenu),
 ];
 
 /// [`resolve_key_binding`] with the user's bindings first: a chord of theirs wins (also over a

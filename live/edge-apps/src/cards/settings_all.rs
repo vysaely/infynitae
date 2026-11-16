@@ -1524,12 +1524,13 @@ mod tests {
         let expected_keys: HashSet<&str> = FILE_ONLY.iter().copied().collect();
         assert_eq!(parsed_keys, expected_keys);
 
-        let keep = real_entries
+        assert!(!real_entries.iter().any(|e| e.key == "KEEP_ON_TOP"));
+        let csd = real_entries
             .iter()
-            .find(|e| e.key == "KEEP_ON_TOP")
+            .find(|e| e.key == "BORDER_IGNORE_CSD")
             .unwrap();
-        assert_eq!(keep.default_val, "Picture-in-Picture, Picture in picture");
-        assert!(keep.comment.contains("Windows kept on top"));
+        assert_eq!(csd.default_val, "true");
+        assert!(csd.comment.contains("No border around apps"));
 
         assert!(parse_file_only_entries("").is_empty());
 
@@ -1541,8 +1542,9 @@ mod tests {
         assert_eq!(broken_entries[0].comment, "Custom comment line");
         assert_eq!(broken_entries[1].key, "UNTERMINATED");
 
-        let lines = parse_user_lines("# commented\n#KEEP_ON_TOP=\"no\"\nKEEP_ON_TOP=\"VLC\"\n");
-        assert_eq!(lines.get("KEEP_ON_TOP"), Some(&3));
+        let lines =
+            parse_user_lines("# commented\n#PRIVACY_TITLES=\"no\"\nPRIVACY_TITLES=\"Vault\"\n");
+        assert_eq!(lines.get("PRIVACY_TITLES"), Some(&3));
         assert!(!lines.contains_key("FRAME_GUARD"));
     }
 
@@ -1709,7 +1711,7 @@ mod tests {
         std::fs::write(&def_file, &real_cfg).unwrap();
         std::fs::write(
             &cfg_file,
-            "GAME_MODE=\"true\"\nKEEP_ON_TOP=\"VLC\"\nCUSTOM_LINE=\"x\"\n",
+            "GAME_MODE=\"true\"\nBORDER_IGNORE_CSD=\"false\"\nCUSTOM_LINE=\"x\"\n",
         )
         .unwrap();
 
@@ -1720,8 +1722,8 @@ mod tests {
         apply_all_sources(&mut card, &dir, &cfg);
 
         let mut out = Vec::new();
-        // Matches KEEP_ON_TOP via first comment line ("Windows kept on top of the others...")
-        card.event(&Event::Text("kept on top"), &cx, &mut out);
+        // Matches BORDER_IGNORE_CSD via first comment line ("No border around apps...")
+        card.event(&Event::Text("border around apps"), &cx, &mut out);
         assert_eq!(card.status(&cx), Status::Ready);
         let (h_search, hits_search) = draw_card(&card, &cx, 404.0);
         assert!(h_search > 0.0);
@@ -1730,16 +1732,16 @@ mod tests {
             .list
             .iter()
             .any(|(id, _)| *id == HIT_OPEN_CONFIG));
-        // KEEP_ON_TOP is in "In the file"
+        // BORDER_IGNORE_CSD is in "In the file"
         assert!(hits_search.list.iter().any(|(id, _)| *id == HIT_FILE_BASE));
 
         let matches = card.matching_file_entries();
-        assert_eq!(matches[0].key, "KEEP_ON_TOP");
+        assert_eq!(matches[0].key, "BORDER_IGNORE_CSD");
 
         // Also test key-name search (e.g. OVERLAY_PLANES)
         card.event(&Event::Text("OVERLAY_PLANES"), &cx, &mut out);
         assert_eq!(card.matching_file_entries()[0].key, "OVERLAY_PLANES");
-        card.event(&Event::Text("kept on top"), &cx, &mut out);
+        card.event(&Event::Text("border around apps"), &cx, &mut out);
         let _ = draw_card(&card, &cx, 404.0);
 
         // Verify exact editor commands for +N editors vs non-+N editors (including shell metacharacters)

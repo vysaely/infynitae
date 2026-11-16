@@ -228,6 +228,46 @@ impl MenuCard {
 
 const SEP_H: f64 = 9.0;
 
+/// Draws one small-menu row (tray menu or window menu), with a check mark when `checked`.
+#[allow(clippy::too_many_arguments)]
+pub fn draw_menu_row(
+    cr: &Context,
+    cx: &Cx,
+    hits: &mut Hits,
+    id: u32,
+    r: Rect,
+    label: &str,
+    enabled: bool,
+    checked: bool,
+) {
+    if enabled {
+        ui::list_row(
+            cr,
+            cx,
+            hits,
+            id,
+            r,
+            label,
+            "",
+            checked,
+            checked.then_some(ui::Icon::Check),
+        );
+    } else {
+        draw::text_max(
+            cr,
+            r.0 + 8.0,
+            r.1 + (r.3 - 15.0) / 2.0,
+            r.2 - 16.0,
+            &Text {
+                size: 13.0,
+                bold: false,
+                color: cx.theme.muted,
+                text: label,
+            },
+        );
+    }
+}
+
 impl Card for MenuCard {
     fn apply(&mut self, key: &str, data: &dyn Any) -> bool {
         let (true, Some(d)) = (key == "traymenu", data.downcast_ref::<MenusData>()) else {
@@ -279,22 +319,16 @@ impl Card for MenuCard {
                 continue;
             }
             let r = (body.0, y, body.2, ui::LIST_ROW_H);
-            if e.enabled {
-                ui::list_row(cr, cx, hits, ENTRY + i as u32, r, &e.label, "", false, None);
-            } else {
-                draw::text_max(
-                    cr,
-                    r.0 + 8.0,
-                    r.1 + (r.3 - 15.0) / 2.0,
-                    r.2 - 16.0,
-                    &Text {
-                        size: 13.0,
-                        bold: false,
-                        color: cx.theme.muted,
-                        text: &e.label,
-                    },
-                );
-            }
+            draw_menu_row(
+                cr,
+                cx,
+                hits,
+                ENTRY + i as u32,
+                r,
+                &e.label,
+                e.enabled,
+                false,
+            );
             y += ui::LIST_ROW_H;
         }
     }

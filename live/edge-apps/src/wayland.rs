@@ -505,6 +505,9 @@ struct App {
     popups: Option<PopupLayer>,
     /// the session bus connection serving org.freedesktop.Notifications
     notify_conn: Option<zbus::blocking::Connection>,
+    /// the compositor's shell IPC socket (`$XDG_RUNTIME_DIR/infynitae/shell.sock`)
+    shell_sock: Option<std::os::unix::net::UnixStream>,
+    shell_buf: Vec<u8>,
     exit: bool,
 }
 
@@ -755,6 +758,20 @@ impl App {
                 Action::Invoke(id, key) => notes_changed |= self.shell.notify.invoke(id, &key),
                 Action::ClosePanel => {
                     self.shell.close();
+                }
+                Action::ShellCommand(line) => {
+                    use std::io::Write;
+                    let sent = self
+                        .shell_sock
+                        .as_mut()
+                        .is_some_and(|s| s.write_all(line.as_bytes()).is_ok());
+                    if !sent {
+                        if let Ok(mut s) = std::os::unix::net::UnixStream::connect(runtime_path(
+                            "infynitae/shell.sock",
+                        )) {
+                            let _ = s.write_all(line.as_bytes());
+                        }
+                    }
                 }
                 // the shell takes these before they get here
                 Action::SetQuery(_) | Action::ShowCards(_) => {}
@@ -1438,6 +1455,8 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
         was_animating: false,
         popups: None,
         notify_conn: None,
+        shell_sock: None,
+        shell_buf: Vec::new(),
         exit: false,
     };
     // the session's notifications (NOTIFICATIONS "auto" or "edge"), unless another daemon has them
@@ -1518,8 +1537,61 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
         )
         .map_err(|e| e.to_string())?;
     WaylandSource::new(conn, event_queue)
-        .insert(handle)
+        .insert(handle.clone())
         .map_err(|e| e.to_string())?;
+    if let Ok(mut sock) =
+        std::os::unix::net::UnixStream::connect(runtime_path("infynitae/shell.sock"))
+    {
+        use std::io::Write;
+        if sock
+            .write_all(b"{\"id\":1,\"cmd\":\"subscribe\"}\n")
+            .is_ok()
+            && sock.set_nonblocking(true).is_ok()
+        {
+            app.shell_sock = sock.try_clone().ok();
+            let _ = handle.insert_source(
+                Generic::new(sock, Interest::READ, Mode::Level),
+                |_, fd, app| {
+                    let mut buf = [0u8; 4096];
+                    let gone = loop {
+                        // SAFETY: reads into a live buffer of its own length from our socket
+                        let n = unsafe {
+                            libc::read(fd.as_raw_fd(), buf.as_mut_ptr().cast(), buf.len())
+                        };
+                        if n > 0 {
+                            app.shell_buf.extend_from_slice(&buf[..n as usize]);
+                            continue;
+                        }
+                        // 0 is the compositor gone (a level source would fire on it forever);
+                        // an error other than "nothing more now" too
+                        break n == 0
+                            || std::io::Error::last_os_error().kind()
+                                != std::io::ErrorKind::WouldBlock;
+                    };
+                    let mut changed = false;
+                    // whole lines only: a read can end inside a line, or inside a character
+                    while let Some(nl) = app.shell_buf.iter().position(|&b| b == b'\n') {
+                        let line: Vec<u8> = app.shell_buf.drain(..=nl).collect();
+                        if let Some(wm) = std::str::from_utf8(&line)
+                            .ok()
+                            .and_then(crate::shell::parse_window_menu_event)
+                        {
+                            changed |= app.shell.open_window_menu(wm);
+                        }
+                    }
+                    if changed {
+                        app.sync_all();
+                    }
+                    if gone {
+                        app.shell_sock = None;
+                        app.shell_buf.clear();
+                        return Ok(PostAction::Remove);
+                    }
+                    Ok(PostAction::Continue)
+                },
+            );
+        }
+    }
 
     // callers read this to know the running edge can ask (live/infynitae-format-drive)
     let features_file = runtime_path(crate::ask::FEATURES_FILE);

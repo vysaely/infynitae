@@ -228,6 +228,12 @@ const ACTIONS: &[BuiltinAction] = &[
         defaults: &[],
         more: true,
     },
+    BuiltinAction {
+        action: "WINDOW_MENU",
+        name: "Open window menu",
+        defaults: &[],
+        more: true,
+    },
 ];
 
 /// Data emitted by the `key_capture` source (`capture_file_path()`).
@@ -1310,7 +1316,7 @@ mod tests {
         let rows = card.rows();
         assert_eq!(
             rows.len(),
-            30,
+            31,
             "every built-in ACTION_NAMES entry has a row"
         );
         assert!(rows
@@ -1746,7 +1752,7 @@ mod tests {
         };
 
         let idle_hits = draw_once(&card);
-        assert_eq!(idle_hits.list.len(), 30);
+        assert_eq!(idle_hits.list.len(), 31);
 
         card.state = UiState::Listening {
             key: "BIND_TERMINAL".into(),

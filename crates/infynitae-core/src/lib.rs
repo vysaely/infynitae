@@ -226,6 +226,22 @@ pub enum ShellCommand {
         output: Option<output::OutputId>,
         fullscreen: bool,
     },
+    /// Keeps `element` on top of normal windows (`stage::Stage` `above`, following camera pans)
+    /// or returns it to the normal stack (`on: None` toggles, as Super+Shift+K does).
+    KeepOnTop {
+        element: stage::ElementRef,
+        on: Option<bool>,
+    },
+    /// Minimizes `element` (as a client minimize does).
+    MinimizeElement { element: stage::ElementRef },
+    /// Maximizes `element` on its output or restores its saved place and size (`maximized: None`
+    /// toggles).
+    MaximizeElement {
+        element: stage::ElementRef,
+        maximized: Option<bool>,
+    },
+    /// Asks `element` to close (`Effect::CloseRequest`).
+    CloseElement { element: stage::ElementRef },
 }
 
 /// Where [`ShellCommand::Navigate`] centres the camera.
@@ -523,6 +539,9 @@ pub struct Core {
     key_bindings: input::keys::UserBindings,
     /// Pending IPC chord capture request (`begin_key_capture`).
     key_capture: Option<input::keys::KeyCapture>,
+    /// Pending window menu request (`show_window_menu`): the mapped element and its output-logical
+    /// screen position `(x, y)`.
+    window_menu: Option<(stage::ElementId, (f64, f64))>,
     /// `xdg_toplevel` parents, (child, parent), from the adapter (`set_toplevel_parent`).
     toplevel_parents: Vec<(stage::ElementId, stage::ElementId)>,
     /// The centre of each app's last destroyed window (app_id lowercase), newest last, at most
@@ -631,6 +650,7 @@ impl Core {
                 focus_on_open: false,
                 key_bindings: input::keys::UserBindings::default(),
                 key_capture: None,
+                window_menu: None,
                 toplevel_parents: Vec::new(),
                 closed_windows: Vec::new(),
                 teleport_on_open: false,
@@ -1270,6 +1290,16 @@ impl Core {
             }
             _ => None,
         }
+    }
+
+    /// Pending window menu request (`show_window_menu`), if any.
+    pub fn window_menu(&self) -> Option<(stage::ElementId, (f64, f64))> {
+        self.window_menu
+    }
+
+    /// Collects and clears the pending window menu request (`show_window_menu`).
+    pub fn take_window_menu(&mut self) -> Option<(stage::ElementId, (f64, f64))> {
+        self.window_menu.take()
     }
 
     /// The output the pointer is currently located on, if any.
