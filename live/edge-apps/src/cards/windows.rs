@@ -418,6 +418,13 @@ impl Card for WindowsCard {
                 }
             }
         }
+        ui::scrollbar(
+            cr,
+            cx,
+            body,
+            filtered.len() as f64 * ROW_H,
+            start as f64 * ROW_H,
+        );
     }
 
     fn event(&mut self, ev: &Event, cx: &Cx, out: &mut Vec<Action>) -> bool {

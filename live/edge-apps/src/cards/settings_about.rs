@@ -4,7 +4,7 @@
 
 use crate::card::{self, Action, Button, Card, Cx, Data, Event, Hits, Rect, Source, Status};
 use crate::cards::settings;
-use crate::draw::{self, Text, FONT};
+use crate::draw::{self, Text};
 use crate::provider::{CardKind, Size};
 use crate::theme::Theme;
 use crate::ui::{self, Row};
@@ -929,17 +929,16 @@ impl AboutCard {
     }
 
     fn wrap_subtext_layout(cr: &Context, max_w: f64, text: &str) -> pango::Layout {
-        let l = pangocairo::functions::create_layout(cr);
-        let mut fd = pango::FontDescription::from_string(FONT);
-        fd.set_absolute_size(11.0 * pango::SCALE as f64);
-        l.set_font_description(Some(&fd));
-        l.set_width((max_w.max(40.0) * pango::SCALE as f64) as i32);
-        l.set_wrap(pango::WrapMode::WordChar);
-        l.set_text(text);
-        l
+        draw::wrapped_layout(cr, 11.0, false, max_w.max(40.0), None, text)
     }
 
-    fn measure_and_draw(
+    fn measure_and_draw(&self, cr: &Context, cx: &Cx, body: Rect, hits: Option<&mut Hits>) -> f64 {
+        draw::with_font(&cx.theme.font, || {
+            self.measure_and_draw_inner(cr, cx, body, hits)
+        })
+    }
+
+    fn measure_and_draw_inner(
         &self,
         cr: &Context,
         cx: &Cx,
@@ -1175,6 +1174,7 @@ impl AboutCard {
                 let max_scroll = total.saturating_sub(MAX_LOAD_ROWS);
                 let start = self.load_scroll.min(max_scroll);
                 let end = (start + MAX_LOAD_ROWS).min(total);
+                let list_top = y;
                 for i in start..end {
                     let f = &self.info.saved_files[i];
                     if let Some(h) = hits.as_deref_mut() {
@@ -1194,6 +1194,15 @@ impl AboutCard {
                         );
                     }
                     y += ui::ROW_H;
+                }
+                if hits.is_some() {
+                    ui::scrollbar(
+                        cr,
+                        cx,
+                        (body.0, list_top, body.2, (end - start) as f64 * ui::ROW_H),
+                        total as f64 * ui::ROW_H,
+                        start as f64 * ui::ROW_H,
+                    );
                 }
             }
         }

@@ -1873,6 +1873,15 @@ impl LookCard {
                 None,
             );
         }
+        if entries.len() > vis && lr.3 >= vis as f64 * ui::LIST_ROW_H {
+            ui::scrollbar(
+                cr,
+                cx,
+                (lr.0, lr.1 + 4.0, lr.2, (lr.3 - 8.0).max(0.0)),
+                entries.len() as f64 * ui::LIST_ROW_H,
+                start as f64 * ui::LIST_ROW_H,
+            );
+        }
     }
     fn draw_accent_picker(&self, cr: &Context, cx: &Cx, hits: &mut Hits, lr: Rect) {
         ui::list_box(cr, cx, lr);
@@ -1920,7 +1929,7 @@ impl LookCard {
                 .look
                 .as_ref()
                 .and_then(|l| l.accent_thumb.as_ref())
-                .and_then(thumb_surface)
+                .and_then(icons::surface_for_decoded)
             {
                 let sw = surf.width() as f64;
                 let sh = surf.height() as f64;
@@ -2605,29 +2614,6 @@ fn thumb_cell_size(width: f64, size: Size) -> (usize, f64, f64) {
     (cols, cw, ch)
 }
 
-thread_local! {
-    static THUMB_SURFACES: RefCell<HashMap<usize, (Arc<DecodedImage>, cairo::ImageSurface)>> =
-        RefCell::new(HashMap::new());
-}
-
-fn thumb_surface(img: &Arc<DecodedImage>) -> Option<cairo::ImageSurface> {
-    let key = Arc::as_ptr(img) as usize;
-    THUMB_SURFACES.with(|cache| {
-        let mut map = cache.borrow_mut();
-        if let Some((held, surf)) = map.get(&key) {
-            if Arc::ptr_eq(held, img) {
-                return Some(surf.clone());
-            }
-        }
-        let surf = icons::image_surface_from_decoded(img)?;
-        if map.len() >= 64 {
-            map.clear();
-        }
-        map.insert(key, (Arc::clone(img), surf.clone()));
-        Some(surf)
-    })
-}
-
 impl LookCard {
     #[allow(clippy::too_many_arguments)]
     fn draw_wallpaper_grid(
@@ -2704,7 +2690,7 @@ impl LookCard {
             if let Some(surf) = thumbs
                 .and_then(|t| t.get(idx))
                 .and_then(|o| o.as_ref())
-                .and_then(thumb_surface)
+                .and_then(icons::surface_for_decoded)
             {
                 let sw = surf.width() as f64;
                 let sh = surf.height() as f64;
@@ -2912,7 +2898,7 @@ impl LookCard {
             let _ = cr.save();
             cr.arc(cx_c, cy_c, rad, 0.0, std::f64::consts::TAU);
             cr.clip();
-            if let Some(surf) = thumb_surface(img) {
+            if let Some(surf) = icons::surface_for_decoded(img) {
                 let sw = surf.width() as f64;
                 let sh = surf.height() as f64;
                 let d = 2.0 * rad;
@@ -2971,7 +2957,7 @@ impl LookCard {
             if let Some(surf) = thumbs
                 .and_then(|t| t.get(idx))
                 .and_then(|o| o.as_ref())
-                .and_then(thumb_surface)
+                .and_then(icons::surface_for_decoded)
             {
                 let sw = surf.width() as f64;
                 let sh = surf.height() as f64;

@@ -374,7 +374,9 @@ impl Shell {
     /// Panel `idx` on a screen of `w x h`: its box on screen, panel-local card rectangles (without
     /// `panel_scroll`), and total content height.
     pub fn layout_local(&self, idx: usize, w: f64, h: f64) -> (Rect, Vec<(usize, Rect)>, f64) {
-        self.layout_panel_local(&self.panels[idx], w, h)
+        draw::with_font(&self.theme.font, || {
+            self.layout_panel_local(&self.panels[idx], w, h)
+        })
     }
 
     fn layout_panel_local(
@@ -750,6 +752,7 @@ impl Shell {
             return false;
         }
         let cfg = Config::from_text(&std::fs::read_to_string(path).unwrap_or_default());
+        crate::icons::clear_icon_cache();
         if cfg.panels == self.cfg.panels && cfg.favorites == self.cfg.favorites {
             // the same panels and cards: keep them (an open list, the accent picker stay as they
             // are while a setting is written); the colours and the cards' data follow
@@ -769,6 +772,9 @@ impl Shell {
         self.transient = None;
         self.closing = None;
         if let Some(a) = apps {
+            if a != self.apps {
+                crate::icons::clear_icon_cache();
+            }
             self.apps = a;
         }
         self.theme = Theme::from_config(&cfg);
@@ -1952,6 +1958,10 @@ impl Shell {
     /// rising in as the panel opens or fading out as it closes; keeps each card's hits for the
     /// pointer while open. Returns the panel's box.
     pub fn draw(&self, cr: &cairo::Context, w: f64, h: f64) -> Option<Rect> {
+        draw::with_font(&self.theme.font, || self.draw_open_or_closing(cr, w, h))
+    }
+
+    fn draw_open_or_closing(&self, cr: &cairo::Context, w: f64, h: f64) -> Option<Rect> {
         if self.ask.ask.on {
             return Some(crate::ask::draw(cr, &self.theme, &self.ask.ask, (w, h)));
         }
@@ -2150,12 +2160,8 @@ impl Shell {
             }
         }
         if max_scroll > 0.0 {
-            let thumb_h = ((pbox.3 / content_h) * pbox.3).clamp(24.0, pbox.3);
-            let track = (pbox.3 - thumb_h).max(1.0);
-            let thumb_y = pbox.1 + (scroll / max_scroll) * track;
-            draw::round_rect(cr, pbox.0 + pbox.2 - 4.0, thumb_y, 3.0, thumb_h, 1.5);
-            draw::set(cr, th.muted.alpha(0.35));
-            let _ = cr.fill();
+            let sb_cx = self.cx(Size::M, None, above);
+            crate::ui::scrollbar(cr, &sb_cx, pbox, content_h, scroll);
         }
         cr.restore().ok();
         if editing {
@@ -2277,16 +2283,7 @@ fn draw_header(cr: &cairo::Context, th: &Theme, r: Rect, title: &str, from: &str
 }
 
 fn missing_layout(cr: &cairo::Context, max_w: f64, why: &str) -> pango::Layout {
-    let l = pangocairo::functions::create_layout(cr);
-    let mut fd = pango::FontDescription::from_string(draw::FONT);
-    fd.set_absolute_size(draw::SIZE_SMALL * pango::SCALE as f64);
-    l.set_font_description(Some(&fd));
-    l.set_width((max_w.max(20.0) * pango::SCALE as f64) as i32);
-    l.set_wrap(pango::WrapMode::WordChar);
-    l.set_ellipsize(pango::EllipsizeMode::End);
-    l.set_height(-2);
-    l.set_text(why);
-    l
+    draw::wrapped_layout(cr, draw::SIZE_SMALL, false, max_w.max(20.0), Some(2), why)
 }
 
 fn wrapped_text_height(max_w: f64, text: &str) -> f64 {
@@ -3026,7 +3023,9 @@ mod tests {
             Vec::new(),
             &cfg_path,
         );
+        let gen0 = crate::icons::global_icon_generation();
         assert!(!sh.reload_if_changed_at(&cfg_path));
+        assert_eq!(crate::icons::global_icon_generation(), gen0);
         std::fs::write(&cfg_path, "ACCENT=\"#445566\"\n").unwrap();
         let future = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
         std::fs::File::options()
@@ -3037,6 +3036,21 @@ mod tests {
             .unwrap();
         assert!(sh.reload_if_changed_at(&cfg_path));
         assert_eq!(sh.cfg.accent, [0x44, 0x55, 0x66]);
+        let gen1 = crate::icons::global_icon_generation();
+        assert!(gen1 > gen0, "config reload should clear icon cache");
+
+        sh.rebuild_panels(
+            sh.cfg.clone(),
+            Some(vec![App {
+                id: "new-app".into(),
+                name: "New App".into(),
+                ..Default::default()
+            }]),
+        );
+        assert!(
+            crate::icons::global_icon_generation() > gen1,
+            "app list change should clear icon cache"
+        );
 
         // 2. Config does not exist at start, then is created after start.
         let new_cfg_path = dir.join("config-new");

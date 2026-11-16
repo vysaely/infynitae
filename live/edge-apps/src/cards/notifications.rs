@@ -5,7 +5,7 @@
 //! live/edge-rs/src/modules/notifications.rs.
 
 use crate::card::{Action, Button, Card, Cx, Event, Hits, Note, Rect, Source, Status};
-use crate::draw::{self, Text, FONT};
+use crate::draw::{self, Text};
 use crate::provider::{CardKind, Claim, Listed, Provider, Size};
 use crate::ui;
 use cairo::Context;
@@ -105,15 +105,7 @@ fn x_rect(x: f64, w: f64, y: f64) -> Rect {
 }
 
 fn two_lines(cr: &Context, x: f64, y: f64, max_w: f64, t: &Text) {
-    let l = pangocairo::functions::create_layout(cr);
-    let mut fd = pango::FontDescription::from_string(FONT);
-    fd.set_absolute_size(t.size * pango::SCALE as f64);
-    l.set_font_description(Some(&fd));
-    l.set_width((max_w.max(1.0) * pango::SCALE as f64) as i32);
-    l.set_wrap(pango::WrapMode::WordChar);
-    l.set_ellipsize(pango::EllipsizeMode::End);
-    l.set_height(-2);
-    l.set_text(t.text);
+    let l = draw::wrapped_layout(cr, t.size, t.bold, max_w.max(1.0), Some(2), t.text);
     draw::set(cr, t.color);
     cr.move_to(x.round(), y.round());
     pangocairo::functions::show_layout(cr, &l);
