@@ -166,8 +166,8 @@ impl OutputSurface {
     }
 
     fn apply_mode(&mut self, qh: &QueueHandle<App>, compositor: &CompositorState, shell: &Shell) {
-        let active = shell.active();
-        if !active && self.fullscreen_under {
+        let visible = shell.visible();
+        if !visible && self.fullscreen_under {
             if !self.unmapped {
                 // a null buffer unmaps a layer surface; it maps again after a commit and its configure
                 self.layer.wl_surface().attach(None, 0, 0);
@@ -196,7 +196,7 @@ impl OutputSurface {
         self.layer
             .set_keyboard_interactivity(keyboard_interactivity(shell));
         self.set_input_region(compositor, shell);
-        if active {
+        if visible {
             self.dirty = true;
             self.mapped_closed = false;
             self.clear_pending = false;
@@ -299,7 +299,7 @@ impl OutputSurface {
     }
 
     fn render_if_needed(&mut self, qh: &QueueHandle<App>, shell: &Shell) {
-        if !self.configured || !self.dirty || self.frame_pending || !shell.active() {
+        if !self.configured || !self.dirty || self.frame_pending || !shell.visible() {
             return;
         }
         let (w, h) = (self.width as i32, self.height as i32);
@@ -316,8 +316,8 @@ impl OutputSurface {
             return;
         };
         let pad = 4;
-        let lift = if shell.open_ms.is_finite() && !shell.ask.ask.on {
-            ARRIVE_LIFT.ceil() as i32
+        let lift = if !shell.ask.ask.on && (shell.open_ms.is_finite() || shell.is_closing()) {
+            ARRIVE_LIFT.max(crate::shell::LEAVE_DROP).ceil() as i32
         } else {
             0
         };
@@ -595,7 +595,7 @@ impl App {
         if !self.shell.reload_if_changed() {
             return false;
         }
-        if self.shell.active() {
+        if self.shell.visible() {
             for os in &mut self.outputs {
                 os.dirty = true;
             }
@@ -880,10 +880,12 @@ impl CompositorHandler for App {
         {
             let _ = self.reload_config();
         }
-        // an animation running (the cards arriving, a list opening, drag autoscroll): draw again
-        let animating = self.shell.open.is_some()
+        // an animation running (arrival, leaving, a list opening, drag autoscroll): draw again
+        let was_visible = self.shell.visible();
+        let animating = was_visible
             && (self.shell.tick(Instant::now()) || self.shell.wants_frame());
         let ended = self.was_animating && !animating;
+        let closed_finished = was_visible && !self.shell.visible();
         self.was_animating = animating;
         if let Some(os) = self
             .outputs
@@ -900,8 +902,8 @@ impl CompositorHandler for App {
                 os.clear_and_commit(qh);
             }
         }
-        if ended {
-            // the panel's size settled: its input region follows
+        if ended || closed_finished {
+            // the panel's size settled or its leaving fade ended: input region / clear follows
             self.sync_all();
         }
         if let Some(pl) = self

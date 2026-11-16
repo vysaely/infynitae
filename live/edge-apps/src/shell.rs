@@ -24,6 +24,9 @@ pub const ARRIVE_MS: f64 = 200.0;
 pub const ARRIVE_STAGGER_MS: f64 = 28.0;
 pub const ARRIVE_LIFT: f64 = 14.0;
 const ARRIVE_CARDS: f64 = 8.0;
+/// Leaving animation: fade and drop when a panel closes.
+pub const LEAVE_MS: f64 = 120.0;
+pub const LEAVE_DROP: f64 = 6.0;
 /// Pointer dwell before opening a hover panel, and grace before closing when left.
 pub const HOVER_OPEN_MS: f64 = 120.0;
 pub const HOVER_CLOSE_MS: f64 = 250.0;
@@ -43,6 +46,14 @@ pub struct Placed {
 pub struct PanelState {
     pub panel: Panel,
     pub cards: Vec<Placed>,
+}
+
+struct ClosingPanel {
+    idx: usize,
+    transient: Option<PanelState>,
+    started: Instant,
+    ms: f64,
+    scroll: f64,
 }
 
 /// The cards of `p` that can be made: a word whose app is not installed, or whose provider or kind
@@ -140,6 +151,7 @@ pub struct Shell {
     pub keyboard: bool,
     pub opened_at: Option<Instant>,
     pub open_ms: f64,
+    closing: Option<ClosingPanel>,
     pub last_tick: Option<Instant>,
     pub last_screen: (f64, f64),
     pub now: chrono::NaiveDateTime,
@@ -206,6 +218,7 @@ impl Shell {
             actions: Vec::new(),
             opened_at: None,
             open_ms: f64::INFINITY,
+            closing: None,
             last_tick: None,
             last_screen: (1920.0, 1080.0),
             now: chrono::Local::now().naive_local(),
@@ -239,12 +252,6 @@ impl Shell {
         }
     }
 
-    fn width_of(&self, idx: usize, w: f64) -> f64 {
-        let p = &self.panels[idx].panel;
-        let pw = if p.width > 0 { p.width as f64 } else { 380.0 };
-        pw.min(w - 2.0 * MARGIN)
-    }
-
     /// A card's whole height (its box: header, body, padding) at `width`; 0 when it hides, or a
     /// placeholder's height while editing.
     fn card_h(&self, pc: &Placed, width: f64, list_above: bool) -> f64 {
@@ -264,9 +271,22 @@ impl Shell {
     /// Panel `idx` on a screen of `w x h`: its box on screen, panel-local card rectangles (without
     /// `panel_scroll`), and total content height.
     pub fn layout_local(&self, idx: usize, w: f64, h: f64) -> (Rect, Vec<(usize, Rect)>, f64) {
+        self.layout_panel_local(&self.panels[idx], w, h)
+    }
+
+    fn layout_panel_local(
+        &self,
+        ps: &PanelState,
+        w: f64,
+        h: f64,
+    ) -> (Rect, Vec<(usize, Rect)>, f64) {
         let editing = self.editing();
-        let ps = &self.panels[idx];
-        let pw = self.width_of(idx, w);
+        let pw = if ps.panel.width > 0 {
+            ps.panel.width as f64
+        } else {
+            380.0
+        }
+        .min(w - 2.0 * MARGIN);
         let above = ps.panel.side == Side::Bottom;
         let mut rows: Vec<Vec<(usize, f64)>> = Vec::new();
         let mut i = 0;
@@ -643,6 +663,7 @@ impl Shell {
 
     pub fn rebuild_panels(&mut self, cfg: Config, apps: Option<Vec<App>>) {
         self.transient = None;
+        self.closing = None;
         if let Some(a) = apps {
             self.apps = a;
         }
@@ -745,6 +766,7 @@ impl Shell {
             self.cancel_edit();
         }
         self.open = Some(idx);
+        self.closing = None;
         self.panel_scroll = 0.0;
         self.reset_keys(idx);
         self.opened_by_hover = by_hover;
@@ -769,12 +791,13 @@ impl Shell {
         self.close_at(Instant::now())
     }
 
-    pub fn close_at(&mut self, _now: Instant) -> bool {
+    pub fn close_at(&mut self, now: Instant) -> bool {
         if self.editing() {
             self.cancel_edit();
         }
         let open = self.open.take();
         let was = open.is_some();
+        let scroll = self.panel_scroll;
         if let Some(idx) = open {
             if let Some(panel) = self.panels.get_mut(idx) {
                 for pc in &mut panel.cards {
@@ -801,10 +824,18 @@ impl Shell {
         self.open_ms = f64::INFINITY;
         self.frame.borrow_mut().clear();
         self.frame_scroll.set(0.0);
-        if let Some(t) = self.transient.take() {
-            if t < self.panels.len() {
-                self.panels.remove(t);
-            }
+        let transient = self
+            .transient
+            .take()
+            .and_then(|t| (t < self.panels.len()).then(|| self.panels.remove(t)));
+        if let Some(idx) = open {
+            self.closing = (!self.ask.ask.on).then_some(ClosingPanel {
+                idx,
+                transient,
+                started: now,
+                ms: 0.0,
+                scroll,
+            });
         }
         was
     }
@@ -828,6 +859,7 @@ impl Shell {
         p.words = words;
         let cards = place(&p, &self.apps, &self.cfg.favorites);
         self.close();
+        self.closing = None;
         self.panels.push(PanelState { panel: p, cards });
         let t = self.panels.len() - 1;
         self.transient = Some(t);
@@ -1387,23 +1419,36 @@ impl Shell {
         self.open.is_some() || self.ask.ask.on
     }
 
+    pub fn is_closing(&self) -> bool {
+        self.closing.is_some()
+    }
+
+    /// Something must be drawn on screen (open, asking, or fading out after close).
+    pub fn visible(&self) -> bool {
+        self.active() || self.closing.is_some()
+    }
+
     /// What is drawn on a `w x h` screen: the question's card while it asks, else the open
-    /// panel's box (plus the edit bar and Add list while editing).
+    /// panel's box (plus the edit bar and Add list while editing), or a closing panel's box.
     pub fn shown_box(&self, w: f64, h: f64) -> Option<Rect> {
         if self.ask.ask.on {
             return Some(self.ask.ask.geometry(w, h));
         }
-        let idx = self.open?;
-        let pbox = self.layout_local(idx, w, h).0;
-        if !self.editing() {
-            return Some(pbox);
+        if let Some(idx) = self.open {
+            let pbox = self.layout_local(idx, w, h).0;
+            if !self.editing() {
+                return Some(pbox);
+            }
+            let (bar, add) = self.edit_rects(idx, w, h);
+            let mut out = union_rect(pbox, bar);
+            if self.edit.adding {
+                out = union_rect(out, add);
+            }
+            return Some(out);
         }
-        let (bar, add) = self.edit_rects(idx, w, h);
-        let mut out = union_rect(pbox, bar);
-        if self.edit.adding {
-            out = union_rect(out, add);
-        }
-        Some(out)
+        let c = self.closing.as_ref()?;
+        let ps = c.transient.as_ref().or_else(|| self.panels.get(c.idx))?;
+        Some(self.layout_panel_local(ps, w, h).0)
     }
 
     /// A request in the ask file (SIGRTMIN+3), or a cancel: loaded, queued after one already
@@ -1414,9 +1459,12 @@ impl Shell {
         let req = crate::wayland::runtime_path(crate::ask::ASK_FILE);
         changed |= crate::ask::load_from_path(&mut self.ask, &req);
         changed |= crate::ask::check_asker_gone(&mut self.ask);
-        if self.ask.ask.on && self.open.is_some() {
-            self.close();
-            changed = true;
+        if self.ask.ask.on {
+            if self.open.is_some() {
+                self.close();
+                changed = true;
+            }
+            self.closing = None;
         }
         changed
     }
@@ -1668,6 +1716,15 @@ impl Shell {
             }
             running = true;
         }
+        if let Some(c) = &mut self.closing {
+            let ms = now.duration_since(c.started).as_secs_f64() * 1000.0;
+            if ms < LEAVE_MS {
+                c.ms = ms;
+                running = true;
+            } else {
+                self.closing = None;
+            }
+        }
         if let Some(idx) = self.open {
             for pc in &mut self.panels[idx].cards {
                 running |= pc.card.tick(dt);
@@ -1757,7 +1814,7 @@ impl Shell {
     }
 
     pub fn wants_frame(&self) -> bool {
-        if self.opened_at.is_some() {
+        if self.opened_at.is_some() || self.closing.is_some() {
             return true;
         }
         let Some(idx) = self.open else {
@@ -1779,28 +1836,52 @@ impl Shell {
         false
     }
 
-    /// Draws the open panel on a screen of `w x h`: each card's box, header and body, rising in as
-    /// the panel opens; keeps each card's hits for the pointer. Returns the panel's box.
+    /// Draws the open (or closing) panel on a screen of `w x h`: each card's box, header and body,
+    /// rising in as the panel opens or fading out as it closes; keeps each card's hits for the
+    /// pointer while open. Returns the panel's box.
     pub fn draw(&self, cr: &cairo::Context, w: f64, h: f64) -> Option<Rect> {
         if self.ask.ask.on {
             return Some(crate::ask::draw(cr, &self.theme, &self.ask.ask, (w, h)));
         }
-        let idx = self.open?;
-        let editing = self.editing();
-        let (pbox, local_rects, content_h) = self.layout_local(idx, w, h);
+        if let Some(idx) = self.open {
+            return Some(self.draw_panel(cr, w, h, &self.panels[idx], idx, self.panel_scroll, None));
+        }
+        if let Some(c) = &self.closing {
+            let ps = c.transient.as_ref().or_else(|| self.panels.get(c.idx))?;
+            let cp = (1.0 - crate::ui::ease((c.ms / LEAVE_MS).clamp(0.0, 1.0))).clamp(0.0, 1.0);
+            return Some(self.draw_panel(cr, w, h, ps, c.idx, c.scroll, Some(cp)));
+        }
+        None
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_panel(
+        &self,
+        cr: &cairo::Context,
+        w: f64,
+        h: f64,
+        ps: &PanelState,
+        idx: usize,
+        scroll_pos: f64,
+        closing_p: Option<f64>,
+    ) -> Rect {
+        let interactive = closing_p.is_none();
+        let editing = interactive && self.editing();
+        let (pbox, local_rects, content_h) = self.layout_panel_local(ps, w, h);
         let max_scroll = (content_h - pbox.3).max(0.0);
-        let scroll = self.panel_scroll.clamp(0.0, max_scroll);
+        let scroll = scroll_pos.clamp(0.0, max_scroll);
         let rects: Vec<(usize, Rect)> = local_rects
             .iter()
             .map(|&(ci, r)| (ci, (pbox.0 + r.0, pbox.1 + r.1 - scroll, r.2, r.3)))
             .collect();
-        let ps = &self.panels[idx];
         let above = ps.panel.side == Side::Bottom;
         let th = &self.theme;
         let mut frame = Vec::new();
         let bottom = rects.iter().map(|(_, r)| r.1 + r.3).fold(0.0, f64::max);
         cr.save().ok();
-        let clip_lift = if self.open_ms.is_finite() {
+        let clip_lift = if closing_p.is_some() {
+            LEAVE_DROP
+        } else if self.open_ms.is_finite() {
             ARRIVE_LIFT
         } else {
             0.0
@@ -1811,23 +1892,34 @@ impl Shell {
             let pc = &ps.cards[*ci];
             let cx = self.cx(pc.size, pc.app_id.as_deref(), above);
             let status = pc.card.status(&cx);
-            let sel = if editing {
+            let sel = if !interactive || editing {
                 None
             } else {
                 self.selected
                     .filter(|(c, _)| self.keyboard && c == ci)
                     .map(|(_, h)| h)
             };
-            let mut hits = Hits::new(if editing { None } else { self.pointer }, sel);
+            let mut hits = Hits::new(
+                if !interactive || editing {
+                    None
+                } else {
+                    self.pointer
+                },
+                sel,
+            );
             // the bottom card arrives first (about one card per 90 px up)
             let k = ((bottom - (r.1 + r.3)) / 90.0).clamp(0.0, ARRIVE_CARDS);
-            let p = if self.open_ms.is_finite() {
+            let p = if let Some(cp) = closing_p {
+                cp
+            } else if self.open_ms.is_finite() {
                 crate::ui::ease((self.open_ms - k * ARRIVE_STAGGER_MS) / ARRIVE_MS)
             } else {
                 1.0
             };
             if p <= 0.0 {
-                frame.push((*ci, *r, hits));
+                if interactive {
+                    frame.push((*ci, *r, hits));
+                }
                 continue;
             }
             if editing && status == Status::Hidden {
@@ -1884,8 +1976,13 @@ impl Shell {
             );
             let lifted = p < 1.0;
             if lifted {
+                let drop_y = if closing_p.is_some() {
+                    LEAVE_DROP
+                } else {
+                    ARRIVE_LIFT
+                };
                 cr.push_group();
-                cr.translate(0.0, (1.0 - p) * ARRIVE_LIFT);
+                cr.translate(0.0, (1.0 - p) * drop_y);
             }
             draw::card(cr, th, r.0, r.1, r.2, r.3);
             if headed {
@@ -1928,7 +2025,9 @@ impl Shell {
                 let _ = cr.pop_group_to_source();
                 let _ = cr.paint_with_alpha(p);
             }
-            frame.push((*ci, *r, hits));
+            if interactive {
+                frame.push((*ci, *r, hits));
+            }
         }
         if max_scroll > 0.0 {
             let thumb_h = ((pbox.3 / content_h) * pbox.3).clamp(24.0, pbox.3);
@@ -1959,46 +2058,48 @@ impl Shell {
                 &overlay_state,
             );
         }
-        if let Some(r) = self.edit_menu_rect(w, h) {
-            let th = &self.theme;
-            crate::draw::round_rect(cr, r.0, r.1, r.2, r.3, th.small_radius());
-            crate::draw::set(cr, th.card.alpha(1.0));
-            let _ = cr.fill_preserve();
-            crate::draw::set(cr, th.edge);
-            cr.set_line_width(1.0);
-            let _ = cr.stroke();
-            let lit = self.pointer.is_some_and(|(px, py)| {
-                px >= r.0 && px <= r.0 + r.2 && py >= r.1 && py <= r.1 + r.3
-            });
-            if lit {
-                crate::draw::round_rect(
+        if interactive {
+            if let Some(r) = self.edit_menu_rect(w, h) {
+                let th = &self.theme;
+                crate::draw::round_rect(cr, r.0, r.1, r.2, r.3, th.small_radius());
+                crate::draw::set(cr, th.card.alpha(1.0));
+                let _ = cr.fill_preserve();
+                crate::draw::set(cr, th.edge);
+                cr.set_line_width(1.0);
+                let _ = cr.stroke();
+                let lit = self.pointer.is_some_and(|(px, py)| {
+                    px >= r.0 && px <= r.0 + r.2 && py >= r.1 && py <= r.1 + r.3
+                });
+                if lit {
+                    crate::draw::round_rect(
+                        cr,
+                        r.0 + 3.0,
+                        r.1 + 3.0,
+                        r.2 - 6.0,
+                        r.3 - 6.0,
+                        th.small_radius(),
+                    );
+                    crate::draw::set(cr, th.text.alpha(0.08));
+                    let _ = cr.fill();
+                }
+                crate::draw::text_max(
                     cr,
-                    r.0 + 3.0,
-                    r.1 + 3.0,
-                    r.2 - 6.0,
-                    r.3 - 6.0,
-                    th.small_radius(),
+                    r.0 + 12.0,
+                    r.1 + (r.3 - 17.0) / 2.0,
+                    r.2 - 24.0,
+                    &crate::draw::Text {
+                        size: 13.0,
+                        bold: false,
+                        color: th.text,
+                        text: "Edit panel",
+                    },
                 );
-                crate::draw::set(cr, th.text.alpha(0.08));
-                let _ = cr.fill();
             }
-            crate::draw::text_max(
-                cr,
-                r.0 + 12.0,
-                r.1 + (r.3 - 17.0) / 2.0,
-                r.2 - 24.0,
-                &crate::draw::Text {
-                    size: 13.0,
-                    bold: false,
-                    color: th.text,
-                    text: "Edit panel",
-                },
-            );
+            *self.frame.borrow_mut() = frame;
+            self.frame_scroll.set(scroll);
+            self.frame_screen.set((w, h));
         }
-        *self.frame.borrow_mut() = frame;
-        self.frame_scroll.set(scroll);
-        self.frame_screen.set((w, h));
-        Some(pbox)
+        pbox
     }
 }
 
@@ -2428,6 +2529,43 @@ mod tests {
         );
         assert!(!sh.tick(t0 + std::time::Duration::from_millis(1016)));
         assert_eq!(sh.sources(), vec![("settings", "power")]);
+    }
+
+    #[test]
+    fn close_runs_leaving_animation_for_leave_ms_then_stops() {
+        let mut sh = shell("SUPER+A top right settings/session");
+        let idx = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "control")
+            .unwrap();
+        let t0 = Instant::now();
+        assert!(sh.open_panel(idx, false, t0));
+        sh.open_ms = f64::INFINITY;
+        sh.opened_at = None;
+
+        let t_close = t0 + std::time::Duration::from_millis(500);
+        assert!(sh.close_at(t_close));
+        assert!(sh.open.is_none(), "logically closed at once");
+        assert!(!sh.active(), "input/keyboard cleared at once");
+        assert!(sh.is_closing());
+        assert!(sh.visible());
+        assert!(sh.wants_frame());
+
+        assert!(sh.tick(t_close));
+        assert!(sh.tick(t_close + std::time::Duration::from_millis(60)));
+        assert!(sh.shown_box(1280.0, 800.0).is_some());
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 1280, 800).unwrap();
+        let cr = cairo::Context::new(&surf).unwrap();
+        assert!(sh.draw(&cr, 1280.0, 800.0).is_some());
+
+        assert!(
+            !sh.tick(t_close + std::time::Duration::from_millis(LEAVE_MS as u64)),
+            "stops after LEAVE_MS"
+        );
+        assert!(!sh.is_closing());
+        assert!(!sh.visible());
+        assert!(sh.shown_box(1280.0, 800.0).is_none());
     }
 
     fn parse_box_center(dump: &str, prefix: &str) -> (f64, f64) {
