@@ -52,13 +52,23 @@ const H_CLEAR: u32 = 1;
 const H_NOTE: u32 = 100;
 const H_X: u32 = 1000;
 
-/// How many show at each size (whole notifications only; the rest wait for room).
+/// How many show: at most 4 (M) or 8 (L), and only as many whole ones as fit in `cx.room` (a
+/// panel taller than the screen gives this card less); always at least one. The rest are
+/// counted in the title.
 fn shown(cx: &Cx) -> usize {
     let most = match cx.size {
         Size::L => 8,
         _ => 4,
     };
-    cx.notes.len().min(most)
+    let n = cx.notes.len().min(most);
+    let mut used = FOOT_H;
+    for i in 0..n {
+        used += note_h(cx.notes, i) + if i > 0 { GAP } else { 0.0 };
+        if i > 0 && used > cx.room {
+            return i;
+        }
+    }
+    n
 }
 
 /// The app's line above a notification's title.
@@ -127,6 +137,10 @@ pub struct ListCard;
 impl Card for ListCard {
     fn apply(&mut self, _: &str, _: &dyn Any) -> bool {
         false
+    }
+
+    fn flexible(&self) -> bool {
+        true
     }
 
     fn status(&self, cx: &Cx) -> Status {
