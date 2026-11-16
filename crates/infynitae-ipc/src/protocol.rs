@@ -246,6 +246,34 @@ fn request(v: &Value, core: &Core) -> Result<Request, RequestError> {
                 fullscreen,
             })
         }
+        "keep_on_top" | "keep-on-top" => {
+            let on = match v.get("on") {
+                None | Some(Value::Null) => None,
+                Some(Value::Bool(b)) => Some(*b),
+                _ => return Err(Invalid),
+            };
+            Request::Command(ShellCommand::KeepOnTop {
+                element: element("element")?,
+                on,
+            })
+        }
+        "minimize_element" | "minimize" => Request::Command(ShellCommand::MinimizeElement {
+            element: element("element")?,
+        }),
+        "maximize_element" | "maximize" => {
+            let maximized = match v.get("maximized") {
+                None | Some(Value::Null) => None,
+                Some(Value::Bool(b)) => Some(*b),
+                _ => return Err(Invalid),
+            };
+            Request::Command(ShellCommand::MaximizeElement {
+                element: element("element")?,
+                maximized,
+            })
+        }
+        "close_element" | "close" => Request::Command(ShellCommand::CloseElement {
+            element: element("element")?,
+        }),
         _ => return Err(RequestError::UnknownCommand),
     })
 }

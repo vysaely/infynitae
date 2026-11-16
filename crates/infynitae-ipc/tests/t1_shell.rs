@@ -1026,3 +1026,64 @@ fn capture_chord_times_out_and_clears_wake() {
     assert!(!core.is_capturing_key());
     assert!(server.wake_at().is_none());
 }
+
+#[test]
+fn show_window_menu_emits_ipc_event_and_window_menu_commands_apply() {
+    let (mut core, mut server, _o) = setup();
+    let w = map_win(&mut core, 1, 400, 300);
+    let mut sub = connect(&mut server);
+    let reply = sub.reply(&mut server, &mut core, r#"{"id":1,"cmd":"subscribe"}"#);
+    assert_eq!(reply.get("ok"), Some(&Value::Bool(true)));
+
+    core.show_window_menu(w, LocalPoint { x: 24, y: 12 });
+    let ev = sub
+        .read_until(&mut server, &mut core, |got| !got.is_empty())
+        .pop()
+        .unwrap();
+    assert_eq!(ev.get("event").and_then(Value::as_str), Some("window_menu"));
+    assert_eq!(
+        ev.get("element").map(Value::to_json).as_deref(),
+        Some(eref(&core, w).as_str())
+    );
+    // 400x300 centred at (-200, -150) on 1920x1080 camera (0, 0) -> top-left on screen (760, 390)
+    assert_eq!(
+        ev.get("position").map(Value::to_json).as_deref(),
+        Some("[784,402]")
+    );
+    assert_eq!(ev.get("on_top"), Some(&Value::Bool(false)));
+    assert_eq!(ev.get("maximized"), Some(&Value::Bool(false)));
+    assert_eq!(ev.get("fullscreen"), Some(&Value::Bool(false)));
+
+    let mut cmd = connect(&mut server);
+    let w_ref = eref(&core, w);
+    let r1 = cmd.reply(
+        &mut server,
+        &mut core,
+        &format!(r#"{{"id":2,"cmd":"keep_on_top","element":{w_ref}}}"#),
+    );
+    assert_eq!(r1.get("ok"), Some(&Value::Bool(true)));
+    assert!(core.stage().is_above(w));
+
+    let r2 = cmd.reply(
+        &mut server,
+        &mut core,
+        &format!(r#"{{"id":3,"cmd":"maximize","element":{w_ref}}}"#),
+    );
+    assert_eq!(r2.get("ok"), Some(&Value::Bool(true)));
+    assert!(core.is_maximized(w));
+
+    let r3 = cmd.reply(
+        &mut server,
+        &mut core,
+        &format!(r#"{{"id":4,"cmd":"minimize","element":{w_ref}}}"#),
+    );
+    assert_eq!(r3.get("ok"), Some(&Value::Bool(true)));
+    assert!(core.stage().is_minimized(w));
+
+    let r4 = cmd.reply(
+        &mut server,
+        &mut core,
+        &format!(r#"{{"id":5,"cmd":"close","element":{w_ref}}}"#),
+    );
+    assert_eq!(r4.get("ok"), Some(&Value::Bool(true)));
+}

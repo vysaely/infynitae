@@ -896,6 +896,17 @@ impl Core {
                 }
                 return;
             }
+            KeyAction::WindowMenu => {
+                if let Some(id) = self.hovered_window() {
+                    self.raise_and_focus(id, out);
+                    if let PointerState::Located { p, .. } = self.pointer {
+                        self.window_menu = Some((id, p));
+                    }
+                } else if let Some(id) = self.focus.target() {
+                    self.show_window_menu(id, crate::geom::LocalPoint { x: 0, y: 0 });
+                }
+                return;
+            }
             KeyAction::ForceCloseFocused => self
                 .close_target()
                 .map(Effect::ForceClose)
@@ -2542,6 +2553,20 @@ impl Core {
             self.input.ownership.press(button, Owner::Compositor);
             return;
         }
+        if !self.input.ownership.client_owns_any()
+            && self.layer_hit(output, p, true).is_none()
+            && let Some((_, action)) = self
+                .key_bindings
+                .chords
+                .iter()
+                .find(|(c, _)| c.key == button && c.mods == mods)
+        {
+            self.input.ownership.press(button, Owner::Compositor);
+            if let Some(action) = *action {
+                self.apply_key_action(action, proof, out);
+            }
+            return;
+        }
         // G-OB24 is met (C12.F14.5): a pan at any zoom keeps the output's lattice reference
         let acquire = bindings::is_pan_binding(button, mods)
             // INV-INPUT-2: never while the client owns a button
@@ -3246,6 +3271,60 @@ impl Core {
                 } else if self.fullscreen_of(id).is_some() {
                     out.extend(self.leave_fullscreen(id, None));
                 }
+            }
+            ShellCommand::KeepOnTop { element, on } => {
+                let id = self.shell_mapped(element)?;
+                let on = on.unwrap_or_else(|| !self.stage.is_above(id));
+                self.set_on_top(id, on);
+                if self.stage.is_above(id) == on {
+                    out.push(Effect::KeptOnTop { element: id, on });
+                }
+            }
+            ShellCommand::MinimizeElement { element } => {
+                let id = self.shell_mapped(element)?;
+                if self.fullscreen_of(id).is_some() {
+                    return Err(ShellError::Presenting);
+                }
+                if self.input.interaction.active() {
+                    return Err(ShellError::Busy);
+                }
+                if self.stage.set_minimized(id, true).is_ok() {
+                    let live: Vec<_> = self
+                        .focusable_elements()
+                        .into_iter()
+                        .filter(|&e| e != id)
+                        .collect();
+                    out.extend(self.focus.target_lost(id, &live));
+                    self.strict_successor(id, &mut out);
+                    self.invalidate_all_frames();
+                    self.membership_pass_element(id, &mut out);
+                    out.extend(self.visibility_pass());
+                }
+            }
+            ShellCommand::MaximizeElement { element, maximized } => {
+                let id = self.shell_mapped(element)?;
+                if self.fullscreen_of(id).is_some() {
+                    return Err(ShellError::Presenting);
+                }
+                if self.input.interaction.active() {
+                    return Err(ShellError::Busy);
+                }
+                let output = self
+                    .pointer_output()
+                    .or_else(|| self.outputs.first().map(|o| o.id))
+                    .ok_or(ShellError::UnknownOutput)?;
+                let is_on = self.is_maximized(id);
+                let want = maximized.unwrap_or(!is_on);
+                if want != is_on {
+                    self.maximize_toggle(None, output, id, true, &mut out);
+                }
+            }
+            ShellCommand::CloseElement { element } => {
+                let id = self
+                    .stage
+                    .resolve(element)
+                    .map_err(|_| ShellError::StaleElement)?;
+                out.push(Effect::CloseRequest(id));
             }
         }
         Ok(out)

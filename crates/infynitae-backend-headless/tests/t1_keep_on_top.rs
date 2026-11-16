@@ -220,3 +220,146 @@ fn super_shift_p_is_remembered_for_the_windows_app() {
         std::time::Duration::from_secs(5)
     ));
 }
+
+#[test]
+fn show_window_menu_and_window_menu_bind_record_element_and_screen_position() {
+    use infynitae_core::input::keys::{KeyAction, UserBindings, parse_chord};
+
+    let mut r = Rig::x8();
+    let id = *r.ls.state.core().stage().mapped_elements().first().unwrap();
+    let anchor = r.ls.state.core().stage().anchor(id).unwrap();
+
+    // Ask via Wayland xdg_toplevel.show_window_menu at (30, 18) in the window's geometry.
+    let seat = r.ls.probe.seat.clone().unwrap();
+    r.ls.probe.surfaces[0]
+        .toplevel
+        .as_ref()
+        .unwrap()
+        .show_window_menu(&seat, 0, 30, 18);
+    r.ls.pump();
+
+    let expected_x = (anchor.x + 30 + 960) as f64;
+    let expected_y = (anchor.y + 18 + 540) as f64;
+    assert_eq!(
+        r.ls.state.core_mut().take_window_menu(),
+        Some((id, (expected_x, expected_y)))
+    );
+
+    // Configurable WINDOW_MENU bind on Super+right button triggers window_menu at pointer position.
+    let chord = parse_chord("SUPER+BTN_RIGHT").expect("SUPER+BTN_RIGHT chord");
+    r.ls.state.core_mut().set_key_bindings(UserBindings {
+        chords: vec![(chord, Some(KeyAction::WindowMenu))],
+        moved: vec![KeyAction::WindowMenu],
+    });
+    let pointer_p = match r.ls.state.core().pointer() {
+        infynitae_core::pointer::PointerState::Located { p, .. } => p,
+        _ => panic!("expected located pointer"),
+    };
+    r.button(BTN_RIGHT, true, logo());
+    r.button(BTN_RIGHT, false, logo());
+    assert_eq!(
+        r.ls.state.core_mut().take_window_menu(),
+        Some((id, pointer_p))
+    );
+}
+
+#[test]
+fn keep_on_top_command_toggles_stage_above_follows_camera_pan_and_remembers_for_app() {
+    use infynitae_core::stage::ElementRef;
+
+    let mut r = Rig::x8();
+    let a = open(&mut r, "A", (320, 180), Some("Video"));
+    let idx =
+        r.ls.probe
+            .surfaces
+            .iter()
+            .position(|s| s.label == "A")
+            .unwrap();
+    r.ls.probe.surfaces[idx]
+        .toplevel
+        .as_ref()
+        .unwrap()
+        .set_app_id("VLC".to_owned());
+    r.ls.probe.surfaces[idx].wl.commit();
+    for _ in 0..4 {
+        r.ls.pump();
+        r.frame();
+    }
+    let eref =
+        ElementRef::from_raw(r.ls.state.core().stage().instance().get(), a.get().get()).unwrap();
+    assert!(!r.ls.state.core().stage().is_above(a));
+
+    // Toggle on via ShellCommand::KeepOnTop.
+    let fx =
+        r.ls.state
+            .core_mut()
+            .shell_command(
+                &mut r.ls.shell,
+                ShellCommand::KeepOnTop {
+                    element: eref,
+                    on: None,
+                },
+            )
+            .unwrap();
+    r.ls.state.apply(&fx);
+    assert!(r.ls.state.core().stage().is_above(a));
+    assert!(
+        r.ls.wait_for_launcher_action(
+            "remember-window KEEP_ON_TOP vlc on",
+            std::time::Duration::from_secs(5)
+        ),
+        "not remembered: {:?}",
+        r.ls.recorded_launcher_actions()
+    );
+
+    // Stays above windows opened after it, and keeps its screen spot when the camera pans.
+    let b = open(&mut r, "B", (400, 300), None);
+    assert_eq!(top(&r), a);
+    let (was, b_was) = (on_screen(&r, a), on_screen(&r, b));
+    let o = r.ls.output();
+    let nav_fx =
+        r.ls.state
+            .core_mut()
+            .shell_command(
+                &mut r.ls.shell,
+                ShellCommand::Navigate {
+                    output: o,
+                    to: NavigateTo::Delta(300.0, -100.0),
+                    zoom: None,
+                    stream: ShellStream::Atomic,
+                },
+            )
+            .unwrap();
+    r.ls.state.apply(&nav_fx);
+    r.ls.pump();
+    r.frame();
+    assert_ne!(on_screen(&r, b), b_was);
+    let now = on_screen(&r, a);
+    assert!(
+        (now.0 - was.0).abs() <= 1 && (now.1 - was.1).abs() <= 1,
+        "kept-on-top window moved on the screen: {was:?} -> {now:?}"
+    );
+
+    // Toggle off via ShellCommand::KeepOnTop.
+    let fx_off =
+        r.ls.state
+            .core_mut()
+            .shell_command(
+                &mut r.ls.shell,
+                ShellCommand::KeepOnTop {
+                    element: eref,
+                    on: None,
+                },
+            )
+            .unwrap();
+    r.ls.state.apply(&fx_off);
+    assert!(!r.ls.state.core().stage().is_above(a));
+    assert!(
+        r.ls.wait_for_launcher_action(
+            "remember-window KEEP_ON_TOP vlc off",
+            std::time::Duration::from_secs(5)
+        ),
+        "not forgotten: {:?}",
+        r.ls.recorded_launcher_actions()
+    );
+}

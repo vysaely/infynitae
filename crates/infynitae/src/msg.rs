@@ -370,6 +370,72 @@ pub fn run(args: &[String]) -> ExitCode {
             ]))),
             _ => usage(),
         },
+        Some("keep-on-top" | "keep_on_top") => match (num(1), num(2)) {
+            (Some(i), Some(e)) => {
+                let on = match args.get(3).map(String::as_str) {
+                    None | Some("toggle") => Value::Null,
+                    Some("on" | "true" | "1") => Value::Bool(true),
+                    Some("off" | "false" | "0") => Value::Bool(false),
+                    _ => return usage(),
+                };
+                print_reply(&request(&Value::obj([
+                    id,
+                    ("cmd", "keep_on_top".into()),
+                    ("element", element(i, e)),
+                    ("on", on),
+                ])))
+            }
+            _ => usage(),
+        },
+        Some("minimize") => match (num(1), num(2)) {
+            (Some(i), Some(e)) => print_reply(&request(&Value::obj([
+                id,
+                ("cmd", "minimize".into()),
+                ("element", element(i, e)),
+            ]))),
+            _ => usage(),
+        },
+        Some("maximize") => match (num(1), num(2)) {
+            (Some(i), Some(e)) => {
+                let maximized = match args.get(3).map(String::as_str) {
+                    None | Some("toggle") => Value::Null,
+                    Some("on" | "true" | "1") => Value::Bool(true),
+                    Some("off" | "false" | "0") => Value::Bool(false),
+                    _ => return usage(),
+                };
+                print_reply(&request(&Value::obj([
+                    id,
+                    ("cmd", "maximize".into()),
+                    ("element", element(i, e)),
+                    ("maximized", maximized),
+                ])))
+            }
+            _ => usage(),
+        },
+        Some("fullscreen") => match (num(1), num(2)) {
+            (Some(i), Some(e)) => {
+                let fullscreen = match args.get(3).map(String::as_str) {
+                    None | Some("on" | "true" | "1") => Value::Bool(true),
+                    Some("off" | "false" | "0") => Value::Bool(false),
+                    _ => return usage(),
+                };
+                print_reply(&request(&Value::obj([
+                    id,
+                    ("cmd", "fullscreen".into()),
+                    ("element", element(i, e)),
+                    ("fullscreen", fullscreen),
+                ])))
+            }
+            _ => usage(),
+        },
+        Some("close") => match (num(1), num(2)) {
+            (Some(i), Some(e)) => print_reply(&request(&Value::obj([
+                id,
+                ("cmd", "close".into()),
+                ("element", element(i, e)),
+            ]))),
+            _ => usage(),
+        },
         Some("navigate") => {
             let Some((to, zoom)) = parse_navigate_args(args) else {
                 return usage();
