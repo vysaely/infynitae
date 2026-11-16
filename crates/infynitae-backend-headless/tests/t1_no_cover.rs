@@ -1,5 +1,6 @@
-//! Whatever places it, a new window never covers another app's window (owner, 2026-11-07: "this
-//! should cover any app at compositor level"): the rule sits after every placement path.
+//! Whatever places it, a new window never covers another window (owner, 2026-11-07: "this should
+//! cover any app at compositor level"; 2026-11-16: "in any scenario"): the rule sits after every
+//! placement path, and a window shown again keeps off the windows that took its place.
 
 mod common;
 
@@ -118,4 +119,91 @@ fn a_window_opening_maximized_does_not_cover_the_window_in_view() {
     let rx = (a.x, a.y, a.x + 1900, a.y + 1000);
     let rw = rect(&r, w);
     assert!(apart(rw, rx), "the maximized window {rx:?} covers {rw:?}");
+}
+
+/// A big child of one window keeps off its app's other windows too, not only other apps' (owner,
+/// 2026-11-16: "make all windows appear not on top of each other in any scenario"); until then a
+/// window of the same app counted as free room.
+#[test]
+fn a_big_child_keeps_off_its_own_apps_other_windows() {
+    let mut r = Rig::x8();
+    r.ls.state
+        .core_mut()
+        .set_placement_policy(infynitae_core::PlacementPolicy::ClusterTiling);
+    let w = *r.ls.state.core().stage().mapped_elements().last().unwrap();
+    let ws = r.ls.state.core().stage().tree(w).unwrap().geometry.size;
+    let app = |r: &mut Rig, idx: usize| {
+        r.ls.probe.surfaces[idx]
+            .toplevel
+            .as_ref()
+            .unwrap()
+            .set_app_id("firefox".to_owned());
+        r.ls.probe.surfaces[idx].wl.commit();
+    };
+    app(&mut r, 0);
+    r.ls.pump();
+    r.frame();
+    let qh = r.ls.qh.clone();
+    let si = r.ls.probe.toplevel(&qh, "S", (300, 200), 0);
+    app(&mut r, si);
+    for _ in 0..3 {
+        r.ls.pump();
+        r.frame();
+    }
+    let s_el = *r.ls.state.core().stage().mapped_elements().last().unwrap();
+    let di =
+        r.ls.probe
+            .toplevel(&qh, "D", (ws.w * 3 / 2, ws.h * 3 / 2), 0);
+    let parent = r.ls.probe.surfaces[0].toplevel.clone().unwrap();
+    r.ls.probe.surfaces[di]
+        .toplevel
+        .as_ref()
+        .unwrap()
+        .set_parent(Some(&parent));
+    app(&mut r, di);
+    for _ in 0..3 {
+        r.ls.pump();
+        r.frame();
+    }
+    let d = *r.ls.state.core().stage().mapped_elements().last().unwrap();
+    assert_ne!(d, s_el);
+    let (rs, rd) = (rect(&r, s_el), rect(&r, d));
+    assert!(
+        apart(rs, rd),
+        "the child {rd:?} covers its app's window {rs:?}"
+    );
+}
+
+/// A window hidden and shown again (Discord to the tray and back) whose place another window took
+/// meanwhile comes back beside it, not over it.
+#[test]
+fn a_window_shown_again_keeps_off_the_window_that_took_its_place() {
+    let mut r = Rig::x8();
+    r.ls.state
+        .core_mut()
+        .set_placement_policy(infynitae_core::PlacementPolicy::ClusterTiling);
+    let w = *r.ls.state.core().stage().mapped_elements().last().unwrap();
+    let ws = r.ls.state.core().stage().tree(w).unwrap().geometry.size;
+    let before = rect(&r, w);
+    r.ls.probe.unmap(0);
+    r.ls.pump();
+    r.frame();
+    // a window of the same size opens while it is hidden: its place is free, so it may take it
+    let x = open(&mut r, "X", (ws.w, ws.h));
+    let rx = rect(&r, x);
+    assert!(
+        !apart(before, rx),
+        "setup: the new window {rx:?} should take the hidden one's place {before:?}"
+    );
+    r.ls.probe.surfaces[0].wl.commit();
+    r.ls.pump();
+    let qh = r.ls.qh.clone();
+    r.ls.probe.draw(&qh, 0);
+    for _ in 0..3 {
+        r.ls.pump();
+        r.frame();
+    }
+    assert!(r.ls.state.core().stage().mapped_elements().contains(&w));
+    let (rw, rx) = (rect(&r, w), rect(&r, x));
+    assert!(apart(rw, rx), "the window shown again {rw:?} covers {rx:?}");
 }

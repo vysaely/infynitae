@@ -1592,8 +1592,16 @@ impl Core {
                 // is resolved at the element's first windowed presentation. A map in protocol
                 // fullscreen is not one and leaves the opportunity for later; a remap of a
                 // placed element keeps its anchor (INV-STAGE-5).
+                let remap = self.stage.default_placed(id);
                 if self.fullscreen_of(id).is_none() {
                     self.place_by_default(id, &tree)?;
+                }
+                // a window shown again (Discord back from the tray, a game restarting its window)
+                // keeps its place unless another window took it meanwhile: then it moves to the
+                // nearest free spot instead of opening over that window (owner, 2026-11-16)
+                if remap && let Some(at) = self.free_place_on_remap(id, &tree) {
+                    self.stage.place(id, at).map_err(stale)?;
+                    self.invalidate_all_frames();
                 }
                 self.stage.set_tree(id, Some(tree)).map_err(stale)?;
                 self.stage.set_state(id, Lifecycle::Mapped).map_err(stale)?;
@@ -1843,9 +1851,9 @@ impl Core {
     /// `None` keeps the anchor of the initial commit: under [`PlacementPolicy::OriginAtCameraCentre`],
     /// without an output, or when out of Canvas bounds.
     ///
-    /// Whatever placed it, a new window never covers another app's window (owner, 2026-11-07:
-    /// "this should cover any app at compositor level"): a spot that would goes to the nearest
-    /// free one. A child may still cover its parent and its own app's windows; a notification
+    /// Whatever placed it, a new window never covers another window (owner, 2026-11-07: "this
+    /// should cover any app at compositor level"; 2026-11-16: "in any scenario"): a spot that
+    /// would goes to the nearest free one. Only a child may cover its own parent; a notification
     /// stacks in its corner; the `center` policy stacks every window in the middle by choice.
     fn first_map_anchor(&self, id: ElementId, tree: &SurfaceTree) -> Option<CanvasPoint> {
         if self.stage.is_above(id) {
@@ -2100,7 +2108,29 @@ impl Core {
         })
     }
 
-    /// A spot for `id` at `size` near `at` that covers no other app's window, when `at` would:
+    /// Where a remapped window goes when its kept anchor (INV-STAGE-5) now covers another window;
+    /// `None` keeps it. Fullscreen, kept-on-top and notification windows and the `center` policy
+    /// are left as they are, as at the first map.
+    fn free_place_on_remap(&self, id: ElementId, tree: &SurfaceTree) -> Option<CanvasPoint> {
+        if self.fullscreen_of(id).is_some()
+            || self.stage.is_above(id)
+            || self.is_notification(id)
+            || self.placement == PlacementPolicy::CentredInView
+        {
+            return None;
+        }
+        let at = self.stage.anchor(id)?;
+        let size = (
+            i64::from(tree.geometry.size.w),
+            i64::from(tree.geometry.size.h),
+        );
+        if size.0 <= 0 || size.1 <= 0 {
+            return None;
+        }
+        self.free_place_for(id, size, at)
+    }
+
+    /// A spot for `id` at `size` near `at` that covers no other window, when `at` would:
     /// the nearest free one, else beside them all; `None` when `at` covers none.
     pub(crate) fn free_place_for(
         &self,
@@ -2122,25 +2152,15 @@ impl Core {
         Some(CanvasPoint { x, y })
     }
 
-    /// The window-geometry rects of the mapped windows of other apps than `id`'s and `parent`'s
-    /// (`window_rects_except`, less `parent` and the windows sharing either's app id; a window
-    /// without an app id is another app's).
+    /// The window-geometry rects a new window must keep off: every mapped window but `id`, its
+    /// `parent` (a dialog opens over its own parent) and windows kept on top (they float over the
+    /// view, not on the Canvas). Windows of the same app count like any other (owner, 2026-11-16:
+    /// "make all windows appear not on top of each other in any scenario"): a second Firefox
+    /// window no longer opens over the first.
     fn other_apps_rects(&self, id: ElementId, parent: ElementId) -> Vec<(i64, i64, i64, i64)> {
-        let app = |e: ElementId| {
-            self.stage
-                .meta(e)
-                .and_then(|m| m.app_id.as_deref())
-                .map(str::to_ascii_lowercase)
-        };
-        let family = [app(id), app(parent)];
         let mut out = Vec::new();
         for elem in self.stage.mapped_elements() {
-            if elem == id || elem == parent {
-                continue;
-            }
-            if let Some(a) = app(elem)
-                && family.iter().any(|f| f.as_deref() == Some(a.as_str()))
-            {
+            if elem == id || elem == parent || self.stage.is_above(elem) {
                 continue;
             }
             if let (Some(a), Some(t)) = (self.stage.anchor(elem), self.stage.tree(elem)) {
