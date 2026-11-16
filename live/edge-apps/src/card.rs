@@ -118,6 +118,10 @@ pub trait Card {
     fn show_list(&mut self) {}
     /// Called when the panel containing this card closes.
     fn panel_closed(&mut self) {}
+    /// True when the card reads `cx.now` and should redraw on minute boundaries while open.
+    fn wants_clock(&self) -> bool {
+        false
+    }
 }
 
 /// The clickable rectangles of one card in one frame, with the pointer and the keyboard's selection.
@@ -220,6 +224,8 @@ pub enum Action {
     /// these cards (words, as in a panel line) in the open panel's place until it closes: a tray
     /// app's menu and card
     ShowCards(Vec<String>),
+    /// remove this card from the panel line and save
+    RemoveCard,
 }
 
 /// The fixture's values (`INFYNITAE_EDGE_RENDER_DATA`: `key=value` lines, `\n` and `\t` escaped),

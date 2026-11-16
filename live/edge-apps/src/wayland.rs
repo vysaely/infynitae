@@ -166,8 +166,8 @@ impl OutputSurface {
     }
 
     fn apply_mode(&mut self, qh: &QueueHandle<App>, compositor: &CompositorState, shell: &Shell) {
-        let active = shell.active();
-        if !active && self.fullscreen_under {
+        let visible = shell.visible();
+        if !visible && self.fullscreen_under {
             if !self.unmapped {
                 // a null buffer unmaps a layer surface; it maps again after a commit and its configure
                 self.layer.wl_surface().attach(None, 0, 0);
@@ -193,13 +193,10 @@ impl OutputSurface {
         if !self.configured || self.width == 0 || self.height == 0 {
             return;
         }
-        self.layer.set_keyboard_interactivity(if active {
-            KeyboardInteractivity::Exclusive
-        } else {
-            KeyboardInteractivity::None
-        });
+        self.layer
+            .set_keyboard_interactivity(keyboard_interactivity(shell));
         self.set_input_region(compositor, shell);
-        if active {
+        if visible {
             self.dirty = true;
             self.mapped_closed = false;
             self.clear_pending = false;
@@ -302,7 +299,7 @@ impl OutputSurface {
     }
 
     fn render_if_needed(&mut self, qh: &QueueHandle<App>, shell: &Shell) {
-        if !self.configured || !self.dirty || self.frame_pending || !shell.active() {
+        if !self.configured || !self.dirty || self.frame_pending || !shell.visible() {
             return;
         }
         let (w, h) = (self.width as i32, self.height as i32);
@@ -319,8 +316,8 @@ impl OutputSurface {
             return;
         };
         let pad = 4;
-        let lift = if shell.open_ms.is_finite() && !shell.ask.ask.on {
-            ARRIVE_LIFT.ceil() as i32
+        let lift = if !shell.ask.ask.on && (shell.open_ms.is_finite() || shell.is_closing()) {
+            ARRIVE_LIFT.max(crate::shell::LEAVE_DROP).ceil() as i32
         } else {
             0
         };
@@ -673,7 +670,7 @@ impl App {
         if !self.shell.reload_if_changed() {
             return false;
         }
-        if self.shell.active() {
+        if self.shell.visible() {
             for os in &mut self.outputs {
                 os.dirty = true;
             }
@@ -685,6 +682,9 @@ impl App {
     fn sync_all(&mut self) {
         self.reload_config();
         self.run_actions();
+        if self.shell.open.is_some() {
+            self.shell.now = chrono::Local::now().naive_local();
+        }
         let force = self.shell.take_fetch_needed();
         self.fetch_due(force);
         for os in &mut self.outputs {
@@ -838,7 +838,7 @@ impl App {
                     self.shell.close();
                 }
                 // the shell takes these before they get here
-                Action::SetQuery(_) | Action::ShowCards(_) => {}
+                Action::SetQuery(_) | Action::ShowCards(_) | Action::RemoveCard => {}
             }
         }
         if notes_changed {
@@ -961,10 +961,12 @@ impl CompositorHandler for App {
         {
             let _ = self.reload_config();
         }
-        // an animation running (the cards arriving, a list opening, drag autoscroll): draw again
-        let animating = self.shell.open.is_some()
-            && (self.shell.tick(Instant::now()) || self.shell.wants_frame());
+        // an animation running (arrival, leaving, a list opening, drag autoscroll): draw again
+        let was_visible = self.shell.visible();
+        let animating =
+            was_visible && (self.shell.tick(Instant::now()) || self.shell.wants_frame());
         let ended = self.was_animating && !animating;
+        let closed_finished = was_visible && !self.shell.visible();
         self.was_animating = animating;
         if let Some(os) = self
             .outputs
@@ -981,8 +983,8 @@ impl CompositorHandler for App {
                 os.clear_and_commit(qh);
             }
         }
-        if ended {
-            // the panel's size settled: its input region follows
+        if ended || closed_finished {
+            // the panel's size settled or its leaving fade ended: input region / clear follows
             self.sync_all();
         }
         if let Some(pl) = self
@@ -1616,13 +1618,32 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
         app.sync_all();
     }
     while !app.exit {
+        if app.shell.hover_tick(Instant::now()) {
+            app.sync_all();
+        }
         if app.shell.open.is_some() {
-            app.shell.now = chrono::Local::now().naive_local();
+            let prev = app.shell.now;
+            let now = chrono::Local::now().naive_local();
+            app.shell.now = now;
+            if app.shell.wants_clock() && minute_key(prev) != minute_key(now) {
+                for os in &mut app.outputs {
+                    os.dirty = true;
+                    os.render_if_needed(&app.qh, &app.shell);
+                }
+            }
             app.fetch_due(false);
         }
         // while a panel is open, wake when its shortest periodic source interval is next due;
         // closed (or only once-per-open sources), nothing wakes the edge for data fetches
         let mut timeout = app.fetch_timeout(Instant::now());
+        if app.shell.open.is_some() && app.shell.wants_clock() {
+            let rem = next_minute_timeout(app.shell.now);
+            timeout = Some(timeout.map_or(rem, |t| t.min(rem)));
+        }
+        if let Some(d) = app.shell.hover_timeout(Instant::now()) {
+            let rem = d.max(Duration::from_millis(1));
+            timeout = Some(timeout.map_or(rem, |t| t.min(rem)));
+        }
         // an asker that went away (its pipe closed, or it exited): checked every 100 ms while it
         // asks. No watcher thread: a thread holding a copy of the pipe kept the asker from
         // seeing the answer's end (it reads to the end of the pipe).
@@ -1657,6 +1678,34 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
         crate::ask::answer(&mut app.shell.ask, None);
     }
     Ok(())
+}
+
+fn keyboard_interactivity(shell: &Shell) -> KeyboardInteractivity {
+    if !shell.active() {
+        KeyboardInteractivity::None
+    } else if shell.opened_by_hover
+        && !shell.clicked_inside
+        && !shell.ask.ask.on
+        && !shell.editing()
+    {
+        KeyboardInteractivity::OnDemand
+    } else {
+        KeyboardInteractivity::Exclusive
+    }
+}
+
+fn minute_key(now: chrono::NaiveDateTime) -> (chrono::NaiveDate, u32, u32) {
+    use chrono::Timelike;
+    (now.date(), now.hour(), now.minute())
+}
+
+/// Duration until just past the next minute boundary so `Local::now()` has ticked over.
+fn next_minute_timeout(now: chrono::NaiveDateTime) -> Duration {
+    use chrono::Timelike;
+    let secs_left = 59u64.saturating_sub(u64::from(now.second()));
+    let nanos_used = u64::from(now.nanosecond() % 1_000_000_000);
+    let nanos_left = 1_000_000_000u64.saturating_sub(nanos_used);
+    Duration::from_secs(secs_left) + Duration::from_nanos(nanos_left) + Duration::from_millis(5)
 }
 
 /// The notification pop-ups' surface (in place of mako): a strip down the right of the first
@@ -2278,5 +2327,92 @@ mod tests {
         assert!(sched
             .take_due(Some(0), &ids, false, t0 + Duration::from_secs(60), make)
             .is_empty());
+
+    #[test]
+    fn clock_timeout_hits_next_full_minute_and_shell_reports_wants_clock() {
+        use chrono::{NaiveDate, Timelike};
+        let d = NaiveDate::from_ymd_opt(2026, 11, 16).unwrap();
+
+        let t0 = d.and_hms_milli_opt(12, 34, 0, 0).unwrap();
+        let d0 = next_minute_timeout(t0);
+        assert_eq!(d0, Duration::from_millis(60_005));
+        assert_eq!((t0 + chrono::Duration::from_std(d0).unwrap()).minute(), 35);
+
+        let t1 = d.and_hms_milli_opt(12, 34, 30, 500).unwrap();
+        let d1 = next_minute_timeout(t1);
+        assert_eq!(d1, Duration::from_millis(29_505));
+        assert_eq!((t1 + chrono::Duration::from_std(d1).unwrap()).minute(), 35);
+
+        let t2 = d.and_hms_milli_opt(12, 34, 59, 900).unwrap();
+        let d2 = next_minute_timeout(t2);
+        assert_eq!(d2, Duration::from_millis(105));
+        assert_eq!((t2 + chrono::Duration::from_std(d2).unwrap()).minute(), 35);
+
+        // Shell reports wants_clock only when an open panel holds a clock or month card.
+        let mut sh = Shell::new(
+            crate::config::Config::from_text(
+                "PANEL_CONTROL=\"SUPER+A top right 380 calendar/clock\"\nPANEL_OTHER=\"SUPER+K top right 380 settings/power\"\n",
+            ),
+            Vec::new(),
+        );
+        assert!(!sh.wants_clock(), "closed panel needs no clock wake");
+        let ctrl = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "control")
+            .unwrap();
+        let other = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "other")
+            .unwrap();
+        assert!(sh.open_panel(ctrl, false, Instant::now()));
+        assert!(sh.wants_clock());
+        assert!(sh.open_panel(other, false, Instant::now()));
+        assert!(!sh.wants_clock());
+    }
+
+    #[test]
+    fn hover_panel_uses_ondemand_keyboard_until_clicked_inside() {
+        let mut sh = Shell::new(
+            crate::config::Config::from_text(
+                "PANEL_CONTROL=\"SUPER+A top right 380 hover settings/session\"\n",
+            ),
+            Vec::new(),
+        );
+        assert_eq!(keyboard_interactivity(&sh), KeyboardInteractivity::None);
+
+        let idx = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "control")
+            .unwrap();
+        let t0 = Instant::now();
+        assert!(sh.open_panel(idx, true, t0));
+        sh.open_ms = f64::INFINITY;
+        assert_eq!(
+            keyboard_interactivity(&sh),
+            KeyboardInteractivity::OnDemand,
+            "hover-opened panel must not steal exclusive keyboard focus"
+        );
+
+        let ((ox, oy, _, _), _) = sh.layout(idx, 1280.0, 800.0);
+        assert!(sh.click(1280.0, 800.0, ox + 10.0, oy + 10.0, Button::Left));
+        assert!(sh.clicked_inside);
+        assert_eq!(
+            keyboard_interactivity(&sh),
+            KeyboardInteractivity::Exclusive,
+            "clicking inside a hover panel promotes keyboard interactivity to Exclusive"
+        );
+
+        assert!(sh.close_at(t0));
+        assert_eq!(keyboard_interactivity(&sh), KeyboardInteractivity::None);
+
+        assert!(sh.open_panel(idx, false, t0));
+        assert_eq!(
+            keyboard_interactivity(&sh),
+            KeyboardInteractivity::Exclusive,
+            "key-opened panel takes Exclusive keyboard interactivity at once"
+        );
     }
 }
