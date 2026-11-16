@@ -500,6 +500,7 @@ pub fn choice(
 pub fn slider(cr: &Context, cx: &Cx, hits: &mut Hits, id: u32, r: Rect, part: f64) {
     let th = cx.theme;
     let lit = hits.add(id, r) || hits.selected(id);
+    hits.mark_draggable(id);
     let (bar, knob) = if lit { (6.0, 7.0) } else { (3.0, 6.0) };
     let mid = r.1 + r.3 / 2.0;
     let p = part.clamp(0.0, 1.0);

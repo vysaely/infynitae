@@ -9,7 +9,7 @@ use crate::shell::{OutputId, Shell, ARRIVE_LIFT};
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState, Region},
     delegate_compositor, delegate_keyboard, delegate_layer, delegate_output, delegate_pointer,
-    delegate_registry, delegate_seat, delegate_shm,
+    delegate_registry, delegate_seat, delegate_shm, delegate_touch,
     output::{OutputHandler, OutputState},
     reexports::{
         calloop::{
@@ -21,7 +21,7 @@ use smithay_client_toolkit::{
         client::{
             delegate_noop,
             globals::registry_queue_init,
-            protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface},
+            protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface, wl_touch},
             Connection, Dispatch, QueueHandle,
         },
         protocols::wp::{
@@ -41,8 +41,10 @@ use smithay_client_toolkit::{
     seat::{
         keyboard::{KeyEvent, KeyboardHandler, Keysym, Modifiers, RawModifiers},
         pointer::{
-            PointerEvent, PointerEventKind, PointerHandler, BTN_LEFT, BTN_MIDDLE, BTN_RIGHT,
+            AxisScroll, PointerEvent, PointerEventKind, PointerHandler, BTN_LEFT, BTN_MIDDLE,
+            BTN_RIGHT,
         },
+        touch::TouchHandler,
         Capability, SeatHandler, SeatState,
     },
     shell::{
@@ -746,6 +748,7 @@ struct App {
     fullscreen_changed: bool,
     keyboard: Option<wl_keyboard::WlKeyboard>,
     pointer: Option<wl_pointer::WlPointer>,
+    touch: Option<wl_touch::WlTouch>,
     keyboard_output: Option<OutputId>,
     current_pointer_output: Option<OutputId>,
     last_pointer_output: Option<OutputId>,
@@ -762,6 +765,8 @@ struct App {
     was_animating: bool,
     /// the notification pop-ups' strip, made with the first pop-up
     popups: Option<PopupLayer>,
+    /// active touch point on the notification pop-ups strip (id, start position)
+    popup_touch: Option<(i32, (f64, f64))>,
     /// the session bus connection serving org.freedesktop.Notifications
     notify_conn: Option<zbus::blocking::Connection>,
     /// the compositor's shell IPC socket (`$XDG_RUNTIME_DIR/infynitae/shell.sock`)
@@ -1217,6 +1222,7 @@ impl App {
             if self.keyboard_output == Some(id) {
                 self.keyboard_output = None;
             }
+            let _ = self.shell.touch_cancel_on(id);
             if self.shell.visible_output() == Some(id) {
                 self.shell.close();
             }
@@ -1405,6 +1411,7 @@ impl OutputHandler for App {
         if self.popups.as_ref().is_some_and(|p| p.output == output) {
             // the next pop-up makes the strip again, on the first screen left
             self.popups = None;
+            self.popup_touch = None;
         }
     }
 }
@@ -1414,6 +1421,7 @@ impl LayerShellHandler for App {
         self.remove_output_matching(|o| &o.layer == layer);
         if self.popups.as_ref().is_some_and(|p| &p.layer == layer) {
             self.popups = None;
+            self.popup_touch = None;
         }
     }
     fn configure(
@@ -1465,6 +1473,9 @@ impl SeatHandler for App {
         if capability == Capability::Pointer && self.pointer.is_none() {
             self.pointer = self.seat_state.get_pointer(qh, &seat).ok();
         }
+        if capability == Capability::Touch && self.touch.is_none() {
+            self.touch = self.seat_state.get_touch(qh, &seat).ok();
+        }
     }
     fn remove_capability(
         &mut self,
@@ -1483,6 +1494,15 @@ impl SeatHandler for App {
                 p.release();
             }
         }
+        if capability == Capability::Touch {
+            if let Some(t) = self.touch.take() {
+                t.release();
+            }
+            self.popup_touch = None;
+            if self.shell.touch_cancel() {
+                self.sync_all();
+            }
+        }
     }
     fn remove_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
 }
@@ -1492,8 +1512,15 @@ fn key_of(event: &KeyEvent, m: &Modifiers) -> Option<crate::shell::Key> {
     use crate::shell::Key;
     Some(match event.keysym {
         Keysym::Escape => Key::Escape,
-        Keysym::Up => Key::Up,
-        Keysym::Down => Key::Down,
+        Keysym::Up | Keysym::KP_Up => Key::Up,
+        Keysym::Down | Keysym::KP_Down => Key::Down,
+        Keysym::Left | Keysym::KP_Left => Key::Left,
+        Keysym::Right | Keysym::KP_Right => Key::Right,
+        Keysym::Home | Keysym::KP_Home => Key::Home,
+        Keysym::End | Keysym::KP_End => Key::End,
+        Keysym::Page_Up | Keysym::KP_Page_Up => Key::PageUp,
+        Keysym::Page_Down | Keysym::KP_Page_Down => Key::PageDown,
+        Keysym::Delete | Keysym::KP_Delete => Key::Delete,
         Keysym::Tab if m.shift => Key::BackTab,
         Keysym::ISO_Left_Tab => Key::BackTab,
         Keysym::Tab => Key::Tab,
@@ -1576,11 +1603,14 @@ impl KeyboardHandler for App {
         _: u32,
         event: KeyEvent,
     ) {
-        // held: arrows, Backspace and characters repeat; Escape and Enter do not
+        // held: arrows, paging, Backspace and characters repeat; Escape, Enter, Delete and Super do not
         if let Some(k) = key_of(&event, &self.modifiers).filter(|k| {
             !matches!(
                 k,
-                crate::shell::Key::Escape | crate::shell::Key::Enter | crate::shell::Key::Super(_)
+                crate::shell::Key::Escape
+                    | crate::shell::Key::Enter
+                    | crate::shell::Key::Delete
+                    | crate::shell::Key::Super(_)
             )
         }) {
             if self.shell.key(k) {
@@ -1608,6 +1638,21 @@ impl KeyboardHandler for App {
         _: u32,
     ) {
         self.modifiers = modifiers;
+    }
+}
+
+/// Converts a Wayland vertical axis event into `(pixels, notches)`.
+/// Discrete wheel events (`value120` or `discrete`) scale by 36 px per notch; continuous touchpad
+/// events pass `absolute` pixels 1:1 with `0.0` notches.
+pub(crate) fn scroll_from_axis(vertical: &AxisScroll) -> (f64, f64) {
+    if vertical.value120 != 0 {
+        let notches = f64::from(vertical.value120) / 120.0;
+        (notches * crate::card::SCROLL_NOTCH_PX, notches)
+    } else if vertical.discrete != 0 {
+        let notches = f64::from(vertical.discrete);
+        (notches * crate::card::SCROLL_NOTCH_PX, notches)
+    } else {
+        (vertical.absolute, 0.0)
     }
 }
 
@@ -1688,12 +1733,12 @@ impl PointerHandler for App {
                 }
                 PointerEventKind::Release { .. } => self.shell.release_on(os_id),
                 PointerEventKind::Axis { vertical, .. } => {
-                    let dy = if vertical.discrete != 0 {
-                        vertical.discrete as f64
+                    let (dy, notches) = scroll_from_axis(&vertical);
+                    if notches != 0.0 {
+                        self.shell.scroll_notches_on(os_id, w, h, x, y, notches)
                     } else {
-                        vertical.absolute
-                    };
-                    dy.abs() > 0.0 && self.shell.scroll_on(os_id, w, h, x, y, dy)
+                        dy.abs() > 0.0 && self.shell.scroll_on(os_id, w, h, x, y, dy)
+                    }
                 }
             };
         }
@@ -1701,6 +1746,131 @@ impl PointerHandler for App {
             self.sync_popups();
         }
         if changed || !self.shell.actions.is_empty() {
+            self.sync_all();
+        }
+    }
+}
+
+impl TouchHandler for App {
+    fn down(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_touch::WlTouch,
+        _: u32,
+        _: u32,
+        surface: wl_surface::WlSurface,
+        id: i32,
+        position: (f64, f64),
+    ) {
+        if self
+            .popups
+            .as_ref()
+            .is_some_and(|p| p.layer.wl_surface() == &surface)
+        {
+            if self.popup_touch.is_none() {
+                self.popup_touch = Some((id, position));
+            }
+            return;
+        }
+        let Some((os_id, w, h)) = self
+            .outputs
+            .iter()
+            .find(|o| o.layer.wl_surface() == &surface && o.configured)
+            .map(|o| (o.id, o.width as f64, o.height as f64))
+        else {
+            return;
+        };
+        if self
+            .shell
+            .touch_down_on(os_id, w, h, id, position.0, position.1)
+            || !self.shell.actions.is_empty()
+        {
+            self.sync_all();
+        }
+    }
+
+    fn up(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_touch::WlTouch,
+        _: u32,
+        _: u32,
+        id: i32,
+    ) {
+        if let Some((_, start)) = self.popup_touch.take().filter(|(pid, _)| *pid == id) {
+            let pop_changed = if let Some(pl) = self.popups.as_mut() {
+                use crate::notify::{hit, Hit};
+                let w = pl.width as f64;
+                let n = &mut self.shell.notify;
+                match hit(n, w, start) {
+                    Some(Hit::Dismiss(nid)) => n.dismiss(nid),
+                    Some(Hit::Action(nid, key)) => n.invoke(nid, &key),
+                    Some(Hit::Open(nid)) => n.invoke(nid, "default"),
+                    None => false,
+                }
+            } else {
+                false
+            };
+            if pop_changed {
+                self.sync_popups();
+            }
+            return;
+        }
+        if self.shell.touch_up(id) || !self.shell.actions.is_empty() {
+            self.sync_all();
+        }
+    }
+
+    fn motion(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_touch::WlTouch,
+        _: u32,
+        id: i32,
+        position: (f64, f64),
+    ) {
+        if let Some((pid, start)) = self.popup_touch {
+            if pid == id {
+                let dx = position.0 - start.0;
+                let dy = position.1 - start.1;
+                if dx * dx + dy * dy >= 64.0 {
+                    self.popup_touch = None;
+                }
+                return;
+            }
+        }
+        if self.shell.touch_motion(id, position.0, position.1) {
+            self.sync_all();
+        }
+    }
+
+    fn shape(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_touch::WlTouch,
+        _: i32,
+        _: f64,
+        _: f64,
+    ) {
+    }
+
+    fn orientation(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_touch::WlTouch,
+        _: i32,
+        _: f64,
+    ) {
+    }
+
+    fn cancel(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_touch::WlTouch) {
+        self.popup_touch = None;
+        if self.shell.touch_cancel() {
             self.sync_all();
         }
     }
@@ -1718,6 +1888,7 @@ delegate_shm!(App);
 delegate_seat!(App);
 delegate_keyboard!(App);
 delegate_pointer!(App);
+delegate_touch!(App);
 delegate_layer!(App);
 delegate_registry!(App);
 delegate_noop!(App: ignore WpViewporter);
@@ -1977,6 +2148,7 @@ fn init_app(
         fullscreen_changed: false,
         keyboard: None,
         pointer: None,
+        touch: None,
         keyboard_output: None,
         current_pointer_output: None,
         last_pointer_output: None,
@@ -1990,6 +2162,7 @@ fn init_app(
         queued: Default::default(),
         was_animating: false,
         popups: None,
+        popup_touch: None,
         notify_conn: None,
         shell_sock: None,
         shell_buf: Vec::new(),
@@ -3119,6 +3292,7 @@ mod tests {
         output_globals: HashMap<u32, u32>,
         output_obj_to_global: HashMap<u32, u32>,
         pointer_id: Option<u32>,
+        touch_id: Option<u32>,
         toplevel_mgr_id: Option<u32>,
         next_serial: u32,
         next_server_id: u32,
@@ -3282,6 +3456,7 @@ mod tests {
                 Seat,
                 Pointer,
                 Keyboard,
+                Touch,
                 Output,
                 Viewporter,
                 Viewport,
@@ -3295,7 +3470,7 @@ mod tests {
             let mut globals: Vec<(u32, &'static str, u32)> = vec![
                 (1, "wl_compositor", 6),
                 (2, "wl_shm", 1),
-                (3, "wl_seat", 7),
+                (3, "wl_seat", 8),
                 (4, "zwlr_layer_shell_v1", 4),
                 (5, "zwlr_foreign_toplevel_manager_v1", 3),
             ];
@@ -3369,7 +3544,7 @@ mod tests {
                                 "wl_seat" => {
                                     objs.insert(new_id, Obj::Seat);
                                     let mut b = Vec::new();
-                                    Self::push_u32(&mut b, 3); // pointer | keyboard
+                                    Self::push_u32(&mut b, 7); // pointer | keyboard | touch
                                     out_bytes.extend(Self::msg(new_id, 0, &b));
                                     let mut nb = Vec::new();
                                     Self::push_str(&mut nb, "seat0");
@@ -3526,6 +3701,11 @@ mod tests {
                             1 => {
                                 let kid = Self::read_u32(body, &mut off);
                                 objs.insert(kid, Obj::Keyboard);
+                            }
+                            2 => {
+                                let tid = Self::read_u32(body, &mut off);
+                                objs.insert(tid, Obj::Touch);
+                                state.lock().unwrap().touch_id = Some(tid);
                             }
                             _ => {}
                         },
@@ -3703,6 +3883,93 @@ mod tests {
             raw.extend(Self::msg(pid, 3, &rb));
             raw.extend(Self::msg(pid, 5, &[]));
             self.send_raw(raw);
+        }
+
+        fn send_pointer_axis_value120(&self, value120: i32, absolute: f64) {
+            let pid = self.state.lock().unwrap().pointer_id.unwrap();
+            let mut raw = Vec::new();
+            let mut sb = Vec::new();
+            Self::push_u32(&mut sb, 0); // wheel
+            raw.extend(Self::msg(pid, 6, &sb));
+            let mut vb = Vec::new();
+            Self::push_u32(&mut vb, 0); // vertical
+            Self::push_i32(&mut vb, value120);
+            raw.extend(Self::msg(pid, 9, &vb));
+            let mut ab = Vec::new();
+            Self::push_u32(&mut ab, 120);
+            Self::push_u32(&mut ab, 0); // vertical
+            Self::push_i32(&mut ab, (absolute * 256.0).round() as i32);
+            raw.extend(Self::msg(pid, 4, &ab));
+            raw.extend(Self::msg(pid, 5, &[]));
+            self.send_raw(raw);
+        }
+
+        fn send_pointer_axis_continuous(&self, absolute: f64) {
+            let pid = self.state.lock().unwrap().pointer_id.unwrap();
+            let mut raw = Vec::new();
+            let mut sb = Vec::new();
+            Self::push_u32(&mut sb, 1); // finger
+            raw.extend(Self::msg(pid, 6, &sb));
+            let mut ab = Vec::new();
+            Self::push_u32(&mut ab, 121);
+            Self::push_u32(&mut ab, 0); // vertical
+            Self::push_i32(&mut ab, (absolute * 256.0).round() as i32);
+            raw.extend(Self::msg(pid, 4, &ab));
+            raw.extend(Self::msg(pid, 5, &[]));
+            self.send_raw(raw);
+        }
+
+        fn send_touch_down(&self, surface_id: u32, id: i32, x: f64, y: f64) {
+            let mut st = self.state.lock().unwrap();
+            let tid = st.touch_id.unwrap();
+            st.next_serial += 1;
+            let serial = st.next_serial;
+            drop(st);
+            let mut raw = Vec::new();
+            let mut db = Vec::new();
+            Self::push_u32(&mut db, serial);
+            Self::push_u32(&mut db, 130);
+            Self::push_u32(&mut db, surface_id);
+            Self::push_i32(&mut db, id);
+            Self::push_i32(&mut db, (x * 256.0).round() as i32);
+            Self::push_i32(&mut db, (y * 256.0).round() as i32);
+            raw.extend(Self::msg(tid, 0, &db));
+            raw.extend(Self::msg(tid, 3, &[]));
+            self.send_raw(raw);
+        }
+
+        fn send_touch_motion(&self, id: i32, x: f64, y: f64) {
+            let tid = self.state.lock().unwrap().touch_id.unwrap();
+            let mut raw = Vec::new();
+            let mut mb = Vec::new();
+            Self::push_u32(&mut mb, 131);
+            Self::push_i32(&mut mb, id);
+            Self::push_i32(&mut mb, (x * 256.0).round() as i32);
+            Self::push_i32(&mut mb, (y * 256.0).round() as i32);
+            raw.extend(Self::msg(tid, 2, &mb));
+            raw.extend(Self::msg(tid, 3, &[]));
+            self.send_raw(raw);
+        }
+
+        fn send_touch_up(&self, id: i32) {
+            let mut st = self.state.lock().unwrap();
+            let tid = st.touch_id.unwrap();
+            st.next_serial += 1;
+            let serial = st.next_serial;
+            drop(st);
+            let mut raw = Vec::new();
+            let mut ub = Vec::new();
+            Self::push_u32(&mut ub, serial);
+            Self::push_u32(&mut ub, 132);
+            Self::push_i32(&mut ub, id);
+            raw.extend(Self::msg(tid, 1, &ub));
+            raw.extend(Self::msg(tid, 3, &[]));
+            self.send_raw(raw);
+        }
+
+        fn send_touch_cancel(&self) {
+            let tid = self.state.lock().unwrap().touch_id.unwrap();
+            self.send_raw(Self::msg(tid, 4, &[]));
         }
 
         fn send_focused_toplevel(&self, output_idx: u32) {
@@ -4101,5 +4368,173 @@ mod tests {
         assert!(refresh.check_open(Some(idx)).is_none());
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn scroll_from_axis_distinguishes_discrete_value120_and_touchpad_pixels() {
+        let disc = AxisScroll {
+            discrete: 1,
+            absolute: 10.0,
+            ..Default::default()
+        };
+        assert_eq!(scroll_from_axis(&disc), (36.0, 1.0));
+
+        let v120 = AxisScroll {
+            value120: 120,
+            absolute: 15.0,
+            ..Default::default()
+        };
+        assert_eq!(scroll_from_axis(&v120), (36.0, 1.0));
+
+        let half_v120 = AxisScroll {
+            value120: 60,
+            ..Default::default()
+        };
+        assert_eq!(scroll_from_axis(&half_v120), (18.0, 0.5));
+
+        let pad_small = AxisScroll {
+            absolute: 2.5,
+            ..Default::default()
+        };
+        assert_eq!(scroll_from_axis(&pad_small), (2.5, 0.0));
+
+        let pad_tiny = AxisScroll {
+            absolute: -0.5,
+            ..Default::default()
+        };
+        assert_eq!(scroll_from_axis(&pad_tiny), (-0.5, 0.0));
+    }
+
+    #[test]
+    fn key_of_maps_navigation_editing_and_delete_keys() {
+        use crate::shell::Key;
+        let mods = Modifiers::default();
+        let mk = |keysym| KeyEvent {
+            raw_code: 0,
+            keysym,
+            utf8: None,
+            time: 0,
+        };
+        assert_eq!(key_of(&mk(Keysym::Left), &mods), Some(Key::Left));
+        assert_eq!(key_of(&mk(Keysym::Right), &mods), Some(Key::Right));
+        assert_eq!(key_of(&mk(Keysym::Home), &mods), Some(Key::Home));
+        assert_eq!(key_of(&mk(Keysym::End), &mods), Some(Key::End));
+        assert_eq!(key_of(&mk(Keysym::Page_Up), &mods), Some(Key::PageUp));
+        assert_eq!(key_of(&mk(Keysym::Page_Down), &mods), Some(Key::PageDown));
+        assert_eq!(key_of(&mk(Keysym::Delete), &mods), Some(Key::Delete));
+    }
+
+    #[test]
+    fn headless_two_outputs_touch_and_axis_route_to_open_output() {
+        use crate::cards::settings_rows::ConfigData;
+        let (mock, conn) = MockWayland::start(
+            vec![
+                MockOutputSpec {
+                    width: 1920,
+                    height: 1080,
+                    scale: 1,
+                    fractional_120: 120,
+                },
+                MockOutputSpec {
+                    width: 1280,
+                    height: 320,
+                    scale: 1,
+                    fractional_120: 120,
+                },
+            ],
+            false,
+        );
+        let mut sh = Shell::new(
+            crate::config::Config::from_text(
+                "PANEL_CONTROL=\"SUPER+A top right 380 settings/power settings/input settings/session\"\n",
+            ),
+            Vec::new(),
+        );
+        sh.apply(
+            "settings",
+            "power",
+            &crate::cards::settings::parse_power("* balanced:\n  power-saver:\n  performance:\n")
+                as &dyn std::any::Any,
+        );
+        let mut input_cfg = ConfigData::default();
+        input_cfg
+            .default
+            .insert("KEYBOARD_REPEAT_DELAY".into(), "400".into());
+        sh.apply("settings", "config", &input_cfg as &dyn std::any::Any);
+
+        let (fetch_tx, _fetch_rx) = channel::channel::<Fetched>();
+        let (mut app, mut eq) = init_app(&conn, sh, fetch_tx).unwrap();
+        eq.roundtrip(&mut app).unwrap();
+        assert!(app.touch.is_some());
+
+        let sid1 = surface_wl_id(&app.outputs[0]);
+        let sid2 = surface_wl_id(&app.outputs[1]);
+        let out2_id = app.outputs[1].id;
+        assert!(app.shell.toggle_named_on(Some(out2_id), "control"));
+        app.shell.open_ms = f64::INFINITY;
+        app.shell.opened_at = None;
+        app.sync_all();
+        eq.roundtrip(&mut app).unwrap();
+
+        let pbox2 = app.shell.shown_box(1280.0, 320.0).unwrap();
+
+        // Pointer axis on Output 1 (panel is on Output 2) is ignored.
+        mock.send_pointer_move(sid1, 100.0, 100.0, true);
+        mock.send_pointer_axis_value120(120, 10.0);
+        eq.roundtrip(&mut app).unwrap();
+        assert_eq!(app.shell.panel_scroll, 0.0);
+
+        // Pointer axis on Output 2: continuous pixels 1:1, then 1 value120 notch = 36 px.
+        mock.send_pointer_move(sid2, pbox2.0 + 10.0, pbox2.1 + 10.0, true);
+        mock.send_pointer_axis_continuous(2.5);
+        eq.roundtrip(&mut app).unwrap();
+        assert!((app.shell.panel_scroll - 2.5).abs() < 1e-3);
+        mock.send_pointer_axis_value120(120, 15.0);
+        eq.roundtrip(&mut app).unwrap();
+        assert!((app.shell.panel_scroll - 38.5).abs() < 1e-3);
+
+        // Touch on Output 1 does nothing.
+        mock.send_touch_down(sid1, 0, 100.0, 100.0);
+        mock.send_touch_up(0);
+        eq.roundtrip(&mut app).unwrap();
+        assert!(app.shell.open.is_some());
+        assert!(app.shell.actions.is_empty());
+
+        // Touch tap on Output 2 ("performance" choice) triggers its command.
+        app.shell.panel_scroll = 0.0;
+        app.outputs[1].dirty = true;
+        app.sync_all();
+        eq.roundtrip(&mut app).unwrap();
+        let perf_r = app.shell.frame_hits(Some(out2_id))[0].2.list[2].1;
+        mock.send_touch_down(sid2, 1, perf_r.0 + 4.0, perf_r.1 + 4.0);
+        mock.send_touch_up(1);
+        eq.roundtrip(&mut app).unwrap();
+        assert!(
+            app.shell
+                .actions
+                .iter()
+                .any(|(a, ..)| matches!(a, Action::Run(cmd) if cmd.contains("performance")))
+                || app.queued.lock().unwrap().contains_key("settings/power")
+        );
+        app.shell.actions.clear();
+
+        // Touch drag on slider followed by cancel clears state without committing.
+        let slider_r = {
+            let hits = app.shell.frame_hits(Some(out2_id));
+            hits[1]
+                .2
+                .list
+                .iter()
+                .find(|(id, _)| hits[1].2.is_draggable(*id))
+                .expect("input slider draggable")
+                .1
+        };
+        let iy = slider_r.1 + slider_r.3 / 2.0;
+        mock.send_touch_down(sid2, 2, slider_r.0 + slider_r.2 * 0.2, iy);
+        mock.send_touch_motion(2, slider_r.0 + slider_r.2 * 0.8, iy);
+        mock.send_touch_cancel();
+        eq.roundtrip(&mut app).unwrap();
+        assert!(app.shell.actions.is_empty());
+        assert!(!app.queued.lock().unwrap().contains_key("settings/input"));
     }
 }

@@ -789,6 +789,20 @@ impl Card for InputCard {
                 self.set(i, fmt_slide(v, step), out);
                 true
             }
+            Event::Cancel { .. } => self.sliding.take().is_some(),
+            Event::Step { hit, dir } if *hit >= ROW && *dir != 0 => {
+                let i = ((*hit - ROW) / 10) as usize;
+                let part = (*hit - ROW) % 10;
+                if part != 1 || i >= TABLE.len() || !self.row_available(i) {
+                    return false;
+                }
+                let Control::Slide { min, max, step, .. } = TABLE[i].control else {
+                    return false;
+                };
+                let cur = self.value(i).trim().parse::<f64>().unwrap_or(min);
+                let next = snap(cur + f64::from(*dir) * step, min, max, step);
+                self.set(i, fmt_slide(next, step), out)
+            }
             _ => false,
         }
     }

@@ -737,6 +737,27 @@ impl Card for TableCard {
                 self.set(i, fmt_number(v), out);
                 true
             }
+            Event::Cancel { .. } => self.sliding.take().is_some(),
+            Event::Step { hit, dir } if *hit >= ROW && *dir != 0 => {
+                let i = ((*hit - ROW) / 10) as usize;
+                let part = (*hit - ROW) % 10;
+                let Some(s) = self.table.get(i).copied() else {
+                    return false;
+                };
+                match s.control {
+                    Control::Slide { min, max, step, .. } if part == 1 => {
+                        let cur = self.value(i).parse::<f64>().unwrap_or(min);
+                        let next = snap(cur + f64::from(*dir) * step, min, max, step);
+                        self.set(i, fmt_number(next), out)
+                    }
+                    Control::Step { min, max } if part == 1 || part == 2 => {
+                        let v: i64 = self.value(i).parse().unwrap_or(min);
+                        let n = (v + i64::from(*dir)).clamp(min, max);
+                        self.set(i, n.to_string(), out)
+                    }
+                    _ => false,
+                }
+            }
             _ => false,
         }
     }

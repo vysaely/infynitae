@@ -1006,18 +1006,27 @@ impl Card for PowerCard {
         );
     }
     fn event(&mut self, ev: &Event, _: &Cx, out: &mut Vec<Action>) -> bool {
-        let (
+        let Some(d) = &mut self.data else {
+            return false;
+        };
+        let mode = match ev {
             Event::Press {
                 hit,
                 button: Button::Left,
                 ..
-            },
-            Some(d),
-        ) = (ev, &mut self.data)
-        else {
-            return false;
+            } => d.modes.get(*hit as usize).cloned(),
+            Event::Step { hit, dir } if (*hit as usize) < d.modes.len() && *dir != 0 => {
+                let cur = d
+                    .modes
+                    .iter()
+                    .position(|m| *m == d.active)
+                    .unwrap_or(*hit as usize);
+                let next = (cur as isize + isize::from(*dir)).clamp(0, d.modes.len() as isize - 1);
+                d.modes.get(next as usize).cloned()
+            }
+            _ => return false,
         };
-        let Some(mode) = d.modes.get(*hit as usize).cloned() else {
+        let Some(mode) = mode else {
             return false;
         };
         if mode == d.active {

@@ -715,6 +715,7 @@ pub struct AboutCard {
     query: String,
     load_open: bool,
     load_scroll: usize,
+    load_scroll_accum: f64,
     dismissed_preview: Option<String>,
     undo_load: bool,
     loading_name: Option<String>,
@@ -1314,27 +1315,18 @@ impl Card for AboutCard {
                 self.query = (*q).to_string();
                 true
             }
-            Event::Scroll { dy, .. } => {
+            Event::Scroll { dy, notches, .. } => {
                 if !self.showing_load_list() {
                     return false;
                 }
                 let max_scroll = self.info.saved_files.len().saturating_sub(MAX_LOAD_ROWS);
-                if max_scroll == 0 {
-                    return false;
-                }
-                let cur = self.load_scroll.min(max_scroll);
-                let next = if *dy > 0.0 {
-                    (cur + 1).min(max_scroll)
-                } else if *dy < 0.0 {
-                    cur.saturating_sub(1)
-                } else {
-                    return false;
-                };
-                if next == self.load_scroll {
-                    return false;
-                }
-                self.load_scroll = next;
-                true
+                crate::card::scroll_rows(
+                    &mut self.load_scroll,
+                    &mut self.load_scroll_accum,
+                    max_scroll,
+                    *dy,
+                    *notches,
+                )
             }
             Event::Press {
                 hit,

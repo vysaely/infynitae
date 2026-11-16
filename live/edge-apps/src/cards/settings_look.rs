@@ -1190,6 +1190,7 @@ pub struct LookCard {
     pick: Option<usize>,
     list: ui::List,
     list_scroll: usize,
+    list_scroll_accum: f64,
     accent_tab: AccentTab,
     accent_hsv: (f64, f64, f64),
     accent_drag: Option<AccentDrag>,
@@ -1232,6 +1233,7 @@ impl LookCard {
             pick: None,
             list: ui::List::default(),
             list_scroll: 0,
+            list_scroll_accum: 0.0,
             accent_tab: AccentTab::Wallpaper,
             accent_hsv: (220.0, 0.50, 0.97),
             accent_drag: None,
@@ -2451,6 +2453,7 @@ fn draw_color_square(
 
 fn draw_hue_strip(cr: &Context, cx: &Cx, hits: &mut Hits, id: u32, r: Rect, hue: f64) {
     let _ = hits.add(id, r) || hits.selected(id);
+    hits.mark_draggable(id);
     let pat = cairo::LinearGradient::new(r.0, r.1, r.0 + r.2, r.1);
     let stops = [
         (0.0 / 6.0, (1.0, 0.0, 0.0)),
@@ -2484,6 +2487,7 @@ fn draw_hue_strip(cr: &Context, cx: &Cx, hits: &mut Hits, id: u32, r: Rect, hue:
 
 fn draw_sv_square(cr: &Context, cx: &Cx, hits: &mut Hits, id: u32, r: Rect, hsv: (f64, f64, f64)) {
     let _ = hits.add(id, r) || hits.selected(id);
+    hits.mark_draggable(id);
     let pure = Rgba::rgb(hsv_to_rgb(hsv.0, 1.0, 1.0));
     let _ = cr.save();
     draw::round_rect(cr, r.0, r.1, r.2, r.3, THUMB_RADIUS);
@@ -3310,7 +3314,7 @@ impl Card for LookCard {
                 }
                 true
             }
-            Event::Scroll { dy, .. } => {
+            Event::Scroll { dy, notches, .. } => {
                 let Some(i) = self.pick else {
                     return false;
                 };
@@ -3319,22 +3323,13 @@ impl Card for LookCard {
                 }
                 let total = self.list_entries(i).len();
                 let max_scroll = total.saturating_sub(MAX_LIST_ROWS);
-                if max_scroll == 0 {
-                    return false;
-                }
-                let cur = self.list_scroll.min(max_scroll);
-                let next = if *dy > 0.0 {
-                    (cur + 1).min(max_scroll)
-                } else if *dy < 0.0 {
-                    cur.saturating_sub(1)
-                } else {
-                    return false;
-                };
-                if next == self.list_scroll {
-                    return false;
-                }
-                self.list_scroll = next;
-                true
+                crate::card::scroll_rows(
+                    &mut self.list_scroll,
+                    &mut self.list_scroll_accum,
+                    max_scroll,
+                    *dy,
+                    *notches,
+                )
             }
             Event::Press {
                 hit,
@@ -3653,6 +3648,76 @@ impl Card for LookCard {
                 };
                 self.set(i, fmt_number(v), out);
                 true
+            }
+            Event::Cancel { .. } => {
+                let had_drag = self.accent_drag.take().is_some();
+                self.accent_preview = None;
+                self.sliding.take().is_some() || had_drag
+            }
+            Event::Step { hit, dir } if *dir != 0 => {
+                let hit = *hit;
+                if self.accent_picker_open() {
+                    if hit == H_TAB_WP || hit == H_TAB_ANY {
+                        let next = if *dir > 0 {
+                            AccentTab::AnyColor
+                        } else {
+                            AccentTab::Wallpaper
+                        };
+                        if next == self.accent_tab {
+                            return false;
+                        }
+                        self.accent_tab = next;
+                        self.wp_mode_open = false;
+                        if next == AccentTab::AnyColor && self.accent_preview.is_none() {
+                            self.sync_accent_hsv();
+                        }
+                        return true;
+                    }
+                    if hit == H_HUE {
+                        self.accent_hsv.0 =
+                            (self.accent_hsv.0 + f64::from(*dir) * 10.0).rem_euclid(360.0);
+                        let hex =
+                            hsv_to_hex(self.accent_hsv.0, self.accent_hsv.1, self.accent_hsv.2);
+                        self.set_accent(hex, out);
+                        return true;
+                    }
+                    if (H_SCHEME_BASE..H_SCHEME_BASE + SCHEME_OPTS.len() as u32).contains(&hit) {
+                        let cur = self.value(SCHEME_ROW);
+                        let cur_idx = SCHEME_OPTS
+                            .iter()
+                            .position(|(v, _)| v.eq_ignore_ascii_case(&cur))
+                            .unwrap_or((hit - H_SCHEME_BASE) as usize);
+                        let next = (cur_idx as isize + isize::from(*dir))
+                            .clamp(0, SCHEME_OPTS.len() as isize - 1)
+                            as usize;
+                        let (val, _) = SCHEME_OPTS[next];
+                        return self.set(SCHEME_ROW, val.to_string(), out);
+                    }
+                }
+                if !(ROW..MORE).contains(&hit) {
+                    return false;
+                }
+                let i = ((hit - ROW) / 10) as usize;
+                let part = (hit - ROW) % 10;
+                let Some(r) = self.table.get(i).copied() else {
+                    return false;
+                };
+                if !self.row_visible(&r) {
+                    return false;
+                }
+                match r.control {
+                    LookControl::Slide { min, max, step, .. } if part == 1 => {
+                        let cur = self.value(i).parse::<f64>().unwrap_or(min);
+                        let next = snap(cur + f64::from(*dir) * step, min, max, step);
+                        self.set(i, fmt_number(next), out)
+                    }
+                    LookControl::Step { min, max } if part == 1 || part == 2 => {
+                        let v: i64 = self.value(i).parse().unwrap_or(min);
+                        let n = (v + i64::from(*dir)).clamp(min, max);
+                        self.set(i, n.to_string(), out)
+                    }
+                    _ => false,
+                }
             }
             _ => false,
         }
@@ -4467,7 +4532,15 @@ mod tests {
             .map(|(_, r)| r.1 + r.3)
             .fold(0.0_f64, f64::max);
         assert!((h_list - max_bottom_l).abs() < 1.0);
-        assert!(f.event(&Event::Scroll { hit: None, dy: 1.0 }, &cx_m, &mut out));
+        assert!(f.event(
+            &Event::Scroll {
+                hit: None,
+                dy: 36.0,
+                notches: 1.0,
+            },
+            &cx_m,
+            &mut out
+        ));
         assert_eq!(f.list_scroll, 1);
 
         // When the bottom-most row's list opens and finishes animating, list box bottom sits 4 px inside height

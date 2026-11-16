@@ -87,6 +87,7 @@ enum ListItem<'a> {
 #[derive(Default)]
 pub struct WindowsCard {
     scroll: usize,
+    scroll_accum: f64,
     filter: String,
     places: Vec<Place>,
 }
@@ -437,24 +438,26 @@ impl Card for WindowsCard {
                 self.scroll = 0;
                 true
             }
-            Event::Scroll { dy, .. } => {
+            Event::Scroll { dy, notches, .. } => {
                 let total = filtered_items(cx, &self.places, &self.filter).len();
                 let max_scroll = total.saturating_sub(max_rows(cx.size));
-                if max_scroll == 0 {
-                    return false;
-                }
-                let cur = self.scroll.min(max_scroll);
-                let next = if *dy > 0.0 {
-                    (cur + 1).min(max_scroll)
-                } else if *dy < 0.0 {
-                    cur.saturating_sub(1)
-                } else {
+                crate::card::scroll_rows(
+                    &mut self.scroll,
+                    &mut self.scroll_accum,
+                    max_scroll,
+                    *dy,
+                    *notches,
+                )
+            }
+            Event::Delete { hit } => {
+                let Some((idx, _)) = decode_hit(*hit) else {
                     return false;
                 };
-                if next == self.scroll {
+                let filtered = filtered_items(cx, &self.places, &self.filter);
+                let Some(ListItem::Window(win, _)) = filtered.get(idx) else {
                     return false;
-                }
-                self.scroll = next;
+                };
+                out.push(Action::CloseWindow(win.id));
                 true
             }
             Event::Press { hit, button, .. } => {
@@ -489,7 +492,10 @@ impl Card for WindowsCard {
                 activate_item(first, out);
                 true
             }
-            Event::Drag { .. } | Event::Release { .. } => false,
+            Event::Drag { .. }
+            | Event::Release { .. }
+            | Event::Cancel { .. }
+            | Event::Step { .. } => false,
         }
     }
 }
@@ -811,13 +817,22 @@ mod tests {
         assert!(!c.event(
             &Event::Scroll {
                 hit: None,
-                dy: -1.0
+                dy: -36.0,
+                notches: -1.0,
             },
             &cx_m,
             &mut out
         ));
         // Scroll down advances to offset 1 (windows 2..8).
-        assert!(c.event(&Event::Scroll { hit: None, dy: 1.0 }, &cx_m, &mut out));
+        assert!(c.event(
+            &Event::Scroll {
+                hit: None,
+                dy: 36.0,
+                notches: 1.0,
+            },
+            &cx_m,
+            &mut out
+        ));
         assert_eq!(c.scroll, 1);
         let (_, hits) = draw_card(&c, &cx_m, None);
         // First visible row hit belongs to filtered index 1 (Window id 2).
@@ -837,14 +852,46 @@ mod tests {
         assert!(c.event(&Event::Text("Win 14"), &cx_m, &mut out));
         assert_eq!(c.scroll, 0);
         // Only 1 window matches -> scroll is a no-op.
-        assert!(!c.event(&Event::Scroll { hit: None, dy: 1.0 }, &cx_m, &mut out));
+        assert!(!c.event(
+            &Event::Scroll {
+                hit: None,
+                dy: 36.0,
+                notches: 1.0,
+            },
+            &cx_m,
+            &mut out
+        ));
 
         // Size::L holds 12 rows -> 14 windows give max_scroll = 2.
         assert!(c.event(&Event::Text(""), &cx_m, &mut out));
         let cx_l = make_cx(Size::L, &[], &windows, &th);
-        assert!(c.event(&Event::Scroll { hit: None, dy: 1.0 }, &cx_l, &mut out));
-        assert!(c.event(&Event::Scroll { hit: None, dy: 1.0 }, &cx_l, &mut out));
-        assert!(!c.event(&Event::Scroll { hit: None, dy: 1.0 }, &cx_l, &mut out));
+        assert!(c.event(
+            &Event::Scroll {
+                hit: None,
+                dy: 36.0,
+                notches: 1.0,
+            },
+            &cx_l,
+            &mut out
+        ));
+        assert!(c.event(
+            &Event::Scroll {
+                hit: None,
+                dy: 36.0,
+                notches: 1.0,
+            },
+            &cx_l,
+            &mut out
+        ));
+        assert!(!c.event(
+            &Event::Scroll {
+                hit: None,
+                dy: 36.0,
+                notches: 1.0,
+            },
+            &cx_l,
+            &mut out
+        ));
         assert_eq!(c.scroll, 2);
     }
 

@@ -792,6 +792,7 @@ pub struct MusicCard {
     /// Remembers the most recently playing bus for `music/playing` when all players pause.
     pub last_playing_bus: Option<String>,
     pub queue_scroll: usize,
+    queue_scroll_accum: f64,
     pub pending_seek_us: Option<i64>,
     dragging_seek: bool,
     seek_rect: Cell<Option<Rect>>,
@@ -1021,21 +1022,38 @@ impl Card for MusicCard {
         }
 
         match ev {
-            Event::Scroll { dy, .. } if cx.size == Size::L => {
+            Event::Scroll { dy, notches, .. } if cx.size == Size::L => {
                 let len = self.player(cx).map_or(0, |p| p.queue.len());
                 let max_scroll = len.saturating_sub(MAX_QUEUE_VISIBLE);
-                if max_scroll == 0 {
+                crate::card::scroll_rows(
+                    &mut self.queue_scroll,
+                    &mut self.queue_scroll_accum,
+                    max_scroll,
+                    *dy,
+                    *notches,
+                )
+            }
+            Event::Step { hit, dir } if *hit == H_SEEK => {
+                let Some(p) = self.player_mut(cx) else {
+                    return false;
+                };
+                if p.duration_us <= 0 || *dir == 0 {
                     return false;
                 }
-                if *dy > 0.0 && self.queue_scroll < max_scroll {
-                    self.queue_scroll += 1;
-                    return true;
+                let next = (p.position_us + i64::from(*dir) * 5_000_000).clamp(0, p.duration_us);
+                if next == p.position_us {
+                    return false;
                 }
-                if *dy < 0.0 && self.queue_scroll > 0 {
-                    self.queue_scroll -= 1;
-                    return true;
+                p.position_us = next;
+                if !p.bus_name.is_empty() {
+                    out.push(Action::Run(cmd_seek(&p.bus_name, &p.track_id, next)));
                 }
-                false
+                self.pending_seek_us = Some(next);
+                true
+            }
+            Event::Cancel { hit } if *hit == H_SEEK => {
+                self.pending_seek_us = None;
+                std::mem::take(&mut self.dragging_seek)
             }
             Event::Drag { hit, at } if *hit == H_SEEK => {
                 let r = self.seek_rect.get().unwrap_or((18.0, 0.0, 344.0, 18.0));
@@ -2513,16 +2531,41 @@ mod tests {
         let cx_l = test_cx(&th, Size::L, None);
         let h_before = card.height(&cx_l, 360.0);
         let mut out = Vec::new();
-        assert!(card.event(&Event::Scroll { hit: None, dy: 1.0 }, &cx_l, &mut out));
-        assert_eq!(card.queue_scroll, 1);
-        assert_eq!(card.height(&cx_l, 360.0), h_before);
-        assert!(card.event(&Event::Scroll { hit: None, dy: 1.0 }, &cx_l, &mut out));
-        assert_eq!(card.queue_scroll, 2);
-        assert!(!card.event(&Event::Scroll { hit: None, dy: 1.0 }, &cx_l, &mut out));
         assert!(card.event(
             &Event::Scroll {
                 hit: None,
-                dy: -1.0
+                dy: 36.0,
+                notches: 1.0,
+            },
+            &cx_l,
+            &mut out
+        ));
+        assert_eq!(card.queue_scroll, 1);
+        assert_eq!(card.height(&cx_l, 360.0), h_before);
+        assert!(card.event(
+            &Event::Scroll {
+                hit: None,
+                dy: 36.0,
+                notches: 1.0,
+            },
+            &cx_l,
+            &mut out
+        ));
+        assert_eq!(card.queue_scroll, 2);
+        assert!(!card.event(
+            &Event::Scroll {
+                hit: None,
+                dy: 36.0,
+                notches: 1.0,
+            },
+            &cx_l,
+            &mut out
+        ));
+        assert!(card.event(
+            &Event::Scroll {
+                hit: None,
+                dy: -36.0,
+                notches: -1.0,
             },
             &cx_l,
             &mut out

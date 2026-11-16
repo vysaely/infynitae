@@ -963,6 +963,7 @@ pub struct DisplayCard {
     sliding: Option<i32>,
     pending_night_light: Option<i32>,
     sliders: RefCell<Vec<(u32, Rect)>>,
+    scroll_accum: f64,
 }
 
 impl Default for DisplayCard {
@@ -985,6 +986,7 @@ impl DisplayCard {
             sliding: None,
             pending_night_light: None,
             sliders: RefCell::new(Vec::new()),
+            scroll_accum: 0.0,
         }
     }
 
@@ -1885,7 +1887,8 @@ impl Card for DisplayCard {
                 }
                 true
             }
-            Event::Scroll { hit, dy } => {
+            Event::Cancel { .. } => self.sliding.take().is_some(),
+            Event::Scroll { hit, dy, notches } => {
                 let Some(hid) = hit else { return false };
                 if *hid < H_ROW_BASE {
                     return false;
@@ -1904,8 +1907,50 @@ impl Card for DisplayCard {
                 else {
                     return false;
                 };
-                let delta = if *dy < 0.0 { step } else { -step };
-                let next = (value + delta).clamp(min, max);
+                let dir = if *notches != 0.0 { *notches } else { *dy };
+                if !((dir < 0.0 && value < max) || (dir > 0.0 && value > min)) {
+                    self.scroll_accum = 0.0;
+                    return false;
+                }
+                let steps = crate::card::scroll_steps(
+                    &mut self.scroll_accum,
+                    *dy,
+                    *notches,
+                    crate::card::SCROLL_NOTCH_PX,
+                );
+                if steps == 0 {
+                    return true;
+                }
+                let next = (value - steps as i32 * step).clamp(min, max);
+                if next == value {
+                    return false;
+                }
+                let old_opt = (!row.old_cfg.is_empty()).then_some(row.old_cfg.as_str());
+                self.pending_night_light = Some(next);
+                out.push(Action::Run(change_command(
+                    TABLE[1].key,
+                    old_opt,
+                    &next.to_string(),
+                    TABLE[1].after,
+                )));
+                true
+            }
+            Event::Step { hit, dir } if *hit >= H_ROW_BASE && *dir != 0 => {
+                let idx = (*hit - H_ROW_BASE) as usize;
+                let Some(row) = rows.get(idx) else {
+                    return false;
+                };
+                let RowAction::Slide {
+                    min,
+                    max,
+                    step,
+                    value,
+                    ..
+                } = row.action
+                else {
+                    return false;
+                };
+                let next = (value + i32::from(*dir) * step).clamp(min, max);
                 if next == value {
                     return false;
                 }
@@ -2547,7 +2592,8 @@ mod tests {
         assert!(card.event(
             &Event::Scroll {
                 hit: Some(nl_hit),
-                dy: 1.0
+                dy: 36.0,
+                notches: 1.0,
             },
             &cx_m,
             &mut out
