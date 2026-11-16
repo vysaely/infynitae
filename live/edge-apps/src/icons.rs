@@ -552,6 +552,31 @@ pub fn image_surface_from_decoded(img: &DecodedImage) -> Option<cairo::ImageSurf
     Some(surf)
 }
 
+thread_local! {
+    static DECODED_SURFACES: RefCell<HashMap<usize, (Arc<DecodedImage>, cairo::ImageSurface)>> =
+        RefCell::new(HashMap::new());
+}
+
+/// Converts and caches a `DecodedImage` as a Cairo `ImageSurface` on the draw thread, keyed by
+/// the `Arc` allocation pointer so identical decoded bitmaps are copied at most once.
+pub fn surface_for_decoded(img: &Arc<DecodedImage>) -> Option<cairo::ImageSurface> {
+    let key = Arc::as_ptr(img) as usize;
+    DECODED_SURFACES.with(|cache| {
+        let mut map = cache.borrow_mut();
+        if let Some((held, surf)) = map.get(&key) {
+            if Arc::ptr_eq(held, img) {
+                return Some(surf.clone());
+            }
+        }
+        let surf = image_surface_from_decoded(img)?;
+        if map.len() >= 256 {
+            map.clear();
+        }
+        map.insert(key, (Arc::clone(img), surf.clone()));
+        Some(surf)
+    })
+}
+
 /// Loads an image file scaled to at most `size` x `size` through `gdk-pixbuf` into an ARGB32
 /// Cairo surface.
 pub fn load_pixbuf_surface(path: &Path, size: i32) -> Option<cairo::ImageSurface> {
