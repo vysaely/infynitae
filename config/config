@@ -595,6 +595,11 @@ TRAY_CARD="menu"
     # default: menu
     # options: menu  · menu-first (its menu, then its card)  · card-first
 
+MONITOR_LOG_DIR=""
+    # Folder of lab*.log files shown by the System monitor GPU card; empty reads none [use]
+    # default: ""
+    # options: ""  · a folder path
+
 NOTIFICATIONS="auto"
     # Who shows notifications [reload]: the edge's own pop-ups (top right, in the system's
     # look; held back during games and Do not disturb, still listed in the Notifications card)

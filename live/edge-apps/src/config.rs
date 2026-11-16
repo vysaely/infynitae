@@ -555,6 +555,27 @@ pub struct Config {
     pub opacity: f64,
     /// SWITCH_LOOK
     pub switch_look: String,
+    /// MONITOR_LOG_DIR: optional folder of lab*.log files for the System monitor GPU card
+    pub monitor_log_dir: Option<PathBuf>,
+}
+
+pub fn expand_home_path(raw: &str) -> PathBuf {
+    let trimmed = raw.trim();
+    if let Some(home) = std::env::var_os("HOME").filter(|h| !h.is_empty()) {
+        let base = PathBuf::from(home);
+        for prefix in ["$HOME", "${HOME}", "~"] {
+            if trimmed == prefix {
+                return base;
+            }
+            if let Some(rest) = trimmed
+                .strip_prefix(prefix)
+                .and_then(|s| s.strip_prefix('/'))
+            {
+                return base.join(rest);
+            }
+        }
+    }
+    PathBuf::from(trimmed)
 }
 
 pub fn config_path() -> PathBuf {
@@ -605,6 +626,7 @@ impl Config {
             tray_card: "menu".into(),
             opacity: 0.90, // 90 % until CARD_BLUR exists: 70 % without blur reads as see-through
             switch_look: "rows".into(),
+            monitor_log_dir: None,
         };
         let mut ctrl = vec![
             Module::Clock,
@@ -694,6 +716,11 @@ impl Config {
                     }
                 }
                 "SWITCH_LOOK" => c.switch_look = value_text(v).to_ascii_lowercase(),
+                "MONITOR_LOG_DIR" => {
+                    let t = value_text(v);
+                    let t = t.trim();
+                    c.monitor_log_dir = (!t.is_empty()).then(|| expand_home_path(t));
+                }
                 "CONTROL_MODULES" => {
                     // the control panel's modules before PANEL_CONTROL; "apps" there was the tray
                     let t = value_text(v);

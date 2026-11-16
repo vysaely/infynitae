@@ -144,6 +144,10 @@ impl Source for ConfigSource {
             programs,
         })
     }
+
+    fn every(&self) -> Option<std::time::Duration> {
+        None
+    }
 }
 
 /// The command a change runs: the old value logged (Undo reads it), the new one set, then the
@@ -204,6 +208,7 @@ pub const FILE_ONLY: &[&str] = &[
     "MENU_PICKER",
     "CONTROL_MENU",
     "TRAY_CARD",
+    "MONITOR_LOG_DIR",
     "NOTIFICATIONS",
     "ENABLE_EDGE",
     "EDGE_IMPL",
