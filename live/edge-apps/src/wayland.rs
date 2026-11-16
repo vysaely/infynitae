@@ -193,11 +193,8 @@ impl OutputSurface {
         if !self.configured || self.width == 0 || self.height == 0 {
             return;
         }
-        self.layer.set_keyboard_interactivity(if active {
-            KeyboardInteractivity::Exclusive
-        } else {
-            KeyboardInteractivity::None
-        });
+        self.layer
+            .set_keyboard_interactivity(keyboard_interactivity(shell));
         self.set_input_region(compositor, shell);
         if active {
             self.dirty = true;
@@ -1532,6 +1529,9 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
         app.sync_all();
     }
     while !app.exit {
+        if app.shell.hover_tick(Instant::now()) {
+            app.sync_all();
+        }
         if app.shell.open.is_some() {
             let prev = app.shell.now;
             let now = chrono::Local::now().naive_local();
@@ -1549,6 +1549,10 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
         let mut timeout = app.fetch_timeout(Instant::now());
         if app.shell.open.is_some() && app.shell.wants_clock() {
             let rem = next_minute_timeout(app.shell.now);
+            timeout = Some(timeout.map_or(rem, |t| t.min(rem)));
+        }
+        if let Some(d) = app.shell.hover_timeout(Instant::now()) {
+            let rem = d.max(Duration::from_millis(1));
             timeout = Some(timeout.map_or(rem, |t| t.min(rem)));
         }
         // an asker that went away (its pipe closed, or it exited): checked every 100 ms while it
@@ -1585,6 +1589,20 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
         crate::ask::answer(&mut app.shell.ask, None);
     }
     Ok(())
+}
+
+fn keyboard_interactivity(shell: &Shell) -> KeyboardInteractivity {
+    if !shell.active() {
+        KeyboardInteractivity::None
+    } else if shell.opened_by_hover
+        && !shell.clicked_inside
+        && !shell.ask.ask.on
+        && !shell.editing()
+    {
+        KeyboardInteractivity::OnDemand
+    } else {
+        KeyboardInteractivity::Exclusive
+    }
 }
 
 fn minute_key(now: chrono::NaiveDateTime) -> (chrono::NaiveDate, u32, u32) {
@@ -2093,5 +2111,49 @@ mod tests {
         assert!(sh.wants_clock());
         assert!(sh.open_panel(other, false, Instant::now()));
         assert!(!sh.wants_clock());
+    }
+
+    #[test]
+    fn hover_panel_uses_ondemand_keyboard_until_clicked_inside() {
+        let mut sh = Shell::new(
+            crate::config::Config::from_text(
+                "PANEL_CONTROL=\"SUPER+A top right 380 hover settings/session\"\n",
+            ),
+            Vec::new(),
+        );
+        assert_eq!(keyboard_interactivity(&sh), KeyboardInteractivity::None);
+
+        let idx = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "control")
+            .unwrap();
+        let t0 = Instant::now();
+        assert!(sh.open_panel(idx, true, t0));
+        sh.open_ms = f64::INFINITY;
+        assert_eq!(
+            keyboard_interactivity(&sh),
+            KeyboardInteractivity::OnDemand,
+            "hover-opened panel must not steal exclusive keyboard focus"
+        );
+
+        let ((ox, oy, _, _), _) = sh.layout(idx, 1280.0, 800.0);
+        assert!(sh.click(1280.0, 800.0, ox + 10.0, oy + 10.0, Button::Left));
+        assert!(sh.clicked_inside);
+        assert_eq!(
+            keyboard_interactivity(&sh),
+            KeyboardInteractivity::Exclusive,
+            "clicking inside a hover panel promotes keyboard interactivity to Exclusive"
+        );
+
+        assert!(sh.close_at(t0));
+        assert_eq!(keyboard_interactivity(&sh), KeyboardInteractivity::None);
+
+        assert!(sh.open_panel(idx, false, t0));
+        assert_eq!(
+            keyboard_interactivity(&sh),
+            KeyboardInteractivity::Exclusive,
+            "key-opened panel takes Exclusive keyboard interactivity at once"
+        );
     }
 }

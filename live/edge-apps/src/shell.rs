@@ -24,6 +24,9 @@ pub const ARRIVE_MS: f64 = 200.0;
 pub const ARRIVE_STAGGER_MS: f64 = 28.0;
 pub const ARRIVE_LIFT: f64 = 14.0;
 const ARRIVE_CARDS: f64 = 8.0;
+/// Pointer dwell before opening a hover panel, and grace before closing when left.
+pub const HOVER_OPEN_MS: f64 = 120.0;
+pub const HOVER_CLOSE_MS: f64 = 250.0;
 
 /// A card in a panel: its word, provider, kind, the card itself, the app it comes from.
 pub struct Placed {
@@ -111,6 +114,9 @@ pub struct Shell {
     pub panels: Vec<PanelState>,
     pub open: Option<usize>,
     pub opened_by_hover: bool,
+    pub clicked_inside: bool,
+    hover_open: Option<(usize, Instant)>,
+    hover_close: Option<Instant>,
     /// the pointer, in surface pixels, and the card and hit under it in the last frame
     pub pointer: Option<(f64, f64)>,
     pub hovered: Option<(usize, u32)>,
@@ -188,6 +194,9 @@ impl Shell {
             panels,
             open: None,
             opened_by_hover: false,
+            clicked_inside: false,
+            hover_open: None,
+            hover_close: None,
             pointer: None,
             hovered: None,
             pressed: None,
@@ -492,6 +501,9 @@ impl Shell {
             return false;
         }
         self.opened_by_hover = false;
+        self.clicked_inside = false;
+        self.hover_open = None;
+        self.hover_close = None;
         self.hovered = None;
         self.pressed = None;
         self.keyboard = false;
@@ -727,7 +739,7 @@ impl Shell {
             crate::ask::answer(&mut self.ask, None);
         }
         if self.open == Some(idx) {
-            return if by_hover { false } else { self.close() };
+            return if by_hover { false } else { self.close_at(now) };
         }
         if self.editing() {
             self.cancel_edit();
@@ -736,6 +748,9 @@ impl Shell {
         self.panel_scroll = 0.0;
         self.reset_keys(idx);
         self.opened_by_hover = by_hover;
+        self.clicked_inside = false;
+        self.hover_open = None;
+        self.hover_close = None;
         self.opened_at = Some(now);
         self.open_ms = 0.0;
         self.hovered = None;
@@ -751,6 +766,10 @@ impl Shell {
     }
 
     pub fn close(&mut self) -> bool {
+        self.close_at(Instant::now())
+    }
+
+    pub fn close_at(&mut self, _now: Instant) -> bool {
         if self.editing() {
             self.cancel_edit();
         }
@@ -771,6 +790,9 @@ impl Shell {
         self.selected = None;
         self.keyboard = false;
         self.opened_by_hover = false;
+        self.clicked_inside = false;
+        self.hover_open = None;
+        self.hover_close = None;
         self.hovered = None;
         self.pressed = None;
         self.pointer = None;
@@ -832,9 +854,14 @@ impl Shell {
             .map(|(i, _, _)| *i)
     }
 
-    /// The pointer moved: a hover panel opens from its strip and closes when left; the light follows
-    /// the hit under it; a held button drags. True when something must be drawn again.
+    /// The pointer moved: a hover panel opens from its strip after a short dwell and closes after
+    /// a grace time when left; the light follows the hit under it; a held button drags. True when
+    /// something must be drawn again.
     pub fn pointer_motion(&mut self, w: f64, h: f64, x: f64, y: f64) -> bool {
+        self.pointer_motion_at(w, h, x, y, Instant::now())
+    }
+
+    pub fn pointer_motion_at(&mut self, w: f64, h: f64, x: f64, y: f64, now: Instant) -> bool {
         self.last_screen = (w, h);
         if self.ask.ask.on {
             return crate::ask::hover(&mut self.ask, w, h, x, y);
@@ -842,13 +869,27 @@ impl Shell {
         // the pointer moved: the keyboard's selection hides (the light follows the pointer)
         let hid = std::mem::take(&mut self.keyboard);
         let Some(idx) = self.open else {
-            for i in 0..self.panels.len() {
-                if self.panels[i].panel.hover {
-                    let s = self.hover_strip(i, w, h);
-                    if x >= s.0 && x <= s.0 + s.2 && y >= s.1 && y <= s.1 + s.3 {
-                        return self.open_panel(i, true, Instant::now());
-                    }
+            let hit_strip = (0..self.panels.len()).find(|&i| {
+                if !self.panels[i].panel.hover {
+                    return false;
                 }
+                let s = self.hover_strip(i, w, h);
+                x >= s.0 && x <= s.0 + s.2 && y >= s.1 && y <= s.1 + s.3
+            });
+            if let Some(i) = hit_strip {
+                match self.hover_open {
+                    Some((prev, t0)) if prev == i => {
+                        if now.saturating_duration_since(t0).as_secs_f64() * 1000.0
+                            >= HOVER_OPEN_MS
+                        {
+                            self.hover_open = None;
+                            return self.open_panel(i, true, now);
+                        }
+                    }
+                    _ => self.hover_open = Some((i, now)),
+                }
+            } else {
+                self.hover_open = None;
             }
             return false;
         };
@@ -885,32 +926,88 @@ impl Shell {
         if self.opened_by_hover {
             let b = self.hover_box(idx, w, h);
             if x < b.0 || x > b.0 + b.2 || y < b.1 || y > b.1 + b.3 {
-                return self.close();
+                self.hover_close.get_or_insert(now);
+                self.pointer = None;
+                let lit = self.hovered.take().is_some();
+                return lit || hid;
             }
+            self.hover_close = None;
         }
         self.pointer = Some((x, y));
         if let Some((ci, hit)) = self.pressed {
             return self.card_event(idx, ci, &Event::Drag { hit, at: (x, y) });
         }
-        let now = self.hit_at((x, y));
-        let changed = now != self.hovered;
-        self.hovered = now;
+        let hit_now = self.hit_at((x, y));
+        let changed = hit_now != self.hovered;
+        self.hovered = hit_now;
         changed || hid
     }
 
     pub fn pointer_leave(&mut self) -> bool {
+        self.pointer_leave_at(Instant::now())
+    }
+
+    pub fn pointer_leave_at(&mut self, now: Instant) -> bool {
         if self.ask.ask.on {
             return false;
         }
         self.pointer = None;
+        self.hover_open = None;
         if self.editing() {
             return self.edit.hover_card.take().is_some();
         }
         let lit = self.hovered.take().is_some();
         if self.opened_by_hover && self.open.is_some() {
-            return self.close();
+            self.hover_close.get_or_insert(now);
+            return lit;
         }
         lit
+    }
+
+    /// Advances hover dwell / close grace timers; returns true if a panel opened or closed.
+    pub fn hover_tick(&mut self, now: Instant) -> bool {
+        if self.ask.ask.on || self.editing() {
+            self.hover_open = None;
+            self.hover_close = None;
+            return false;
+        }
+        if self.open.is_none() {
+            if let Some((i, t0)) = self.hover_open {
+                if now.saturating_duration_since(t0).as_secs_f64() * 1000.0 >= HOVER_OPEN_MS {
+                    self.hover_open = None;
+                    return self.open_panel(i, true, now);
+                }
+            }
+            return false;
+        }
+        if self.opened_by_hover {
+            if let Some(t0) = self.hover_close {
+                if now.saturating_duration_since(t0).as_secs_f64() * 1000.0 >= HOVER_CLOSE_MS {
+                    self.hover_close = None;
+                    return self.close_at(now);
+                }
+            }
+        }
+        false
+    }
+
+    pub fn hover_timeout(&self, now: Instant) -> Option<std::time::Duration> {
+        if self.ask.ask.on || self.editing() {
+            return None;
+        }
+        if self.open.is_none() {
+            self.hover_open.map(|(_, t0)| {
+                std::time::Duration::from_secs_f64(HOVER_OPEN_MS / 1000.0)
+                    .saturating_sub(now.saturating_duration_since(t0))
+            })
+        } else if self.opened_by_hover {
+            self.hover_close.map(|t0| {
+                std::time::Duration::from_secs_f64(HOVER_CLOSE_MS / 1000.0)
+                    .saturating_sub(now.saturating_duration_since(t0))
+            })
+        } else {
+            None
+        }
     }
 
     fn edit_press(&mut self, idx: usize, w: f64, h: f64, x: f64, y: f64, button: Button) -> bool {
@@ -1121,11 +1218,13 @@ impl Shell {
         if x < ox || x > ox + pw || y < oy || y > oy + ph {
             return self.close();
         }
+        self.hover_close = None;
+        let promoted = self.opened_by_hover && !std::mem::replace(&mut self.clicked_inside, true);
         let Some((ci, hit)) = self.hit_at((x, y)) else {
             if button == Button::Right {
-                return self.offer_edit(idx, x, y);
+                return self.offer_edit(idx, x, y) || promoted;
             }
-            return false;
+            return promoted;
         };
         if button == Button::Left {
             self.pressed = Some((ci, hit));
@@ -1140,9 +1239,9 @@ impl Shell {
             },
         );
         if !used && button == Button::Right && self.open == Some(idx) {
-            return self.offer_edit(idx, x, y);
+            return self.offer_edit(idx, x, y) || promoted;
         }
-        used
+        used || promoted
     }
 
     pub fn release(&mut self) -> bool {
@@ -2231,13 +2330,83 @@ mod tests {
             .position(|p| p.panel.name == "control")
             .unwrap();
         let s = sh.hover_strip(idx, 1920.0, 1080.0);
-        assert!(sh.pointer_motion(1920.0, 1080.0, s.0 + 10.0, s.1 + 1.0));
+        let t0 = Instant::now();
+        assert!(!sh.pointer_motion_at(1920.0, 1080.0, s.0 + 10.0, s.1 + 1.0, t0));
+        assert!(sh.open.is_none());
+        let t1 = t0 + std::time::Duration::from_millis(HOVER_OPEN_MS as u64);
+        assert!(sh.hover_tick(t1));
         assert_eq!(sh.open, Some(idx));
         assert!(sh.opened_by_hover);
+        assert!(!sh.pointer_motion_at(1920.0, 1080.0, 100.0, 100.0, t1));
+        assert_eq!(sh.open, Some(idx));
         assert!(
-            sh.pointer_motion(1920.0, 1080.0, 100.0, 100.0),
-            "left: closed"
+            sh.hover_tick(t1 + std::time::Duration::from_millis(HOVER_CLOSE_MS as u64)),
+            "left past grace: closed"
         );
+        assert!(sh.open.is_none());
+    }
+
+    #[test]
+    fn hover_dwell_ignores_fast_pass_and_grace_cancels_on_reentry() {
+        let mut sh = shell("SUPER+A bottom right 380 hover settings/power");
+        let idx = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "control")
+            .unwrap();
+        let s = sh.hover_strip(idx, 1920.0, 1080.0);
+        let t0 = Instant::now();
+
+        // Fast pass through the 2 px strip (leaves within 40 ms) does not open.
+        assert!(!sh.pointer_motion_at(1920.0, 1080.0, s.0 + 10.0, s.1 + 1.0, t0));
+        assert!(sh.hover_timeout(t0).is_some());
+        assert!(!sh.hover_tick(t0 + std::time::Duration::from_millis(40)));
+        assert!(!sh.pointer_motion_at(
+            1920.0,
+            1080.0,
+            s.0 + 10.0,
+            s.1 - 20.0,
+            t0 + std::time::Duration::from_millis(50)
+        ));
+        assert!(sh.hover_timeout(t0 + std::time::Duration::from_millis(50)).is_none());
+        assert!(!sh.hover_tick(t0 + std::time::Duration::from_millis(300)));
+        assert!(sh.open.is_none());
+
+        // Leaving via pointer_leave_at while dwelling also cancels opening.
+        let t_enter = t0 + std::time::Duration::from_millis(400);
+        sh.pointer_motion_at(1920.0, 1080.0, s.0 + 10.0, s.1 + 1.0, t_enter);
+        sh.pointer_leave_at(t_enter + std::time::Duration::from_millis(30));
+        assert!(!sh.hover_tick(t_enter + std::time::Duration::from_millis(200)));
+        assert!(sh.open.is_none());
+
+        // Resting in the strip for HOVER_OPEN_MS opens it.
+        let t_dwell = t_enter + std::time::Duration::from_millis(300);
+        sh.pointer_motion_at(1920.0, 1080.0, s.0 + 10.0, s.1 + 1.0, t_dwell);
+        assert!(!sh.hover_tick(t_dwell + std::time::Duration::from_millis(119)));
+        assert!(sh.hover_tick(t_dwell + std::time::Duration::from_millis(120)));
+        assert_eq!(sh.open, Some(idx));
+
+        // Leave the hover box, then return within HOVER_CLOSE_MS: stays open.
+        let t_out = t_dwell + std::time::Duration::from_millis(200);
+        let b = sh.hover_box(idx, 1920.0, 1080.0);
+        sh.pointer_motion_at(1920.0, 1080.0, 50.0, 50.0, t_out);
+        assert!(!sh.hover_tick(t_out + std::time::Duration::from_millis(200)));
+        assert_eq!(sh.open, Some(idx));
+        sh.pointer_motion_at(
+            1920.0,
+            1080.0,
+            b.0 + 10.0,
+            b.1 + 10.0,
+            t_out + std::time::Duration::from_millis(210),
+        );
+        assert!(!sh.hover_tick(t_out + std::time::Duration::from_millis(500)));
+        assert_eq!(sh.open, Some(idx));
+
+        // Leave again (via pointer_leave_at) and stay out past HOVER_CLOSE_MS: closes.
+        let t_leave = t_out + std::time::Duration::from_millis(600);
+        sh.pointer_leave_at(t_leave);
+        assert!(!sh.hover_tick(t_leave + std::time::Duration::from_millis(249)));
+        assert!(sh.hover_tick(t_leave + std::time::Duration::from_millis(250)));
         assert!(sh.open.is_none());
     }
 
@@ -2310,7 +2479,9 @@ mod tests {
             .position(|p| p.panel.name == "control")
             .unwrap();
         let strip = sh.hover_strip(idx, 1920.0, 1080.0);
-        assert!(sh.pointer_motion(1920.0, 1080.0, strip.0 + 10.0, strip.1 + 1.0));
+        let t0 = Instant::now();
+        assert!(!sh.pointer_motion_at(1920.0, 1080.0, strip.0 + 10.0, strip.1 + 1.0, t0));
+        assert!(sh.hover_tick(t0 + std::time::Duration::from_millis(HOVER_OPEN_MS as u64)));
         assert!(sh.opened_by_hover);
         sh.open_ms = f64::INFINITY;
         let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 1920, 1080).unwrap();
