@@ -124,22 +124,24 @@ fn readable(fg: Rgba, bg: Rgba, toward: Rgba) -> Rgba {
 
 /// Alert colour derived from the theme's card polarity and text tint, readable at 4.5:1 on card and
 /// kept visually separate from `accent`.
-fn theme_alert(card: Rgba, text: Rgba, accent: Rgba, light: bool) -> Rgba {
-    let light_card = light || card.alpha(1.0).luminance() > 0.35;
+fn theme_alert(card: Rgba, text: Rgba, accent: Rgba) -> Rgba {
+    let light_card = card.alpha(1.0).luminance() > 0.35;
     let s = if light_card { 0.74 } else { 0.80 };
     let l = if light_card { 0.42 } else { 0.65 };
     let make = |h: f64| readable_contrast(Rgba::hsl(h, s, l).mix(text, 0.08), card, text, 4.5);
-    let c = make(358.0);
-    let close = (c.0 - accent.0)
-        .abs()
-        .max((c.1 - accent.1).abs())
-        .max((c.2 - accent.2).abs())
-        < 0.14;
-    if close {
-        make(28.0)
-    } else {
-        c
+    let dist = |a: Rgba, b: Rgba| {
+        (a.0 - b.0)
+            .abs()
+            .max((a.1 - b.1).abs())
+            .max((a.2 - b.2).abs())
+    };
+    for h in [358.0, 28.0, 42.0] {
+        let c = make(h);
+        if dist(c, accent) >= 0.14 {
+            return c;
+        }
     }
+    make(28.0)
 }
 
 impl Theme {
@@ -168,8 +170,9 @@ impl Theme {
             // "yours" and anything unknown: the system's colours as they are
             _ => (surface, seed, false),
         };
-        let text = if built && cfg_text.contrast(card) < 4.5 {
-            if c.light {
+        let light_card = card.luminance() > 0.35;
+        let text = if cfg_text.contrast(card) < 4.5 {
+            if light_card {
                 Rgba::rgb([0x11, 0x13, 0x17])
             } else {
                 Rgba::rgb([0xee, 0xf2, 0xf8])
@@ -181,12 +184,20 @@ impl Theme {
             ("yours", Some(hair)) | ("", Some(hair)) => Rgba::rgb(hair).alpha(0.9),
             _ => text.alpha(0.10),
         };
-        let muted = text.mix(if built { card } else { surface }, 0.32);
-        let lum = 0.2126 * accent.0 + 0.7152 * accent.1 + 0.0722 * accent.2;
+        let muted = readable(
+            text.mix(if built { card } else { surface }, 0.32),
+            card,
+            text,
+        );
         let (dark_fg, light_fg) = if card.luminance() <= text.luminance() {
             (card, text)
         } else {
             (text, card)
+        };
+        let on_accent = if dark_fg.contrast(accent) >= light_fg.contrast(accent) {
+            readable_contrast(dark_fg, accent, Rgba::hsl(0.0, 0.0, 0.0), 4.5)
+        } else {
+            readable_contrast(light_fg, accent, Rgba::hsl(0.0, 0.0, 1.0), 4.5)
         };
         Theme {
             card: card.alpha(c.opacity),
@@ -194,9 +205,9 @@ impl Theme {
             text,
             muted,
             accent,
-            on_accent: if lum > 0.45 { dark_fg } else { light_fg },
+            on_accent,
             accent_text: readable(accent, card, text),
-            alert: theme_alert(card, text, accent, c.light),
+            alert: theme_alert(card, text, accent),
             track: text.alpha(0.12),
             corners: c.corners,
             font: c.font.clone(),
@@ -400,5 +411,75 @@ mod tests {
             "LOOK_FONT=\"sans-serif\"",
         ];
         assert_eq!(lines, expected);
+    }
+
+    #[test]
+    fn all_schemes_polarities_and_awkward_accents_keep_promised_contrast() {
+        let schemes = [
+            "yours",
+            "monochrome",
+            "neutral",
+            "tonal",
+            "vibrant",
+            "expressive",
+        ];
+        let accents = [
+            ("yellow", "#ffff00"),
+            ("near-black", "#08080a"),
+            ("near-white", "#f8f8fa"),
+            ("red", "#ff0000"),
+            ("green", "#00ff00"),
+            ("blue", "#0000ff"),
+            ("grey", "#808080"),
+            ("default", "#333b54"),
+        ];
+        for scheme in schemes {
+            for light in [false, true] {
+                let pol = if light { "prefer-light" } else { "prefer-dark" };
+                let surface = if light && scheme == "yours" {
+                    "SURFACE_COLOR=\"#f5f6f8\"\n"
+                } else {
+                    ""
+                };
+                for (acc_name, acc_hex) in accents {
+                    let cfg_text = format!(
+                        "{surface}COLOR_SCHEME=\"{pol}\"\nTHEME_SCHEME=\"{scheme}\"\nACCENT=\"{acc_hex}\"\n"
+                    );
+                    let t = Theme::from_config(&Config::from_text(&cfg_text));
+                    let card = t.card.alpha(1.0);
+                    let ctx = format!("{scheme}/{pol}/{acc_name}({acc_hex})");
+                    assert!(
+                        t.text.contrast(card) >= 4.5,
+                        "{ctx}: text on card contrast = {}",
+                        t.text.contrast(card)
+                    );
+                    assert!(
+                        t.muted.contrast(card) >= 3.0,
+                        "{ctx}: muted on card contrast = {}",
+                        t.muted.contrast(card)
+                    );
+                    assert!(
+                        t.accent_text.contrast(card) >= 3.0,
+                        "{ctx}: accent_text on card contrast = {}",
+                        t.accent_text.contrast(card)
+                    );
+                    assert!(
+                        t.on_accent.contrast(t.accent) >= 4.5,
+                        "{ctx}: on_accent on accent contrast = {}",
+                        t.on_accent.contrast(t.accent)
+                    );
+                    assert!(
+                        t.alert.contrast(card) >= 4.5,
+                        "{ctx}: alert on card contrast = {}",
+                        t.alert.contrast(card)
+                    );
+                    let d = (t.alert.0 - t.accent.0)
+                        .abs()
+                        .max((t.alert.1 - t.accent.1).abs())
+                        .max((t.alert.2 - t.accent.2).abs());
+                    assert!(d >= 0.14, "{ctx}: alert too close to accent: {d}");
+                }
+            }
+        }
     }
 }
