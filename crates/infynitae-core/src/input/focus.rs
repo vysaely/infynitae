@@ -296,6 +296,11 @@ impl FocusModel {
         self.layer.map(|(l, _)| l)
     }
 
+    /// An on-demand layer (a panel the user clicked) holds the keyboard.
+    pub fn layer_on_demand(&self) -> bool {
+        matches!(self.layer, Some((_, false)))
+    }
+
     fn layer_exclusive(&self) -> bool {
         matches!(self.layer, Some((_, true)))
     }

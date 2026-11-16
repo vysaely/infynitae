@@ -2212,27 +2212,37 @@ impl Core {
                         output: cur_o,
                         p: cur_p,
                     } = self.pointer
-                    && self.layer_hit(cur_o, cur_p, true).is_none()
                 {
-                    let pt = crate::geom::OutputLogicalPoint {
-                        x: cur_p.0,
-                        y: cur_p.1,
-                    };
-                    // only a crossing moves the focus, not every motion: Super+Tab's window
-                    // stays when the mouse is nudged (owner, 2026-11-01)
-                    let under = self.hit_test(cur_o, pt).map(|hit| hit.element);
-                    if under != self.hover_seen {
-                        self.hover_seen = under;
-                        let target = self.focus.target();
-                        if under.is_some() && under != target
-                            || under.is_none()
-                                && self.focus_follows_mouse_strict
-                                && target.is_some()
-                        {
-                            out.extend(self.focus.hover_focus(under, time_us));
-                            // a pointer lock or confine the newly focused window asked for
-                            // starts now, as after any focus change (finding 4)
-                            out.extend(self.reconcile_constraints());
+                    // over a panel or overlay no window is under the pointer: coming back to the
+                    // window counts as a crossing again (finding 2)
+                    if self.layer_hit(cur_o, cur_p, true).is_some() {
+                        self.hover_seen = None;
+                    } else {
+                        let pt = crate::geom::OutputLogicalPoint {
+                            x: cur_p.0,
+                            y: cur_p.1,
+                        };
+                        // only a crossing moves the focus, not every motion: Super+Tab's window
+                        // stays when the mouse is nudged (owner, 2026-11-01)
+                        let under = self.hit_test(cur_o, pt).map(|hit| hit.element);
+                        if under != self.hover_seen {
+                            self.hover_seen = under;
+                            let target = self.focus.target();
+                            // a clicked panel holding the keyboard gives it back when the pointer
+                            // crosses into a window, also the one focused before it (finding 2)
+                            let takes_back_from_panel =
+                                under.is_some() && under == target && self.focus.layer_on_demand();
+                            if under.is_some() && under != target
+                                || takes_back_from_panel
+                                || under.is_none()
+                                    && self.focus_follows_mouse_strict
+                                    && target.is_some()
+                            {
+                                out.extend(self.focus.hover_focus(under, time_us));
+                                // a pointer lock or confine the newly focused window asked for
+                                // starts now, as after any focus change (finding 4)
+                                out.extend(self.reconcile_constraints());
+                            }
                         }
                     }
                 }
@@ -7246,8 +7256,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "AUDIT_FOCUS_HOVER: above-canvas layer leaves hover_seen stale and traps OnDemand layer focus on return"]
-    fn audit_layer_hover_leaves_hover_seen_stale_and_traps_on_demand_layer_focus() {
+    fn coming_back_from_a_clicked_panel_gives_the_window_the_keyboard() {
         use crate::geom::{LocalPoint, LocalRect, LocalSize};
         use crate::layer::{Anchors, KeyboardInteractivity, Layer, LayerState};
         use crate::snapshot::{InputRegion, SnapshotSurface, SurfaceKey, SurfaceRole, SurfaceTree};
