@@ -757,7 +757,7 @@ impl App {
                     self.shell.close();
                 }
                 // the shell takes these before they get here
-                Action::SetQuery(_) | Action::ShowCards(_) => {}
+                Action::SetQuery(_) | Action::ShowCards(_) | Action::RemoveCard => {}
             }
         }
         if notes_changed {

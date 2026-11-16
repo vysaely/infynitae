@@ -56,35 +56,130 @@ struct ClosingPanel {
     scroll: f64,
 }
 
-/// The cards of `p` that can be made: a word whose app is not installed, or whose provider or kind
-/// does not exist, is left out (docs section 3.3, "App not installed", comes with edit mode).
-pub fn place(p: &Panel, apps: &[App], favorites: &str) -> Vec<Placed> {
-    let mut out = Vec::new();
-    for w in crate::panel::cards_with(p, favorites) {
-        let Some((prov, app)) = provider::resolve(&w.owner, apps) else {
-            continue;
-        };
-        let (Some(kind), Some(card)) = (
+pub const NOT_INSTALLED_TEXT: &str = "This app is not installed";
+
+struct NotInstalledProvider;
+
+impl provider::Provider for NotInstalledProvider {
+    fn id(&self) -> &'static str {
+        ""
+    }
+    fn name(&self) -> &'static str {
+        ""
+    }
+    fn claims(&self) -> &'static [provider::Claim] {
+        &[]
+    }
+    fn listed(&self) -> provider::Listed {
+        provider::Listed::Never
+    }
+    fn cards(&self) -> &'static [CardKind] {
+        &[]
+    }
+    fn card(&self, _: &str, _: Option<&str>) -> Option<Box<dyn Card>> {
+        None
+    }
+    fn source(&self, _: &str) -> Option<Box<dyn crate::card::Source>> {
+        None
+    }
+}
+
+static NOT_INSTALLED_PROVIDER: NotInstalledProvider = NotInstalledProvider;
+static NOT_INSTALLED_KIND: CardKind = CardKind {
+    id: "",
+    title: "",
+    about: "",
+    sizes: &[Size::S],
+    default: Size::S,
+    half: false,
+    sources: &[],
+};
+
+struct NotInstalledCard {
+    title: String,
+}
+
+impl Card for NotInstalledCard {
+    fn apply(&mut self, _key: &str, _data: &dyn std::any::Any) -> bool {
+        false
+    }
+    fn status(&self, _cx: &Cx) -> Status {
+        Status::Ready
+    }
+    fn title(&self, _cx: &Cx) -> Option<String> {
+        Some(self.title.clone())
+    }
+    fn height(&self, _cx: &Cx, width: f64) -> f64 {
+        wrapped_text_height((width - 16.0).max(20.0), NOT_INSTALLED_TEXT) + 8.0 + 26.0
+    }
+    fn draw(&self, cr: &cairo::Context, cx: &Cx, body: Rect, hits: &mut Hits) {
+        let max_w = (body.2 - 16.0).max(20.0);
+        let l = missing_layout(cr, max_w, NOT_INSTALLED_TEXT);
+        draw::set(cr, cx.theme.muted);
+        cr.move_to((body.0 + 8.0).round(), body.1.round());
+        pangocairo::functions::show_layout(cr, &l);
+        let text_h = (l.pixel_size().1 as f64).max(20.0);
+        crate::ui::button(cr, cx, hits, 0, body.0 + 8.0, body.1 + text_h + 8.0, "Remove");
+    }
+    fn event(&mut self, ev: &Event, _cx: &Cx, out: &mut Vec<Action>) -> bool {
+        if matches!(
+            ev,
+            Event::Press {
+                hit: 0,
+                button: Button::Left,
+                ..
+            }
+        ) {
+            out.push(Action::RemoveCard);
+            return true;
+        }
+        false
+    }
+}
+
+fn place_one(w: CardRef, apps: &[App]) -> Placed {
+    if let Some((prov, app)) = provider::resolve(&w.owner, apps) {
+        if let (Some(kind), Some(card)) = (
             prov.kind(&w.kind),
             prov.card(&w.kind, w.argument.as_deref()),
-        ) else {
-            continue;
-        };
-        let size = w
-            .size
-            .filter(|s| kind.sizes.contains(s))
-            .unwrap_or(kind.default);
-        out.push(Placed {
-            from: from_name(prov.name(), kind.title, app),
-            app_id: app.map(|a| a.id.clone()),
-            word: w,
-            provider: prov,
-            kind,
-            size,
-            card,
-        });
+        ) {
+            let size = w
+                .size
+                .filter(|s| kind.sizes.contains(s))
+                .unwrap_or(kind.default);
+            return Placed {
+                from: from_name(prov.name(), kind.title, app),
+                app_id: app.map(|a| a.id.clone()),
+                word: w,
+                provider: prov,
+                kind,
+                size,
+                card,
+            };
+        }
     }
-    out
+    let from = provider::by_id(&w.owner).map_or_else(|| w.owner.clone(), |p| p.name().to_string());
+    let title = provider::by_id(&w.owner)
+        .and_then(|p| p.kind(&w.kind))
+        .map_or_else(|| w.kind.clone(), |k| k.title.to_string());
+    Placed {
+        word: w,
+        provider: &NOT_INSTALLED_PROVIDER,
+        kind: &NOT_INSTALLED_KIND,
+        size: Size::S,
+        from,
+        app_id: None,
+        card: Box::new(NotInstalledCard { title }),
+    }
+}
+
+/// The cards of `p`: unknown apps or card kinds stay as a built-in "This app is not installed"
+/// card with Remove (docs/EDGE_APPS.md section 3.3).
+pub fn place(p: &Panel, apps: &[App], favorites: &str) -> Vec<Placed> {
+    crate::panel::cards_with(p, favorites)
+        .into_iter()
+        .map(|w| place_one(w, apps))
+        .collect()
 }
 
 /// The name at the right of a card's header: the app it comes from, else its provider, and nothing
@@ -378,7 +473,6 @@ impl Shell {
         };
         crate::panel::cards(&ps.panel)
             .into_iter()
-            .filter(|c| crate::edit::resolve_kind(c, &self.apps).is_some())
             .map(|mut c| {
                 c.place = None;
                 c
@@ -460,26 +554,9 @@ impl Shell {
                     .unwrap_or(pc.kind.default);
                 pc.word = w;
                 next_cards.push(pc);
-            } else if let Some((prov, app)) = provider::resolve(&w.owner, apps) {
-                if let (Some(kind), Some(card)) = (
-                    prov.kind(&w.kind),
-                    prov.card(&w.kind, w.argument.as_deref()),
-                ) {
-                    let size = w
-                        .size
-                        .filter(|s| kind.sizes.contains(s))
-                        .unwrap_or(kind.default);
-                    next_cards.push(Placed {
-                        from: from_name(prov.name(), kind.title, app),
-                        app_id: app.map(|a| a.id.clone()),
-                        word: w,
-                        provider: prov,
-                        kind,
-                        size,
-                        card,
-                    });
-                    added_fresh = true;
-                }
+            } else {
+                next_cards.push(place_one(w, apps));
+                added_fresh = true;
             }
         }
         self.panels[idx].cards = next_cards;
@@ -568,13 +645,7 @@ impl Shell {
         true
     }
 
-    pub fn finish_edit(&mut self) -> bool {
-        if !self.editing() {
-            return false;
-        }
-        let idx = self.edit.panel_idx;
-        let before_line = std::mem::take(&mut self.edit.before_line);
-        let cards = self.edit_cards(idx);
+    fn save_and_rebuild_panel(&mut self, idx: usize, cards: Vec<CardRef>, before_line: String) {
         let p = &mut self.panels[idx].panel;
         p.placed = false;
         p.height = 0;
@@ -582,9 +653,6 @@ impl Shell {
         p.words = cards.iter().map(CardRef::word).collect();
         let panel_clone = p.clone();
         let panel_name = panel_clone.name.clone();
-
-        self.edit = Default::default();
-        self.panel_scroll = 0.0;
 
         let new_cfg = if let Some((cfg_path, bak_path)) = self.save_paths.clone() {
             if let Err(e) =
@@ -623,6 +691,34 @@ impl Shell {
             .iter()
             .position(|ps| ps.panel.name == panel_name);
         self.fetch_needed = true;
+    }
+
+    fn remove_placed_card(&mut self, idx: usize, ci: usize) -> bool {
+        let Some(ps) = self.panels.get(idx) else {
+            return false;
+        };
+        let before_line = crate::panel::line(&ps.panel);
+        let mut cards = self.edit_cards(idx);
+        if !crate::edit::remove_card(&mut cards, ci, &self.apps) {
+            return false;
+        }
+        self.selected = None;
+        self.hovered = None;
+        self.pressed = None;
+        self.save_and_rebuild_panel(idx, cards, before_line);
+        true
+    }
+
+    pub fn finish_edit(&mut self) -> bool {
+        if !self.editing() {
+            return false;
+        }
+        let idx = self.edit.panel_idx;
+        let before_line = std::mem::take(&mut self.edit.before_line);
+        let cards = self.edit_cards(idx);
+        self.edit = Default::default();
+        self.panel_scroll = 0.0;
+        self.save_and_rebuild_panel(idx, cards, before_line);
         true
     }
 
@@ -1390,6 +1486,7 @@ impl Shell {
         let card = format!("{}/{}", pc.word.owner, pc.word.kind);
         let mut requery = None;
         let mut show = None;
+        let mut remove = false;
         for a in out {
             match a {
                 Action::ShowCards(w) => show = Some(w),
@@ -1397,9 +1494,13 @@ impl Shell {
                     self.close();
                     return true;
                 }
+                Action::RemoveCard => remove = true,
                 Action::SetQuery(q) => requery = Some(q),
                 a => self.actions.push((a, card.clone(), prov, keys)),
             }
+        }
+        if remove {
+            return self.remove_placed_card(idx, ci);
         }
         if let Some(w) = show {
             self.show_cards(idx, w);
@@ -2169,16 +2270,19 @@ fn missing_layout(cr: &cairo::Context, max_w: f64, why: &str) -> pango::Layout {
     l
 }
 
-fn missing_height(card_width: f64, why: &str) -> f64 {
-    let max_w = card_width - 2.0 * PAD_X;
+fn wrapped_text_height(max_w: f64, text: &str) -> f64 {
     let Ok(surf) = cairo::ImageSurface::create(cairo::Format::ARgb32, 1, 1) else {
         return 20.0;
     };
     let Ok(cr) = cairo::Context::new(&surf) else {
         return 20.0;
     };
-    let l = missing_layout(&cr, max_w, why);
+    let l = missing_layout(&cr, max_w, text);
     (l.pixel_size().1 as f64).max(20.0)
+}
+
+fn missing_height(card_width: f64, why: &str) -> f64 {
+    wrapped_text_height(card_width - 2.0 * PAD_X, why)
 }
 
 fn union_rect(a: Rect, b: Rect) -> Rect {
@@ -3183,5 +3287,72 @@ mod tests {
         assert_eq!(sh.panel_scroll, 0.0);
         let first = sh.hit_order()[0];
         assert_eq!(sh.selected, Some((first.0, first.1)));
+    }
+
+    #[test]
+    fn missing_app_shows_not_installed_card_and_remove_updates_panel_line() {
+        let dir = std::env::temp_dir().join(format!(
+            "infynitae-shell-not-installed-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg_path = dir.join("config");
+        let bak_path = dir.join("panels.backup");
+        std::fs::write(
+            &cfg_path,
+            "PANEL_X=\"SUPER+X top right 380 nosuchapp/card settings/bogus settings/session\"\n",
+        )
+        .unwrap();
+
+        let mut sh = Shell::new(
+            Config::from_text(&std::fs::read_to_string(&cfg_path).unwrap()),
+            Vec::new(),
+        );
+        sh.save_paths = Some((cfg_path.clone(), bak_path.clone()));
+        let idx = sh.panels.iter().position(|p| p.panel.name == "x").unwrap();
+        assert_eq!(sh.panels[idx].cards.len(), 3);
+        assert_eq!(sh.panels[idx].cards[0].from, "nosuchapp");
+        assert_eq!(sh.panels[idx].cards[1].from, "Settings");
+        let cx = sh.cx(Size::S, None, false);
+        assert_eq!(sh.panels[idx].cards[0].card.status(&cx), Status::Ready);
+        assert_eq!(
+            sh.panels[idx].cards[0].card.title(&cx).as_deref(),
+            Some("card")
+        );
+        assert_eq!(NOT_INSTALLED_TEXT, "This app is not installed");
+
+        assert!(sh.open_panel(idx, false, Instant::now()));
+        sh.open_ms = f64::INFINITY;
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 1280, 800).unwrap();
+        let cr = cairo::Context::new(&surf).unwrap();
+        sh.draw(&cr, 1280.0, 800.0);
+
+        let remove_r = {
+            let f = sh.frame.borrow();
+            assert_eq!(f[0].2.list.len(), 1, "not-installed card has Remove button");
+            f[0].2.list[0].1
+        };
+        assert!(sh.click(
+            1280.0,
+            800.0,
+            remove_r.0 + 4.0,
+            remove_r.1 + 4.0,
+            Button::Left
+        ));
+        let idx = sh.panels.iter().position(|p| p.panel.name == "x").unwrap();
+        assert_eq!(sh.open, Some(idx));
+        assert_eq!(sh.panels[idx].cards.len(), 2);
+        assert_eq!(sh.panels[idx].cards[0].word.kind, "bogus");
+        assert_eq!(sh.panels[idx].cards[1].word.kind, "session");
+
+        let saved = std::fs::read_to_string(&cfg_path).unwrap();
+        assert!(!saved.contains("nosuchapp/card"));
+        assert!(saved.contains("settings/bogus"));
+        assert!(saved.contains("settings/session"));
+        let backup = std::fs::read_to_string(&bak_path).unwrap();
+        assert!(backup.contains("nosuchapp/card"));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

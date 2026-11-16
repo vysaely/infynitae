@@ -219,6 +219,8 @@ pub enum Action {
     /// these cards (words, as in a panel line) in the open panel's place until it closes: a tray
     /// app's menu and card
     ShowCards(Vec<String>),
+    /// remove this card from the panel line and save
+    RemoveCard,
 }
 
 /// The fixture's values (`INFYNITAE_EDGE_RENDER_DATA`: `key=value` lines, `\n` and `\t` escaped),
