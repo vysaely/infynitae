@@ -882,8 +882,8 @@ impl CompositorHandler for App {
         }
         // an animation running (arrival, leaving, a list opening, drag autoscroll): draw again
         let was_visible = self.shell.visible();
-        let animating = was_visible
-            && (self.shell.tick(Instant::now()) || self.shell.wants_frame());
+        let animating =
+            was_visible && (self.shell.tick(Instant::now()) || self.shell.wants_frame());
         let ended = self.was_animating && !animating;
         let closed_finished = was_visible && !self.shell.visible();
         self.was_animating = animating;

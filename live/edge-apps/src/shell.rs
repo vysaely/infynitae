@@ -119,7 +119,15 @@ impl Card for NotInstalledCard {
         cr.move_to((body.0 + 8.0).round(), body.1.round());
         pangocairo::functions::show_layout(cr, &l);
         let text_h = (l.pixel_size().1 as f64).max(20.0);
-        crate::ui::button(cr, cx, hits, 0, body.0 + 8.0, body.1 + text_h + 8.0, "Remove");
+        crate::ui::button(
+            cr,
+            cx,
+            hits,
+            0,
+            body.0 + 8.0,
+            body.1 + text_h + 8.0,
+            "Remove",
+        );
     }
     fn event(&mut self, ev: &Event, _cx: &Cx, out: &mut Vec<Action>) -> bool {
         if matches!(
@@ -1007,8 +1015,7 @@ impl Shell {
             if let Some(i) = hit_strip {
                 match self.hover_open {
                     Some((prev, t0)) if prev == i => {
-                        if now.saturating_duration_since(t0).as_secs_f64() * 1000.0
-                            >= HOVER_OPEN_MS
+                        if now.saturating_duration_since(t0).as_secs_f64() * 1000.0 >= HOVER_OPEN_MS
                         {
                             self.hover_open = None;
                             return self.open_panel(i, true, now);
@@ -1897,8 +1904,12 @@ impl Shell {
     }
 
     pub fn wants_clock(&self) -> bool {
-        self.open
-            .is_some_and(|idx| self.panels[idx].cards.iter().any(|pc| pc.card.wants_clock()))
+        self.open.is_some_and(|idx| {
+            self.panels[idx]
+                .cards
+                .iter()
+                .any(|pc| pc.card.wants_clock())
+        })
     }
 
     /// New data for `(provider, key)`: every card that lists it. True when one changed.
@@ -1945,7 +1956,15 @@ impl Shell {
             return Some(crate::ask::draw(cr, &self.theme, &self.ask.ask, (w, h)));
         }
         if let Some(idx) = self.open {
-            return Some(self.draw_panel(cr, w, h, &self.panels[idx], idx, self.panel_scroll, None));
+            return Some(self.draw_panel(
+                cr,
+                w,
+                h,
+                &self.panels[idx],
+                idx,
+                self.panel_scroll,
+                None,
+            ));
         }
         if let Some(c) = &self.closing {
             let ps = c.transient.as_ref().or_else(|| self.panels.get(c.idx))?;
@@ -2573,7 +2592,9 @@ mod tests {
             s.1 - 20.0,
             t0 + std::time::Duration::from_millis(50)
         ));
-        assert!(sh.hover_timeout(t0 + std::time::Duration::from_millis(50)).is_none());
+        assert!(sh
+            .hover_timeout(t0 + std::time::Duration::from_millis(50))
+            .is_none());
         assert!(!sh.hover_tick(t0 + std::time::Duration::from_millis(300)));
         assert!(sh.open.is_none());
 
@@ -3050,7 +3071,9 @@ mod tests {
             },
         ];
         let mut sh = Shell::new(
-            Config::from_text("PANEL_CONTROL=\"SUPER+A top right 380 longapp/app@half secondapp/app@half\"\n"),
+            Config::from_text(
+                "PANEL_CONTROL=\"SUPER+A top right 380 longapp/app@half secondapp/app@half\"\n",
+            ),
             apps,
         );
         let idx = sh
@@ -3173,7 +3196,10 @@ mod tests {
         let cr = cairo::Context::new(&surf).unwrap();
         let pbox = sh.draw(&cr, 1280.0, 400.0).unwrap();
         let (_, _, content_h) = sh.layout_local(idx, 1280.0, 400.0);
-        assert!(content_h > pbox.3, "precondition: panel is taller than screen");
+        assert!(
+            content_h > pbox.3,
+            "precondition: panel is taller than screen"
+        );
 
         // Move Down repeatedly without redrawing in between until past the fold.
         let order = sh.hit_order();
