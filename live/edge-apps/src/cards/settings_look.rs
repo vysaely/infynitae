@@ -194,8 +194,12 @@ impl Source for LookSource {
                 out.accent_candidates = parse_accent_lines(&acc_lines);
             }
             if let Some(p) = thumb_path {
-                out.accent_thumb =
-                    icons::cached_wallpaper_thumb(&p, PICKER_PREVIEW_SIZE.0, PICKER_PREVIEW_SIZE.1);
+                let scale = icons::display_scale();
+                out.accent_thumb = icons::cached_wallpaper_thumb(
+                    &p,
+                    icons::scaled_px(PICKER_PREVIEW_SIZE.0, scale),
+                    icons::scaled_px(PICKER_PREVIEW_SIZE.1, scale),
+                );
             }
             return Box::new(out);
         }
@@ -216,8 +220,12 @@ impl Source for LookSource {
         let mut accent_thumb = None;
         if let Some(ref wp) = active_wp {
             if wallpaper_bin {
-                accent_thumb =
-                    icons::cached_wallpaper_thumb(wp, PICKER_PREVIEW_SIZE.0, PICKER_PREVIEW_SIZE.1);
+                let scale = icons::display_scale();
+                accent_thumb = icons::cached_wallpaper_thumb(
+                    wp,
+                    icons::scaled_px(PICKER_PREVIEW_SIZE.0, scale),
+                    icons::scaled_px(PICKER_PREVIEW_SIZE.1, scale),
+                );
                 if let Ok(out) = Command::new(&wp_bin).arg("--accents").arg(wp).output() {
                     if out.status.success() {
                         accent_candidates =
@@ -413,14 +421,19 @@ impl Source for WallpapersSource {
 }
 
 fn decode_wallpaper_thumbs(files: &[WallpaperFile]) -> (ThumbList, ThumbList) {
+    let scale = icons::display_scale();
+    let sw = icons::scaled_px(THUMB_S.0, scale);
+    let sh = icons::scaled_px(THUMB_S.1, scale);
+    let mw = icons::scaled_px(THUMB_M.0, scale);
+    let mh = icons::scaled_px(THUMB_M.1, scale);
     let shown = &files[..files.len().min(MAX_WALLPAPERS)];
     let thumbs_s = shown
         .iter()
-        .map(|f| icons::cached_wallpaper_thumb(Path::new(&f.path), THUMB_S.0, THUMB_S.1))
+        .map(|f| icons::cached_wallpaper_thumb(Path::new(&f.path), sw, sh))
         .collect();
     let thumbs_m = shown
         .iter()
-        .map(|f| icons::cached_wallpaper_thumb(Path::new(&f.path), THUMB_M.0, THUMB_M.1))
+        .map(|f| icons::cached_wallpaper_thumb(Path::new(&f.path), mw, mh))
         .collect();
     (thumbs_s, thumbs_m)
 }
@@ -474,9 +487,10 @@ impl Source for FaceSource {
                     path: expanded,
                 });
             }
+            let row_px = icons::scaled_px(FACE_ROW_THUMB, icons::display_scale());
             let current = current_path
                 .filter(|p| p.is_file())
-                .and_then(|p| icons::cached_wallpaper_thumb(&p, FACE_ROW_THUMB, FACE_ROW_THUMB));
+                .and_then(|p| icons::cached_wallpaper_thumb(&p, row_px, row_px));
             let thumbs = decode_face_thumbs(&files);
             return Box::new(FaceData {
                 current,
@@ -485,9 +499,10 @@ impl Source for FaceSource {
             });
         }
         let face_path = self.home.join(".face");
+        let row_px = icons::scaled_px(FACE_ROW_THUMB, icons::display_scale());
         let current = face_path
             .is_file()
-            .then(|| icons::cached_wallpaper_thumb(&face_path, FACE_ROW_THUMB, FACE_ROW_THUMB))
+            .then(|| icons::cached_wallpaper_thumb(&face_path, row_px, row_px))
             .flatten();
         let dirs = [
             self.home.join("Pictures"),
@@ -508,11 +523,10 @@ impl Source for FaceSource {
 }
 
 fn decode_face_thumbs(files: &[WallpaperFile]) -> ThumbList {
+    let px = icons::scaled_px(FACE_GRID_THUMB, icons::display_scale());
     files[..files.len().min(FACE_MAX_THUMBS)]
         .iter()
-        .map(|f| {
-            icons::cached_wallpaper_thumb(Path::new(&f.path), FACE_GRID_THUMB, FACE_GRID_THUMB)
-        })
+        .map(|f| icons::cached_wallpaper_thumb(Path::new(&f.path), px, px))
         .collect()
 }
 

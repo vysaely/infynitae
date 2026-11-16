@@ -11,7 +11,26 @@ use crate::panel::CardRef;
 use crate::provider::{self, CardKind, Size};
 use crate::theme::Theme;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::time::Instant;
+
+/// Identifies an output surface inside `Shell` without exposing Wayland handles.
+pub type OutputId = u64;
+
+const SCREEN_KEY_TAG: u64 = 1 << 63;
+
+fn screen_key(w: f64, h: f64) -> OutputId {
+    SCREEN_KEY_TAG
+        | ((w.round().clamp(0.0, 65535.0) as u64) << 16)
+        | (h.round().clamp(0.0, 65535.0) as u64)
+}
+
+#[derive(Clone, Default)]
+struct OutputFrame {
+    hits: Vec<(usize, Rect, Hits)>,
+    scroll: f64,
+    screen: (f64, f64),
+}
 
 /// From the screen's edge to a panel.
 pub const MARGIN: f64 = 24.0;
@@ -54,6 +73,7 @@ struct ClosingPanel {
     started: Instant,
     ms: f64,
     scroll: f64,
+    output: Option<OutputId>,
 }
 
 pub const NOT_INSTALLED_TEXT: &str = "This app is not installed";
@@ -352,20 +372,24 @@ pub struct Shell {
     pub notify: crate::notify::Notify,
     pub panels: Vec<PanelState>,
     pub open: Option<usize>,
+    pub open_output: Option<OutputId>,
+    ask_output: Option<OutputId>,
     pub opened_by_hover: bool,
     pub clicked_inside: bool,
-    hover_open: Option<(usize, Instant)>,
+    hover_open: Option<(OutputId, usize, Instant)>,
     hover_close: Option<Instant>,
-    /// the pointer, in surface pixels, and the card and hit under it in the last frame
+    /// the pointer on the active output (or from `--render`), and per-output pointers
     pub pointer: Option<(f64, f64)>,
-    pub hovered: Option<(usize, u32)>,
-    /// the card and hit a button went down on (drags go to it)
-    pub pressed: Option<(usize, u32)>,
-    /// each shown card's rectangle and hits in the last frame, plus the scroll and screen at which
-    /// they were drawn
+    pointers: HashMap<OutputId, (f64, f64)>,
+    hovered: HashMap<OutputId, (usize, u32)>,
+    /// the output, card and hit a button went down on (drags go to it)
+    pressed: Option<(OutputId, usize, u32)>,
+    /// each shown card's rectangle and hits in the last frame, plus per-output frames
     pub frame: RefCell<Vec<(usize, Rect, Hits)>>,
     frame_scroll: std::cell::Cell<f64>,
     frame_screen: std::cell::Cell<(f64, f64)>,
+    frames: RefCell<HashMap<OutputId, OutputFrame>>,
+    last_output: Option<OutputId>,
     /// what the cards asked for: the action, its card ("owner/kind": one command at a time per
     /// card), and the provider and source keys to fetch again after it ran
     pub actions: Vec<(Action, String, &'static str, &'static [&'static str])>,
@@ -436,16 +460,21 @@ impl Shell {
             keyboard: false,
             panels,
             open: None,
+            open_output: None,
+            ask_output: None,
             opened_by_hover: false,
             clicked_inside: false,
             hover_open: None,
             hover_close: None,
             pointer: None,
-            hovered: None,
+            pointers: HashMap::new(),
+            hovered: HashMap::new(),
             pressed: None,
             frame: RefCell::new(Vec::new()),
             frame_scroll: std::cell::Cell::new(0.0),
             frame_screen: std::cell::Cell::new((1920.0, 1080.0)),
+            frames: RefCell::new(HashMap::new()),
+            last_output: None,
             actions: Vec::new(),
             opened_at: None,
             open_ms: f64::INFINITY,
@@ -519,7 +548,7 @@ impl Shell {
         } else {
             380.0
         }
-        .min(w - 2.0 * MARGIN);
+        .min((w - 2.0 * MARGIN).max(0.0));
         let above = ps.panel.side == Side::Bottom;
         let mut rows: Vec<Vec<(usize, f64)>> = Vec::new();
         let mut i = 0;
@@ -559,7 +588,7 @@ impl Shell {
                 + heights.iter().sum::<f64>()
                 + (GAP + strip) * rows.len().saturating_sub(1) as f64
         };
-        let ph = content_h.min(h - 2.0 * MARGIN);
+        let ph = content_h.min((h - 2.0 * MARGIN).max(0.0));
         let p = &ps.panel;
         let (along_w, size) = if p.side.horizontal() {
             (w, pw)
@@ -733,7 +762,7 @@ impl Shell {
             self.close();
         }
         self.window_menu = Some(menu);
-        self.hovered = None;
+        self.hovered.clear();
         self.pressed = None;
         self.selected = None;
         self.keyboard = false;
@@ -756,6 +785,11 @@ impl Shell {
     }
 
     pub fn enter_edit(&mut self, w: f64, h: f64) -> bool {
+        let out = self.open_output.unwrap_or_else(|| screen_key(w, h));
+        self.enter_edit_on(out, w, h)
+    }
+
+    fn enter_edit_on(&mut self, output: OutputId, w: f64, h: f64) -> bool {
         let Some(idx) = self.open else {
             return false;
         };
@@ -770,7 +804,7 @@ impl Shell {
         self.clicked_inside = false;
         self.hover_open = None;
         self.hover_close = None;
-        self.hovered = None;
+        self.hovered.clear();
         self.pressed = None;
         self.keyboard = false;
         self.selected = None;
@@ -794,7 +828,7 @@ impl Shell {
             ..Default::default()
         };
         self.refresh_edit_rects(w, h);
-        self.update_edit_hover(w, h);
+        self.update_edit_hover_on(output, w, h);
         true
     }
 
@@ -872,7 +906,7 @@ impl Shell {
             return false;
         }
         self.selected = None;
-        self.hovered = None;
+        self.hovered.clear();
         self.pressed = None;
         self.save_and_rebuild_panel(idx, cards, before_line);
         true
@@ -958,6 +992,27 @@ impl Shell {
         });
     }
 
+    fn pointer_for(&self, output: OutputId) -> Option<(f64, f64)> {
+        self.pointers
+            .get(&output)
+            .copied()
+            .or_else(|| self.pointers.is_empty().then_some(self.pointer).flatten())
+    }
+
+    fn active_output_or_last(&self) -> OutputId {
+        self.open_output
+            .or(self.last_output)
+            .unwrap_or_else(|| screen_key(self.last_screen.0, self.last_screen.1))
+    }
+
+    fn screen_for(&self, output: OutputId) -> (f64, f64) {
+        self.frames
+            .borrow()
+            .get(&output)
+            .map(|f| f.screen)
+            .unwrap_or(self.last_screen)
+    }
+
     fn edit_change<F>(&mut self, idx: usize, f: F) -> bool
     where
         F: FnOnce(&mut Vec<CardRef>, &mut i32, &mut bool, &[App]) -> bool,
@@ -976,11 +1031,12 @@ impl Shell {
         }
         self.edit.push_undo(snap);
         self.apply_panel_state(idx, cards, width, hover);
-        let (w, h) = self.last_screen;
+        let out = self.active_output_or_last();
+        let (w, h) = self.screen_for(out);
         let (pbox, _, content_h) = self.layout_local(idx, w, h);
         self.panel_scroll = self.panel_scroll.clamp(0.0, (content_h - pbox.3).max(0.0));
         self.refresh_edit_rects(w, h);
-        self.update_edit_hover(w, h);
+        self.update_edit_hover_on(out, w, h);
         true
     }
 
@@ -998,12 +1054,12 @@ impl Shell {
         }
     }
 
-    fn update_edit_hover(&mut self, w: f64, h: f64) {
+    fn update_edit_hover_on(&mut self, output: OutputId, w: f64, h: f64) {
         let Some(idx) = self.open.filter(|_| self.editing()) else {
             self.edit.hover_card = None;
             return;
         };
-        let Some((x, y)) = self.pointer else {
+        let Some((x, y)) = self.pointer_for(output) else {
             return;
         };
         let (pbox, local_rects, content_h) = self.layout_local(idx, w, h);
@@ -1019,6 +1075,16 @@ impl Shell {
     }
 
     pub fn open_panel(&mut self, idx: usize, by_hover: bool, now: Instant) -> bool {
+        self.open_panel_on(None, idx, by_hover, now)
+    }
+
+    pub fn open_panel_on(
+        &mut self,
+        output: Option<OutputId>,
+        idx: usize,
+        by_hover: bool,
+        now: Instant,
+    ) -> bool {
         // what changed in the file shows from this opening on (a reload keeps the order of panels)
         self.reload_if_changed();
         if idx >= self.panels.len() || (by_hover && self.ask.ask.on) {
@@ -1027,6 +1093,7 @@ impl Shell {
         // a panel asked for by its key: the question is put aside (cancelled), as in the old edge
         if self.ask.ask.on {
             crate::ask::answer(&mut self.ask, None);
+            self.ask_output = None;
         }
         if self.open == Some(idx) {
             return if by_hover { false } else { self.close_at(now) };
@@ -1036,6 +1103,10 @@ impl Shell {
             self.cancel_edit();
         }
         self.open = Some(idx);
+        self.open_output = output;
+        if let Some(o) = output {
+            self.last_output = Some(o);
+        }
         self.closing = None;
         self.panel_scroll = 0.0;
         self.reset_keys(idx);
@@ -1045,14 +1116,14 @@ impl Shell {
         self.hover_close = None;
         self.opened_at = Some(now);
         self.open_ms = 0.0;
-        self.hovered = None;
+        self.hovered.clear();
         self.pressed = None;
         true
     }
 
-    pub fn toggle_named(&mut self, name: &str) -> bool {
+    pub fn toggle_named_on(&mut self, output: Option<OutputId>, name: &str) -> bool {
         match self.panels.iter().position(|p| p.panel.name == name) {
-            Some(i) => self.open_panel(i, false, Instant::now()),
+            Some(i) => self.open_panel_on(output, i, false, Instant::now()),
             None => false,
         }
     }
@@ -1066,6 +1137,7 @@ impl Shell {
             self.cancel_edit();
         }
         let open = self.open.take();
+        let output = self.open_output.take();
         let was = open.is_some();
         let scroll = self.panel_scroll;
         if let Some(idx) = open {
@@ -1087,13 +1159,19 @@ impl Shell {
         self.clicked_inside = false;
         self.hover_open = None;
         self.hover_close = None;
-        self.hovered = None;
+        self.hovered.clear();
         self.pressed = None;
+        if let Some(o) = output {
+            self.pointers.remove(&o);
+        } else {
+            self.pointers.clear();
+        }
         self.pointer = None;
         self.panel_scroll = 0.0;
         self.opened_at = None;
         self.open_ms = f64::INFINITY;
         self.frame.borrow_mut().clear();
+        self.frames.borrow_mut().clear();
         self.frame_scroll.set(0.0);
         let transient = self
             .transient
@@ -1106,6 +1184,7 @@ impl Shell {
                 started: now,
                 ms: 0.0,
                 scroll,
+                output,
             });
         }
         was || had_wm
@@ -1122,6 +1201,7 @@ impl Shell {
         if words.is_empty() {
             return;
         }
+        let output = self.open_output;
         let mut p = self.panels[idx].panel.clone();
         p.name = "tray".into();
         p.key = None;
@@ -1135,13 +1215,22 @@ impl Shell {
         let t = self.panels.len() - 1;
         self.transient = Some(t);
         self.open = Some(t);
+        self.open_output = output;
         self.opened_at = Some(Instant::now());
         self.open_ms = 0.0;
         self.fetch_needed = true;
     }
 
-    /// The card and hit under `p` in the last frame.
-    fn hit_at(&self, p: (f64, f64)) -> Option<(usize, u32)> {
+    /// The card and hit under `p` in the last frame drawn on `output`.
+    fn hit_at_on(&self, output: OutputId, p: (f64, f64)) -> Option<(usize, u32)> {
+        let frames = self.frames.borrow();
+        if let Some(f) = frames.get(&output) {
+            return f
+                .hits
+                .iter()
+                .rev()
+                .find_map(|(i, _, hits)| hits.top_at(p).map(|h| (*i, h)));
+        }
         self.frame
             .borrow()
             .iter()
@@ -1149,7 +1238,15 @@ impl Shell {
             .find_map(|(i, _, hits)| hits.top_at(p).map(|h| (*i, h)))
     }
 
-    fn card_at(&self, p: (f64, f64)) -> Option<usize> {
+    fn card_at_on(&self, output: OutputId, p: (f64, f64)) -> Option<usize> {
+        let frames = self.frames.borrow();
+        if let Some(f) = frames.get(&output) {
+            return f
+                .hits
+                .iter()
+                .find(|(_, r, _)| p.0 >= r.0 && p.0 < r.0 + r.2 && p.1 >= r.1 && p.1 < r.1 + r.3)
+                .map(|(i, _, _)| *i);
+        }
         self.frame
             .borrow()
             .iter()
@@ -1160,25 +1257,51 @@ impl Shell {
     /// The pointer moved: a hover panel opens from its strip after a short dwell and closes after
     /// a grace time when left; the light follows the hit under it; a held button drags. True when
     /// something must be drawn again.
+    #[cfg(test)]
     pub fn pointer_motion(&mut self, w: f64, h: f64, x: f64, y: f64) -> bool {
         self.pointer_motion_at(w, h, x, y, Instant::now())
     }
 
+    #[cfg(test)]
     pub fn pointer_motion_at(&mut self, w: f64, h: f64, x: f64, y: f64, now: Instant) -> bool {
-        self.last_screen = (w, h);
+        self.pointer_motion_on(screen_key(w, h), w, h, x, y, now)
+    }
+
+    pub fn pointer_motion_on(
+        &mut self,
+        output: OutputId,
+        w: f64,
+        h: f64,
+        x: f64,
+        y: f64,
+        now: Instant,
+    ) -> bool {
         if self.ask.ask.on {
+            if self.ask_output.is_some_and(|id| id != output) {
+                return false;
+            }
+            self.last_output = Some(output);
+            self.last_screen = (w, h);
             return crate::ask::hover(&mut self.ask, w, h, x, y);
         }
-        // the pointer moved: the keyboard's selection hides (the light follows the pointer)
-        let hid = std::mem::take(&mut self.keyboard);
         if self.window_menu.is_some() {
+            // the pointer moved: the keyboard's selection hides (the light follows the pointer)
+            let hid = std::mem::take(&mut self.keyboard);
             self.pointer = Some((x, y));
-            let now = self.hit_at((x, y));
-            let changed = now != self.hovered;
-            self.hovered = now;
+            self.last_output = Some(output);
+            let now = self.hit_at_on(output, (x, y));
+            let changed = now != self.hovered.get(&output).copied();
+            match now {
+                Some(h) => self.hovered.insert(output, h),
+                None => self.hovered.remove(&output),
+            };
             return changed || hid;
         }
         let Some(idx) = self.open else {
+            self.last_output = Some(output);
+            self.last_screen = (w, h);
+            self.pointers.insert(output, (x, y));
+            self.keyboard = false;
             let hit_strip = (0..self.panels.len()).find(|&i| {
                 if !self.panels[i].panel.hover {
                     return false;
@@ -1188,21 +1311,30 @@ impl Shell {
             });
             if let Some(i) = hit_strip {
                 match self.hover_open {
-                    Some((prev, t0)) if prev == i => {
+                    Some((prev_out, prev_i, t0)) if prev_out == output && prev_i == i => {
                         if now.saturating_duration_since(t0).as_secs_f64() * 1000.0 >= HOVER_OPEN_MS
                         {
                             self.hover_open = None;
-                            return self.open_panel(i, true, now);
+                            return self.open_panel_on(Some(output), i, true, now);
                         }
                     }
-                    _ => self.hover_open = Some((i, now)),
+                    _ => self.hover_open = Some((output, i, now)),
                 }
-            } else {
+            } else if self.hover_open.is_some_and(|(o, _, _)| o == output) {
                 self.hover_open = None;
             }
             return false;
         };
+        if self.open_output.is_some_and(|id| id != output) {
+            self.pointers.insert(output, (x, y));
+            return false;
+        }
+        self.last_output = Some(output);
+        self.last_screen = (w, h);
+        // the pointer moved: the keyboard's selection hides (the light follows the pointer)
+        let hid = std::mem::take(&mut self.keyboard);
         if self.editing() {
+            self.pointers.insert(output, (x, y));
             self.pointer = Some((x, y));
             if let Some(mut d) = self.edit.drag {
                 if !d.moved && (y - d.start_y).abs() >= 6.0 {
@@ -1226,7 +1358,7 @@ impl Shell {
                 return false;
             }
             let prev = self.edit.hover_card;
-            self.update_edit_hover(w, h);
+            self.update_edit_hover_on(output, w, h);
             let (bar, add) = self.edit_rects(idx, w, h);
             let over_bar = crate::edit::inside(bar, x, y)
                 || (self.edit.adding && crate::edit::inside(add, x, y));
@@ -1236,36 +1368,55 @@ impl Shell {
             let b = self.hover_box(idx, w, h);
             if x < b.0 || x > b.0 + b.2 || y < b.1 || y > b.1 + b.3 {
                 self.hover_close.get_or_insert(now);
+                self.pointers.remove(&output);
                 self.pointer = None;
-                let lit = self.hovered.take().is_some();
+                let lit = self.hovered.remove(&output).is_some();
                 return lit || hid;
             }
             self.hover_close = None;
         }
+        self.pointers.insert(output, (x, y));
         self.pointer = Some((x, y));
-        if let Some((ci, hit)) = self.pressed {
-            return self.card_event(idx, ci, &Event::Drag { hit, at: (x, y) });
+        if let Some((po, ci, hit)) = self.pressed {
+            if po == output {
+                return self.card_event(idx, ci, &Event::Drag { hit, at: (x, y) });
+            }
         }
-        let hit_now = self.hit_at((x, y));
-        let changed = hit_now != self.hovered;
-        self.hovered = hit_now;
+        let hit_now = self.hit_at_on(output, (x, y));
+        let changed = hit_now != self.hovered.get(&output).copied();
+        match hit_now {
+            Some(h) => {
+                self.hovered.insert(output, h);
+            }
+            None => {
+                self.hovered.remove(&output);
+            }
+        }
         changed || hid
     }
 
-    pub fn pointer_leave(&mut self) -> bool {
-        self.pointer_leave_at(Instant::now())
+    #[cfg(test)]
+    pub fn pointer_leave_at(&mut self, now: Instant) -> bool {
+        let out = self.active_output_or_last();
+        self.pointer_leave_on(out, now)
     }
 
-    pub fn pointer_leave_at(&mut self, now: Instant) -> bool {
+    pub fn pointer_leave_on(&mut self, output: OutputId, now: Instant) -> bool {
         if self.ask.ask.on {
             return false;
         }
+        self.pointers.remove(&output);
+        if self.hover_open.is_some_and(|(o, _, _)| o == output) {
+            self.hover_open = None;
+        }
+        if self.open_output.is_some_and(|id| id != output) {
+            return false;
+        }
         self.pointer = None;
-        self.hover_open = None;
         if self.editing() {
             return self.edit.hover_card.take().is_some();
         }
-        let lit = self.hovered.take().is_some();
+        let lit = self.hovered.remove(&output).is_some();
         if self.opened_by_hover && self.open.is_some() {
             self.hover_close.get_or_insert(now);
             return lit;
@@ -1281,10 +1432,10 @@ impl Shell {
             return false;
         }
         if self.open.is_none() {
-            if let Some((i, t0)) = self.hover_open {
+            if let Some((out, i, t0)) = self.hover_open {
                 if now.saturating_duration_since(t0).as_secs_f64() * 1000.0 >= HOVER_OPEN_MS {
                     self.hover_open = None;
-                    return self.open_panel(i, true, now);
+                    return self.open_panel_on(Some(out), i, true, now);
                 }
             }
             return false;
@@ -1305,7 +1456,7 @@ impl Shell {
             return None;
         }
         if self.open.is_none() {
-            self.hover_open.map(|(_, t0)| {
+            self.hover_open.map(|(_, _, t0)| {
                 std::time::Duration::from_secs_f64(HOVER_OPEN_MS / 1000.0)
                     .saturating_sub(now.saturating_duration_since(t0))
             })
@@ -1319,8 +1470,18 @@ impl Shell {
         }
     }
 
-    fn edit_press(&mut self, idx: usize, w: f64, h: f64, x: f64, y: f64, button: Button) -> bool {
+    fn edit_press(
+        &mut self,
+        output: OutputId,
+        idx: usize,
+        screen: (f64, f64),
+        at: (f64, f64),
+        button: Button,
+    ) -> bool {
+        let ((w, h), (x, y)) = (screen, at);
+        self.last_output = Some(output);
         self.last_screen = (w, h);
+        self.pointers.insert(output, (x, y));
         self.pointer = Some((x, y));
         let (bar, add) = self.edit_rects(idx, w, h);
         self.edit.bar_rect = bar;
@@ -1344,7 +1505,7 @@ impl Shell {
                         };
                         self.apply_panel_state(idx, snap.cards, snap.width, snap.hover);
                         self.refresh_edit_rects(w, h);
-                        self.update_edit_hover(w, h);
+                        self.update_edit_hover_on(output, w, h);
                         return true;
                     }
                     crate::edit::BarButton::Reset => {
@@ -1366,7 +1527,7 @@ impl Shell {
                         self.apply_panel_state(idx, def_cards, def_w, def_hover);
                         self.panel_scroll = 0.0;
                         self.refresh_edit_rects(w, h);
-                        self.update_edit_hover(w, h);
+                        self.update_edit_hover_on(output, w, h);
                         return true;
                     }
                     crate::edit::BarButton::Add => {
@@ -1498,7 +1659,25 @@ impl Shell {
 
     /// A button went down: on a hit, the card's Press; an unused right click starts editing; outside
     /// an open panel, it closes.
+    #[cfg(test)]
     pub fn click(&mut self, w: f64, h: f64, x: f64, y: f64, button: Button) -> bool {
+        self.click_on(screen_key(w, h), w, h, x, y, button)
+    }
+
+    pub fn click_on(
+        &mut self,
+        output: OutputId,
+        w: f64,
+        h: f64,
+        x: f64,
+        y: f64,
+        button: Button,
+    ) -> bool {
+        if self.visible_output().is_some_and(|id| id != output) {
+            return false;
+        }
+        self.last_output = Some(output);
+        self.last_screen = (w, h);
         if self.ask.ask.on {
             let raw = match button {
                 Button::Left => 0x110,
@@ -1511,14 +1690,14 @@ impl Shell {
             let r = self.window_menu_rect(w, h).unwrap();
             if x < r.0 || x > r.0 + r.2 || y < r.1 || y > r.1 + r.3 {
                 self.window_menu = None;
-                self.hovered = None;
+                self.hovered.clear();
                 self.selected = None;
                 self.keyboard = false;
                 return true;
             }
             if button == Button::Left {
                 if let Some((action, _, _)) = self
-                    .hit_at((x, y))
+                    .hit_at_on(output, (x, y))
                     .and_then(|(_, hit)| wm.items().get(hit as usize).copied())
                 {
                     self.actions.push((
@@ -1528,7 +1707,7 @@ impl Shell {
                         &[],
                     ));
                     self.window_menu = None;
-                    self.hovered = None;
+                    self.hovered.clear();
                     self.selected = None;
                     self.keyboard = false;
                     return true;
@@ -1545,12 +1724,12 @@ impl Shell {
             if button == Button::Left
                 && item.is_some_and(|r| x >= r.0 && x <= r.0 + r.2 && y >= r.1 && y <= r.1 + r.3)
             {
-                return self.enter_edit(w, h);
+                return self.enter_edit_on(output, w, h);
             }
             return true;
         }
         if self.editing() {
-            return self.edit_press(idx, w, h, x, y, button);
+            return self.edit_press(output, idx, (w, h), (x, y), button);
         }
         let ((ox, oy, pw, ph), _) = self.layout(idx, w, h);
         if x < ox || x > ox + pw || y < oy || y > oy + ph {
@@ -1558,14 +1737,14 @@ impl Shell {
         }
         self.hover_close = None;
         let promoted = self.opened_by_hover && !std::mem::replace(&mut self.clicked_inside, true);
-        let Some((ci, hit)) = self.hit_at((x, y)) else {
+        let Some((ci, hit)) = self.hit_at_on(output, (x, y)) else {
             if button == Button::Right {
                 return self.offer_edit(idx, x, y) || promoted;
             }
             return promoted;
         };
         if button == Button::Left {
-            self.pressed = Some((ci, hit));
+            self.pressed = Some((output, ci, hit));
         }
         let used = self.card_event(
             idx,
@@ -1582,7 +1761,19 @@ impl Shell {
         used || promoted
     }
 
+    #[cfg(test)]
     pub fn release(&mut self) -> bool {
+        let out = self
+            .pressed
+            .map(|(o, _, _)| o)
+            .unwrap_or_else(|| self.active_output_or_last());
+        self.release_on(out)
+    }
+
+    pub fn release_on(&mut self, output: OutputId) -> bool {
+        if self.visible_output().is_some_and(|id| id != output) {
+            return false;
+        }
         let Some(idx) = self.open else {
             return false;
         };
@@ -1598,24 +1789,37 @@ impl Shell {
                     false
                 };
                 if !changed {
-                    let (w, h) = self.last_screen;
-                    self.update_edit_hover(w, h);
+                    let (w, h) = self.screen_for(output);
+                    self.update_edit_hover_on(output, w, h);
                 }
                 return true;
             }
             return false;
         }
-        let Some((ci, hit)) = self.pressed.take() else {
+        let Some((po, ci, hit)) = self.pressed else {
             return false;
         };
+        if po != output {
+            return false;
+        }
+        self.pressed = None;
         self.card_event(idx, ci, &Event::Release { hit })
     }
 
+    #[cfg(test)]
     pub fn scroll(&mut self, x: f64, y: f64, dy: f64) -> bool {
+        let out = self.active_output_or_last();
+        let (w, h) = self.screen_for(out);
+        self.scroll_on(out, w, h, x, y, dy)
+    }
+
+    pub fn scroll_on(&mut self, output: OutputId, w: f64, h: f64, x: f64, y: f64, dy: f64) -> bool {
+        if self.visible_output().is_some_and(|id| id != output) {
+            return false;
+        }
         let Some(idx) = self.open else {
             return false;
         };
-        let (w, h) = self.last_screen;
         let step = if dy.abs() <= 3.0 { dy * 36.0 } else { dy * 3.0 };
         if self.editing() {
             let (pbox, _, content_h) = self.layout_local(idx, w, h);
@@ -1642,15 +1846,15 @@ impl Shell {
                 let next = (self.panel_scroll + step).clamp(0.0, max);
                 if (next - self.panel_scroll).abs() > 0.01 {
                     self.panel_scroll = next;
-                    self.update_edit_hover(w, h);
+                    self.update_edit_hover_on(output, w, h);
                     return true;
                 }
             }
             return false;
         }
-        if let Some(ci) = self.card_at((x, y)) {
+        if let Some(ci) = self.card_at_on(output, (x, y)) {
             let hit = self
-                .hit_at((x, y))
+                .hit_at_on(output, (x, y))
                 .filter(|(c, _)| *c == ci)
                 .map(|(_, h)| h);
             if self.card_event(idx, ci, &Event::Scroll { hit, dy }) {
@@ -1739,6 +1943,33 @@ impl Shell {
         self.active() || self.closing.is_some()
     }
 
+    pub fn set_ask_output(&mut self, output: Option<OutputId>) {
+        self.ask_output = output;
+    }
+
+    pub fn visible_output(&self) -> Option<OutputId> {
+        if self.ask.ask.on {
+            self.ask_output
+        } else if self.open.is_some() {
+            self.open_output
+        } else {
+            self.closing.as_ref().and_then(|c| c.output)
+        }
+    }
+
+    pub fn visible_on(&self, output: OutputId) -> bool {
+        self.visible() && self.visible_output().is_none_or(|id| id == output)
+    }
+
+    pub fn frame_hits(&self, output: Option<OutputId>) -> Vec<(usize, Rect, Hits)> {
+        if let Some(id) = output {
+            if let Some(f) = self.frames.borrow().get(&id) {
+                return f.hits.clone();
+            }
+        }
+        self.frame.borrow().clone()
+    }
+
     /// What is drawn on a `w x h` screen: the question's card while it asks, the window menu,
     /// else the open panel's box (plus the edit bar and Add list while editing), or a closing
     /// panel's box.
@@ -1776,10 +2007,16 @@ impl Shell {
         changed |= crate::ask::check_asker_gone(&mut self.ask);
         if self.ask.ask.on {
             if self.open.is_some() {
+                let prev_out = self.open_output;
                 self.close();
+                if self.ask_output.is_none() {
+                    self.ask_output = prev_out;
+                }
                 changed = true;
             }
             self.closing = None;
+        } else {
+            self.ask_output = None;
         }
         changed
     }
@@ -1821,7 +2058,17 @@ impl Shell {
     /// added them), once each.
     fn hit_order(&self) -> Vec<(usize, u32, Rect)> {
         let mut out: Vec<(usize, u32, Rect)> = Vec::new();
-        for (ci, _, hits) in self.frame.borrow().iter() {
+        let frames = self.frames.borrow();
+        let list: &Vec<(usize, Rect, Hits)> = if let Some(id) = self.open_output {
+            if let Some(f) = frames.get(&id) {
+                &f.hits
+            } else {
+                &self.frame.borrow()
+            }
+        } else {
+            &self.frame.borrow()
+        };
+        for (ci, _, hits) in list.iter() {
             for (id, r) in &hits.list {
                 if !out.iter().any(|(c, i, _)| c == ci && i == id) {
                     out.push((*ci, *id, *r));
@@ -1832,7 +2079,14 @@ impl Shell {
     }
 
     fn scroll_to_hit(&mut self, idx: usize, r: Rect, is_first: bool) {
-        let (w, h) = self.frame_screen.get();
+        let ((w, h), frame_scroll) = {
+            let frames = self.frames.borrow();
+            if let Some(f) = self.open_output.and_then(|id| frames.get(&id)) {
+                (f.screen, f.scroll)
+            } else {
+                (self.frame_screen.get(), self.frame_scroll.get())
+            }
+        };
         let (pbox, _, content_h) = self.layout_local(idx, w, h);
         let max_scroll = (content_h - pbox.3).max(0.0);
         if max_scroll <= 0.0 {
@@ -1840,7 +2094,6 @@ impl Shell {
             return;
         }
         let cur_scroll = self.panel_scroll.clamp(0.0, max_scroll);
-        let frame_scroll = self.frame_scroll.get();
         let ry = r.1 + frame_scroll - cur_scroll;
         let top = pbox.1;
         let bot = pbox.1 + pbox.3;
@@ -1879,7 +2132,7 @@ impl Shell {
             return match k {
                 Key::Escape => {
                     self.window_menu = None;
-                    self.hovered = None;
+                    self.hovered.clear();
                     self.selected = None;
                     self.keyboard = false;
                     true
@@ -1913,7 +2166,11 @@ impl Shell {
                         .selected
                         .filter(|_| self.keyboard)
                         .map(|(_, h)| h)
-                        .or_else(|| self.hovered.map(|(_, h)| h));
+                        .or_else(|| {
+                            self.last_output
+                                .and_then(|o| self.hovered.get(&o))
+                                .map(|&(_, h)| h)
+                        });
                     if let Some((action, _, _)) =
                         idx.and_then(|hit| wm.items().get(hit as usize).copied())
                     {
@@ -1924,7 +2181,7 @@ impl Shell {
                             &[],
                         ));
                         self.window_menu = None;
-                        self.hovered = None;
+                        self.hovered.clear();
                         self.selected = None;
                         self.keyboard = false;
                         true
@@ -1952,6 +2209,7 @@ impl Shell {
                 }
                 Key::Super(c) => {
                     let c = c.to_ascii_lowercase();
+                    let out = self.open_output;
                     self.finish_edit();
                     if self
                         .open
@@ -1961,7 +2219,7 @@ impl Shell {
                     } else if let Some(other) =
                         self.panels.iter().position(|p| p.panel.key == Some(c))
                     {
-                        self.open_panel(other, false, Instant::now())
+                        self.open_panel_on(out, other, false, Instant::now())
                     } else {
                         true
                     }
@@ -1988,7 +2246,7 @@ impl Shell {
                     self.close()
                 } else if let Some(other) = self.panels.iter().position(|p| p.panel.key == Some(c))
                 {
-                    self.open_panel(other, false, Instant::now())
+                    self.open_panel_on(self.open_output, other, false, Instant::now())
                 } else {
                     false
                 }
@@ -2031,7 +2289,11 @@ impl Shell {
                         .into_iter()
                         .find(|(c, h, _)| *c == ci && *h == hit)
                         .map_or((0.0, 0.0, 0.0, 0.0), |(_, _, r)| r);
-                    let dy = self.frame_scroll.get() - self.panel_scroll;
+                    let frame_scroll = self
+                        .open_output
+                        .and_then(|id| self.frames.borrow().get(&id).map(|f| f.scroll))
+                        .unwrap_or_else(|| self.frame_scroll.get());
+                    let dy = frame_scroll - self.panel_scroll;
                     let ev = Event::Press {
                         hit,
                         button: Button::Left,
@@ -2105,21 +2367,23 @@ impl Shell {
                 running |= pc.card.tick(dt);
             }
         }
-        running |= self.drag_autoscroll(self.last_screen.0, self.last_screen.1, dt);
+        let out = self.active_output_or_last();
+        let (w, h) = self.screen_for(out);
+        running |= self.drag_autoscroll(out, w, h, dt);
         if !running {
             self.last_tick = None;
         }
         running
     }
 
-    fn drag_autoscroll(&mut self, w: f64, h: f64, dt_ms: f64) -> bool {
+    fn drag_autoscroll(&mut self, output: OutputId, w: f64, h: f64, dt_ms: f64) -> bool {
         let Some(idx) = self.open else {
             return false;
         };
         if !self.editing() || !self.edit.drag.is_some_and(|d| d.moved) {
             return false;
         }
-        let Some((x, y)) = self.pointer else {
+        let Some((x, y)) = self.pointer_for(output) else {
             return false;
         };
         let (pbox, local_rects, content_h) = self.layout_local(idx, w, h);
@@ -2200,9 +2464,10 @@ impl Shell {
             return false;
         };
         if self.editing() && self.edit.drag.is_some_and(|d| d.moved) {
-            if let Some((x, y)) = self.pointer {
-                let (pbox, _, content_h) =
-                    self.layout_local(idx, self.last_screen.0, self.last_screen.1);
+            let out = self.active_output_or_last();
+            if let Some((x, y)) = self.pointer_for(out) {
+                let (w, h) = self.screen_for(out);
+                let (pbox, _, content_h) = self.layout_local(idx, w, h);
                 if content_h > pbox.3
                     && x >= pbox.0
                     && x <= pbox.0 + pbox.2
@@ -2219,10 +2484,25 @@ impl Shell {
     /// rising in as the panel opens or fading out as it closes; keeps each card's hits for the
     /// pointer while open. Returns the panel's box.
     pub fn draw(&self, cr: &cairo::Context, w: f64, h: f64) -> Option<Rect> {
-        draw::with_font(&self.theme.font, || self.draw_open_or_closing(cr, w, h))
+        self.draw_on(screen_key(w, h), cr, w, h)
     }
 
-    fn draw_open_or_closing(&self, cr: &cairo::Context, w: f64, h: f64) -> Option<Rect> {
+    pub fn draw_on(&self, output: OutputId, cr: &cairo::Context, w: f64, h: f64) -> Option<Rect> {
+        if !self.visible_on(output) {
+            return None;
+        }
+        draw::with_font(&self.theme.font, || {
+            self.draw_open_or_closing(output, cr, w, h)
+        })
+    }
+
+    fn draw_open_or_closing(
+        &self,
+        output: OutputId,
+        cr: &cairo::Context,
+        w: f64,
+        h: f64,
+    ) -> Option<Rect> {
         if self.ask.ask.on {
             return Some(crate::ask::draw(cr, &self.theme, &self.ask.ask, (w, h)));
         }
@@ -2254,6 +2534,7 @@ impl Shell {
         }
         if let Some(idx) = self.open {
             return Some(self.draw_panel(
+                output,
                 cr,
                 w,
                 h,
@@ -2266,7 +2547,7 @@ impl Shell {
         if let Some(c) = &self.closing {
             let ps = c.transient.as_ref().or_else(|| self.panels.get(c.idx))?;
             let cp = (1.0 - crate::ui::ease((c.ms / LEAVE_MS).clamp(0.0, 1.0))).clamp(0.0, 1.0);
-            return Some(self.draw_panel(cr, w, h, ps, c.idx, c.scroll, Some(cp)));
+            return Some(self.draw_panel(output, cr, w, h, ps, c.idx, c.scroll, Some(cp)));
         }
         None
     }
@@ -2274,6 +2555,7 @@ impl Shell {
     #[allow(clippy::too_many_arguments)]
     fn draw_panel(
         &self,
+        output: OutputId,
         cr: &cairo::Context,
         w: f64,
         h: f64,
@@ -2282,6 +2564,7 @@ impl Shell {
         scroll_pos: f64,
         closing_p: Option<f64>,
     ) -> Rect {
+        let pointer = self.pointer_for(output);
         let interactive = closing_p.is_none();
         let editing = interactive && self.editing();
         let (pbox, local_rects, content_h) = self.layout_panel_local(ps, w, h);
@@ -2320,7 +2603,7 @@ impl Shell {
                 if !interactive || editing {
                     None
                 } else {
-                    self.pointer
+                    pointer
                 },
                 sel,
             );
@@ -2467,7 +2750,7 @@ impl Shell {
                 (pbox.0, pbox.1),
                 (pbox.2, pbox.3),
                 scroll,
-                self.pointer,
+                pointer,
                 &overlay_state,
             );
         }
@@ -2480,7 +2763,7 @@ impl Shell {
                 crate::draw::set(cr, th.edge);
                 cr.set_line_width(1.0);
                 let _ = cr.stroke();
-                let lit = self.pointer.is_some_and(|(px, py)| {
+                let lit = pointer.is_some_and(|(px, py)| {
                     px >= r.0 && px <= r.0 + r.2 && py >= r.1 && py <= r.1 + r.3
                 });
                 if lit {
@@ -2508,6 +2791,14 @@ impl Shell {
                     },
                 );
             }
+            self.frames.borrow_mut().insert(
+                output,
+                OutputFrame {
+                    hits: frame.clone(),
+                    scroll,
+                    screen: (w, h),
+                },
+            );
             *self.frame.borrow_mut() = frame;
             self.frame_scroll.set(scroll);
             self.frame_screen.set((w, h));
@@ -3756,5 +4047,104 @@ mod tests {
         frame(&sh);
         assert!(sh.key(Key::Escape));
         assert!(!sh.active());
+    }
+
+    #[test]
+    fn two_screen_sizes_keep_separate_frames_pointers_and_clicks() {
+        let mut sh = shell("SUPER+A top right 380 settings/power");
+        sh.apply(
+            "settings",
+            "power",
+            &parse_power("* balanced:\n  power-saver:\n  performance:\n") as &dyn std::any::Any,
+        );
+        let idx = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "control")
+            .unwrap();
+        assert!(sh.open_panel(idx, false, Instant::now()));
+        sh.open_ms = f64::INFINITY;
+
+        // Draw first on 1920x1080, then on 1280x800 (different right-aligned x coordinates).
+        let surf1 = cairo::ImageSurface::create(cairo::Format::ARgb32, 1920, 1080).unwrap();
+        let cr1 = cairo::Context::new(&surf1).unwrap();
+        sh.draw(&cr1, 1920.0, 1080.0);
+        let hit_1920 = sh.frame.borrow()[0].2.list[2].1;
+        assert!(hit_1920.0 > 1500.0);
+
+        let surf2 = cairo::ImageSurface::create(cairo::Format::ARgb32, 1280, 800).unwrap();
+        let cr2 = cairo::Context::new(&surf2).unwrap();
+        sh.draw(&cr2, 1280.0, 800.0);
+        let hit_1280 = sh.frame.borrow()[0].2.list[2].1;
+        assert!(hit_1280.0 < 1280.0);
+
+        // Pointer motion on 1920x1080 must not highlight 1280x800.
+        assert!(sh.pointer_motion(1920.0, 1080.0, hit_1920.0 + 4.0, hit_1920.1 + 4.0));
+        assert!(sh.pointer_for(screen_key(1920.0, 1080.0)).is_some());
+        assert_eq!(sh.pointer_for(screen_key(1280.0, 800.0)), None);
+
+        // Clicking with 1920x1080 coordinates hits the card drawn at 1920x1080, not closed by 1280x800's box.
+        assert!(sh.click(
+            1920.0,
+            1080.0,
+            hit_1920.0 + 4.0,
+            hit_1920.1 + 4.0,
+            Button::Left
+        ));
+        assert_eq!(sh.open, Some(idx));
+        assert!(
+            sh.actions
+                .iter()
+                .any(|(a, _, _, _)| matches!(a, Action::Run(cmd) if cmd.contains("performance"))),
+            "expected performance action, got {:?}",
+            sh.actions.iter().map(|(a, _, _, _)| a).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn small_screen_clamps_panel_width_height_and_scrolls() {
+        let mut sh = shell(
+            "SUPER+A top right 380 settings/power settings/session settings/power settings/session",
+        );
+        sh.apply(
+            "settings",
+            "power",
+            &parse_power("* balanced:\n  power-saver:\n  performance:\n") as &dyn std::any::Any,
+        );
+        let idx = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "control")
+            .unwrap();
+        assert!(sh.open_panel(idx, false, Instant::now()));
+        sh.open_ms = f64::INFINITY;
+
+        // Screen narrower and shorter than the 380 px panel.
+        let (pbox, _, content_h) = sh.layout_local(idx, 320.0, 240.0);
+        assert_eq!(pbox, (24.0, 24.0, 272.0, 192.0));
+        assert!(content_h > pbox.3);
+
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 320, 240).unwrap();
+        let cr = cairo::Context::new(&surf).unwrap();
+        assert_eq!(sh.draw(&cr, 320.0, 240.0), Some(pbox));
+
+        // Scrolling inside the clamped panel moves content into view and clicks hit accurately.
+        sh.pointer_motion(320.0, 240.0, pbox.0 + 20.0, pbox.1 + 20.0);
+        assert!(sh.scroll(pbox.0 + 20.0, pbox.1 + 20.0, 1.0));
+        assert!(sh.panel_scroll > 0.0);
+        sh.draw(&cr, 320.0, 240.0);
+        let hit_after = sh.frame.borrow()[0].2.list[0].1;
+        assert!(sh.click(
+            320.0,
+            240.0,
+            hit_after.0 + 4.0,
+            hit_after.1 + 4.0,
+            Button::Left
+        ));
+        assert!(!sh.actions.is_empty());
+
+        // Even an extreme screen smaller than 2*MARGIN stays non-negative without panicking.
+        let (tiny_box, _, _) = sh.layout_local(idx, 32.0, 32.0);
+        assert!(tiny_box.2 >= 0.0 && tiny_box.3 >= 0.0);
     }
 }
