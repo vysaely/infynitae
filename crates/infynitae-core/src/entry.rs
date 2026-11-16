@@ -283,6 +283,19 @@ impl Core {
                 self.touch_resize_settle(out);
                 Ok(())
             }
+            PhysicalEvent::TabletTap { output, p, time_us } => {
+                if !(p.0.is_finite() && p.1.is_finite()) {
+                    return Err(EntryError::InvalidEvent);
+                }
+                self.input.clock.accepted(time_us);
+                self.closed_windows.clear();
+                if self.output(output).is_some() && !self.input.interaction.active() {
+                    self.tap_focus(output, p, out);
+                    out.extend(self.reconcile_constraints());
+                }
+                self.physical_input_activity = true;
+                Ok(())
+            }
             PhysicalEvent::JumpToWindow { element } => {
                 self.jump_to_window(element, Some(authority::Authorized::mint()), out);
                 Ok(())
@@ -2806,10 +2819,19 @@ impl Core {
             return;
         }
         self.input.ownership.press(button, Owner::Client);
-        // Click-to-focus (INV-INPUT-8, M11): an explicit user action.
-        // If the click hits an element, that element gains ActiveElementFocus. A click on a layer
-        // surface above the Canvas reaches it instead, and focuses it when it is on-demand
-        // interactive (L3, L5); below the Canvas it is reached only where no element is.
+        self.tap_focus(output, p, out);
+        out.push(Effect::PointerButton {
+            button,
+            pressed: true,
+            time_ms,
+        });
+        out.push(Effect::PointerFrame);
+    }
+
+    /// Click- and tap-to-focus (INV-INPUT-8, M11): a window under `(output, p)` is raised and
+    /// focused; an on-demand layer surface above the Canvas (or below it where no window is)
+    /// takes the keyboard (L3, L5).
+    fn tap_focus(&mut self, output: OutputId, p: (f64, f64), out: &mut Vec<Effect>) {
         let pt = crate::geom::OutputLogicalPoint { x: p.0, y: p.1 };
         let on_layer = self.layer_hit(output, p, true);
         let element = if on_layer.is_none() {
@@ -2834,12 +2856,6 @@ impl Core {
         {
             out.extend(self.focus.layer_take(h.layer, false));
         }
-        out.push(Effect::PointerButton {
-            button,
-            pressed: true,
-            time_ms,
-        });
-        out.push(Effect::PointerFrame);
     }
 
     /// Starts a `CameraPan` interaction on `output` with `initiator` (`0` for touchpad swipe).
@@ -7679,5 +7695,87 @@ mod tests {
             Some(ws[2]),
             "ws[2] stayed hover-focused for 500ms before ShellCommand::Focus and should be in Super+Tab history"
         );
+    }
+
+    #[test]
+    fn tablet_tap_focuses_and_raises_window_and_route_point_follows_camera() {
+        use crate::{NavigateTo, PhysicalEvent, ShellCommand, ShellStream};
+        let (mut c, mut i, mut s, mut t) = Core::new(PersistedCameras::default());
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        let ws = map_windows(&mut c, a, 2);
+        let mut fx = Vec::new();
+        c.place_by_user(ws[0], crate::geom::CanvasPoint { x: 100, y: 200 }, &mut fx)
+            .unwrap();
+        c.place_by_user(ws[1], crate::geom::CanvasPoint { x: 600, y: 200 }, &mut fx)
+            .unwrap();
+        c.set_focus(&mut i, Some(ws[1])).unwrap();
+        assert_eq!(c.focus().target(), Some(ws[1]));
+
+        // Pan camera to (300, 350) at zoom 2.0: output (960, 540) maps to canvas (300, 350),
+        // which is inside ws[0] at local (200, 150).
+        c.shell_command(
+            &mut s,
+            ShellCommand::Navigate {
+                output: a,
+                to: NavigateTo::Canvas(300.0, 350.0),
+                zoom: Some(2.0),
+                stream: ShellStream::Atomic,
+            },
+        )
+        .unwrap();
+
+        // Output logical point (990, 560) is (+30, +20) from view centre -> (+15, +10) canvas ->
+        // canvas (315, 360), local (215, 160) on ws[0].
+        let (target, loc) = c.route_point(a, (990.0, 560.0)).expect("routed");
+        let target = target.expect("hit ws[0]");
+        assert_eq!(target.origin, crate::geom::CanvasPoint { x: 100, y: 200 });
+        assert_eq!(
+            (
+                (loc.x - target.origin.x * crate::geom::Q16_ONE) / crate::geom::Q16_ONE,
+                (loc.y - target.origin.y * crate::geom::Q16_ONE) / crate::geom::Q16_ONE,
+            ),
+            (215, 160)
+        );
+
+        let tap_fx = c
+            .physical_input_vec(
+                &mut i,
+                PhysicalEvent::TabletTap {
+                    output: a,
+                    p: (990.0, 560.0),
+                    time_us: 1_000,
+                },
+            )
+            .unwrap();
+        assert_eq!(c.focus().target(), Some(ws[0]));
+        assert_eq!(c.stage().top_mapped(), Some(ws[0]));
+        assert!(tap_fx.contains(&Effect::KeyboardFocus(Some(ws[0]))));
+    }
+
+    #[test]
+    fn tablet_tap_on_empty_canvas_keeps_focus() {
+        use crate::PhysicalEvent;
+        let (mut c, mut i, _s, mut t) = Core::new(PersistedCameras::default());
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        let ws = map_windows(&mut c, a, 1);
+        let mut fx = Vec::new();
+        c.place_by_user(ws[0], crate::geom::CanvasPoint { x: 0, y: 0 }, &mut fx)
+            .unwrap();
+        c.set_focus(&mut i, Some(ws[0])).unwrap();
+        assert_eq!(c.focus().target(), Some(ws[0]));
+
+        // Outside the 400x300 window on empty canvas: does not change focus.
+        let tap_fx = c
+            .physical_input_vec(
+                &mut i,
+                PhysicalEvent::TabletTap {
+                    output: a,
+                    p: (1500.0, 900.0),
+                    time_us: 1_000,
+                },
+            )
+            .unwrap();
+        assert_eq!(c.focus().target(), Some(ws[0]));
+        assert!(!tap_fx.iter().any(|e| matches!(e, Effect::KeyboardFocus(_))));
     }
 }
