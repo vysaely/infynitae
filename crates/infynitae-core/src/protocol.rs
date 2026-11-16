@@ -2977,6 +2977,11 @@ impl Core {
         let pointer::PointerState::Located { output, p } = self.pointer else {
             return None;
         };
+        // a panel or overlay that takes input above the canvas covers the window (as in
+        // `route_pointer`); click-through overlays have no input region there
+        if self.layer_hit(output, p, true).is_some() {
+            return None;
+        }
         let pt = geom::OutputLogicalPoint { x: p.0, y: p.1 };
         let hit = self.hit_test(output, pt)?;
         if hit.surface == surface {
@@ -3038,9 +3043,13 @@ impl Core {
 
         match c.kind {
             crate::pointer::ConstraintKind::Lock => {
-                let pointer::PointerState::Located { output, .. } = self.pointer else {
+                let pointer::PointerState::Located { output, p } = self.pointer else {
                     return false;
                 };
+                // an input-taking layer opened over the locked pointer ends the lock
+                if self.layer_hit(output, p, true).is_some() {
+                    return false;
+                }
                 let Some(model) = self.output(output) else {
                     return false;
                 };

@@ -7335,8 +7335,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "AUDIT_FOCUS_HOVER: route_pointer_hit_local ignores above-canvas layers so an obscured window activates Lock"]
-    fn audit_overlay_layer_over_window_still_activates_pointer_constraint() {
+    fn an_input_layer_over_the_window_blocks_its_pointer_constraint() {
         use crate::geom::{LocalPoint, LocalRect, LocalSize};
         use crate::layer::{Anchors, KeyboardInteractivity, Layer, LayerState};
         use crate::snapshot::{InputRegion, SnapshotSurface, SurfaceKey, SurfaceRole, SurfaceTree};
