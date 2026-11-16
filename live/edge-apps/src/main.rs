@@ -129,17 +129,35 @@ fn render(name: &str, size: &str, out: &str) -> Result<(), String> {
     paint(&sh, w, h, out)
 }
 
+/// Backdrop colour for `--render`: `INFYNITAE_EDGE_RENDER_BG` (`#rrggbb`) if set, otherwise the
+/// theme's card colour adjusted by polarity so light themes are not pictured on a dark desktop.
+fn render_backdrop(th: &theme::Theme, light: bool, env_bg: Option<&str>) -> theme::Rgba {
+    if let Some(rgb) = env_bg.and_then(config::parse_hex) {
+        return theme::Rgba::rgb(rgb);
+    }
+    let c = th.card;
+    let is_light = light || c.alpha(1.0).luminance() > 0.35;
+    let factor = if is_light { 0.88 } else { 0.65 };
+    theme::Rgba(c.0 * factor, c.1 * factor, c.2 * factor, 1.0)
+}
+
 /// Draws what the shell shows on a `w x h` screen into the PNG file `out`.
 fn paint(sh: &shell::Shell, w: i32, h: i32, out: &str) -> Result<(), String> {
+    if let Ok(scratch) = cairo::ImageSurface::create(cairo::Format::ARgb32, w, h) {
+        if let Ok(cr) = cairo::Context::new(&scratch) {
+            sh.draw(&cr, w as f64, h as f64);
+        }
+    }
+    icons::wait_icon_idle();
     let surface =
         cairo::ImageSurface::create(cairo::Format::ARgb32, w, h).map_err(|e| e.to_string())?;
     let cr = cairo::Context::new(&surface).map_err(|e| e.to_string())?;
-    // a dark desktop behind (the picture is for looking at the panel, not the wallpaper)
-    cr.set_source_rgb(
-        0x0e as f64 / 255.0,
-        0x0a as f64 / 255.0,
-        0x0c as f64 / 255.0,
+    let bg = render_backdrop(
+        &sh.theme,
+        sh.cfg.light,
+        std::env::var("INFYNITAE_EDGE_RENDER_BG").ok().as_deref(),
     );
+    cr.set_source_rgb(bg.0, bg.1, bg.2);
     let _ = cr.paint();
     sh.draw(&cr, w as f64, h as f64);
     crate::boxes::dump(sh, w as f64, h as f64);
@@ -220,6 +238,31 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn render_backdrop_follows_theme_polarity_and_env_override() {
+        let dark_cfg = Config::from_text("THEME_SCHEME=\"tonal\"\n");
+        let dark_th = theme::Theme::from_config(&dark_cfg);
+        let dark_bg = render_backdrop(&dark_th, dark_cfg.light, None);
+        assert!(
+            dark_bg.luminance() < 0.15,
+            "dark lum={}",
+            dark_bg.luminance()
+        );
+
+        let light_cfg =
+            Config::from_text("COLOR_SCHEME=\"prefer-light\"\nTHEME_SCHEME=\"tonal\"\n");
+        let light_th = theme::Theme::from_config(&light_cfg);
+        let light_bg = render_backdrop(&light_th, light_cfg.light, None);
+        assert!(
+            light_bg.luminance() > 0.5,
+            "light lum={}",
+            light_bg.luminance()
+        );
+
+        let override_bg = render_backdrop(&light_th, light_cfg.light, Some("#123456"));
+        assert_eq!(override_bg, theme::Rgba::rgb([0x12, 0x34, 0x56]));
+    }
 
     #[test]
     fn render_window_menu_writes_png() {

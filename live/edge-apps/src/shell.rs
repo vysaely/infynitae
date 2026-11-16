@@ -24,6 +24,12 @@ pub const ARRIVE_MS: f64 = 200.0;
 pub const ARRIVE_STAGGER_MS: f64 = 28.0;
 pub const ARRIVE_LIFT: f64 = 14.0;
 const ARRIVE_CARDS: f64 = 8.0;
+/// Leaving animation: fade and drop when a panel closes.
+pub const LEAVE_MS: f64 = 120.0;
+pub const LEAVE_DROP: f64 = 6.0;
+/// Pointer dwell before opening a hover panel, and grace before closing when left.
+pub const HOVER_OPEN_MS: f64 = 120.0;
+pub const HOVER_CLOSE_MS: f64 = 250.0;
 
 /// A card in a panel: its word, provider, kind, the card itself, the app it comes from.
 pub struct Placed {
@@ -42,35 +48,146 @@ pub struct PanelState {
     pub cards: Vec<Placed>,
 }
 
-/// The cards of `p` that can be made: a word whose app is not installed, or whose provider or kind
-/// does not exist, is left out (docs section 3.3, "App not installed", comes with edit mode).
-pub fn place(p: &Panel, apps: &[App], favorites: &str) -> Vec<Placed> {
-    let mut out = Vec::new();
-    for w in crate::panel::cards_with(p, favorites) {
-        let Some((prov, app)) = provider::resolve(&w.owner, apps) else {
-            continue;
-        };
-        let (Some(kind), Some(card)) = (
+struct ClosingPanel {
+    idx: usize,
+    transient: Option<PanelState>,
+    started: Instant,
+    ms: f64,
+    scroll: f64,
+}
+
+pub const NOT_INSTALLED_TEXT: &str = "This app is not installed";
+
+struct NotInstalledProvider;
+
+impl provider::Provider for NotInstalledProvider {
+    fn id(&self) -> &'static str {
+        ""
+    }
+    fn name(&self) -> &'static str {
+        ""
+    }
+    fn claims(&self) -> &'static [provider::Claim] {
+        &[]
+    }
+    fn listed(&self) -> provider::Listed {
+        provider::Listed::Never
+    }
+    fn cards(&self) -> &'static [CardKind] {
+        &[]
+    }
+    fn card(&self, _: &str, _: Option<&str>) -> Option<Box<dyn Card>> {
+        None
+    }
+    fn source(&self, _: &str) -> Option<Box<dyn crate::card::Source>> {
+        None
+    }
+}
+
+static NOT_INSTALLED_PROVIDER: NotInstalledProvider = NotInstalledProvider;
+static NOT_INSTALLED_KIND: CardKind = CardKind {
+    id: "",
+    title: "",
+    about: "",
+    sizes: &[Size::S],
+    default: Size::S,
+    half: false,
+    sources: &[],
+};
+
+struct NotInstalledCard {
+    title: String,
+}
+
+impl Card for NotInstalledCard {
+    fn apply(&mut self, _key: &str, _data: &dyn std::any::Any) -> bool {
+        false
+    }
+    fn status(&self, _cx: &Cx) -> Status {
+        Status::Ready
+    }
+    fn title(&self, _cx: &Cx) -> Option<String> {
+        Some(self.title.clone())
+    }
+    fn height(&self, _cx: &Cx, width: f64) -> f64 {
+        wrapped_text_height((width - 16.0).max(20.0), NOT_INSTALLED_TEXT) + 8.0 + 26.0
+    }
+    fn draw(&self, cr: &cairo::Context, cx: &Cx, body: Rect, hits: &mut Hits) {
+        let max_w = (body.2 - 16.0).max(20.0);
+        let l = missing_layout(cr, max_w, NOT_INSTALLED_TEXT);
+        draw::set(cr, cx.theme.muted);
+        cr.move_to((body.0 + 8.0).round(), body.1.round());
+        pangocairo::functions::show_layout(cr, &l);
+        let text_h = (l.pixel_size().1 as f64).max(20.0);
+        crate::ui::button(
+            cr,
+            cx,
+            hits,
+            0,
+            body.0 + 8.0,
+            body.1 + text_h + 8.0,
+            "Remove",
+        );
+    }
+    fn event(&mut self, ev: &Event, _cx: &Cx, out: &mut Vec<Action>) -> bool {
+        if matches!(
+            ev,
+            Event::Press {
+                hit: 0,
+                button: Button::Left,
+                ..
+            }
+        ) {
+            out.push(Action::RemoveCard);
+            return true;
+        }
+        false
+    }
+}
+
+fn place_one(w: CardRef, apps: &[App]) -> Placed {
+    if let Some((prov, app)) = provider::resolve(&w.owner, apps) {
+        if let (Some(kind), Some(card)) = (
             prov.kind(&w.kind),
             prov.card(&w.kind, w.argument.as_deref()),
-        ) else {
-            continue;
-        };
-        let size = w
-            .size
-            .filter(|s| kind.sizes.contains(s))
-            .unwrap_or(kind.default);
-        out.push(Placed {
-            from: from_name(prov.name(), kind.title, app),
-            app_id: app.map(|a| a.id.clone()),
-            word: w,
-            provider: prov,
-            kind,
-            size,
-            card,
-        });
+        ) {
+            let size = w
+                .size
+                .filter(|s| kind.sizes.contains(s))
+                .unwrap_or(kind.default);
+            return Placed {
+                from: from_name(prov.name(), kind.title, app),
+                app_id: app.map(|a| a.id.clone()),
+                word: w,
+                provider: prov,
+                kind,
+                size,
+                card,
+            };
+        }
     }
-    out
+    let from = provider::by_id(&w.owner).map_or_else(|| w.owner.clone(), |p| p.name().to_string());
+    let title = provider::by_id(&w.owner)
+        .and_then(|p| p.kind(&w.kind))
+        .map_or_else(|| w.kind.clone(), |k| k.title.to_string());
+    Placed {
+        word: w,
+        provider: &NOT_INSTALLED_PROVIDER,
+        kind: &NOT_INSTALLED_KIND,
+        size: Size::S,
+        from,
+        app_id: None,
+        card: Box::new(NotInstalledCard { title }),
+    }
+}
+
+/// The cards of `p`: unknown apps or card kinds stay as a built-in "This app is not installed"
+/// card with Remove (docs/EDGE_APPS.md section 3.3).
+pub fn place(p: &Panel, apps: &[App], favorites: &str) -> Vec<Placed> {
+    crate::panel::cards_with(p, favorites)
+        .into_iter()
+        .map(|w| place_one(w, apps))
+        .collect()
 }
 
 /// The name at the right of a card's header: the app it comes from, else its provider, and nothing
@@ -236,13 +353,19 @@ pub struct Shell {
     pub panels: Vec<PanelState>,
     pub open: Option<usize>,
     pub opened_by_hover: bool,
+    pub clicked_inside: bool,
+    hover_open: Option<(usize, Instant)>,
+    hover_close: Option<Instant>,
     /// the pointer, in surface pixels, and the card and hit under it in the last frame
     pub pointer: Option<(f64, f64)>,
     pub hovered: Option<(usize, u32)>,
     /// the card and hit a button went down on (drags go to it)
     pub pressed: Option<(usize, u32)>,
-    /// each shown card's rectangle and hits in the last frame
+    /// each shown card's rectangle and hits in the last frame, plus the scroll and screen at which
+    /// they were drawn
     pub frame: RefCell<Vec<(usize, Rect, Hits)>>,
+    frame_scroll: std::cell::Cell<f64>,
+    frame_screen: std::cell::Cell<(f64, f64)>,
     /// what the cards asked for: the action, its card ("owner/kind": one command at a time per
     /// card), and the provider and source keys to fetch again after it ran
     pub actions: Vec<(Action, String, &'static str, &'static [&'static str])>,
@@ -256,6 +379,7 @@ pub struct Shell {
     pub keyboard: bool,
     pub opened_at: Option<Instant>,
     pub open_ms: f64,
+    closing: Option<ClosingPanel>,
     pub last_tick: Option<Instant>,
     pub last_screen: (f64, f64),
     pub now: chrono::NaiveDateTime,
@@ -313,13 +437,19 @@ impl Shell {
             panels,
             open: None,
             opened_by_hover: false,
+            clicked_inside: false,
+            hover_open: None,
+            hover_close: None,
             pointer: None,
             hovered: None,
             pressed: None,
             frame: RefCell::new(Vec::new()),
+            frame_scroll: std::cell::Cell::new(0.0),
+            frame_screen: std::cell::Cell::new((1920.0, 1080.0)),
             actions: Vec::new(),
             opened_at: None,
             open_ms: f64::INFINITY,
+            closing: None,
             last_tick: None,
             last_screen: (1920.0, 1080.0),
             now: chrono::Local::now().naive_local(),
@@ -353,12 +483,6 @@ impl Shell {
         }
     }
 
-    fn width_of(&self, idx: usize, w: f64) -> f64 {
-        let p = &self.panels[idx].panel;
-        let pw = if p.width > 0 { p.width as f64 } else { 380.0 };
-        pw.min(w - 2.0 * MARGIN)
-    }
-
     /// A card's whole height (its box: header, body, padding) at `width`; 0 when it hides, or a
     /// placeholder's height while editing.
     fn card_h(&self, pc: &Placed, width: f64, list_above: bool) -> f64 {
@@ -370,6 +494,7 @@ impl Shell {
             Status::Ready => {
                 PAD_TOP + head + pc.card.height(&cx, width - 2.0 * (PAD_X - 8.0)) + PAD_BOTTOM
             }
+            Status::Missing(why) => PAD_TOP + HEAD_H + missing_height(width, &why) + PAD_BOTTOM,
             _ => PAD_TOP + HEAD_H + 20.0 + PAD_BOTTOM,
         }
     }
@@ -377,9 +502,24 @@ impl Shell {
     /// Panel `idx` on a screen of `w x h`: its box on screen, panel-local card rectangles (without
     /// `panel_scroll`), and total content height.
     pub fn layout_local(&self, idx: usize, w: f64, h: f64) -> (Rect, Vec<(usize, Rect)>, f64) {
+        draw::with_font(&self.theme.font, || {
+            self.layout_panel_local(&self.panels[idx], w, h)
+        })
+    }
+
+    fn layout_panel_local(
+        &self,
+        ps: &PanelState,
+        w: f64,
+        h: f64,
+    ) -> (Rect, Vec<(usize, Rect)>, f64) {
         let editing = self.editing();
-        let ps = &self.panels[idx];
-        let pw = self.width_of(idx, w);
+        let pw = if ps.panel.width > 0 {
+            ps.panel.width as f64
+        } else {
+            380.0
+        }
+        .min(w - 2.0 * MARGIN);
         let above = ps.panel.side == Side::Bottom;
         let mut rows: Vec<Vec<(usize, f64)>> = Vec::new();
         let mut i = 0;
@@ -471,7 +611,6 @@ impl Shell {
         };
         crate::panel::cards(&ps.panel)
             .into_iter()
-            .filter(|c| crate::edit::resolve_kind(c, &self.apps).is_some())
             .map(|mut c| {
                 c.place = None;
                 c
@@ -553,26 +692,9 @@ impl Shell {
                     .unwrap_or(pc.kind.default);
                 pc.word = w;
                 next_cards.push(pc);
-            } else if let Some((prov, app)) = provider::resolve(&w.owner, apps) {
-                if let (Some(kind), Some(card)) = (
-                    prov.kind(&w.kind),
-                    prov.card(&w.kind, w.argument.as_deref()),
-                ) {
-                    let size = w
-                        .size
-                        .filter(|s| kind.sizes.contains(s))
-                        .unwrap_or(kind.default);
-                    next_cards.push(Placed {
-                        from: from_name(prov.name(), kind.title, app),
-                        app_id: app.map(|a| a.id.clone()),
-                        word: w,
-                        provider: prov,
-                        kind,
-                        size,
-                        card,
-                    });
-                    added_fresh = true;
-                }
+            } else {
+                next_cards.push(place_one(w, apps));
+                added_fresh = true;
             }
         }
         self.panels[idx].cards = next_cards;
@@ -645,6 +767,9 @@ impl Shell {
             return false;
         }
         self.opened_by_hover = false;
+        self.clicked_inside = false;
+        self.hover_open = None;
+        self.hover_close = None;
         self.hovered = None;
         self.pressed = None;
         self.keyboard = false;
@@ -689,13 +814,7 @@ impl Shell {
         true
     }
 
-    pub fn finish_edit(&mut self) -> bool {
-        if !self.editing() {
-            return false;
-        }
-        let idx = self.edit.panel_idx;
-        let before_line = std::mem::take(&mut self.edit.before_line);
-        let cards = self.edit_cards(idx);
+    fn save_and_rebuild_panel(&mut self, idx: usize, cards: Vec<CardRef>, before_line: String) {
         let p = &mut self.panels[idx].panel;
         p.placed = false;
         p.height = 0;
@@ -703,9 +822,6 @@ impl Shell {
         p.words = cards.iter().map(CardRef::word).collect();
         let panel_clone = p.clone();
         let panel_name = panel_clone.name.clone();
-
-        self.edit = Default::default();
-        self.panel_scroll = 0.0;
 
         let new_cfg = if let Some((cfg_path, bak_path)) = self.save_paths.clone() {
             if let Err(e) =
@@ -744,6 +860,34 @@ impl Shell {
             .iter()
             .position(|ps| ps.panel.name == panel_name);
         self.fetch_needed = true;
+    }
+
+    fn remove_placed_card(&mut self, idx: usize, ci: usize) -> bool {
+        let Some(ps) = self.panels.get(idx) else {
+            return false;
+        };
+        let before_line = crate::panel::line(&ps.panel);
+        let mut cards = self.edit_cards(idx);
+        if !crate::edit::remove_card(&mut cards, ci, &self.apps) {
+            return false;
+        }
+        self.selected = None;
+        self.hovered = None;
+        self.pressed = None;
+        self.save_and_rebuild_panel(idx, cards, before_line);
+        true
+    }
+
+    pub fn finish_edit(&mut self) -> bool {
+        if !self.editing() {
+            return false;
+        }
+        let idx = self.edit.panel_idx;
+        let before_line = std::mem::take(&mut self.edit.before_line);
+        let cards = self.edit_cards(idx);
+        self.edit = Default::default();
+        self.panel_scroll = 0.0;
+        self.save_and_rebuild_panel(idx, cards, before_line);
         true
     }
 
@@ -767,6 +911,7 @@ impl Shell {
             return false;
         }
         let cfg = Config::from_text(&std::fs::read_to_string(path).unwrap_or_default());
+        crate::icons::clear_icon_cache();
         if cfg.panels == self.cfg.panels && cfg.favorites == self.cfg.favorites {
             // the same panels and cards: keep them (an open list, the accent picker stay as they
             // are while a setting is written); the colours and the cards' data follow
@@ -784,7 +929,11 @@ impl Shell {
 
     pub fn rebuild_panels(&mut self, cfg: Config, apps: Option<Vec<App>>) {
         self.transient = None;
+        self.closing = None;
         if let Some(a) = apps {
+            if a != self.apps {
+                crate::icons::clear_icon_cache();
+            }
             self.apps = a;
         }
         self.theme = Theme::from_config(&cfg);
@@ -880,16 +1029,20 @@ impl Shell {
             crate::ask::answer(&mut self.ask, None);
         }
         if self.open == Some(idx) {
-            return if by_hover { false } else { self.close() };
+            return if by_hover { false } else { self.close_at(now) };
         }
         self.window_menu = None;
         if self.editing() {
             self.cancel_edit();
         }
         self.open = Some(idx);
+        self.closing = None;
         self.panel_scroll = 0.0;
         self.reset_keys(idx);
         self.opened_by_hover = by_hover;
+        self.clicked_inside = false;
+        self.hover_open = None;
+        self.hover_close = None;
         self.opened_at = Some(now);
         self.open_ms = 0.0;
         self.hovered = None;
@@ -905,11 +1058,16 @@ impl Shell {
     }
 
     pub fn close(&mut self) -> bool {
+        self.close_at(Instant::now())
+    }
+
+    pub fn close_at(&mut self, now: Instant) -> bool {
         if self.editing() {
             self.cancel_edit();
         }
         let open = self.open.take();
         let was = open.is_some();
+        let scroll = self.panel_scroll;
         if let Some(idx) = open {
             if let Some(panel) = self.panels.get_mut(idx) {
                 for pc in &mut panel.cards {
@@ -926,6 +1084,9 @@ impl Shell {
         self.selected = None;
         self.keyboard = false;
         self.opened_by_hover = false;
+        self.clicked_inside = false;
+        self.hover_open = None;
+        self.hover_close = None;
         self.hovered = None;
         self.pressed = None;
         self.pointer = None;
@@ -933,10 +1094,19 @@ impl Shell {
         self.opened_at = None;
         self.open_ms = f64::INFINITY;
         self.frame.borrow_mut().clear();
-        if let Some(t) = self.transient.take() {
-            if t < self.panels.len() {
-                self.panels.remove(t);
-            }
+        self.frame_scroll.set(0.0);
+        let transient = self
+            .transient
+            .take()
+            .and_then(|t| (t < self.panels.len()).then(|| self.panels.remove(t)));
+        if let Some(idx) = open {
+            self.closing = (!self.ask.ask.on).then_some(ClosingPanel {
+                idx,
+                transient,
+                started: now,
+                ms: 0.0,
+                scroll,
+            });
         }
         was || had_wm
     }
@@ -960,6 +1130,7 @@ impl Shell {
         p.words = words;
         let cards = place(&p, &self.apps, &self.cfg.favorites);
         self.close();
+        self.closing = None;
         self.panels.push(PanelState { panel: p, cards });
         let t = self.panels.len() - 1;
         self.transient = Some(t);
@@ -986,9 +1157,14 @@ impl Shell {
             .map(|(i, _, _)| *i)
     }
 
-    /// The pointer moved: a hover panel opens from its strip and closes when left; the light follows
-    /// the hit under it; a held button drags. True when something must be drawn again.
+    /// The pointer moved: a hover panel opens from its strip after a short dwell and closes after
+    /// a grace time when left; the light follows the hit under it; a held button drags. True when
+    /// something must be drawn again.
     pub fn pointer_motion(&mut self, w: f64, h: f64, x: f64, y: f64) -> bool {
+        self.pointer_motion_at(w, h, x, y, Instant::now())
+    }
+
+    pub fn pointer_motion_at(&mut self, w: f64, h: f64, x: f64, y: f64, now: Instant) -> bool {
         self.last_screen = (w, h);
         if self.ask.ask.on {
             return crate::ask::hover(&mut self.ask, w, h, x, y);
@@ -1003,13 +1179,26 @@ impl Shell {
             return changed || hid;
         }
         let Some(idx) = self.open else {
-            for i in 0..self.panels.len() {
-                if self.panels[i].panel.hover {
-                    let s = self.hover_strip(i, w, h);
-                    if x >= s.0 && x <= s.0 + s.2 && y >= s.1 && y <= s.1 + s.3 {
-                        return self.open_panel(i, true, Instant::now());
-                    }
+            let hit_strip = (0..self.panels.len()).find(|&i| {
+                if !self.panels[i].panel.hover {
+                    return false;
                 }
+                let s = self.hover_strip(i, w, h);
+                x >= s.0 && x <= s.0 + s.2 && y >= s.1 && y <= s.1 + s.3
+            });
+            if let Some(i) = hit_strip {
+                match self.hover_open {
+                    Some((prev, t0)) if prev == i => {
+                        if now.saturating_duration_since(t0).as_secs_f64() * 1000.0 >= HOVER_OPEN_MS
+                        {
+                            self.hover_open = None;
+                            return self.open_panel(i, true, now);
+                        }
+                    }
+                    _ => self.hover_open = Some((i, now)),
+                }
+            } else {
+                self.hover_open = None;
             }
             return false;
         };
@@ -1046,32 +1235,88 @@ impl Shell {
         if self.opened_by_hover {
             let b = self.hover_box(idx, w, h);
             if x < b.0 || x > b.0 + b.2 || y < b.1 || y > b.1 + b.3 {
-                return self.close();
+                self.hover_close.get_or_insert(now);
+                self.pointer = None;
+                let lit = self.hovered.take().is_some();
+                return lit || hid;
             }
+            self.hover_close = None;
         }
         self.pointer = Some((x, y));
         if let Some((ci, hit)) = self.pressed {
             return self.card_event(idx, ci, &Event::Drag { hit, at: (x, y) });
         }
-        let now = self.hit_at((x, y));
-        let changed = now != self.hovered;
-        self.hovered = now;
+        let hit_now = self.hit_at((x, y));
+        let changed = hit_now != self.hovered;
+        self.hovered = hit_now;
         changed || hid
     }
 
     pub fn pointer_leave(&mut self) -> bool {
+        self.pointer_leave_at(Instant::now())
+    }
+
+    pub fn pointer_leave_at(&mut self, now: Instant) -> bool {
         if self.ask.ask.on {
             return false;
         }
         self.pointer = None;
+        self.hover_open = None;
         if self.editing() {
             return self.edit.hover_card.take().is_some();
         }
         let lit = self.hovered.take().is_some();
         if self.opened_by_hover && self.open.is_some() {
-            return self.close();
+            self.hover_close.get_or_insert(now);
+            return lit;
         }
         lit
+    }
+
+    /// Advances hover dwell / close grace timers; returns true if a panel opened or closed.
+    pub fn hover_tick(&mut self, now: Instant) -> bool {
+        if self.ask.ask.on || self.editing() {
+            self.hover_open = None;
+            self.hover_close = None;
+            return false;
+        }
+        if self.open.is_none() {
+            if let Some((i, t0)) = self.hover_open {
+                if now.saturating_duration_since(t0).as_secs_f64() * 1000.0 >= HOVER_OPEN_MS {
+                    self.hover_open = None;
+                    return self.open_panel(i, true, now);
+                }
+            }
+            return false;
+        }
+        if self.opened_by_hover {
+            if let Some(t0) = self.hover_close {
+                if now.saturating_duration_since(t0).as_secs_f64() * 1000.0 >= HOVER_CLOSE_MS {
+                    self.hover_close = None;
+                    return self.close_at(now);
+                }
+            }
+        }
+        false
+    }
+
+    pub fn hover_timeout(&self, now: Instant) -> Option<std::time::Duration> {
+        if self.ask.ask.on || self.editing() {
+            return None;
+        }
+        if self.open.is_none() {
+            self.hover_open.map(|(_, t0)| {
+                std::time::Duration::from_secs_f64(HOVER_OPEN_MS / 1000.0)
+                    .saturating_sub(now.saturating_duration_since(t0))
+            })
+        } else if self.opened_by_hover {
+            self.hover_close.map(|t0| {
+                std::time::Duration::from_secs_f64(HOVER_CLOSE_MS / 1000.0)
+                    .saturating_sub(now.saturating_duration_since(t0))
+            })
+        } else {
+            None
+        }
     }
 
     fn edit_press(&mut self, idx: usize, w: f64, h: f64, x: f64, y: f64, button: Button) -> bool {
@@ -1311,11 +1556,13 @@ impl Shell {
         if x < ox || x > ox + pw || y < oy || y > oy + ph {
             return self.close();
         }
+        self.hover_close = None;
+        let promoted = self.opened_by_hover && !std::mem::replace(&mut self.clicked_inside, true);
         let Some((ci, hit)) = self.hit_at((x, y)) else {
             if button == Button::Right {
-                return self.offer_edit(idx, x, y);
+                return self.offer_edit(idx, x, y) || promoted;
             }
-            return false;
+            return promoted;
         };
         if button == Button::Left {
             self.pressed = Some((ci, hit));
@@ -1330,9 +1577,9 @@ impl Shell {
             },
         );
         if !used && button == Button::Right && self.open == Some(idx) {
-            return self.offer_edit(idx, x, y);
+            return self.offer_edit(idx, x, y) || promoted;
         }
-        used
+        used || promoted
     }
 
     pub fn release(&mut self) -> bool {
@@ -1426,31 +1673,30 @@ impl Shell {
     fn card_event(&mut self, idx: usize, ci: usize, ev: &Event) -> bool {
         let editing = self.editing();
         let above = self.panels[idx].panel.side == Side::Bottom;
-        let (size, app_id) = {
-            let pc = &self.panels[idx].cards[ci];
-            (pc.size, pc.app_id.clone())
-        };
-        let theme = self.theme.clone();
-        let cx = Cx {
-            theme: &theme,
-            now: self.now,
-            size,
-            app: app_id
-                .as_deref()
-                .and_then(|id| self.apps.iter().find(|a| a.id == id)),
-            apps: &self.apps,
-            windows: &self.windows,
-            notes: &self.notes,
-            list_above: above,
-            editing,
-        };
-        let mut out = Vec::new();
         let pc = &mut self.panels[idx].cards[ci];
-        let changed = pc.card.event(ev, &cx, &mut out);
+        let mut out = Vec::new();
+        let changed = {
+            let cx = Cx {
+                theme: &self.theme,
+                now: self.now,
+                size: pc.size,
+                app: pc
+                    .app_id
+                    .as_deref()
+                    .and_then(|id| self.apps.iter().find(|a| a.id == id)),
+                apps: &self.apps,
+                windows: &self.windows,
+                notes: &self.notes,
+                list_above: above,
+                editing,
+            };
+            pc.card.event(ev, &cx, &mut out)
+        };
         let (prov, keys) = (pc.provider.id(), pc.kind.sources);
         let card = format!("{}/{}", pc.word.owner, pc.word.kind);
         let mut requery = None;
         let mut show = None;
+        let mut remove = false;
         for a in out {
             match a {
                 Action::ShowCards(w) => show = Some(w),
@@ -1458,9 +1704,13 @@ impl Shell {
                     self.close();
                     return true;
                 }
+                Action::RemoveCard => remove = true,
                 Action::SetQuery(q) => requery = Some(q),
                 a => self.actions.push((a, card.clone(), prov, keys)),
             }
+        }
+        if remove {
+            return self.remove_placed_card(idx, ci);
         }
         if let Some(w) = show {
             self.show_cards(idx, w);
@@ -1480,8 +1730,18 @@ impl Shell {
         self.open.is_some() || self.ask.ask.on || self.window_menu.is_some()
     }
 
+    pub fn is_closing(&self) -> bool {
+        self.closing.is_some()
+    }
+
+    /// Something must be drawn on screen (open, asking, or fading out after close).
+    pub fn visible(&self) -> bool {
+        self.active() || self.closing.is_some()
+    }
+
     /// What is drawn on a `w x h` screen: the question's card while it asks, the window menu,
-    /// else the open panel's box (plus the edit bar and Add list while editing).
+    /// else the open panel's box (plus the edit bar and Add list while editing), or a closing
+    /// panel's box.
     pub fn shown_box(&self, w: f64, h: f64) -> Option<Rect> {
         if self.ask.ask.on {
             return Some(self.ask.ask.geometry(w, h));
@@ -1489,17 +1749,21 @@ impl Shell {
         if let Some(r) = self.window_menu_rect(w, h) {
             return Some(r);
         }
-        let idx = self.open?;
-        let pbox = self.layout_local(idx, w, h).0;
-        if !self.editing() {
-            return Some(pbox);
+        if let Some(idx) = self.open {
+            let pbox = self.layout_local(idx, w, h).0;
+            if !self.editing() {
+                return Some(pbox);
+            }
+            let (bar, add) = self.edit_rects(idx, w, h);
+            let mut out = union_rect(pbox, bar);
+            if self.edit.adding {
+                out = union_rect(out, add);
+            }
+            return Some(out);
         }
-        let (bar, add) = self.edit_rects(idx, w, h);
-        let mut out = union_rect(pbox, bar);
-        if self.edit.adding {
-            out = union_rect(out, add);
-        }
-        Some(out)
+        let c = self.closing.as_ref()?;
+        let ps = c.transient.as_ref().or_else(|| self.panels.get(c.idx))?;
+        Some(self.layout_panel_local(ps, w, h).0)
     }
 
     /// A request in the ask file (SIGRTMIN+3), or a cancel: loaded, queued after one already
@@ -1510,9 +1774,12 @@ impl Shell {
         let req = crate::wayland::runtime_path(crate::ask::ASK_FILE);
         changed |= crate::ask::load_from_path(&mut self.ask, &req);
         changed |= crate::ask::check_asker_gone(&mut self.ask);
-        if self.ask.ask.on && self.open.is_some() {
-            self.close();
-            changed = true;
+        if self.ask.ask.on {
+            if self.open.is_some() {
+                self.close();
+                changed = true;
+            }
+            self.closing = None;
         }
         changed
     }
@@ -1562,6 +1829,33 @@ impl Shell {
             }
         }
         out
+    }
+
+    fn scroll_to_hit(&mut self, idx: usize, r: Rect, is_first: bool) {
+        let (w, h) = self.frame_screen.get();
+        let (pbox, _, content_h) = self.layout_local(idx, w, h);
+        let max_scroll = (content_h - pbox.3).max(0.0);
+        if max_scroll <= 0.0 {
+            self.panel_scroll = 0.0;
+            return;
+        }
+        let cur_scroll = self.panel_scroll.clamp(0.0, max_scroll);
+        let frame_scroll = self.frame_scroll.get();
+        let ry = r.1 + frame_scroll - cur_scroll;
+        let top = pbox.1;
+        let bot = pbox.1 + pbox.3;
+        let mut next = cur_scroll;
+        if ry + r.3 > bot {
+            next = cur_scroll + (ry + r.3 - bot);
+        }
+        let ry_after = r.1 + frame_scroll - next;
+        if ry_after < top {
+            next = cur_scroll + (ry - top);
+        }
+        if is_first && (r.1 + frame_scroll + r.3) <= bot {
+            next = 0.0;
+        }
+        self.panel_scroll = next.clamp(0.0, max_scroll);
     }
 
     /// A key while a panel is open. True when something must be drawn again.
@@ -1727,6 +2021,7 @@ impl Shell {
                 };
                 self.keyboard = true;
                 self.selected = Some((order[next].0, order[next].1));
+                self.scroll_to_hit(idx, order[next].2, next == 0);
                 true
             }
             Key::Enter => {
@@ -1736,10 +2031,11 @@ impl Shell {
                         .into_iter()
                         .find(|(c, h, _)| *c == ci && *h == hit)
                         .map_or((0.0, 0.0, 0.0, 0.0), |(_, _, r)| r);
+                    let dy = self.frame_scroll.get() - self.panel_scroll;
                     let ev = Event::Press {
                         hit,
                         button: Button::Left,
-                        at: (r.0 + r.2 / 2.0, r.1 + r.3 / 2.0),
+                        at: (r.0 + r.2 / 2.0, r.1 + dy + r.3 / 2.0),
                     };
                     let changed = self.card_event(idx, ci, &ev);
                     if self.open == Some(idx) {
@@ -1794,6 +2090,15 @@ impl Shell {
                 self.open_ms = f64::INFINITY;
             }
             running = true;
+        }
+        if let Some(c) = &mut self.closing {
+            let ms = now.duration_since(c.started).as_secs_f64() * 1000.0;
+            if ms < LEAVE_MS {
+                c.ms = ms;
+                running = true;
+            } else {
+                self.closing = None;
+            }
         }
         if let Some(idx) = self.open {
             for pc in &mut self.panels[idx].cards {
@@ -1865,6 +2170,15 @@ impl Shell {
         out
     }
 
+    pub fn wants_clock(&self) -> bool {
+        self.open.is_some_and(|idx| {
+            self.panels[idx]
+                .cards
+                .iter()
+                .any(|pc| pc.card.wants_clock())
+        })
+    }
+
     /// New data for `(provider, key)`: every card that lists it. True when one changed.
     pub fn apply(&mut self, provider: &str, key: &str, data: &dyn std::any::Any) -> bool {
         let mut changed = false;
@@ -1879,7 +2193,7 @@ impl Shell {
     }
 
     pub fn wants_frame(&self) -> bool {
-        if self.opened_at.is_some() {
+        if self.opened_at.is_some() || self.closing.is_some() {
             return true;
         }
         let Some(idx) = self.open else {
@@ -1901,9 +2215,14 @@ impl Shell {
         false
     }
 
-    /// Draws the open panel on a screen of `w x h`: each card's box, header and body, rising in as
-    /// the panel opens; keeps each card's hits for the pointer. Returns the panel's box.
+    /// Draws the open (or closing) panel on a screen of `w x h`: each card's box, header and body,
+    /// rising in as the panel opens or fading out as it closes; keeps each card's hits for the
+    /// pointer while open. Returns the panel's box.
     pub fn draw(&self, cr: &cairo::Context, w: f64, h: f64) -> Option<Rect> {
+        draw::with_font(&self.theme.font, || self.draw_open_or_closing(cr, w, h))
+    }
+
+    fn draw_open_or_closing(&self, cr: &cairo::Context, w: f64, h: f64) -> Option<Rect> {
         if self.ask.ask.on {
             return Some(crate::ask::draw(cr, &self.theme, &self.ask.ask, (w, h)));
         }
@@ -1933,22 +2252,53 @@ impl Shell {
             *self.frame.borrow_mut() = vec![(0, r, hits)];
             return Some(r);
         }
-        let idx = self.open?;
-        let editing = self.editing();
-        let (pbox, local_rects, content_h) = self.layout_local(idx, w, h);
+        if let Some(idx) = self.open {
+            return Some(self.draw_panel(
+                cr,
+                w,
+                h,
+                &self.panels[idx],
+                idx,
+                self.panel_scroll,
+                None,
+            ));
+        }
+        if let Some(c) = &self.closing {
+            let ps = c.transient.as_ref().or_else(|| self.panels.get(c.idx))?;
+            let cp = (1.0 - crate::ui::ease((c.ms / LEAVE_MS).clamp(0.0, 1.0))).clamp(0.0, 1.0);
+            return Some(self.draw_panel(cr, w, h, ps, c.idx, c.scroll, Some(cp)));
+        }
+        None
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_panel(
+        &self,
+        cr: &cairo::Context,
+        w: f64,
+        h: f64,
+        ps: &PanelState,
+        idx: usize,
+        scroll_pos: f64,
+        closing_p: Option<f64>,
+    ) -> Rect {
+        let interactive = closing_p.is_none();
+        let editing = interactive && self.editing();
+        let (pbox, local_rects, content_h) = self.layout_panel_local(ps, w, h);
         let max_scroll = (content_h - pbox.3).max(0.0);
-        let scroll = self.panel_scroll.clamp(0.0, max_scroll);
+        let scroll = scroll_pos.clamp(0.0, max_scroll);
         let rects: Vec<(usize, Rect)> = local_rects
             .iter()
             .map(|&(ci, r)| (ci, (pbox.0 + r.0, pbox.1 + r.1 - scroll, r.2, r.3)))
             .collect();
-        let ps = &self.panels[idx];
         let above = ps.panel.side == Side::Bottom;
         let th = &self.theme;
         let mut frame = Vec::new();
         let bottom = rects.iter().map(|(_, r)| r.1 + r.3).fold(0.0, f64::max);
         cr.save().ok();
-        let clip_lift = if self.open_ms.is_finite() {
+        let clip_lift = if closing_p.is_some() {
+            LEAVE_DROP
+        } else if self.open_ms.is_finite() {
             ARRIVE_LIFT
         } else {
             0.0
@@ -1959,23 +2309,34 @@ impl Shell {
             let pc = &ps.cards[*ci];
             let cx = self.cx(pc.size, pc.app_id.as_deref(), above);
             let status = pc.card.status(&cx);
-            let sel = if editing {
+            let sel = if !interactive || editing {
                 None
             } else {
                 self.selected
                     .filter(|(c, _)| self.keyboard && c == ci)
                     .map(|(_, h)| h)
             };
-            let mut hits = Hits::new(if editing { None } else { self.pointer }, sel);
+            let mut hits = Hits::new(
+                if !interactive || editing {
+                    None
+                } else {
+                    self.pointer
+                },
+                sel,
+            );
             // the bottom card arrives first (about one card per 90 px up)
             let k = ((bottom - (r.1 + r.3)) / 90.0).clamp(0.0, ARRIVE_CARDS);
-            let p = if self.open_ms.is_finite() {
+            let p = if let Some(cp) = closing_p {
+                cp
+            } else if self.open_ms.is_finite() {
                 crate::ui::ease((self.open_ms - k * ARRIVE_STAGGER_MS) / ARRIVE_MS)
             } else {
                 1.0
             };
             if p <= 0.0 {
-                frame.push((*ci, *r, hits));
+                if interactive {
+                    frame.push((*ci, *r, hits));
+                }
                 continue;
             }
             if editing && status == Status::Hidden {
@@ -2032,8 +2393,13 @@ impl Shell {
             );
             let lifted = p < 1.0;
             if lifted {
+                let drop_y = if closing_p.is_some() {
+                    LEAVE_DROP
+                } else {
+                    ARRIVE_LIFT
+                };
                 cr.push_group();
-                cr.translate(0.0, (1.0 - p) * ARRIVE_LIFT);
+                cr.translate(0.0, (1.0 - p) * drop_y);
             }
             draw::card(cr, th, r.0, r.1, r.2, r.3);
             if headed {
@@ -2041,29 +2407,7 @@ impl Shell {
                     .card
                     .title(&cx)
                     .unwrap_or_else(|| pc.kind.title.to_string());
-                let from_w = draw::text_right(
-                    cr,
-                    r.0 + r.2 - PAD_X,
-                    r.1 + PAD_TOP + 3.0,
-                    &Text {
-                        size: 12.0,
-                        bold: false,
-                        color: th.muted,
-                        text: &pc.from,
-                    },
-                );
-                draw::text_max(
-                    cr,
-                    r.0 + PAD_X,
-                    r.1 + PAD_TOP,
-                    (r.2 - 2.0 * PAD_X - from_w - 12.0).max(40.0),
-                    &Text {
-                        size: 15.0,
-                        bold: true,
-                        color: th.text,
-                        text: &title,
-                    },
-                );
+                draw_header(cr, th, *r, &title, &pc.from);
             }
             match status {
                 Status::Ready => {
@@ -2087,18 +2431,10 @@ impl Shell {
                     );
                 }
                 Status::Missing(why) => {
-                    draw::text_max(
-                        cr,
-                        body.0 + 8.0,
-                        body.1,
-                        body.2 - 16.0,
-                        &Text {
-                            size: 12.0,
-                            bold: false,
-                            color: th.muted,
-                            text: &why,
-                        },
-                    );
+                    let l = missing_layout(cr, body.2 - 16.0, &why);
+                    draw::set(cr, th.muted);
+                    cr.move_to((body.0 + 8.0).round(), body.1.round());
+                    pangocairo::functions::show_layout(cr, &l);
                 }
                 Status::Hidden => {}
             }
@@ -2106,15 +2442,13 @@ impl Shell {
                 let _ = cr.pop_group_to_source();
                 let _ = cr.paint_with_alpha(p);
             }
-            frame.push((*ci, *r, hits));
+            if interactive {
+                frame.push((*ci, *r, hits));
+            }
         }
         if max_scroll > 0.0 {
-            let thumb_h = ((pbox.3 / content_h) * pbox.3).clamp(24.0, pbox.3);
-            let track = (pbox.3 - thumb_h).max(1.0);
-            let thumb_y = pbox.1 + (scroll / max_scroll) * track;
-            draw::round_rect(cr, pbox.0 + pbox.2 - 4.0, thumb_y, 3.0, thumb_h, 1.5);
-            draw::set(cr, th.muted.alpha(0.35));
-            let _ = cr.fill();
+            let sb_cx = self.cx(Size::M, None, above);
+            crate::ui::scrollbar(cr, &sb_cx, pbox, content_h, scroll);
         }
         cr.restore().ok();
         if editing {
@@ -2137,45 +2471,121 @@ impl Shell {
                 &overlay_state,
             );
         }
-        if let Some(r) = self.edit_menu_rect(w, h) {
-            let th = &self.theme;
-            crate::draw::round_rect(cr, r.0, r.1, r.2, r.3, th.small_radius());
-            crate::draw::set(cr, th.card.alpha(1.0));
-            let _ = cr.fill_preserve();
-            crate::draw::set(cr, th.edge);
-            cr.set_line_width(1.0);
-            let _ = cr.stroke();
-            let lit = self.pointer.is_some_and(|(px, py)| {
-                px >= r.0 && px <= r.0 + r.2 && py >= r.1 && py <= r.1 + r.3
-            });
-            if lit {
-                crate::draw::round_rect(
+        if interactive {
+            if let Some(r) = self.edit_menu_rect(w, h) {
+                let th = &self.theme;
+                crate::draw::round_rect(cr, r.0, r.1, r.2, r.3, th.small_radius());
+                crate::draw::set(cr, th.card.alpha(1.0));
+                let _ = cr.fill_preserve();
+                crate::draw::set(cr, th.edge);
+                cr.set_line_width(1.0);
+                let _ = cr.stroke();
+                let lit = self.pointer.is_some_and(|(px, py)| {
+                    px >= r.0 && px <= r.0 + r.2 && py >= r.1 && py <= r.1 + r.3
+                });
+                if lit {
+                    crate::draw::round_rect(
+                        cr,
+                        r.0 + 3.0,
+                        r.1 + 3.0,
+                        r.2 - 6.0,
+                        r.3 - 6.0,
+                        th.small_radius(),
+                    );
+                    crate::draw::set(cr, th.text.alpha(0.08));
+                    let _ = cr.fill();
+                }
+                crate::draw::text_max(
                     cr,
-                    r.0 + 3.0,
-                    r.1 + 3.0,
-                    r.2 - 6.0,
-                    r.3 - 6.0,
-                    th.small_radius(),
+                    r.0 + 12.0,
+                    r.1 + (r.3 - 17.0) / 2.0,
+                    r.2 - 24.0,
+                    &crate::draw::Text {
+                        size: 13.0,
+                        bold: false,
+                        color: th.text,
+                        text: "Edit panel",
+                    },
                 );
-                crate::draw::set(cr, th.text.alpha(0.08));
-                let _ = cr.fill();
             }
-            crate::draw::text_max(
-                cr,
-                r.0 + 12.0,
-                r.1 + (r.3 - 17.0) / 2.0,
-                r.2 - 24.0,
-                &crate::draw::Text {
-                    size: 13.0,
-                    bold: false,
-                    color: th.text,
-                    text: "Edit panel",
-                },
-            );
+            *self.frame.borrow_mut() = frame;
+            self.frame_scroll.set(scroll);
+            self.frame_screen.set((w, h));
         }
-        *self.frame.borrow_mut() = frame;
-        Some(pbox)
+        pbox
     }
+}
+
+fn header_title_max_w(card_w: f64, from_w: f64) -> (f64, f64) {
+    let head_w = (card_w - 2.0 * PAD_X).max(40.0);
+    // Keep at least half of the header for the title when the app name is long.
+    let max_from = ((head_w - 12.0) * 0.45).max(0.0);
+    let capped_from = from_w.min(max_from);
+    let title_w = if capped_from > 0.0 {
+        (head_w - capped_from - 12.0).max(40.0)
+    } else {
+        head_w
+    };
+    (capped_from, title_w)
+}
+
+fn draw_header(cr: &cairo::Context, th: &Theme, r: Rect, title: &str, from: &str) {
+    let from_w = if from.is_empty() {
+        0.0
+    } else {
+        let from_t = Text {
+            size: 12.0,
+            bold: false,
+            color: th.muted,
+            text: from,
+        };
+        let full_w = draw::measure(cr, &from_t).0;
+        let (capped, _) = header_title_max_w(r.2, full_w);
+        if full_w <= capped {
+            draw::text_right(cr, r.0 + r.2 - PAD_X, r.1 + PAD_TOP + 3.0, &from_t)
+        } else {
+            draw::text_max(
+                cr,
+                r.0 + r.2 - PAD_X - capped,
+                r.1 + PAD_TOP + 3.0,
+                capped,
+                &from_t,
+            );
+            capped
+        }
+    };
+    let (_, title_w) = header_title_max_w(r.2, from_w);
+    draw::text_max(
+        cr,
+        r.0 + PAD_X,
+        r.1 + PAD_TOP,
+        title_w,
+        &Text {
+            size: 15.0,
+            bold: true,
+            color: th.text,
+            text: title,
+        },
+    );
+}
+
+fn missing_layout(cr: &cairo::Context, max_w: f64, why: &str) -> pango::Layout {
+    draw::wrapped_layout(cr, draw::SIZE_SMALL, false, max_w.max(20.0), Some(2), why)
+}
+
+fn wrapped_text_height(max_w: f64, text: &str) -> f64 {
+    let Ok(surf) = cairo::ImageSurface::create(cairo::Format::ARgb32, 1, 1) else {
+        return 20.0;
+    };
+    let Ok(cr) = cairo::Context::new(&surf) else {
+        return 20.0;
+    };
+    let l = missing_layout(&cr, max_w, text);
+    (l.pixel_size().1 as f64).max(20.0)
+}
+
+fn missing_height(card_width: f64, why: &str) -> f64 {
+    wrapped_text_height(card_width - 2.0 * PAD_X, why)
 }
 
 fn union_rect(a: Rect, b: Rect) -> Rect {
@@ -2428,13 +2838,85 @@ mod tests {
             .position(|p| p.panel.name == "control")
             .unwrap();
         let s = sh.hover_strip(idx, 1920.0, 1080.0);
-        assert!(sh.pointer_motion(1920.0, 1080.0, s.0 + 10.0, s.1 + 1.0));
+        let t0 = Instant::now();
+        assert!(!sh.pointer_motion_at(1920.0, 1080.0, s.0 + 10.0, s.1 + 1.0, t0));
+        assert!(sh.open.is_none());
+        let t1 = t0 + std::time::Duration::from_millis(HOVER_OPEN_MS as u64);
+        assert!(sh.hover_tick(t1));
         assert_eq!(sh.open, Some(idx));
         assert!(sh.opened_by_hover);
+        assert!(!sh.pointer_motion_at(1920.0, 1080.0, 100.0, 100.0, t1));
+        assert_eq!(sh.open, Some(idx));
         assert!(
-            sh.pointer_motion(1920.0, 1080.0, 100.0, 100.0),
-            "left: closed"
+            sh.hover_tick(t1 + std::time::Duration::from_millis(HOVER_CLOSE_MS as u64)),
+            "left past grace: closed"
         );
+        assert!(sh.open.is_none());
+    }
+
+    #[test]
+    fn hover_dwell_ignores_fast_pass_and_grace_cancels_on_reentry() {
+        let mut sh = shell("SUPER+A bottom right 380 hover settings/power");
+        let idx = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "control")
+            .unwrap();
+        let s = sh.hover_strip(idx, 1920.0, 1080.0);
+        let t0 = Instant::now();
+
+        // Fast pass through the 2 px strip (leaves within 40 ms) does not open.
+        assert!(!sh.pointer_motion_at(1920.0, 1080.0, s.0 + 10.0, s.1 + 1.0, t0));
+        assert!(sh.hover_timeout(t0).is_some());
+        assert!(!sh.hover_tick(t0 + std::time::Duration::from_millis(40)));
+        assert!(!sh.pointer_motion_at(
+            1920.0,
+            1080.0,
+            s.0 + 10.0,
+            s.1 - 20.0,
+            t0 + std::time::Duration::from_millis(50)
+        ));
+        assert!(sh
+            .hover_timeout(t0 + std::time::Duration::from_millis(50))
+            .is_none());
+        assert!(!sh.hover_tick(t0 + std::time::Duration::from_millis(300)));
+        assert!(sh.open.is_none());
+
+        // Leaving via pointer_leave_at while dwelling also cancels opening.
+        let t_enter = t0 + std::time::Duration::from_millis(400);
+        sh.pointer_motion_at(1920.0, 1080.0, s.0 + 10.0, s.1 + 1.0, t_enter);
+        sh.pointer_leave_at(t_enter + std::time::Duration::from_millis(30));
+        assert!(!sh.hover_tick(t_enter + std::time::Duration::from_millis(200)));
+        assert!(sh.open.is_none());
+
+        // Resting in the strip for HOVER_OPEN_MS opens it.
+        let t_dwell = t_enter + std::time::Duration::from_millis(300);
+        sh.pointer_motion_at(1920.0, 1080.0, s.0 + 10.0, s.1 + 1.0, t_dwell);
+        assert!(!sh.hover_tick(t_dwell + std::time::Duration::from_millis(119)));
+        assert!(sh.hover_tick(t_dwell + std::time::Duration::from_millis(120)));
+        assert_eq!(sh.open, Some(idx));
+
+        // Leave the hover box, then return within HOVER_CLOSE_MS: stays open.
+        let t_out = t_dwell + std::time::Duration::from_millis(200);
+        let b = sh.hover_box(idx, 1920.0, 1080.0);
+        sh.pointer_motion_at(1920.0, 1080.0, 50.0, 50.0, t_out);
+        assert!(!sh.hover_tick(t_out + std::time::Duration::from_millis(200)));
+        assert_eq!(sh.open, Some(idx));
+        sh.pointer_motion_at(
+            1920.0,
+            1080.0,
+            b.0 + 10.0,
+            b.1 + 10.0,
+            t_out + std::time::Duration::from_millis(210),
+        );
+        assert!(!sh.hover_tick(t_out + std::time::Duration::from_millis(500)));
+        assert_eq!(sh.open, Some(idx));
+
+        // Leave again (via pointer_leave_at) and stay out past HOVER_CLOSE_MS: closes.
+        let t_leave = t_out + std::time::Duration::from_millis(600);
+        sh.pointer_leave_at(t_leave);
+        assert!(!sh.hover_tick(t_leave + std::time::Duration::from_millis(249)));
+        assert!(sh.hover_tick(t_leave + std::time::Duration::from_millis(250)));
         assert!(sh.open.is_none());
     }
 
@@ -2456,6 +2938,43 @@ mod tests {
         );
         assert!(!sh.tick(t0 + std::time::Duration::from_millis(1016)));
         assert_eq!(sh.sources(), vec![("settings", "power")]);
+    }
+
+    #[test]
+    fn close_runs_leaving_animation_for_leave_ms_then_stops() {
+        let mut sh = shell("SUPER+A top right settings/session");
+        let idx = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "control")
+            .unwrap();
+        let t0 = Instant::now();
+        assert!(sh.open_panel(idx, false, t0));
+        sh.open_ms = f64::INFINITY;
+        sh.opened_at = None;
+
+        let t_close = t0 + std::time::Duration::from_millis(500);
+        assert!(sh.close_at(t_close));
+        assert!(sh.open.is_none(), "logically closed at once");
+        assert!(!sh.active(), "input/keyboard cleared at once");
+        assert!(sh.is_closing());
+        assert!(sh.visible());
+        assert!(sh.wants_frame());
+
+        assert!(sh.tick(t_close));
+        assert!(sh.tick(t_close + std::time::Duration::from_millis(60)));
+        assert!(sh.shown_box(1280.0, 800.0).is_some());
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 1280, 800).unwrap();
+        let cr = cairo::Context::new(&surf).unwrap();
+        assert!(sh.draw(&cr, 1280.0, 800.0).is_some());
+
+        assert!(
+            !sh.tick(t_close + std::time::Duration::from_millis(LEAVE_MS as u64)),
+            "stops after LEAVE_MS"
+        );
+        assert!(!sh.is_closing());
+        assert!(!sh.visible());
+        assert!(sh.shown_box(1280.0, 800.0).is_none());
     }
 
     fn parse_box_center(dump: &str, prefix: &str) -> (f64, f64) {
@@ -2507,7 +3026,9 @@ mod tests {
             .position(|p| p.panel.name == "control")
             .unwrap();
         let strip = sh.hover_strip(idx, 1920.0, 1080.0);
-        assert!(sh.pointer_motion(1920.0, 1080.0, strip.0 + 10.0, strip.1 + 1.0));
+        let t0 = Instant::now();
+        assert!(!sh.pointer_motion_at(1920.0, 1080.0, strip.0 + 10.0, strip.1 + 1.0, t0));
+        assert!(sh.hover_tick(t0 + std::time::Duration::from_millis(HOVER_OPEN_MS as u64)));
         assert!(sh.opened_by_hover);
         sh.open_ms = f64::INFINITY;
         let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 1920, 1080).unwrap();
@@ -2789,7 +3310,9 @@ mod tests {
             Vec::new(),
             &cfg_path,
         );
+        let gen0 = crate::icons::global_icon_generation();
         assert!(!sh.reload_if_changed_at(&cfg_path));
+        assert_eq!(crate::icons::global_icon_generation(), gen0);
         std::fs::write(&cfg_path, "ACCENT=\"#445566\"\n").unwrap();
         let future = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
         std::fs::File::options()
@@ -2800,6 +3323,21 @@ mod tests {
             .unwrap();
         assert!(sh.reload_if_changed_at(&cfg_path));
         assert_eq!(sh.cfg.accent, [0x44, 0x55, 0x66]);
+        let gen1 = crate::icons::global_icon_generation();
+        assert!(gen1 > gen0, "config reload should clear icon cache");
+
+        sh.rebuild_panels(
+            sh.cfg.clone(),
+            Some(vec![App {
+                id: "new-app".into(),
+                name: "New App".into(),
+                ..Default::default()
+            }]),
+        );
+        assert!(
+            crate::icons::global_icon_generation() > gen1,
+            "app list change should clear icon cache"
+        );
 
         // 2. Config does not exist at start, then is created after start.
         let new_cfg_path = dir.join("config-new");
@@ -2808,6 +3346,339 @@ mod tests {
         std::fs::write(&new_cfg_path, "ACCENT=\"#778899\"\n").unwrap();
         assert!(sh_missing.reload_if_changed_at(&new_cfg_path));
         assert_eq!(sh_missing.cfg.accent, [0x77, 0x88, 0x99]);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn long_app_name_on_half_card_leaves_at_least_half_header_for_title() {
+        let half_w = (380.0 - GAP) / 2.0;
+        let head_w = half_w - 2.0 * PAD_X;
+        let long_name = "Very Long Application Name Forty Charact";
+        assert_eq!(long_name.chars().count(), 40);
+
+        let apps = vec![
+            App {
+                id: "longapp".into(),
+                name: long_name.into(),
+                exec: "true".into(),
+                ..Default::default()
+            },
+            App {
+                id: "secondapp".into(),
+                name: "Second".into(),
+                exec: "true".into(),
+                ..Default::default()
+            },
+        ];
+        let mut sh = Shell::new(
+            Config::from_text(
+                "PANEL_CONTROL=\"SUPER+A top right 380 longapp/app@half secondapp/app@half\"\n",
+            ),
+            apps,
+        );
+        let idx = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "control")
+            .unwrap();
+        assert!(sh.open_panel(idx, false, Instant::now()));
+        sh.open_ms = f64::INFINITY;
+
+        let (_, rects) = sh.layout(idx, 1280.0, 800.0);
+        assert_eq!(rects.len(), 2);
+        let r0 = rects[0].1;
+        assert!((r0.2 - half_w).abs() < 0.01);
+
+        let mut surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 1280, 800).unwrap();
+        {
+            let cr = cairo::Context::new(&surf).unwrap();
+            draw::grey_text_edges(&cr);
+            let full_from_w = draw::measure(
+                &cr,
+                &Text {
+                    size: 12.0,
+                    bold: false,
+                    color: sh.theme.muted,
+                    text: long_name,
+                },
+            )
+            .0;
+            let (capped_from, title_w) = header_title_max_w(half_w, full_from_w);
+            assert!(capped_from <= head_w * 0.45);
+            assert!(
+                title_w >= head_w * 0.5,
+                "title width {title_w} must be at least half of header {head_w}"
+            );
+            sh.draw(&cr, 1280.0, 800.0);
+        }
+        surf.flush();
+        // Verify no header text spills left of the card's left edge.
+        let stride = surf.stride() as usize;
+        let data = surf.data().unwrap();
+        let out_x = (r0.0 - 4.0).max(0.0) as usize;
+        let y_start = (r0.1 + PAD_TOP) as usize;
+        let y_end = (r0.1 + PAD_TOP + HEAD_H) as usize;
+        for y in y_start..y_end {
+            let px = &data[y * stride + out_x * 4..y * stride + out_x * 4 + 4];
+            assert_eq!(px, &[0, 0, 0, 0], "header overflowed left of card at y={y}");
+        }
+    }
+
+    #[test]
+    fn missing_reason_wraps_and_fits_at_half_width() {
+        let longest = "Memory information is not available";
+        let half_w = (380.0 - GAP) / 2.0;
+        let body_text_w = half_w - 2.0 * PAD_X;
+        let mh = missing_height(half_w, longest);
+        assert!(
+            mh > 20.0,
+            "wrapped missing text height ({mh}) should exceed single-line 20 px"
+        );
+
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 400, 200).unwrap();
+        let cr = cairo::Context::new(&surf).unwrap();
+        let l = missing_layout(&cr, body_text_w, longest);
+        assert_eq!(l.line_count(), 2);
+        assert!(
+            !l.is_ellipsized(),
+            "longest Missing string should fit in 2 lines without ellipsis at half width"
+        );
+
+        // Verify via Shell layout + draw with monitor/memory in Missing state at half width.
+        let mut sh = shell("SUPER+A top right 380 monitor/memory@half calendar/clock@half");
+        let idx = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "control")
+            .unwrap();
+        // Send empty MemoryData so monitor/memory enters Status::Missing(longest).
+        sh.apply(
+            "monitor",
+            "memory",
+            &crate::cards::monitor::MemoryData::default() as &dyn std::any::Any,
+        );
+        assert!(sh.open_panel(idx, false, Instant::now()));
+        sh.open_ms = f64::INFINITY;
+        let (_, rects) = sh.layout(idx, 1280.0, 800.0);
+        assert_eq!(
+            rects[0].1 .3,
+            PAD_TOP + HEAD_H + mh + PAD_BOTTOM,
+            "card height grows to fit wrapped Missing sentence"
+        );
+        sh.draw(&cr, 1280.0, 800.0);
+    }
+
+    #[test]
+    fn keyboard_navigation_scrolls_selected_hit_into_panel_box() {
+        let mut sh = shell("SUPER+A top right 380 settings/power settings/session windows/list");
+        sh.apply(
+            "settings",
+            "power",
+            &parse_power("* balanced:\n  power-saver:\n  performance:\n") as &dyn std::any::Any,
+        );
+        sh.windows = (1..=6)
+            .map(|i| Window {
+                id: i,
+                title: format!("Win {i}"),
+                app_id: "kitty".into(),
+                focused: i == 1,
+            })
+            .collect();
+        let idx = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "control")
+            .unwrap();
+        assert!(sh.open_panel(idx, false, Instant::now()));
+        sh.open_ms = f64::INFINITY;
+
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 1280, 400).unwrap();
+        let cr = cairo::Context::new(&surf).unwrap();
+        let pbox = sh.draw(&cr, 1280.0, 400.0).unwrap();
+        let (_, _, content_h) = sh.layout_local(idx, 1280.0, 400.0);
+        assert!(
+            content_h > pbox.3,
+            "precondition: panel is taller than screen"
+        );
+
+        // Move Down repeatedly without redrawing in between until past the fold.
+        let order = sh.hit_order();
+        let past_fold = order
+            .iter()
+            .position(|(_, _, r)| r.1 + r.3 > pbox.1 + pbox.3)
+            .expect("at least one hit starts below the fold");
+        for _ in 0..=past_fold {
+            assert!(sh.key(Key::Down));
+        }
+        assert!(
+            sh.panel_scroll > 0.0,
+            "panel_scroll should advance past the fold"
+        );
+        sh.draw(&cr, 1280.0, 400.0);
+        let (ci, hit) = sh.selected.unwrap();
+        let r = sh
+            .hit_order()
+            .into_iter()
+            .find(|(c, h, _)| *c == ci && *h == hit)
+            .unwrap()
+            .2;
+        assert!(
+            r.1 >= pbox.1 && r.1 + r.3 <= pbox.1 + pbox.3,
+            "selected rect {r:?} must lie inside pbox {pbox:?}"
+        );
+    }
+
+    #[test]
+    fn tall_scrolled_panel_with_hidden_and_half_cards_walks_all_hits_in_view() {
+        let apps = vec![
+            App {
+                id: "app1".into(),
+                name: "App One".into(),
+                exec: "true".into(),
+                ..Default::default()
+            },
+            App {
+                id: "app2".into(),
+                name: "App Two".into(),
+                exec: "true".into(),
+                ..Default::default()
+            },
+        ];
+        // Includes a hidden card (notifications/list with no notes), a half-width pair,
+        // and multiple tall cards that overflow a 400 px high screen.
+        let mut sh = Shell::new(
+            Config::from_text(
+                "PANEL_CONTROL=\"SUPER+A top right 380 notifications/list app1/app@half app2/app@half settings/power settings/session windows/list\"\n",
+            ),
+            apps,
+        );
+        sh.apply(
+            "settings",
+            "power",
+            &parse_power("* balanced:\n  power-saver:\n  performance:\n") as &dyn std::any::Any,
+        );
+        sh.windows = (1..=6)
+            .map(|i| Window {
+                id: i,
+                title: format!("Window {i}"),
+                app_id: "firefox".into(),
+                focused: i == 1,
+            })
+            .collect();
+        let idx = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "control")
+            .unwrap();
+        assert!(sh.open_panel(idx, false, Instant::now()));
+        sh.open_ms = f64::INFINITY;
+
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 1280, 400).unwrap();
+        let cr = cairo::Context::new(&surf).unwrap();
+        let pbox = sh.draw(&cr, 1280.0, 400.0).unwrap();
+        let (_, layout_rects) = sh.layout(idx, 1280.0, 400.0);
+        // notifications/list (index 0) is Hidden, app1/app and app2/app share one row (half-width).
+        assert_eq!(layout_rects[0].0, 1);
+        assert_eq!(layout_rects[0].1 .1, layout_rects[1].1 .1);
+
+        let total_hits = sh.hit_order().len();
+        assert!(total_hits >= 10);
+        let mut saw_scrolled = false;
+        for step in 0..total_hits {
+            assert!(sh.key(Key::Down));
+            sh.draw(&cr, 1280.0, 400.0);
+            if sh.panel_scroll > 0.0 {
+                saw_scrolled = true;
+            }
+            let (ci, hit) = sh.selected.unwrap();
+            let r = sh
+                .hit_order()
+                .into_iter()
+                .find(|(c, h, _)| *c == ci && *h == hit)
+                .expect("selected hit present in frame")
+                .2;
+            assert!(
+                r.0 >= pbox.0
+                    && r.0 + r.2 <= pbox.0 + pbox.2
+                    && r.1 >= pbox.1
+                    && r.1 + r.3 <= pbox.1 + pbox.3,
+                "step {step}: selected rect {r:?} not inside pbox {pbox:?}"
+            );
+        }
+        assert!(saw_scrolled, "walking all hits must scroll past the fold");
+
+        // Wrapping past the last hit returns to the first hit and scrolls back to top.
+        assert!(sh.key(Key::Down));
+        sh.draw(&cr, 1280.0, 400.0);
+        assert_eq!(sh.panel_scroll, 0.0);
+        let first = sh.hit_order()[0];
+        assert_eq!(sh.selected, Some((first.0, first.1)));
+    }
+
+    #[test]
+    fn missing_app_shows_not_installed_card_and_remove_updates_panel_line() {
+        let dir = std::env::temp_dir().join(format!(
+            "infynitae-shell-not-installed-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg_path = dir.join("config");
+        let bak_path = dir.join("panels.backup");
+        std::fs::write(
+            &cfg_path,
+            "PANEL_X=\"SUPER+X top right 380 nosuchapp/card settings/bogus settings/session\"\n",
+        )
+        .unwrap();
+
+        let mut sh = Shell::new(
+            Config::from_text(&std::fs::read_to_string(&cfg_path).unwrap()),
+            Vec::new(),
+        );
+        sh.save_paths = Some((cfg_path.clone(), bak_path.clone()));
+        let idx = sh.panels.iter().position(|p| p.panel.name == "x").unwrap();
+        assert_eq!(sh.panels[idx].cards.len(), 3);
+        assert_eq!(sh.panels[idx].cards[0].from, "nosuchapp");
+        assert_eq!(sh.panels[idx].cards[1].from, "Settings");
+        let cx = sh.cx(Size::S, None, false);
+        assert_eq!(sh.panels[idx].cards[0].card.status(&cx), Status::Ready);
+        assert_eq!(
+            sh.panels[idx].cards[0].card.title(&cx).as_deref(),
+            Some("card")
+        );
+        assert_eq!(NOT_INSTALLED_TEXT, "This app is not installed");
+
+        assert!(sh.open_panel(idx, false, Instant::now()));
+        sh.open_ms = f64::INFINITY;
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 1280, 800).unwrap();
+        let cr = cairo::Context::new(&surf).unwrap();
+        sh.draw(&cr, 1280.0, 800.0);
+
+        let remove_r = {
+            let f = sh.frame.borrow();
+            assert_eq!(f[0].2.list.len(), 1, "not-installed card has Remove button");
+            f[0].2.list[0].1
+        };
+        assert!(sh.click(
+            1280.0,
+            800.0,
+            remove_r.0 + 4.0,
+            remove_r.1 + 4.0,
+            Button::Left
+        ));
+        let idx = sh.panels.iter().position(|p| p.panel.name == "x").unwrap();
+        assert_eq!(sh.open, Some(idx));
+        assert_eq!(sh.panels[idx].cards.len(), 2);
+        assert_eq!(sh.panels[idx].cards[0].word.kind, "bogus");
+        assert_eq!(sh.panels[idx].cards[1].word.kind, "session");
+
+        let saved = std::fs::read_to_string(&cfg_path).unwrap();
+        assert!(!saved.contains("nosuchapp/card"));
+        assert!(saved.contains("settings/bogus"));
+        assert!(saved.contains("settings/session"));
+        let backup = std::fs::read_to_string(&bak_path).unwrap();
+        assert!(backup.contains("nosuchapp/card"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }

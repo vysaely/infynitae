@@ -80,6 +80,9 @@ impl Card for ClockCard {
     fn status(&self, _cx: &Cx) -> Status {
         Status::Ready
     }
+    fn wants_clock(&self) -> bool {
+        true
+    }
     fn height(&self, cx: &Cx, _width: f64) -> f64 {
         match cx.size {
             Size::S => CLOCK_S_H,
@@ -258,6 +261,9 @@ impl Card for MonthCard {
     }
     fn status(&self, _cx: &Cx) -> Status {
         Status::Ready
+    }
+    fn wants_clock(&self) -> bool {
+        true
     }
     fn title(&self, cx: &Cx) -> Option<String> {
         let first = shifted_month(cx.now.date(), self.month_offset);

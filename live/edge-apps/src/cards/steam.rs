@@ -424,6 +424,7 @@ impl Card for GamesCard {
     fn draw(&self, cr: &Context, cx: &Cx, body: Rect, hits: &mut Hits) {
         let Some(d) = &self.data else { return };
         let range = self.visible_range(cx);
+        let start = range.start;
         if range.is_empty() {
             return;
         }
@@ -470,6 +471,13 @@ impl Card for GamesCard {
                 ui::button(cr, cx, hits, play_id, bx, by, "Play");
             }
         }
+        ui::scrollbar(
+            cr,
+            cx,
+            body,
+            d.games.len() as f64 * ui::ROW_H,
+            start as f64 * ui::ROW_H,
+        );
         cr.restore().ok();
     }
 

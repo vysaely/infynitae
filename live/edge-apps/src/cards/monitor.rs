@@ -205,8 +205,12 @@ pub struct CpuSource {
 
 impl CpuSource {
     pub fn real() -> Self {
+        let proc_dir = std::env::var_os("INFYNITAE_PROC_DIR")
+            .filter(|p| !p.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/proc"));
         Self {
-            proc_dir: PathBuf::from("/proc"),
+            proc_dir,
             hwmon_dir: PathBuf::from("/sys/class/hwmon"),
             prev: None,
         }
@@ -618,6 +622,10 @@ impl Source for MemorySource {
             render_fixture("memory").unwrap_or_else(|| fetch_proc_memory_from(&self.proc_dir));
         Box::new(parse_memory(&out))
     }
+
+    fn every(&self) -> Option<std::time::Duration> {
+        Some(std::time::Duration::from_secs(5))
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -764,7 +772,28 @@ pub fn find_drm_card_device(drm_dir: &Path) -> Option<PathBuf> {
     None
 }
 
-/// Reads the latest running training lab lines from `lab_dir` (`~/aevyternae-mind/logs/lab*.log`).
+const LAB_LOG_TAIL_BYTES: usize = 64 * 1024;
+
+fn read_file_tail(path: &Path, max_bytes: usize) -> std::io::Result<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = std::fs::File::open(path)?;
+    let len = file.metadata()?.len();
+    let skip_first_line = len > max_bytes as u64;
+    if skip_first_line {
+        file.seek(SeekFrom::End(-(max_bytes as i64)))?;
+    }
+    let mut buf = Vec::with_capacity((len.min(max_bytes as u64)) as usize);
+    file.read_to_end(&mut buf)?;
+    let text = String::from_utf8_lossy(&buf);
+    if skip_first_line {
+        if let Some((_, rest)) = text.split_once('\n') {
+            return Ok(rest.to_string());
+        }
+    }
+    Ok(text.into_owned())
+}
+
+/// Reads the latest running training lab lines from the tail of `lab_dir/lab*.log`.
 pub fn read_recent_lab_log(lab_dir: &Path) -> Option<String> {
     let Ok(entries) = std::fs::read_dir(lab_dir) else {
         return None;
@@ -787,7 +816,7 @@ pub fn read_recent_lab_log(lab_dir: &Path) -> Option<String> {
     logs.sort_by_key(|a| std::cmp::Reverse(a.0));
 
     for (_, path) in logs {
-        let Ok(content) = std::fs::read_to_string(path) else {
+        let Ok(content) = read_file_tail(&path, LAB_LOG_TAIL_BYTES) else {
             continue;
         };
         if content.contains("=== ") {
@@ -1132,16 +1161,28 @@ pub struct GpuSource {
 }
 
 impl GpuSource {
-    pub fn real() -> Self {
-        let lab_dir = std::env::var_os("HOME")
-            .filter(|h| !h.is_empty())
-            .map(|h| PathBuf::from(h).join("aevyternae-mind/logs"));
+    pub fn from_env_and_config(
+        env_dir: Option<&std::ffi::OsStr>,
+        cfg: &crate::config::Config,
+    ) -> Self {
+        let from_env = env_dir
+            .and_then(|v| v.to_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(crate::config::expand_home_path);
+        let lab_dir = cfg.monitor_log_dir.clone().or(from_env);
         Self {
             drm_dir: PathBuf::from("/sys/class/drm"),
             amdgpu_ids: PathBuf::from("/usr/share/libdrm/amdgpu.ids"),
             lab_dir,
             use_lspci: true,
         }
+    }
+
+    pub fn real() -> Self {
+        let cfg = crate::config::Config::load();
+        let env_dir = std::env::var_os("MONITOR_LOG_DIR");
+        Self::from_env_and_config(env_dir.as_deref(), &cfg)
     }
 }
 
@@ -2699,5 +2740,63 @@ LAB A5b DONE
             .list
             .iter()
             .all(|(_, r)| r.1 >= 40.0 && r.1 + r.3 <= 40.0 + h_gpu));
+    }
+
+    #[test]
+    fn gpu_source_real_has_no_lab_dir_when_key_unset() {
+        assert_eq!(GpuSource::real().lab_dir, None);
+        assert_eq!(
+            GpuSource::from_env_and_config(None, &Config::from_text("")).lab_dir,
+            None
+        );
+        assert_eq!(
+            GpuSource::from_env_and_config(
+                Some(std::ffi::OsStr::new("")),
+                &Config::from_text("MONITOR_LOG_DIR=\"\"\n")
+            )
+            .lab_dir,
+            None
+        );
+        assert_eq!(
+            GpuSource::from_env_and_config(
+                None,
+                &Config::from_text("MONITOR_LOG_DIR=\"/tmp/logs\"\n")
+            )
+            .lab_dir,
+            Some(PathBuf::from("/tmp/logs"))
+        );
+    }
+
+    #[test]
+    fn read_recent_lab_log_reads_only_file_tail() {
+        let dir = temp_dir("lab_tail");
+        std::fs::create_dir_all(&dir).unwrap();
+        let log_path = dir.join("lab1.log");
+
+        // An unclosed run header beyond the 64 KiB tail must not be seen when only the tail is read.
+        let mut body = String::from("=== old_run 01:00\n");
+        body.push_str(&"loss=0.1234 step=100\n".repeat(4000));
+        assert!(body.len() > LAB_LOG_TAIL_BYTES);
+        std::fs::write(&log_path, &body).unwrap();
+        assert_eq!(read_recent_lab_log(&dir), None);
+
+        // A run header inside the tail is found.
+        body.push_str("=== tail_run 20:55\nloss=0.0500\n");
+        std::fs::write(&log_path, &body).unwrap();
+        let got = read_recent_lab_log(&dir).unwrap();
+        assert_eq!(
+            parse_lab_log(&got),
+            Some(("tail_run".into(), "20:55".into()))
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn memory_source_interval_is_five_seconds() {
+        assert_eq!(
+            MemorySource::real().every(),
+            Some(std::time::Duration::from_secs(5))
+        );
     }
 }

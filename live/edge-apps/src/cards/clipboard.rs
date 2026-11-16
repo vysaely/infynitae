@@ -403,6 +403,7 @@ impl Card for HistoryCard {
         }
 
         let range = Self::visible_range_for(d, cx.size, self.scroll);
+        let start = range.start;
         for (row_i, idx) in range.enumerate() {
             let item = &d.items[idx];
             let ry = body.1 + row_i as f64 * ROW_H;
@@ -453,6 +454,13 @@ impl Card for HistoryCard {
                 draw::text_max(cr, text_x, ry + (ROW_H - th) / 2.0, max_w, &preview_t);
             }
         }
+        ui::scrollbar(
+            cr,
+            cx,
+            body,
+            d.items.len() as f64 * ROW_H,
+            start as f64 * ROW_H,
+        );
     }
 
     fn event(&mut self, ev: &Event, cx: &Cx, out: &mut Vec<Action>) -> bool {

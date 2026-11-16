@@ -166,8 +166,8 @@ impl OutputSurface {
     }
 
     fn apply_mode(&mut self, qh: &QueueHandle<App>, compositor: &CompositorState, shell: &Shell) {
-        let active = shell.active();
-        if !active && self.fullscreen_under {
+        let visible = shell.visible();
+        if !visible && self.fullscreen_under {
             if !self.unmapped {
                 // a null buffer unmaps a layer surface; it maps again after a commit and its configure
                 self.layer.wl_surface().attach(None, 0, 0);
@@ -193,13 +193,10 @@ impl OutputSurface {
         if !self.configured || self.width == 0 || self.height == 0 {
             return;
         }
-        self.layer.set_keyboard_interactivity(if active {
-            KeyboardInteractivity::Exclusive
-        } else {
-            KeyboardInteractivity::None
-        });
+        self.layer
+            .set_keyboard_interactivity(keyboard_interactivity(shell));
         self.set_input_region(compositor, shell);
-        if active {
+        if visible {
             self.dirty = true;
             self.mapped_closed = false;
             self.clear_pending = false;
@@ -302,7 +299,7 @@ impl OutputSurface {
     }
 
     fn render_if_needed(&mut self, qh: &QueueHandle<App>, shell: &Shell) {
-        if !self.configured || !self.dirty || self.frame_pending || !shell.active() {
+        if !self.configured || !self.dirty || self.frame_pending || !shell.visible() {
             return;
         }
         let (w, h) = (self.width as i32, self.height as i32);
@@ -319,8 +316,8 @@ impl OutputSurface {
             return;
         };
         let pad = 4;
-        let lift = if shell.open_ms.is_finite() && !shell.ask.ask.on {
-            ARRIVE_LIFT.ceil() as i32
+        let lift = if !shell.ask.ask.on && (shell.open_ms.is_finite() || shell.is_closing()) {
+            ARRIVE_LIFT.max(crate::shell::LEAVE_DROP).ceil() as i32
         } else {
             0
         };
@@ -383,6 +380,10 @@ struct Toplevel {
 
 /// What comes back to the loop from a worker thread.
 enum Fetched {
+    /// Result from a source's worker along with the `Source` object so its state (such as CPU
+    /// `/proc/stat` deltas) persists across fetches while the panel stays open.
+    Source(&'static str, &'static str, Data, Box<dyn Source>),
+    /// One-off result from `Action::Run` after a card command finishes.
     Data(&'static str, &'static str, Data),
 }
 
@@ -391,9 +392,11 @@ type SourceId = (&'static str, &'static str);
 struct SourceEntry {
     last: Instant,
     every: Option<Duration>,
+    source: Option<Box<dyn Source>>,
 }
 
-/// When each source on the open panel last ran and its interval (`None` = once per panel opening).
+/// When each source on the open panel last ran, its interval (`None` = once per panel opening),
+/// and its live `Source` object kept between fetches while the panel remains open.
 #[derive(Default)]
 struct FetchSchedule {
     open_panel: Option<usize>,
@@ -430,9 +433,11 @@ impl FetchSchedule {
             if let Some(&every) = self.in_flight.get(&id) {
                 // Remember in-flight interval across reopen so finishing before close-reopen settle
                 // does not schedule a duplicate fetch for the same opening.
-                self.records
-                    .entry(id)
-                    .or_insert(SourceEntry { last: now, every });
+                self.records.entry(id).or_insert(SourceEntry {
+                    last: now,
+                    every,
+                    source: None,
+                });
                 continue;
             }
             let due = match self.records.get(&id) {
@@ -445,22 +450,50 @@ impl FetchSchedule {
             if !due {
                 continue;
             }
-            let Some(src) = make(id.0, id.1) else {
-                continue;
+            let (src, every) = match self.records.get_mut(&id) {
+                Some(entry) => {
+                    let src = match entry.source.take() {
+                        Some(s) => s,
+                        None => match make(id.0, id.1) {
+                            Some(s) => s,
+                            None => continue,
+                        },
+                    };
+                    let every = src.every();
+                    entry.last = now;
+                    entry.every = every;
+                    (src, every)
+                }
+                None => {
+                    let Some(src) = make(id.0, id.1) else {
+                        continue;
+                    };
+                    let every = src.every();
+                    self.records.insert(
+                        id,
+                        SourceEntry {
+                            last: now,
+                            every,
+                            source: None,
+                        },
+                    );
+                    (src, every)
+                }
             };
-            let every = src.every();
-            self.records.insert(id, SourceEntry { last: now, every });
             self.in_flight.insert(id, every);
             due_list.push((id, src));
         }
         due_list
     }
 
-    fn mark_done(&mut self, id: SourceId, now: Instant) {
+    fn mark_done(&mut self, id: SourceId, src: Option<Box<dyn Source>>, now: Instant) {
         self.in_flight.remove(&id);
         if self.open_panel.is_some() {
             if let Some(entry) = self.records.get_mut(&id) {
                 entry.last = now;
+                if let Some(s) = src {
+                    entry.source = Some(s);
+                }
             }
         }
     }
@@ -477,6 +510,43 @@ impl FetchSchedule {
                 Some(due_at.saturating_duration_since(now))
             })
             .min()
+    }
+}
+
+struct SourceWorker {
+    tx: std::sync::mpsc::Sender<Box<dyn Source>>,
+    #[cfg(test)]
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+fn spawn_worker(id: SourceId, fetch_tx: Sender<Fetched>) -> SourceWorker {
+    let (tx, rx) = std::sync::mpsc::channel::<Box<dyn Source>>();
+    let (prov, key) = id;
+    let run = move || {
+        while let Ok(mut src) = rx.recv() {
+            let data = src.fetch();
+            if fetch_tx
+                .send(Fetched::Source(prov, key, data, src))
+                .is_err()
+            {
+                break;
+            }
+        }
+    };
+    let _handle = match std::thread::Builder::new()
+        .name(format!("edge-{prov}-{key}"))
+        .spawn(run)
+    {
+        Ok(h) => Some(h),
+        Err(e) => {
+            eprintln!("infynitae-edge-apps: spawn worker {prov}/{key}: {e}");
+            None
+        }
+    };
+    SourceWorker {
+        tx,
+        #[cfg(test)]
+        handle: _handle,
     }
 }
 
@@ -498,6 +568,8 @@ struct App {
     shell: Shell,
     fetch_tx: Sender<Fetched>,
     fetch: FetchSchedule,
+    /// one long-lived worker thread per active source while its panel is open
+    workers: HashMap<SourceId, SourceWorker>,
     /// cards with a command running, and the latest one waiting after it
     queued: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, Option<String>>>>,
     was_animating: bool,
@@ -601,7 +673,7 @@ impl App {
         if !self.shell.reload_if_changed() {
             return false;
         }
-        if self.shell.active() {
+        if self.shell.visible() {
             for os in &mut self.outputs {
                 os.dirty = true;
             }
@@ -613,6 +685,9 @@ impl App {
     fn sync_all(&mut self) {
         self.reload_config();
         self.run_actions();
+        if self.shell.open.is_some() {
+            self.shell.now = chrono::Local::now().naive_local();
+        }
         let force = self.shell.take_fetch_needed();
         self.fetch_due(force);
         for os in &mut self.outputs {
@@ -630,8 +705,8 @@ impl App {
         self.sync_all();
     }
 
-    /// The open panel's sources, fetched on worker threads (each at most once at a time); `force`
-    /// fetches again before its time.
+    /// The open panel's sources, fetched on one long-lived worker thread per source while open;
+    /// `force` fetches again before its time.
     fn fetch_due(&mut self, force: bool) {
         let reloaded = if self.shell.open.is_some() {
             self.reload_config()
@@ -640,21 +715,27 @@ impl App {
         };
         let Some(open) = self.shell.open else {
             self.fetch.sync_panel(None, &[]);
+            self.workers.clear();
             return;
         };
         let force = force || self.shell.take_fetch_needed();
         let sources = self.shell.sources();
+        self.workers.retain(|id, _| sources.contains(id));
         let now = Instant::now();
-        for ((prov, key), mut src) in
-            self.fetch
-                .take_due(Some(open), &sources, force, now, |p, k| {
-                    crate::provider::by_id(p).and_then(|prov| prov.source(k))
-                })
+        for (id, src) in self
+            .fetch
+            .take_due(Some(open), &sources, force, now, |p, k| {
+                crate::provider::by_id(p).and_then(|prov| prov.source(k))
+            })
         {
-            let tx = self.fetch_tx.clone();
-            std::thread::spawn(move || {
-                let _ = tx.send(Fetched::Data(prov, key, src.fetch()));
-            });
+            let worker = self
+                .workers
+                .entry(id)
+                .or_insert_with(|| spawn_worker(id, self.fetch_tx.clone()));
+            if let Err(std::sync::mpsc::SendError(src)) = worker.tx.send(src) {
+                *worker = spawn_worker(id, self.fetch_tx.clone());
+                let _ = worker.tx.send(src);
+            }
         }
         if reloaded {
             for os in &mut self.outputs {
@@ -774,7 +855,7 @@ impl App {
                     }
                 }
                 // the shell takes these before they get here
-                Action::SetQuery(_) | Action::ShowCards(_) => {}
+                Action::SetQuery(_) | Action::ShowCards(_) | Action::RemoveCard => {}
             }
         }
         if notes_changed {
@@ -897,10 +978,12 @@ impl CompositorHandler for App {
         {
             let _ = self.reload_config();
         }
-        // an animation running (the cards arriving, a list opening, drag autoscroll): draw again
-        let animating = self.shell.open.is_some()
-            && (self.shell.tick(Instant::now()) || self.shell.wants_frame());
+        // an animation running (arrival, leaving, a list opening, drag autoscroll): draw again
+        let was_visible = self.shell.visible();
+        let animating =
+            was_visible && (self.shell.tick(Instant::now()) || self.shell.wants_frame());
         let ended = self.was_animating && !animating;
+        let closed_finished = was_visible && !self.shell.visible();
         self.was_animating = animating;
         if let Some(os) = self
             .outputs
@@ -917,8 +1000,8 @@ impl CompositorHandler for App {
                 os.clear_and_commit(qh);
             }
         }
-        if ended {
-            // the panel's size settled: its input region follows
+        if ended || closed_finished {
+            // the panel's size settled or its leaving fade ended: input region / clear follows
             self.sync_all();
         }
         if let Some(pl) = self
@@ -1430,6 +1513,10 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
     );
     shell.live = true;
     let (fetch_tx, fetch_rx) = channel::channel::<Fetched>();
+    let (icon_tx, icon_rx) = channel::channel::<()>();
+    crate::icons::set_icon_wakeup(move || {
+        let _ = icon_tx.send(());
+    });
     let (notify_tx, notify_rx) = channel::channel::<crate::notify::Incoming>();
     let output_state = OutputState::new(&globals, &qh);
     let existing: Vec<_> = output_state.outputs().collect();
@@ -1451,6 +1538,7 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
         shell,
         fetch_tx,
         fetch: FetchSchedule::default(),
+        workers: HashMap::new(),
         queued: Default::default(),
         was_animating: false,
         popups: None,
@@ -1483,18 +1571,35 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
     let handle = event_loop.handle();
     handle
         .insert_source(fetch_rx, |evt, _, app| {
-            if let channel::Event::Msg(Fetched::Data(prov, key, data)) = evt {
-                app.fetch.mark_done((prov, key), Instant::now());
-                let changed = app.shell.apply(prov, key, data.as_ref());
-                let reloaded = app.reload_config();
-                if (changed || reloaded) && app.shell.open.is_some() {
+            let (prov, key, data) = match evt {
+                channel::Event::Msg(Fetched::Source(prov, key, data, src)) => {
+                    app.fetch.mark_done((prov, key), Some(src), Instant::now());
+                    (prov, key, data)
+                }
+                channel::Event::Msg(Fetched::Data(prov, key, data)) => (prov, key, data),
+                _ => return,
+            };
+            let changed = app.shell.apply(prov, key, data.as_ref());
+            let reloaded = app.reload_config();
+            if (changed || reloaded) && app.shell.open.is_some() {
+                for os in &mut app.outputs {
+                    os.dirty = true;
+                    os.render_if_needed(&app.qh, &app.shell);
+                }
+                // a card that grew or shrank: the input region follows
+                for os in &mut app.outputs {
+                    os.set_input_region(&app.compositor, &app.shell);
+                }
+            }
+        })
+        .map_err(|e| e.to_string())?;
+    handle
+        .insert_source(icon_rx, |evt, _, app| {
+            if let channel::Event::Msg(()) = evt {
+                if app.shell.open.is_some() {
                     for os in &mut app.outputs {
                         os.dirty = true;
                         os.render_if_needed(&app.qh, &app.shell);
-                    }
-                    // a card that grew or shrank: the input region follows
-                    for os in &mut app.outputs {
-                        os.set_input_region(&app.compositor, &app.shell);
                     }
                 }
             }
@@ -1601,13 +1706,32 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
         app.sync_all();
     }
     while !app.exit {
+        if app.shell.hover_tick(Instant::now()) {
+            app.sync_all();
+        }
         if app.shell.open.is_some() {
-            app.shell.now = chrono::Local::now().naive_local();
+            let prev = app.shell.now;
+            let now = chrono::Local::now().naive_local();
+            app.shell.now = now;
+            if app.shell.wants_clock() && minute_key(prev) != minute_key(now) {
+                for os in &mut app.outputs {
+                    os.dirty = true;
+                    os.render_if_needed(&app.qh, &app.shell);
+                }
+            }
             app.fetch_due(false);
         }
         // while a panel is open, wake when its shortest periodic source interval is next due;
         // closed (or only once-per-open sources), nothing wakes the edge for data fetches
         let mut timeout = app.fetch_timeout(Instant::now());
+        if app.shell.open.is_some() && app.shell.wants_clock() {
+            let rem = next_minute_timeout(app.shell.now);
+            timeout = Some(timeout.map_or(rem, |t| t.min(rem)));
+        }
+        if let Some(d) = app.shell.hover_timeout(Instant::now()) {
+            let rem = d.max(Duration::from_millis(1));
+            timeout = Some(timeout.map_or(rem, |t| t.min(rem)));
+        }
         // an asker that went away (its pipe closed, or it exited): checked every 100 ms while it
         // asks. No watcher thread: a thread holding a copy of the pipe kept the asker from
         // seeing the answer's end (it reads to the end of the pipe).
@@ -1642,6 +1766,34 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
         crate::ask::answer(&mut app.shell.ask, None);
     }
     Ok(())
+}
+
+fn keyboard_interactivity(shell: &Shell) -> KeyboardInteractivity {
+    if !shell.active() {
+        KeyboardInteractivity::None
+    } else if shell.opened_by_hover
+        && !shell.clicked_inside
+        && !shell.ask.ask.on
+        && !shell.editing()
+    {
+        KeyboardInteractivity::OnDemand
+    } else {
+        KeyboardInteractivity::Exclusive
+    }
+}
+
+fn minute_key(now: chrono::NaiveDateTime) -> (chrono::NaiveDate, u32, u32) {
+    use chrono::Timelike;
+    (now.date(), now.hour(), now.minute())
+}
+
+/// Duration until just past the next minute boundary so `Local::now()` has ticked over.
+fn next_minute_timeout(now: chrono::NaiveDateTime) -> Duration {
+    use chrono::Timelike;
+    let secs_left = 59u64.saturating_sub(u64::from(now.second()));
+    let nanos_used = u64::from(now.nanosecond() % 1_000_000_000);
+    let nanos_left = 1_000_000_000u64.saturating_sub(nanos_used);
+    Duration::from_secs(secs_left) + Duration::from_nanos(nanos_left) + Duration::from_millis(5)
 }
 
 /// The notification pop-ups' surface (in place of mako): a strip down the right of the first
@@ -1860,7 +2012,7 @@ mod tests {
             vec![("about", "info")]
         );
         assert_eq!(once_calls.load(Ordering::Relaxed), 1);
-        sched.mark_done(("about", "info"), t0 + Duration::from_millis(10));
+        sched.mark_done(("about", "info"), None, t0 + Duration::from_millis(10));
 
         // While the same panel stays open, it never fetches again and needs no wakeup timeout.
         assert_eq!(sched.next_timeout(&ids, t0 + Duration::from_secs(1)), None);
@@ -1895,7 +2047,7 @@ mod tests {
             vec![("about", "info")]
         );
         assert_eq!(once_calls.load(Ordering::Relaxed), 2);
-        sched.mark_done(("about", "info"), t0 + Duration::from_secs(62));
+        sched.mark_done(("about", "info"), None, t0 + Duration::from_secs(62));
 
         // Switching directly to another panel also treats the new opening as fresh.
         assert_eq!(
@@ -1936,15 +2088,15 @@ mod tests {
 
         // Complete at distinct instants; next_timeout tracks the earliest remaining deadline.
         let t_done_fast = t0 + Duration::from_millis(50);
-        sched.mark_done(("about", "info"), t0 + Duration::from_millis(20));
-        sched.mark_done(("audio", "sink"), t_done_fast);
+        sched.mark_done(("about", "info"), None, t0 + Duration::from_millis(20));
+        sched.mark_done(("audio", "sink"), None, t_done_fast);
         assert_eq!(
             sched.next_timeout(&ids, t_done_fast),
             Some(Duration::from_secs(2))
         );
 
         let t_done_slow = t0 + Duration::from_millis(300);
-        sched.mark_done(("weather", "now"), t_done_slow);
+        sched.mark_done(("weather", "now"), None, t_done_slow);
         assert_eq!(
             sched.next_timeout(&ids, t_done_slow),
             Some(Duration::from_millis(1750))
@@ -1975,7 +2127,7 @@ mod tests {
             sched.next_timeout(&ids, t_tick1),
             Some(Duration::from_secs(10) - (t_tick1 - t_done_slow))
         );
-        sched.mark_done(("audio", "sink"), t_tick1 + Duration::from_millis(20));
+        sched.mark_done(("audio", "sink"), None, t_tick1 + Duration::from_millis(20));
 
         // After 10 s from slow's completion, slow becomes due alongside any due fast interval.
         let t_tick_slow = t_done_slow + Duration::from_secs(10);
@@ -2029,8 +2181,8 @@ mod tests {
             t0 + Duration::from_millis(30)
         )
         .is_empty());
-        sched.mark_done(("about", "info"), t0 + Duration::from_millis(40));
-        sched.mark_done(("audio", "sink"), t0 + Duration::from_millis(40));
+        sched.mark_done(("about", "info"), None, t0 + Duration::from_millis(40));
+        sched.mark_done(("audio", "sink"), None, t0 + Duration::from_millis(40));
 
         // On later ticks in this reopened panel, `about/info` stays single-shot.
         assert!(run_due(
@@ -2070,7 +2222,7 @@ mod tests {
             run_due(&mut sched, Some(0), &full, false, t0),
             vec![("about", "info")]
         );
-        sched.mark_done(("about", "info"), t0 + Duration::from_millis(10));
+        sched.mark_done(("about", "info"), None, t0 + Duration::from_millis(10));
 
         // Card removed from the open panel drops its record; re-adding fetches once again.
         assert!(run_due(
@@ -2092,5 +2244,264 @@ mod tests {
             vec![("about", "info")]
         );
         assert_eq!(calls.load(Ordering::Relaxed), 2);
+    }
+
+    struct InstanceSource {
+        calls: usize,
+    }
+
+    impl Source for InstanceSource {
+        fn fetch(&mut self) -> Data {
+            self.calls += 1;
+            Box::new((std::thread::current().id(), self.calls))
+        }
+    }
+
+    #[test]
+    fn keeps_source_instance_across_fetches_in_one_opening() {
+        let mut sched = FetchSchedule::default();
+        let ids = [("monitor", "cpu")];
+        let mut make_calls = 0usize;
+        let t0 = Instant::now();
+
+        let mut due1 = sched.take_due(Some(0), &ids, false, t0, |_, _| {
+            make_calls += 1;
+            Some(Box::new(InstanceSource { calls: 0 }))
+        });
+        assert_eq!(due1.len(), 1);
+        let (id1, mut src1) = due1.pop().unwrap();
+        let (_, n1) = *src1
+            .fetch()
+            .downcast::<(std::thread::ThreadId, usize)>()
+            .unwrap();
+        assert_eq!(n1, 1);
+        assert_eq!(make_calls, 1);
+        let t_done1 = t0 + Duration::from_millis(10);
+        sched.mark_done(id1, Some(src1), t_done1);
+
+        let t1 = t_done1 + Duration::from_secs(2);
+        let mut due2 = sched.take_due(Some(0), &ids, false, t1, |_, _| {
+            make_calls += 1;
+            Some(Box::new(InstanceSource { calls: 0 }))
+        });
+        assert_eq!(due2.len(), 1);
+        let (id2, mut src2) = due2.pop().unwrap();
+        let (_, n2) = *src2
+            .fetch()
+            .downcast::<(std::thread::ThreadId, usize)>()
+            .unwrap();
+        assert_eq!(n2, 2, "second fetch must reuse the same Source instance");
+        assert_eq!(
+            make_calls, 1,
+            "source must not be rebuilt while panel stays open"
+        );
+        sched.mark_done(id2, Some(src2), t1 + Duration::from_millis(10));
+
+        // Closing and reopening builds a fresh Source.
+        assert!(sched
+            .take_due(None, &[], false, t1 + Duration::from_secs(1), |_, _| None)
+            .is_empty());
+        let mut due3 = sched.take_due(Some(0), &ids, false, t1 + Duration::from_secs(2), |_, _| {
+            make_calls += 1;
+            Some(Box::new(InstanceSource { calls: 0 }))
+        });
+        let (_, mut src3) = due3.pop().unwrap();
+        let (_, n3) = *src3
+            .fetch()
+            .downcast::<(std::thread::ThreadId, usize)>()
+            .unwrap();
+        assert_eq!(n3, 1);
+        assert_eq!(make_calls, 2);
+    }
+
+    #[test]
+    fn worker_reuses_one_thread_while_open_and_stops_on_close() {
+        type WorkerMsg = (std::thread::ThreadId, usize, Box<dyn Source>);
+        let (fetch_tx, fetch_rx) = channel::channel::<Fetched>();
+        let mut event_loop: EventLoop<Option<WorkerMsg>> = EventLoop::try_new().unwrap();
+        event_loop
+            .handle()
+            .insert_source(fetch_rx, |evt, _, out| {
+                if let channel::Event::Msg(Fetched::Source(_, _, data, src)) = evt {
+                    let (tid, n) = *data.downcast::<(std::thread::ThreadId, usize)>().unwrap();
+                    *out = Some((tid, n, src));
+                }
+            })
+            .unwrap();
+
+        let mut worker = spawn_worker(("monitor", "cpu"), fetch_tx);
+        let src: Box<dyn Source> = Box::new(InstanceSource { calls: 0 });
+        worker.tx.send(src).unwrap();
+        let mut res = None;
+        while res.is_none() {
+            event_loop
+                .dispatch(Some(Duration::from_millis(100)), &mut res)
+                .unwrap();
+        }
+        let (tid1, n1, src) = res.take().unwrap();
+        assert_eq!(n1, 1);
+
+        worker.tx.send(src).unwrap();
+        while res.is_none() {
+            event_loop
+                .dispatch(Some(Duration::from_millis(100)), &mut res)
+                .unwrap();
+        }
+        let (tid2, n2, _src) = res.take().unwrap();
+        assert_eq!(n2, 2);
+        assert_eq!(tid1, tid2, "same worker thread serves both fetches");
+
+        let handle = worker.handle.take().unwrap();
+        drop(worker);
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn cpu_source_reports_percent_on_second_fetch_of_one_opening() {
+        let dir =
+            std::env::temp_dir().join(format!("infynitae-edge-apps-f1-cpu-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("stat"), "cpu  100 0 50 850 0 0 0 0\n").unwrap();
+        std::env::set_var("INFYNITAE_PROC_DIR", &dir);
+
+        let mut sched = FetchSchedule::default();
+        let ids = [("monitor", "cpu")];
+        let t0 = Instant::now();
+        let make = |p, k| crate::provider::by_id(p).and_then(|prov| prov.source(k));
+
+        let mut due1 = sched.take_due(Some(0), &ids, false, t0, make);
+        assert_eq!(due1.len(), 1);
+        let (id1, mut src1) = due1.pop().unwrap();
+        let d1 = src1
+            .fetch()
+            .downcast::<crate::cards::monitor::CpuData>()
+            .unwrap();
+        assert_eq!(d1.busy_pct, None);
+        let t_done1 = t0 + Duration::from_millis(10);
+        sched.mark_done(id1, Some(src1), t_done1);
+
+        std::fs::write(dir.join("stat"), "cpu  180 0 70 1150 0 0 0 0\n").unwrap();
+        let t1 = t_done1 + Duration::from_secs(2);
+        let mut due2 = sched.take_due(Some(0), &ids, false, t1, make);
+        assert_eq!(due2.len(), 1);
+        let (id2, mut src2) = due2.pop().unwrap();
+        let d2 = src2
+            .fetch()
+            .downcast::<crate::cards::monitor::CpuData>()
+            .unwrap();
+        assert_eq!(d2.busy_pct, Some(25));
+        sched.mark_done(id2, Some(src2), t1 + Duration::from_millis(10));
+
+        std::env::remove_var("INFYNITAE_PROC_DIR");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn settings_config_source_fetches_once_per_open_with_no_timer() {
+        let mut sched = FetchSchedule::default();
+        let ids = [("settings", "config")];
+        let t0 = Instant::now();
+        let make = |p, k| crate::provider::by_id(p).and_then(|prov| prov.source(k));
+
+        let mut due1 = sched.take_due(Some(0), &ids, false, t0, make);
+        assert_eq!(due1.len(), 1);
+        let (id, mut src) = due1.pop().unwrap();
+        assert_eq!(src.every(), None);
+        let _ = src.fetch();
+        sched.mark_done(id, Some(src), t0 + Duration::from_millis(10));
+
+        assert_eq!(sched.next_timeout(&ids, t0 + Duration::from_secs(1)), None);
+        assert!(sched
+            .take_due(Some(0), &ids, false, t0 + Duration::from_secs(60), make)
+            .is_empty());
+    }
+
+    #[test]
+    fn clock_timeout_hits_next_full_minute_and_shell_reports_wants_clock() {
+        use chrono::{NaiveDate, Timelike};
+        let d = NaiveDate::from_ymd_opt(2026, 11, 16).unwrap();
+
+        let t0 = d.and_hms_milli_opt(12, 34, 0, 0).unwrap();
+        let d0 = next_minute_timeout(t0);
+        assert_eq!(d0, Duration::from_millis(60_005));
+        assert_eq!((t0 + chrono::Duration::from_std(d0).unwrap()).minute(), 35);
+
+        let t1 = d.and_hms_milli_opt(12, 34, 30, 500).unwrap();
+        let d1 = next_minute_timeout(t1);
+        assert_eq!(d1, Duration::from_millis(29_505));
+        assert_eq!((t1 + chrono::Duration::from_std(d1).unwrap()).minute(), 35);
+
+        let t2 = d.and_hms_milli_opt(12, 34, 59, 900).unwrap();
+        let d2 = next_minute_timeout(t2);
+        assert_eq!(d2, Duration::from_millis(105));
+        assert_eq!((t2 + chrono::Duration::from_std(d2).unwrap()).minute(), 35);
+
+        // Shell reports wants_clock only when an open panel holds a clock or month card.
+        let mut sh = Shell::new(
+            crate::config::Config::from_text(
+                "PANEL_CONTROL=\"SUPER+A top right 380 calendar/clock\"\nPANEL_OTHER=\"SUPER+K top right 380 settings/power\"\n",
+            ),
+            Vec::new(),
+        );
+        assert!(!sh.wants_clock(), "closed panel needs no clock wake");
+        let ctrl = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "control")
+            .unwrap();
+        let other = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "other")
+            .unwrap();
+        assert!(sh.open_panel(ctrl, false, Instant::now()));
+        assert!(sh.wants_clock());
+        assert!(sh.open_panel(other, false, Instant::now()));
+        assert!(!sh.wants_clock());
+    }
+
+    #[test]
+    fn hover_panel_uses_ondemand_keyboard_until_clicked_inside() {
+        let mut sh = Shell::new(
+            crate::config::Config::from_text(
+                "PANEL_CONTROL=\"SUPER+A top right 380 hover settings/session\"\n",
+            ),
+            Vec::new(),
+        );
+        assert_eq!(keyboard_interactivity(&sh), KeyboardInteractivity::None);
+
+        let idx = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "control")
+            .unwrap();
+        let t0 = Instant::now();
+        assert!(sh.open_panel(idx, true, t0));
+        sh.open_ms = f64::INFINITY;
+        assert_eq!(
+            keyboard_interactivity(&sh),
+            KeyboardInteractivity::OnDemand,
+            "hover-opened panel must not steal exclusive keyboard focus"
+        );
+
+        let ((ox, oy, _, _), _) = sh.layout(idx, 1280.0, 800.0);
+        assert!(sh.click(1280.0, 800.0, ox + 10.0, oy + 10.0, Button::Left));
+        assert!(sh.clicked_inside);
+        assert_eq!(
+            keyboard_interactivity(&sh),
+            KeyboardInteractivity::Exclusive,
+            "clicking inside a hover panel promotes keyboard interactivity to Exclusive"
+        );
+
+        assert!(sh.close_at(t0));
+        assert_eq!(keyboard_interactivity(&sh), KeyboardInteractivity::None);
+
+        assert!(sh.open_panel(idx, false, t0));
+        assert_eq!(
+            keyboard_interactivity(&sh),
+            KeyboardInteractivity::Exclusive,
+            "key-opened panel takes Exclusive keyboard interactivity at once"
+        );
     }
 }

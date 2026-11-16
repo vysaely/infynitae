@@ -479,26 +479,28 @@ pub fn draw(
     pointer: Option<(f64, f64)>,
     now: Instant,
 ) {
-    let inside = |r: Rect| {
-        pointer.is_some_and(|p| p.0 >= r.0 && p.0 < r.0 + r.2 && p.1 >= r.1 && p.1 < r.1 + r.3)
-    };
-    for ((_, r), pop) in layout(n, w).into_iter().zip(&n.popups) {
-        let age = now.saturating_duration_since(pop.born).as_secs_f64() * 1000.0;
-        let t = crate::ui::ease(age / ARRIVE_MS);
-        if t <= 0.0 {
-            continue;
+    draw::with_font(&th.font, || {
+        let inside = |r: Rect| {
+            pointer.is_some_and(|p| p.0 >= r.0 && p.0 < r.0 + r.2 && p.1 >= r.1 && p.1 < r.1 + r.3)
+        };
+        for ((_, r), pop) in layout(n, w).into_iter().zip(&n.popups) {
+            let age = now.saturating_duration_since(pop.born).as_secs_f64() * 1000.0;
+            let t = crate::ui::ease(age / ARRIVE_MS);
+            if t <= 0.0 {
+                continue;
+            }
+            let lifted = t < 1.0;
+            if lifted {
+                cr.push_group();
+                cr.translate((1.0 - t) * 24.0, 0.0);
+            }
+            draw_one(cr, th, &pop.note, r, inside(r), &inside);
+            if lifted {
+                let _ = cr.pop_group_to_source();
+                let _ = cr.paint_with_alpha(t);
+            }
         }
-        let lifted = t < 1.0;
-        if lifted {
-            cr.push_group();
-            cr.translate((1.0 - t) * 24.0, 0.0);
-        }
-        draw_one(cr, th, &pop.note, r, inside(r), &inside);
-        if lifted {
-            let _ = cr.pop_group_to_source();
-            let _ = cr.paint_with_alpha(t);
-        }
-    }
+    });
 }
 
 fn draw_one(
@@ -619,15 +621,7 @@ fn draw_one(
 
 /// The body in up to `lines` lines, wrapped, the last cut with an ellipsis.
 fn draw_body(cr: &Context, x: f64, y: f64, w: f64, lines: usize, body: &str, th: &Theme) {
-    let l = pangocairo::functions::create_layout(cr);
-    let mut fd = pango::FontDescription::from_string(draw::FONT);
-    fd.set_absolute_size(12.0 * pango::SCALE as f64);
-    l.set_font_description(Some(&fd));
-    l.set_width((w * pango::SCALE as f64) as i32);
-    l.set_wrap(pango::WrapMode::WordChar);
-    l.set_ellipsize(pango::EllipsizeMode::End);
-    l.set_height(-(lines as i32));
-    l.set_text(body);
+    let l = draw::wrapped_layout(cr, 12.0, false, w, Some(lines), body);
     draw::set(cr, th.muted);
     cr.move_to(x.round(), y.round());
     pangocairo::functions::show_layout(cr, &l);
