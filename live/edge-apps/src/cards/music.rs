@@ -458,19 +458,18 @@ struct MusicSource;
 
 impl Source for MusicSource {
     fn fetch(&mut self) -> Data {
-        let mut data = if std::env::var_os("INFYNITAE_EDGE_RENDER_DATA")
-            .is_some_and(|p| !p.is_empty())
-        {
-            let raw = run_sh("music", "");
-            let raw = if raw.is_empty() {
-                run_sh("media", "")
+        let mut data =
+            if std::env::var_os("INFYNITAE_EDGE_RENDER_DATA").is_some_and(|p| !p.is_empty()) {
+                let raw = run_sh("music", "");
+                let raw = if raw.is_empty() {
+                    run_sh("media", "")
+                } else {
+                    raw
+                };
+                parse_music(&raw)
             } else {
-                raw
+                fetch_dbus()
             };
-            parse_music(&raw)
-        } else {
-            fetch_dbus()
-        };
         populate_covers_with(cover_cache(), &mut data, icons::decode_cover_image);
         Box::new(data)
     }
@@ -1846,14 +1845,7 @@ fn draw_play_button(cr: &Context, cx: &Cx, hits: &mut Hits, r: Rect, playing: bo
 // ---------------------------------------------------------------------------------------------
 // Cover art and line icons
 
-fn draw_cover(
-    cr: &Context,
-    cx: &Cx,
-    x: f64,
-    y: f64,
-    size: f64,
-    cover: Option<&Arc<DecodedImage>>,
-) {
+fn draw_cover(cr: &Context, cx: &Cx, x: f64, y: f64, size: f64, cover: Option<&Arc<DecodedImage>>) {
     let th = cx.theme;
     if let Some(img) = cover {
         if let Some(surf) = icons::surface_for_decoded(img) {
@@ -2578,7 +2570,10 @@ mod tests {
             ));
             populate_covers_with(&cache, &mut data, icons::decode_cover_image);
             let cov = data.players[0].cover.as_ref().expect("decoded cover");
-            assert_eq!((cov.width, cov.height), (COVER_DECODE_SIZE, COVER_DECODE_SIZE));
+            assert_eq!(
+                (cov.width, cov.height),
+                (COVER_DECODE_SIZE, COVER_DECODE_SIZE)
+            );
             card.apply("music", &data);
             let h = card.height(&cx, 360.0);
             let mut draw_surf =

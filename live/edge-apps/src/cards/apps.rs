@@ -2162,8 +2162,8 @@ mod tests {
         let cx = test_cx(&th, Size::L, &apps);
         let card = AppsListCard::default();
         let h = card.height(&cx, 340.0);
-        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 360, h.ceil() as i32 + 20)
-            .unwrap();
+        let surf =
+            cairo::ImageSurface::create(cairo::Format::ARgb32, 360, h.ceil() as i32 + 20).unwrap();
         let cr = cairo::Context::new(&surf).unwrap();
         let mut hits = Hits::new(None, None);
 
@@ -2172,9 +2172,8 @@ mod tests {
         let apps_card_ms = t0.elapsed().as_secs_f64() * 1000.0;
 
         // Also time queuing all 200 distinct uncached icons directly on the UI thread.
-        let cache = crate::icons::IconCache::new(|| {
-            crate::icons::IconSearch::with_dirs(Vec::new(), None)
-        });
+        let cache =
+            crate::icons::IconCache::new(|| crate::icons::IconSearch::with_dirs(Vec::new(), None));
         let t1 = std::time::Instant::now();
         for (i, app) in apps.iter().enumerate() {
             crate::icons::draw_app_icon_with(
@@ -2189,9 +2188,7 @@ mod tests {
             );
         }
         let all_200_ms = t1.elapsed().as_secs_f64() * 1000.0;
-        eprintln!(
-            "apps_200_first_draw: card={apps_card_ms:.3} ms, 200_icons={all_200_ms:.3} ms"
-        );
+        eprintln!("apps_200_first_draw: card={apps_card_ms:.3} ms, 200_icons={all_200_ms:.3} ms");
         assert!(
             apps_card_ms < 100.0,
             "first AppsListCard::draw stalled: {apps_card_ms:.3} ms"

@@ -244,8 +244,12 @@ mod tests {
 
     #[test]
     fn theme_font_changes_measured_and_wrapped_text_width() {
-        let t_sans = Theme::from_config(&crate::config::Config::from_text("FONT_NAME=\"sans-serif\"\n"));
-        let t_mono = Theme::from_config(&crate::config::Config::from_text("FONT_NAME=\"monospace\"\n"));
+        let t_sans = Theme::from_config(&crate::config::Config::from_text(
+            "FONT_NAME=\"sans-serif\"\n",
+        ));
+        let t_mono = Theme::from_config(&crate::config::Config::from_text(
+            "FONT_NAME=\"monospace\"\n",
+        ));
         let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 400, 80).unwrap();
         let cr = cairo::Context::new(&surf).unwrap();
         let sample = Text {

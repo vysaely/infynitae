@@ -1015,18 +1015,41 @@ mod tests {
         let cx = test_cx(&th);
         let view = (0.0, 10.0, 200.0, 100.0);
 
-        let no_overflow = render_pixel(210, 120, |cr| scrollbar(cr, &cx, view, 100.0, 0.0), (197, 15));
+        let no_overflow = render_pixel(
+            210,
+            120,
+            |cr| scrollbar(cr, &cx, view, 100.0, 0.0),
+            (197, 15),
+        );
         assert_eq!(no_overflow[3], 0, "no scrollbar when content fits");
 
-        let top_start = render_pixel(210, 120, |cr| scrollbar(cr, &cx, view, 400.0, 0.0), (197, 15));
-        let top_end = render_pixel(210, 120, |cr| scrollbar(cr, &cx, view, 400.0, 0.0), (197, 105));
+        let top_start = render_pixel(
+            210,
+            120,
+            |cr| scrollbar(cr, &cx, view, 400.0, 0.0),
+            (197, 15),
+        );
+        let top_end = render_pixel(
+            210,
+            120,
+            |cr| scrollbar(cr, &cx, view, 400.0, 0.0),
+            (197, 105),
+        );
         assert!(top_start[3] > 0, "thumb drawn at top when scroll is 0");
         assert_eq!(top_end[3], 0, "bottom clear when scroll is 0");
 
-        let bot_start =
-            render_pixel(210, 120, |cr| scrollbar(cr, &cx, view, 400.0, 300.0), (197, 15));
-        let bot_end =
-            render_pixel(210, 120, |cr| scrollbar(cr, &cx, view, 400.0, 300.0), (197, 105));
+        let bot_start = render_pixel(
+            210,
+            120,
+            |cr| scrollbar(cr, &cx, view, 400.0, 300.0),
+            (197, 15),
+        );
+        let bot_end = render_pixel(
+            210,
+            120,
+            |cr| scrollbar(cr, &cx, view, 400.0, 300.0),
+            (197, 105),
+        );
         assert_eq!(bot_start[3], 0, "top clear at bottom of scroll");
         assert!(bot_end[3] > 0, "thumb drawn at bottom at max scroll");
     }

@@ -726,8 +726,7 @@ pub fn load_icon_decoded(path: &Path, size: i32) -> Option<DecodedImage> {
             if handle.is_null() {
                 return None;
             }
-            let Some(mut dst) =
-                cairo::ImageSurface::create(cairo::Format::ARgb32, size, size).ok()
+            let Some(mut dst) = cairo::ImageSurface::create(cairo::Format::ARgb32, size, size).ok()
             else {
                 (fns.g_object_unref)(handle);
                 return None;
@@ -1227,7 +1226,8 @@ mod tests {
         write_solid_png(&icon_path, 48, 48, 220, 20, 20);
 
         let base = dir.clone();
-        let cache = IconCache::new(move || IconSearch::with_dirs(vec![base.clone()], Some("custom")));
+        let cache =
+            IconCache::new(move || IconSearch::with_dirs(vec![base.clone()], Some("custom")));
         let woke = Arc::new(AtomicUsize::new(0));
         let woke_cb = Arc::clone(&woke);
         cache.set_wakeup(move || {
@@ -1269,7 +1269,10 @@ mod tests {
 
         // Second draw paints the red icon pixels; missing icon stays remembered without re-lookup.
         let red_px = sample_center("reload-app");
-        assert!(red_px[2] > 180 && red_px[1] < 40, "expected red: {red_px:?}");
+        assert!(
+            red_px[2] > 180 && red_px[1] < 40,
+            "expected red: {red_px:?}"
+        );
         let _ = sample_center("later-app");
         cache.wait_idle();
         assert_eq!(cache.lookup_count(), 2);

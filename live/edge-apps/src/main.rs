@@ -230,9 +230,14 @@ mod tests {
         let dark_cfg = Config::from_text("THEME_SCHEME=\"tonal\"\n");
         let dark_th = theme::Theme::from_config(&dark_cfg);
         let dark_bg = render_backdrop(&dark_th, dark_cfg.light, None);
-        assert!(dark_bg.luminance() < 0.15, "dark lum={}", dark_bg.luminance());
+        assert!(
+            dark_bg.luminance() < 0.15,
+            "dark lum={}",
+            dark_bg.luminance()
+        );
 
-        let light_cfg = Config::from_text("COLOR_SCHEME=\"prefer-light\"\nTHEME_SCHEME=\"tonal\"\n");
+        let light_cfg =
+            Config::from_text("COLOR_SCHEME=\"prefer-light\"\nTHEME_SCHEME=\"tonal\"\n");
         let light_th = theme::Theme::from_config(&light_cfg);
         let light_bg = render_backdrop(&light_th, light_cfg.light, None);
         assert!(
