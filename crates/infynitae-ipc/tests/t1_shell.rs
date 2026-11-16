@@ -1035,10 +1035,25 @@ fn show_window_menu_emits_ipc_event_and_window_menu_commands_apply() {
     let reply = sub.reply(&mut server, &mut core, r#"{"id":1,"cmd":"subscribe"}"#);
     assert_eq!(reply.get("ok"), Some(&Value::Bool(true)));
 
+    // a window in the background cannot open the menu: only the focused one answers a click
+    let mut cmd0 = connect(&mut server);
+    let focus_w = format!(r#"{{"id":9,"cmd":"focus","element":{}}}"#, eref(&core, w));
+    let r = cmd0.reply(&mut server, &mut core, &focus_w);
+    assert_eq!(r.get("ok"), Some(&Value::Bool(true)));
+    let other = map_win(&mut core, 2, 200, 150);
+    assert_ne!(core.focus().target(), Some(other));
+    core.show_window_menu(other, LocalPoint { x: 1, y: 1 });
+    assert!(
+        core.window_menu().is_none(),
+        "an unfocused window opened the menu"
+    );
+
     core.show_window_menu(w, LocalPoint { x: 24, y: 12 });
+    let is_menu = |e: &Value| e.get("event").and_then(Value::as_str) == Some("window_menu");
     let ev = sub
-        .read_until(&mut server, &mut core, |got| !got.is_empty())
-        .pop()
+        .read_until(&mut server, &mut core, |got| got.iter().any(is_menu))
+        .into_iter()
+        .find(is_menu)
         .unwrap();
     assert_eq!(ev.get("event").and_then(Value::as_str), Some("window_menu"));
     assert_eq!(

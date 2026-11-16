@@ -424,14 +424,12 @@ impl Core {
     /// The capabilities to advertise: those the policy can grant. Fullscreen is granted to the
     /// focused element and before a first map (INV-PRES-1); maximize, minimize and the window menu
     /// are answered by `Core::client_maximize`, `Core::client_minimize` and `Core::show_window_menu`.
-    #[allow(clippy::needless_update)]
     pub fn toplevel_capabilities(&self) -> ToplevelCapabilities {
         ToplevelCapabilities {
             fullscreen: true,
             maximize: true,
             minimize: true,
             window_menu: true,
-            ..ToplevelCapabilities::default()
         }
     }
 
@@ -2386,7 +2384,12 @@ impl Core {
     /// A client asked for the compositor's window menu (`xdg_toplevel.show_window_menu`) at
     /// `location` in `id`'s window geometry, or the user triggered `KeyAction::WindowMenu`.
     /// Records the mapped window and its output-logical screen position `(x, y)` for the shell.
+    /// Only the focused window may ask: the request answers the user's own click, and a window
+    /// in the background must not open menus over what the user is doing.
     pub fn show_window_menu(&mut self, id: ElementId, location: LocalPoint) {
+        if self.focus.target() != Some(id) {
+            return;
+        }
         let Some(anchor) = self.stage.anchor(id) else {
             return;
         };

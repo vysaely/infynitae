@@ -507,7 +507,7 @@ struct App {
     notify_conn: Option<zbus::blocking::Connection>,
     /// the compositor's shell IPC socket (`$XDG_RUNTIME_DIR/infynitae/shell.sock`)
     shell_sock: Option<std::os::unix::net::UnixStream>,
-    shell_buf: String,
+    shell_buf: Vec<u8>,
     exit: bool,
 }
 
@@ -1456,7 +1456,7 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
         popups: None,
         notify_conn: None,
         shell_sock: None,
-        shell_buf: String::new(),
+        shell_buf: Vec::new(),
         exit: false,
     };
     // the session's notifications (NOTIFICATIONS "auto" or "edge"), unless another daemon has them
@@ -1552,27 +1552,42 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
             let _ = handle.insert_source(
                 Generic::new(sock, Interest::READ, Mode::Level),
                 |_, fd, app| {
-                    let mut buf = [0u8; 1024];
+                    let mut buf = [0u8; 4096];
+                    let mut gone = false;
                     loop {
+                        // SAFETY: reads into a live buffer of its own length from our socket
                         let n = unsafe {
                             libc::read(fd.as_raw_fd(), buf.as_mut_ptr().cast(), buf.len())
                         };
-                        if n <= 0 {
-                            break;
+                        if n > 0 {
+                            app.shell_buf.extend_from_slice(&buf[..n as usize]);
+                            continue;
                         }
-                        if let Ok(s) = std::str::from_utf8(&buf[..n as usize]) {
-                            app.shell_buf.push_str(s);
-                        }
+                        // 0 is the compositor gone (a level source would fire on it forever);
+                        // an error other than "nothing more now" too
+                        gone = n == 0
+                            || std::io::Error::last_os_error().kind()
+                                != std::io::ErrorKind::WouldBlock;
+                        break;
                     }
                     let mut changed = false;
-                    while let Some(nl) = app.shell_buf.find('\n') {
-                        let line: String = app.shell_buf.drain(..=nl).collect();
-                        if let Some(wm) = crate::shell::parse_window_menu_event(&line) {
+                    // whole lines only: a read can end inside a line, or inside a character
+                    while let Some(nl) = app.shell_buf.iter().position(|&b| b == b'\n') {
+                        let line: Vec<u8> = app.shell_buf.drain(..=nl).collect();
+                        if let Some(wm) = std::str::from_utf8(&line)
+                            .ok()
+                            .and_then(crate::shell::parse_window_menu_event)
+                        {
                             changed |= app.shell.open_window_menu(wm);
                         }
                     }
                     if changed {
                         app.sync_all();
+                    }
+                    if gone {
+                        app.shell_sock = None;
+                        app.shell_buf.clear();
+                        return Ok(PostAction::Remove);
                     }
                     Ok(PostAction::Continue)
                 },
