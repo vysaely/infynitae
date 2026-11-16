@@ -105,6 +105,16 @@ These pass the test suite but have not run on a real screen or device yet:
   cursor, and four-finger swipe up toggles the overview; two-finger gestures, holds, and all
   gestures when `TOUCHPAD_GESTURES=false` go to the hovered app. Tested in core unit tests and
   headless Wayland client tests (`t1_touchpad_gestures`); not yet tested on real touchpad hardware.
+- **Pens and drawing tablets** (`zwp_tablet_manager_v2`): drawing apps that bind tablet-v2
+  receive proximity, tip, motion, pressure, tilt, distance, rotation, slider, wheel, stylus
+  buttons and pad buttons in surface-local coordinates through the output's camera, and a tap
+  focuses and raises the window under the pen. Apps without tablet-v2 receive pointer motion and
+  left clicks instead, with no double input to tablet-v2 apps. Tablets match their screen using
+  the same rule as touchscreens (`WL_OUTPUT`, physical size in mm within 15 mm, internal panel,
+  pointer output, or first screen, falling back to the virtual screen when no physical screen is
+  connected). Tested in unit tests (`infynitae-core`, `infynitae-backend-drm`) and with real
+  Wayland probe clients in `t1_tablet` (with panned and zoomed camera, pad buttons and session
+  lock); not yet tested on real tablet hardware or in a live DRM session.
 - **Virtual screen** (`VIRTUAL_SCREEN`, on by default): with no screen connected (a monitor off
   that reports itself unplugged, or none at all), a virtual 1920x1080 screen stands in, so remote
   desktop still has a screen; it goes once a real one is connected. A monitor that is off but
@@ -190,7 +200,7 @@ These pass the test suite but have not run on a real screen or device yet:
 
 ## Missing
 
-- **Pens and drawing tablets,** HDR, accessibility and screen readers.
+- HDR, accessibility and screen readers.
 - **Output management:** tools cannot yet turn a screen off through it (wlopm can).
 - **Hardware:** a second GPU, NVIDIA's explicit sync.
 - **Packaging** for anything other than Arch Linux. The install assumes one user and
