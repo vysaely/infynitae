@@ -249,7 +249,9 @@ pub fn row_alert(
         icon(cr, ic, tx, r.1 + (r.3 - ICON) / 2.0, icon_color);
         tx += ICON + 10.0;
     }
-    let w = (r.0 + r.2 - row.right - 8.0 - tx).max(20.0);
+    let w = (r.0 + r.2 - row.right - 8.0 - tx)
+        .max(20.0)
+        .min((r.0 + r.2 - 8.0 - tx).max(0.0));
     let two = !row.state.is_empty();
     let ty = if two {
         r.1 + (r.3 - 32.0) / 2.0
@@ -358,6 +360,9 @@ pub fn more(
     );
 }
 
+/// Maximum width of a `button` so a long label fits inside a narrow (half) card.
+pub const BUTTON_MAX_W: f64 = 140.0;
+
 /// A text button on a soft fill ("Search again", "Remove"). Returns its width.
 pub fn button(cr: &Context, cx: &Cx, hits: &mut Hits, id: u32, x: f64, y: f64, word: &str) -> f64 {
     let th = cx.theme;
@@ -367,7 +372,8 @@ pub fn button(cr: &Context, cx: &Cx, hits: &mut Hits, id: u32, x: f64, y: f64, w
         color: th.text,
         text: word,
     };
-    let w = draw::measure(cr, &t).0 + 18.0;
+    let tw = draw::measure(cr, &t).0;
+    let w = (tw + 18.0).min(BUTTON_MAX_W);
     let r = (x, y, w, 26.0);
     let lit = hits.add(id, r) || hits.selected(id);
     draw::round_rect(cr, x, y, w, 26.0, th.small_radius());
@@ -376,7 +382,12 @@ pub fn button(cr: &Context, cx: &Cx, hits: &mut Hits, id: u32, x: f64, y: f64, w
         th.text.alpha(if lit { CHOSEN_ALPHA } else { LIGHT_ALPHA }),
     );
     let _ = cr.fill();
-    draw::text_center(cr, x + w / 2.0, y + 5.0, &t);
+    let max_tw = (w - 18.0).max(0.0);
+    if tw <= max_tw {
+        draw::text_center(cr, x + w / 2.0, y + 5.0, &t);
+    } else {
+        draw::text_max(cr, x + 9.0, y + 5.0, max_tw, &t);
+    }
     w
 }
 
@@ -461,17 +472,19 @@ pub fn choice_button(
         },
     );
     let _ = cr.fill();
-    draw::text_center(
-        cr,
-        r.0 + r.2 / 2.0,
-        r.1 + (r.3 - 15.0) / 2.0,
-        &Text {
-            size: draw::SIZE_SMALL,
-            bold: on,
-            color: if on { th.accent_text } else { th.text },
-            text: word,
-        },
-    );
+    let t = Text {
+        size: draw::SIZE_SMALL,
+        bold: on,
+        color: if on { th.accent_text } else { th.text },
+        text: word,
+    };
+    let tw = draw::measure(cr, &t).0;
+    let max_tw = (r.2 - 12.0).max(0.0);
+    if tw <= max_tw {
+        draw::text_center(cr, r.0 + r.2 / 2.0, r.1 + (r.3 - 15.0) / 2.0, &t);
+    } else {
+        draw::text_max(cr, r.0 + 6.0, r.1 + (r.3 - 15.0) / 2.0, max_tw, &t);
+    }
 }
 
 /// A choice of a few words in one line (power mode, picker tabs); each word is hit `first_id + i`,
@@ -626,22 +639,25 @@ pub fn list_row(
     } else if lit {
         light(cr, cx, r);
     }
+    let icon_w = if icon_at_right.is_some() {
+        ICON + 6.0
+    } else {
+        0.0
+    };
     let note_w = if note.is_empty() {
         0.0
     } else {
-        draw::text_right(
-            cr,
-            r.0 + r.2 - 10.0,
-            r.1 + (r.3 - 15.0) / 2.0,
-            &Text {
-                size: draw::SIZE_NOTE,
-                bold: false,
-                color: th.muted,
-                text: note,
-            },
-        ) + 8.0
+        let nt = Text {
+            size: draw::SIZE_NOTE,
+            bold: false,
+            color: th.muted,
+            text: note,
+        };
+        let max_nw = ((r.2 - 20.0 - icon_w) * 0.45).max(0.0);
+        let nw = draw::measure(cr, &nt).0.min(max_nw);
+        draw::text_max(cr, r.0 + r.2 - 10.0 - nw, r.1 + (r.3 - 15.0) / 2.0, nw, &nt) + 8.0
     };
-    let icon_w = if let Some(ic) = icon_at_right {
+    if let Some(ic) = icon_at_right {
         icon(
             cr,
             ic,
@@ -653,15 +669,14 @@ pub fn list_row(
                 th.muted
             },
         );
-        ICON + 6.0
-    } else {
-        0.0
-    };
+    }
     draw::text_max(
         cr,
         r.0 + 10.0,
         r.1 + (r.3 - 17.0) / 2.0,
-        (r.2 - 20.0 - note_w - icon_w).max(20.0),
+        (r.2 - 20.0 - note_w - icon_w)
+            .max(20.0)
+            .min((r.2 - 20.0).max(0.0)),
         &Text {
             size: draw::SIZE_BODY,
             bold: active,
@@ -1143,5 +1158,111 @@ mod tests {
             "caret should be drawn in accent blue at caret_abc={caret_abc}: {caret_drawn:?}"
         );
         let _ = (caret_px, with_text);
+    }
+
+    fn assert_drawn_only_inside<F>(surf_w: i32, surf_h: i32, r: Rect, label: &str, draw_fn: F)
+    where
+        F: FnOnce(&Context),
+    {
+        let mut surf = cairo::ImageSurface::create(cairo::Format::ARgb32, surf_w, surf_h).unwrap();
+        {
+            let cr = Context::new(&surf).unwrap();
+            draw_fn(&cr);
+        }
+        surf.flush();
+        let stride = surf.stride() as usize;
+        let data = surf.data().unwrap();
+        let x0 = r.0.floor() as usize;
+        let y0 = r.1.floor() as usize;
+        let x1 = (r.0 + r.2).ceil() as usize;
+        let y1 = (r.1 + r.3).ceil() as usize;
+        let mut inside_ink = 0usize;
+        for y in 0..surf_h as usize {
+            for x in 0..surf_w as usize {
+                let off = y * stride + x * 4;
+                let px = [data[off], data[off + 1], data[off + 2], data[off + 3]];
+                if x >= x0 && x < x1 && y >= y0 && y < y1 {
+                    if px[3] > 0 {
+                        inside_ink += 1;
+                    }
+                } else {
+                    assert_eq!(
+                        px,
+                        [0, 0, 0, 0],
+                        "{label}: pixel outside rect {r:?} touched at ({x}, {y}): {px:?}"
+                    );
+                }
+            }
+        }
+        assert!(inside_ink > 0, "{label}: nothing drawn inside {r:?}");
+    }
+
+    #[test]
+    fn narrow_140px_helpers_keep_60_char_text_inside_rect() {
+        let th = crate::theme::Theme::from_config(&crate::config::Config::from_text(""));
+        let cx = test_cx(&th);
+        let long = "W".repeat(60);
+        assert_eq!(long.chars().count(), 60);
+
+        // 1. ui::row (with icon, 60-char name, 60-char state, and right reserved width)
+        let row_r = (20.0, 20.0, 140.0, ROW_H);
+        assert_drawn_only_inside(200, 80, row_r, "row", |cr| {
+            let mut hits = Hits::new(None, None);
+            row(
+                cr,
+                &cx,
+                &mut hits,
+                1,
+                row_r,
+                &Row {
+                    icon: Some(Icon::Wifi(3)),
+                    name: &long,
+                    state: &long,
+                    on: true,
+                    right: MORE_W,
+                },
+            );
+        });
+
+        // 2. ui::list_row (60-char text, 60-char note, and right icon)
+        let list_r = (20.0, 20.0, 140.0, LIST_ROW_H);
+        assert_drawn_only_inside(200, 80, list_r, "list_row", |cr| {
+            let mut hits = Hits::new(None, None);
+            list_row(
+                cr,
+                &cx,
+                &mut hits,
+                1,
+                list_r,
+                &long,
+                &long,
+                true,
+                Some(Icon::Check),
+            );
+        });
+
+        // 3. ui::value_box (closed and open inside a 140 px row)
+        assert_drawn_only_inside(200, 80, row_r, "value_box closed", |cr| {
+            let w = value_box(cr, &cx, row_r, row_r.0 + row_r.2, &long, false, false);
+            assert!(w <= row_r.2 * 0.6 + 1e-6);
+        });
+        assert_drawn_only_inside(200, 80, row_r, "value_box open", |cr| {
+            let w = value_box(cr, &cx, row_r, row_r.0 + row_r.2, &long, false, true);
+            assert!(w <= row_r.2 * 0.6 + 1e-6);
+        });
+
+        // 4. ui::button (at 140 px max width with a 60-char label)
+        let btn_r = (20.0, 20.0, 140.0, 26.0);
+        assert_drawn_only_inside(200, 80, btn_r, "button", |cr| {
+            let mut hits = Hits::new(None, None);
+            let w = button(cr, &cx, &mut hits, 1, btn_r.0, btn_r.1, &long);
+            assert!(w <= 140.0, "button width {w} exceeded 140 px");
+        });
+
+        // 5. ui::choice_button (at 140 px width with a 60-char label)
+        assert_drawn_only_inside(200, 80, btn_r, "choice_button", |cr| {
+            let mut hits = Hits::new(None, None);
+            choice_button(cr, &cx, &mut hits, 1, btn_r, &long, true);
+        });
     }
 }
