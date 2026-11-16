@@ -1553,8 +1553,7 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
                 Generic::new(sock, Interest::READ, Mode::Level),
                 |_, fd, app| {
                     let mut buf = [0u8; 4096];
-                    let mut gone = false;
-                    loop {
+                    let gone = loop {
                         // SAFETY: reads into a live buffer of its own length from our socket
                         let n = unsafe {
                             libc::read(fd.as_raw_fd(), buf.as_mut_ptr().cast(), buf.len())
@@ -1565,11 +1564,10 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
                         }
                         // 0 is the compositor gone (a level source would fire on it forever);
                         // an error other than "nothing more now" too
-                        gone = n == 0
+                        break n == 0
                             || std::io::Error::last_os_error().kind()
                                 != std::io::ErrorKind::WouldBlock;
-                        break;
-                    }
+                    };
                     let mut changed = false;
                     // whole lines only: a read can end inside a line, or inside a character
                     while let Some(nl) = app.shell_buf.iter().position(|&b| b == b'\n') {
