@@ -242,6 +242,7 @@ impl Shell {
             Status::Ready => {
                 PAD_TOP + head + pc.card.height(&cx, width - 2.0 * (PAD_X - 8.0)) + PAD_BOTTOM
             }
+            Status::Missing(why) => PAD_TOP + HEAD_H + missing_height(width, &why) + PAD_BOTTOM,
             _ => PAD_TOP + HEAD_H + 20.0 + PAD_BOTTOM,
         }
     }
@@ -1229,27 +1230,25 @@ impl Shell {
     fn card_event(&mut self, idx: usize, ci: usize, ev: &Event) -> bool {
         let editing = self.editing();
         let above = self.panels[idx].panel.side == Side::Bottom;
-        let (size, app_id) = {
-            let pc = &self.panels[idx].cards[ci];
-            (pc.size, pc.app_id.clone())
-        };
-        let theme = self.theme.clone();
-        let cx = Cx {
-            theme: &theme,
-            now: self.now,
-            size,
-            app: app_id
-                .as_deref()
-                .and_then(|id| self.apps.iter().find(|a| a.id == id)),
-            apps: &self.apps,
-            windows: &self.windows,
-            notes: &self.notes,
-            list_above: above,
-            editing,
-        };
-        let mut out = Vec::new();
         let pc = &mut self.panels[idx].cards[ci];
-        let changed = pc.card.event(ev, &cx, &mut out);
+        let mut out = Vec::new();
+        let changed = {
+            let cx = Cx {
+                theme: &self.theme,
+                now: self.now,
+                size: pc.size,
+                app: pc
+                    .app_id
+                    .as_deref()
+                    .and_then(|id| self.apps.iter().find(|a| a.id == id)),
+                apps: &self.apps,
+                windows: &self.windows,
+                notes: &self.notes,
+                list_above: above,
+                editing,
+            };
+            pc.card.event(ev, &cx, &mut out)
+        };
         let (prov, keys) = (pc.provider.id(), pc.kind.sources);
         let card = format!("{}/{}", pc.word.owner, pc.word.kind);
         let mut requery = None;
@@ -1755,29 +1754,7 @@ impl Shell {
                     .card
                     .title(&cx)
                     .unwrap_or_else(|| pc.kind.title.to_string());
-                let from_w = draw::text_right(
-                    cr,
-                    r.0 + r.2 - PAD_X,
-                    r.1 + PAD_TOP + 3.0,
-                    &Text {
-                        size: 12.0,
-                        bold: false,
-                        color: th.muted,
-                        text: &pc.from,
-                    },
-                );
-                draw::text_max(
-                    cr,
-                    r.0 + PAD_X,
-                    r.1 + PAD_TOP,
-                    (r.2 - 2.0 * PAD_X - from_w - 12.0).max(40.0),
-                    &Text {
-                        size: 15.0,
-                        bold: true,
-                        color: th.text,
-                        text: &title,
-                    },
-                );
+                draw_header(cr, th, *r, &title, &pc.from);
             }
             match status {
                 Status::Ready => {
@@ -1801,18 +1778,10 @@ impl Shell {
                     );
                 }
                 Status::Missing(why) => {
-                    draw::text_max(
-                        cr,
-                        body.0 + 8.0,
-                        body.1,
-                        body.2 - 16.0,
-                        &Text {
-                            size: 12.0,
-                            bold: false,
-                            color: th.muted,
-                            text: &why,
-                        },
-                    );
+                    let l = missing_layout(cr, body.2 - 16.0, &why);
+                    draw::set(cr, th.muted);
+                    cr.move_to((body.0 + 8.0).round(), body.1.round());
+                    pangocairo::functions::show_layout(cr, &l);
                 }
                 Status::Hidden => {}
             }
@@ -1890,6 +1859,84 @@ impl Shell {
         *self.frame.borrow_mut() = frame;
         Some(pbox)
     }
+}
+
+fn header_title_max_w(card_w: f64, from_w: f64) -> (f64, f64) {
+    let head_w = (card_w - 2.0 * PAD_X).max(40.0);
+    // Keep at least half of the header for the title when the app name is long.
+    let max_from = ((head_w - 12.0) * 0.45).max(0.0);
+    let capped_from = from_w.min(max_from);
+    let title_w = if capped_from > 0.0 {
+        (head_w - capped_from - 12.0).max(40.0)
+    } else {
+        head_w
+    };
+    (capped_from, title_w)
+}
+
+fn draw_header(cr: &cairo::Context, th: &Theme, r: Rect, title: &str, from: &str) {
+    let from_w = if from.is_empty() {
+        0.0
+    } else {
+        let from_t = Text {
+            size: 12.0,
+            bold: false,
+            color: th.muted,
+            text: from,
+        };
+        let full_w = draw::measure(cr, &from_t).0;
+        let (capped, _) = header_title_max_w(r.2, full_w);
+        if full_w <= capped {
+            draw::text_right(cr, r.0 + r.2 - PAD_X, r.1 + PAD_TOP + 3.0, &from_t)
+        } else {
+            draw::text_max(
+                cr,
+                r.0 + r.2 - PAD_X - capped,
+                r.1 + PAD_TOP + 3.0,
+                capped,
+                &from_t,
+            );
+            capped
+        }
+    };
+    let (_, title_w) = header_title_max_w(r.2, from_w);
+    draw::text_max(
+        cr,
+        r.0 + PAD_X,
+        r.1 + PAD_TOP,
+        title_w,
+        &Text {
+            size: 15.0,
+            bold: true,
+            color: th.text,
+            text: title,
+        },
+    );
+}
+
+fn missing_layout(cr: &cairo::Context, max_w: f64, why: &str) -> pango::Layout {
+    let l = pangocairo::functions::create_layout(cr);
+    let mut fd = pango::FontDescription::from_string(draw::FONT);
+    fd.set_absolute_size(draw::SIZE_SMALL * pango::SCALE as f64);
+    l.set_font_description(Some(&fd));
+    l.set_width((max_w.max(20.0) * pango::SCALE as f64) as i32);
+    l.set_wrap(pango::WrapMode::WordChar);
+    l.set_ellipsize(pango::EllipsizeMode::End);
+    l.set_height(-2);
+    l.set_text(why);
+    l
+}
+
+fn missing_height(card_width: f64, why: &str) -> f64 {
+    let max_w = card_width - 2.0 * PAD_X;
+    let Ok(surf) = cairo::ImageSurface::create(cairo::Format::ARgb32, 1, 1) else {
+        return 20.0;
+    };
+    let Ok(cr) = cairo::Context::new(&surf) else {
+        return 20.0;
+    };
+    let l = missing_layout(&cr, max_w, why);
+    (l.pixel_size().1 as f64).max(20.0)
 }
 
 fn union_rect(a: Rect, b: Rect) -> Rect {
@@ -2524,5 +2571,122 @@ mod tests {
         assert_eq!(sh_missing.cfg.accent, [0x77, 0x88, 0x99]);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn long_app_name_on_half_card_leaves_at_least_half_header_for_title() {
+        let half_w = (380.0 - GAP) / 2.0;
+        let head_w = half_w - 2.0 * PAD_X;
+        let long_name = "Very Long Application Name Forty Charact";
+        assert_eq!(long_name.chars().count(), 40);
+
+        let apps = vec![
+            App {
+                id: "longapp".into(),
+                name: long_name.into(),
+                exec: "true".into(),
+                ..Default::default()
+            },
+            App {
+                id: "secondapp".into(),
+                name: "Second".into(),
+                exec: "true".into(),
+                ..Default::default()
+            },
+        ];
+        let mut sh = Shell::new(
+            Config::from_text("PANEL_CONTROL=\"SUPER+A top right 380 longapp/app@half secondapp/app@half\"\n"),
+            apps,
+        );
+        let idx = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "control")
+            .unwrap();
+        assert!(sh.open_panel(idx, false, Instant::now()));
+        sh.open_ms = f64::INFINITY;
+
+        let (_, rects) = sh.layout(idx, 1280.0, 800.0);
+        assert_eq!(rects.len(), 2);
+        let r0 = rects[0].1;
+        assert!((r0.2 - half_w).abs() < 0.01);
+
+        let mut surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 1280, 800).unwrap();
+        {
+            let cr = cairo::Context::new(&surf).unwrap();
+            draw::grey_text_edges(&cr);
+            let full_from_w = draw::measure(
+                &cr,
+                &Text {
+                    size: 12.0,
+                    bold: false,
+                    color: sh.theme.muted,
+                    text: long_name,
+                },
+            )
+            .0;
+            let (capped_from, title_w) = header_title_max_w(half_w, full_from_w);
+            assert!(capped_from <= head_w * 0.45);
+            assert!(
+                title_w >= head_w * 0.5,
+                "title width {title_w} must be at least half of header {head_w}"
+            );
+            sh.draw(&cr, 1280.0, 800.0);
+        }
+        surf.flush();
+        // Verify no header text spills left of the card's left edge.
+        let stride = surf.stride() as usize;
+        let data = surf.data().unwrap();
+        let out_x = (r0.0 - 4.0).max(0.0) as usize;
+        let y_start = (r0.1 + PAD_TOP) as usize;
+        let y_end = (r0.1 + PAD_TOP + HEAD_H) as usize;
+        for y in y_start..y_end {
+            let px = &data[y * stride + out_x * 4..y * stride + out_x * 4 + 4];
+            assert_eq!(px, &[0, 0, 0, 0], "header overflowed left of card at y={y}");
+        }
+    }
+
+    #[test]
+    fn missing_reason_wraps_and_fits_at_half_width() {
+        let longest = "Memory information is not available";
+        let half_w = (380.0 - GAP) / 2.0;
+        let body_text_w = half_w - 2.0 * PAD_X;
+        let mh = missing_height(half_w, longest);
+        assert!(
+            mh > 20.0,
+            "wrapped missing text height ({mh}) should exceed single-line 20 px"
+        );
+
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 400, 200).unwrap();
+        let cr = cairo::Context::new(&surf).unwrap();
+        let l = missing_layout(&cr, body_text_w, longest);
+        assert_eq!(l.line_count(), 2);
+        assert!(
+            !l.is_ellipsized(),
+            "longest Missing string should fit in 2 lines without ellipsis at half width"
+        );
+
+        // Verify via Shell layout + draw with monitor/memory in Missing state at half width.
+        let mut sh = shell("SUPER+A top right 380 monitor/memory@half calendar/clock@half");
+        let idx = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "control")
+            .unwrap();
+        // Send empty MemoryData so monitor/memory enters Status::Missing(longest).
+        sh.apply(
+            "monitor",
+            "memory",
+            &crate::cards::monitor::MemoryData::default() as &dyn std::any::Any,
+        );
+        assert!(sh.open_panel(idx, false, Instant::now()));
+        sh.open_ms = f64::INFINITY;
+        let (_, rects) = sh.layout(idx, 1280.0, 800.0);
+        assert_eq!(
+            rects[0].1 .3,
+            PAD_TOP + HEAD_H + mh + PAD_BOTTOM,
+            "card height grows to fit wrapped Missing sentence"
+        );
+        sh.draw(&cr, 1280.0, 800.0);
     }
 }
