@@ -333,8 +333,8 @@ pub struct SteamSource {
 impl Source for SteamSource {
     fn fetch(&mut self) -> Data {
         let root = self.root.clone().or_else(|| {
-            let home = std::env::var_os("HOME").filter(|s| !s.is_empty())?;
-            find_steam_dir(Path::new(&home))
+            let home = crate::paths::home()?;
+            find_steam_dir(&home)
         });
         let data = root
             .filter(|p| p.is_dir())

@@ -121,16 +121,7 @@ struct PcPaths {
 }
 
 fn runtime_infynitae_dir() -> PathBuf {
-    let base = std::env::var_os("XDG_RUNTIME_DIR")
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME")
-                .filter(|v| !v.is_empty())
-                .map(|h| PathBuf::from(h).join(".cache"))
-        })
-        .unwrap_or_else(|| PathBuf::from(".cache"));
-    base.join("infynitae")
+    crate::paths::runtime_or_cache_dir().join("infynitae")
 }
 
 /// Clears transient "Load settings" preview and "Undo load" markers when the panel closes.
@@ -142,17 +133,15 @@ pub(crate) fn clear_load_state() {
 
 impl PcPaths {
     fn system() -> Self {
-        let home = std::env::var_os("HOME")
-            .filter(|v| !v.is_empty())
-            .map(PathBuf::from);
+        let home = crate::paths::home();
         let settings_changes = home
             .as_ref()
             .map(|h| h.join(".local/state/infynitae/settings-changes"))
-            .unwrap_or_else(|| PathBuf::from(".local/state/infynitae/settings-changes"));
+            .unwrap_or_default();
         let export_dir = home
             .as_ref()
             .map(|h| h.join("Documents/Infynitae"))
-            .unwrap_or_else(|| PathBuf::from("Documents/Infynitae"));
+            .unwrap_or_default();
         let rt_dir = runtime_infynitae_dir();
         let infynitae_repo = home.map(|h| h.join("infynitae"));
         let wayland_socket = match (
@@ -270,16 +259,11 @@ impl Source for PcSource {
 }
 
 fn parse_saved_fixture(raw: &str) -> Vec<SavedFile> {
-    let home = std::env::var("HOME").unwrap_or_default();
     raw.lines()
         .map(str::trim)
         .filter(|l| !l.is_empty())
         .map(|l| {
-            let expanded = if !home.is_empty() && l.starts_with("~/") {
-                format!("{home}{}", &l[1..])
-            } else {
-                l.to_string()
-            };
+            let expanded = crate::paths::expand_home(l).to_string_lossy().into_owned();
             let name = Path::new(&expanded)
                 .file_name()
                 .and_then(|s| s.to_str())

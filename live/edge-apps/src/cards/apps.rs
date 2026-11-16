@@ -1440,7 +1440,7 @@ pub struct BackgroundSource {
 impl Default for BackgroundSource {
     fn default() -> Self {
         Self {
-            runtime_dir: std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from),
+            runtime_dir: Some(crate::paths::runtime_dir()),
         }
     }
 }

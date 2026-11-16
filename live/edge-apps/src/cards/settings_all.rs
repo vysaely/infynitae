@@ -188,13 +188,11 @@ pub struct SettingsAllCard {
 
 impl Default for SettingsAllCard {
     fn default() -> Self {
-        let home = std::env::var_os("HOME")
-            .map(PathBuf::from)
+        let defaults_path = crate::paths::home()
+            .map(|h| h.join("infynitae/config/config"))
             .unwrap_or_default();
-        Self::with_paths(
-            home.join("infynitae/config/config"),
-            crate::config::config_path(),
-        )
+        let config_path = crate::config::config_path().unwrap_or_default();
+        Self::with_paths(defaults_path, config_path)
     }
 }
 

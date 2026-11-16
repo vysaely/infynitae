@@ -17,15 +17,10 @@ use std::time::UNIX_EPOCH;
 
 /// The icon theme the user chose for GTK apps (`gtk-icon-theme-name` in settings.ini).
 fn user_icon_theme() -> Option<String> {
-    let cfg = std::env::var("XDG_CONFIG_HOME")
-        .ok()
+    let cfg = std::env::var_os("XDG_CONFIG_HOME")
         .filter(|s| !s.is_empty())
         .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var("HOME")
-                .ok()
-                .map(|h| PathBuf::from(h).join(".config"))
-        })?;
+        .or_else(|| crate::paths::home().map(|h| h.join(".config")))?;
     for f in ["gtk-4.0/settings.ini", "gtk-3.0/settings.ini"] {
         let Ok(text) = std::fs::read_to_string(cfg.join(f)) else {
             continue;
@@ -51,8 +46,7 @@ fn icon_base_dirs() -> Vec<PathBuf> {
         .filter(|s| !s.is_empty())
     {
         base_dirs.push(PathBuf::from(dh).join("icons"));
-    } else if let Some(h) = std::env::var("HOME").ok().filter(|s| !s.is_empty()) {
-        let hp = PathBuf::from(h);
+    } else if let Some(hp) = crate::paths::home() {
         base_dirs.push(hp.join(".local/share/icons"));
         base_dirs.push(hp.join(".icons"));
         base_dirs.push(hp.join(".local/share/flatpak/exports/share/icons"));
