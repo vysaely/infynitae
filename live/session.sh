@@ -108,6 +108,14 @@ if command -v dbus-update-activation-environment >/dev/null 2>&1; then
     dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP DISPLAY XAUTHORITY 2>/dev/null || true
 fi
 systemctl --user start infynitae-shutdown-guard.service 2>/dev/null || true
+# a compositor restart (Ctrl+Alt+Backspace after an update) ends the wlroots portal, and systemd
+# starts it again before the new display exists: three failures in a second, then it gives up for the
+# session, and screenshots and remote desktop through the portal stop working (2026-11-15: 64 times
+# in 3 days). Started again now that the display is there.
+if systemctl --user is-failed --quiet xdg-desktop-portal-wlr.service 2>/dev/null; then
+    systemctl --user reset-failed xdg-desktop-portal-wlr.service 2>/dev/null || true
+    systemctl --user start --no-block xdg-desktop-portal-wlr.service 2>/dev/null || true
+fi
 
 # 2b. Screen sharing: the portal's config for the screens present (infynitae-reload screenshare)
 RELOAD_BIN=$(infy_bin infynitae-reload || true)
