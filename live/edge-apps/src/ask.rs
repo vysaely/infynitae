@@ -1056,6 +1056,13 @@ pub fn draw(cr: &Context, th: &Theme, ask: &AskState, screen: (f64, f64)) -> Rec
     if gw <= 0.0 || gh <= 0.0 {
         return (gx, gy, gw, gh);
     }
+    draw::with_font(&th.font, || {
+        draw_inner(cr, th, ask, (gx, gy, gw, gh));
+    });
+    (gx, gy, gw, gh)
+}
+
+fn draw_inner(cr: &Context, th: &Theme, ask: &AskState, (gx, gy, gw, gh): Rect) {
     draw::card(cr, th, gx, gy, gw, gh);
     draw::text_max(
         cr,
@@ -1174,8 +1181,6 @@ pub fn draw(cr: &Context, th: &Theme, ask: &AskState, screen: (f64, f64)) -> Rec
             let _ = std::fs::write(boxes_path, format!("ask {gx:.0} {gy:.0} {gw:.0} {gh:.0}\n"));
         }
     }
-
-    (gx, gy, gw, gh)
 }
 
 #[cfg(test)]

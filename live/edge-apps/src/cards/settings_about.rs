@@ -4,7 +4,7 @@
 
 use crate::card::{self, Action, Button, Card, Cx, Data, Event, Hits, Rect, Source, Status};
 use crate::cards::settings;
-use crate::draw::{self, Text, FONT};
+use crate::draw::{self, Text};
 use crate::provider::{CardKind, Size};
 use crate::theme::Theme;
 use crate::ui::{self, Row};
@@ -929,17 +929,16 @@ impl AboutCard {
     }
 
     fn wrap_subtext_layout(cr: &Context, max_w: f64, text: &str) -> pango::Layout {
-        let l = pangocairo::functions::create_layout(cr);
-        let mut fd = pango::FontDescription::from_string(FONT);
-        fd.set_absolute_size(11.0 * pango::SCALE as f64);
-        l.set_font_description(Some(&fd));
-        l.set_width((max_w.max(40.0) * pango::SCALE as f64) as i32);
-        l.set_wrap(pango::WrapMode::WordChar);
-        l.set_text(text);
-        l
+        draw::wrapped_layout(cr, 11.0, false, max_w.max(40.0), None, text)
     }
 
-    fn measure_and_draw(
+    fn measure_and_draw(&self, cr: &Context, cx: &Cx, body: Rect, hits: Option<&mut Hits>) -> f64 {
+        draw::with_font(&cx.theme.font, || {
+            self.measure_and_draw_inner(cr, cx, body, hits)
+        })
+    }
+
+    fn measure_and_draw_inner(
         &self,
         cr: &Context,
         cx: &Cx,

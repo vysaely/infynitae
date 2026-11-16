@@ -249,6 +249,10 @@ impl Shell {
     /// Panel `idx` on a screen of `w x h`: its box on screen, panel-local card rectangles (without
     /// `panel_scroll`), and total content height.
     pub fn layout_local(&self, idx: usize, w: f64, h: f64) -> (Rect, Vec<(usize, Rect)>, f64) {
+        draw::with_font(&self.theme.font, || self.layout_local_inner(idx, w, h))
+    }
+
+    fn layout_local_inner(&self, idx: usize, w: f64, h: f64) -> (Rect, Vec<(usize, Rect)>, f64) {
         let editing = self.editing();
         let ps = &self.panels[idx];
         let pw = self.width_of(idx, w);
@@ -1647,6 +1651,10 @@ impl Shell {
         if self.ask.ask.on {
             return Some(crate::ask::draw(cr, &self.theme, &self.ask.ask, (w, h)));
         }
+        draw::with_font(&self.theme.font, || self.draw_panel(cr, w, h))
+    }
+
+    fn draw_panel(&self, cr: &cairo::Context, w: f64, h: f64) -> Option<Rect> {
         let idx = self.open?;
         let editing = self.editing();
         let (pbox, local_rects, content_h) = self.layout_local(idx, w, h);
