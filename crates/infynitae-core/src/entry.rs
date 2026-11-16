@@ -13,6 +13,7 @@ use crate::input::bindings;
 use crate::input::interaction::Interaction;
 use crate::input::keys::{self, KeyAction, KeyCapture};
 use crate::input::ownership::Owner;
+use crate::input::{GestureKind, TouchpadGesture};
 use crate::output::{self, OutputDescriptor, OutputId, OutputModel};
 use crate::pointer::{self, PointerState};
 use crate::protocol::Effect;
@@ -276,6 +277,76 @@ impl Core {
             }
             PhysicalEvent::JumpToWindow { element } => {
                 self.jump_to_window(element, Some(authority::Authorized::mint()), out);
+                Ok(())
+            }
+            PhysicalEvent::GestureSwipeBegin { fingers, time_us } => {
+                self.input.clock.accepted(time_us);
+                self.physical_input_activity = true;
+                let proof = self.touchpad_gestures.then(authority::Authorized::mint);
+                self.gesture_swipe_begin(fingers, ms(time_us), proof, out);
+                Ok(())
+            }
+            PhysicalEvent::GestureSwipeUpdate { delta, time_us } => {
+                if !(delta.0.is_finite() && delta.1.is_finite()) {
+                    return Err(EntryError::InvalidEvent);
+                }
+                self.input.clock.accepted(time_us);
+                self.physical_input_activity = true;
+                let proof = matches!(
+                    self.input.gesture,
+                    Some(TouchpadGesture::Pan | TouchpadGesture::FourFingerSwipe { .. })
+                )
+                .then(authority::Authorized::mint);
+                self.gesture_swipe_update(delta, ms(time_us), proof, out);
+                Ok(())
+            }
+            PhysicalEvent::GestureSwipeEnd { cancelled, time_us } => {
+                self.input.clock.accepted(time_us);
+                self.physical_input_activity = true;
+                self.gesture_swipe_end(cancelled, ms(time_us), out);
+                Ok(())
+            }
+            PhysicalEvent::GesturePinchBegin { fingers, time_us } => {
+                self.input.clock.accepted(time_us);
+                self.physical_input_activity = true;
+                self.gesture_pinch_begin(fingers, ms(time_us), out);
+                Ok(())
+            }
+            PhysicalEvent::GesturePinchUpdate {
+                delta,
+                scale,
+                rotation,
+                time_us,
+            } => {
+                let finite = [delta.0, delta.1, scale, rotation]
+                    .iter()
+                    .all(|v| v.is_finite());
+                if !finite {
+                    return Err(EntryError::InvalidEvent);
+                }
+                self.input.clock.accepted(time_us);
+                self.physical_input_activity = true;
+                let proof = matches!(self.input.gesture, Some(TouchpadGesture::Pinch { .. }))
+                    .then(authority::Authorized::mint);
+                self.gesture_pinch_update(delta, scale, rotation, ms(time_us), proof, out);
+                Ok(())
+            }
+            PhysicalEvent::GesturePinchEnd { cancelled, time_us } => {
+                self.input.clock.accepted(time_us);
+                self.physical_input_activity = true;
+                self.gesture_pinch_end(cancelled, ms(time_us), out);
+                Ok(())
+            }
+            PhysicalEvent::GestureHoldBegin { fingers, time_us } => {
+                self.input.clock.accepted(time_us);
+                self.physical_input_activity = true;
+                self.gesture_hold_begin(fingers, ms(time_us), out);
+                Ok(())
+            }
+            PhysicalEvent::GestureHoldEnd { cancelled, time_us } => {
+                self.input.clock.accepted(time_us);
+                self.physical_input_activity = true;
+                self.gesture_hold_end(cancelled, ms(time_us), out);
                 Ok(())
             }
         }
@@ -1936,6 +2007,9 @@ impl Core {
     ) {
         match self.input.interaction {
             Interaction::CameraPan { output, camera, .. } => {
+                if matches!(self.input.gesture, Some(TouchpadGesture::Pan)) {
+                    return;
+                }
                 let _panned = self.pan_step(proof, output, camera, delta, out);
                 // NEGATIVE CONTROL (INV-INPUT-3 bypass switch, TST-05): pan motion also reaches
                 // the client. The x8 tests must fail under it.
@@ -2278,6 +2352,26 @@ impl Core {
         axis: crate::input::Axis,
         out: &mut Vec<Effect>,
     ) {
+        // Scroll amount: negative is scroll up (away from user, zoom in)
+        // positive is scroll down (towards user, zoom out)
+        let delta = if axis.v120.1 != 0 {
+            axis.v120.1 as f64 / 120.0
+        } else if axis.amount.1.abs() > 0.001 {
+            axis.amount.1 / 15.0
+        } else {
+            0.0
+        };
+        if delta == 0.0 {
+            return;
+        }
+
+        // Each full scroll detent changes zoom by ~15%
+        let factor = 1.15_f64.powf(-delta);
+        self.zoom_by_factor(proof, factor, out);
+    }
+
+    /// Zooms the pointer output's camera by `factor` around the pointer position.
+    fn zoom_by_factor(&mut self, proof: authority::Authorized, factor: f64, out: &mut Vec<Effect>) {
         let PointerState::Located { output, p } = self.pointer else {
             return;
         };
@@ -2318,21 +2412,9 @@ impl Core {
             return;
         };
 
-        // Scroll amount: negative is scroll up (away from user, zoom in)
-        // positive is scroll down (towards user, zoom out)
-        let delta = if axis.v120.1 != 0 {
-            axis.v120.1 as f64 / 120.0
-        } else if axis.amount.1.abs() > 0.001 {
-            axis.amount.1 / 15.0
-        } else {
-            0.0
-        };
-        if delta == 0.0 {
+        if !factor.is_finite() || factor <= 0.0 {
             return;
         }
-
-        // Each full scroll detent changes zoom by ~15%
-        let factor = 1.15_f64.powf(-delta);
         if self.zoom_feel != crate::navigation::ZoomFeel::Instant {
             if self
                 .cameras
@@ -2460,7 +2542,6 @@ impl Core {
             self.input.ownership.press(button, Owner::Compositor);
             return;
         }
-        let camera = self.cameras.camera_for_output(output);
         // G-OB24 is met (C12.F14.5): a pan at any zoom keeps the output's lattice reference
         let acquire = bindings::is_pan_binding(button, mods)
             // INV-INPUT-2: never while the client owns a button
@@ -2610,50 +2691,8 @@ impl Core {
             self.input.ownership.press(button, Owner::Compositor);
             return;
         }
-        if let (true, Some(camera), Some(start)) =
-            (acquire, camera, camera.and_then(|c| self.cameras.center(c)))
-        {
-            let mut start = start;
-            if self.fullscreen_pan
-                && let Some(pres) = self.presentation(output)
-                && !self.is_presentation_suppressed(output)
-                && let Some((anchor, tree, _)) = self.stage.mapped(pres)
-            {
-                let extent = self
-                    .output(output)
-                    .map(|m| m.logical_extent())
-                    .unwrap_or((1920.0, 1080.0));
-                let margin_x = ((extent.0 - f64::from(tree.geometry.size.w)) / 2.0).max(0.0);
-                let margin_y = ((extent.1 - f64::from(tree.geometry.size.h)) / 2.0).max(0.0);
-                let pres_center = crate::geom::CanvasPos {
-                    x: crate::geom::q16(anchor.x as f64 - margin_x + extent.0 / 2.0),
-                    y: crate::geom::q16(anchor.y as f64 - margin_y + extent.1 / 2.0),
-                };
-                if let Some(p) = proof {
-                    self.cameras
-                        .set_zoom_and_center(p, camera, 1.0, pres_center);
-                }
-                start = pres_center;
-            }
-            // M6 Idle → Panning: the press is consumed; KeepFocus (no event).
-            // OB-4: Dismiss active popup grabs before the camera change.
-            self.input.interaction = Interaction::CameraPan {
-                output,
-                camera,
-                initiator: button,
-                start,
-                sum: (0.0, 0.0),
-            };
-            if self.fullscreen_pan
-                && self.presentation(output).is_some()
-                && !self.is_presentation_suppressed(output)
-            {
-                self.suppress_presentation(output, out);
-            }
+        if acquire && self.begin_camera_pan(output, button, proof, out) {
             self.input.ownership.press(button, Owner::Compositor);
-            if let Some(target) = self.focus.target() {
-                out.push(Effect::DismissPopupGrab(target));
-            }
             return;
         }
         self.input.ownership.press(button, Owner::Client);
@@ -2693,6 +2732,235 @@ impl Core {
         out.push(Effect::PointerFrame);
     }
 
+    /// Starts a `CameraPan` interaction on `output` with `initiator` (`0` for touchpad swipe).
+    fn begin_camera_pan(
+        &mut self,
+        output: OutputId,
+        initiator: u32,
+        proof: Option<authority::Authorized>,
+        out: &mut Vec<Effect>,
+    ) -> bool {
+        let Some(camera) = self.cameras.camera_for_output(output) else {
+            return false;
+        };
+        let Some(mut start) = self.cameras.center(camera) else {
+            return false;
+        };
+        if self.fullscreen_pan
+            && let Some(pres) = self.presentation(output)
+            && !self.is_presentation_suppressed(output)
+            && let Some((anchor, tree, _)) = self.stage.mapped(pres)
+        {
+            let extent = self
+                .output(output)
+                .map(|m| m.logical_extent())
+                .unwrap_or((1920.0, 1080.0));
+            let margin_x = ((extent.0 - f64::from(tree.geometry.size.w)) / 2.0).max(0.0);
+            let margin_y = ((extent.1 - f64::from(tree.geometry.size.h)) / 2.0).max(0.0);
+            let pres_center = crate::geom::CanvasPos {
+                x: crate::geom::q16(anchor.x as f64 - margin_x + extent.0 / 2.0),
+                y: crate::geom::q16(anchor.y as f64 - margin_y + extent.1 / 2.0),
+            };
+            if let Some(p) = proof {
+                self.cameras
+                    .set_zoom_and_center(p, camera, 1.0, pres_center);
+            }
+            start = pres_center;
+        }
+        // M6 Idle → Panning: the press is consumed; KeepFocus (no event).
+        // OB-4: Dismiss active popup grabs before the camera change.
+        self.input.interaction = Interaction::CameraPan {
+            output,
+            camera,
+            initiator,
+            start,
+            sum: (0.0, 0.0),
+        };
+        if self.fullscreen_pan
+            && self.presentation(output).is_some()
+            && !self.is_presentation_suppressed(output)
+        {
+            self.suppress_presentation(output, out);
+        }
+        if let Some(target) = self.focus.target() {
+            out.push(Effect::DismissPopupGrab(target));
+        }
+        true
+    }
+
+    fn gesture_swipe_begin(
+        &mut self,
+        fingers: u32,
+        time_ms: u32,
+        proof: Option<authority::Authorized>,
+        out: &mut Vec<Effect>,
+    ) {
+        if self.input.gesture.is_some() || self.input.interaction.active() {
+            return;
+        }
+        let PointerState::Located { output, .. } = self.pointer else {
+            return;
+        };
+        let can_compositor = self.touchpad_gestures && !self.input.ownership.client_owns_any();
+        if can_compositor && fingers == 3 {
+            let presenting =
+                self.presentation(output).is_some() && !self.is_presentation_suppressed(output);
+            if !(presenting && !self.fullscreen_pan) && self.begin_camera_pan(output, 0, proof, out)
+            {
+                self.input.gesture = Some(TouchpadGesture::Pan);
+            }
+            return;
+        }
+        if can_compositor && fingers == 4 {
+            self.input.gesture = Some(TouchpadGesture::FourFingerSwipe {
+                dx: 0.0,
+                dy: 0.0,
+                triggered: false,
+            });
+            return;
+        }
+        self.input.gesture = Some(TouchpadGesture::Client(GestureKind::Swipe));
+        out.push(Effect::GestureSwipeBegin { fingers, time_ms });
+    }
+
+    fn gesture_swipe_update(
+        &mut self,
+        delta: (f64, f64),
+        time_ms: u32,
+        proof: Option<authority::Authorized>,
+        out: &mut Vec<Effect>,
+    ) {
+        /// Logical swipe distance (upward) needed to trigger the overview on a 4-finger swipe.
+        const SWIPE_OVERVIEW_THRESHOLD: f64 = 32.0;
+        match self.input.gesture {
+            Some(TouchpadGesture::Pan) => {
+                if let Interaction::CameraPan { output, camera, .. } = self.input.interaction {
+                    let _ = self.pan_step(proof, output, camera, delta, out);
+                }
+            }
+            Some(TouchpadGesture::FourFingerSwipe {
+                mut dx,
+                mut dy,
+                mut triggered,
+            }) => {
+                dx += delta.0;
+                dy += delta.1;
+                if !triggered
+                    && -dy >= SWIPE_OVERVIEW_THRESHOLD
+                    && -dy > dx.abs()
+                    && let Some(p) = proof
+                {
+                    triggered = true;
+                    self.overview_toggle(p, out);
+                }
+                self.input.gesture = Some(TouchpadGesture::FourFingerSwipe { dx, dy, triggered });
+            }
+            Some(TouchpadGesture::Client(GestureKind::Swipe)) => {
+                out.push(Effect::GestureSwipeUpdate { delta, time_ms });
+            }
+            _ => {}
+        }
+    }
+
+    fn gesture_swipe_end(&mut self, cancelled: bool, time_ms: u32, out: &mut Vec<Effect>) {
+        match self.input.gesture {
+            Some(TouchpadGesture::Pan) => {
+                self.input.gesture = None;
+                out.extend(self.end_interaction());
+            }
+            Some(TouchpadGesture::FourFingerSwipe { .. }) => {
+                self.input.gesture = None;
+            }
+            Some(TouchpadGesture::Client(GestureKind::Swipe)) => {
+                self.input.gesture = None;
+                out.push(Effect::GestureSwipeEnd { cancelled, time_ms });
+            }
+            _ => {}
+        }
+    }
+
+    fn gesture_pinch_begin(&mut self, fingers: u32, time_ms: u32, out: &mut Vec<Effect>) {
+        if self.input.gesture.is_some()
+            || self.input.interaction.active()
+            || self.pointer == PointerState::NoOutput
+        {
+            return;
+        }
+        if self.touchpad_gestures && fingers == 4 && !self.input.ownership.client_owns_any() {
+            self.input.gesture = Some(TouchpadGesture::Pinch { prev_scale: 1.0 });
+            return;
+        }
+        self.input.gesture = Some(TouchpadGesture::Client(GestureKind::Pinch));
+        out.push(Effect::GesturePinchBegin { fingers, time_ms });
+    }
+
+    fn gesture_pinch_update(
+        &mut self,
+        delta: (f64, f64),
+        scale: f64,
+        rotation: f64,
+        time_ms: u32,
+        proof: Option<authority::Authorized>,
+        out: &mut Vec<Effect>,
+    ) {
+        match self.input.gesture {
+            Some(TouchpadGesture::Pinch { prev_scale }) => {
+                if scale > 0.0 && prev_scale > 0.0 {
+                    let factor = scale / prev_scale;
+                    self.input.gesture = Some(TouchpadGesture::Pinch { prev_scale: scale });
+                    if (factor - 1.0).abs() > 1e-9
+                        && let Some(p) = proof
+                    {
+                        self.zoom_by_factor(p, factor, out);
+                    }
+                }
+            }
+            Some(TouchpadGesture::Client(GestureKind::Pinch)) => {
+                out.push(Effect::GesturePinchUpdate {
+                    delta,
+                    scale,
+                    rotation,
+                    time_ms,
+                });
+            }
+            _ => {}
+        }
+    }
+
+    fn gesture_pinch_end(&mut self, cancelled: bool, time_ms: u32, out: &mut Vec<Effect>) {
+        match self.input.gesture {
+            Some(TouchpadGesture::Pinch { .. }) => {
+                self.input.gesture = None;
+            }
+            Some(TouchpadGesture::Client(GestureKind::Pinch)) => {
+                self.input.gesture = None;
+                out.push(Effect::GesturePinchEnd { cancelled, time_ms });
+            }
+            _ => {}
+        }
+    }
+
+    fn gesture_hold_begin(&mut self, fingers: u32, time_ms: u32, out: &mut Vec<Effect>) {
+        if self.input.gesture.is_some()
+            || self.input.interaction.active()
+            || self.pointer == PointerState::NoOutput
+        {
+            return;
+        }
+        self.input.gesture = Some(TouchpadGesture::Client(GestureKind::Hold));
+        out.push(Effect::GestureHoldBegin { fingers, time_ms });
+    }
+
+    fn gesture_hold_end(&mut self, cancelled: bool, time_ms: u32, out: &mut Vec<Effect>) {
+        if matches!(
+            self.input.gesture,
+            Some(TouchpadGesture::Client(GestureKind::Hold))
+        ) {
+            self.input.gesture = None;
+            out.push(Effect::GestureHoldEnd { cancelled, time_ms });
+        }
+    }
+
     /// The end of a compositor interaction, by its initiator's release or by a cancel (M22):
     /// batch-end reconciliation (INV-INPUT-5), exactly one true-position event unless the
     /// reconciliation keeps a lock (M10, C12.F17 Q3: a kept confinement receives it), and the
@@ -2707,6 +2975,9 @@ impl Core {
         );
         self.input.cluster_drag.clear();
         self.input.interaction = Interaction::Idle;
+        if matches!(self.input.gesture, Some(TouchpadGesture::Pan)) {
+            self.input.gesture = None;
+        }
         let mut fx = Vec::new();
         if resized {
             self.end_resize(&mut fx);
@@ -2726,7 +2997,9 @@ impl Core {
         match self.input.ownership.release(button) {
             None => {}
             Some(Owner::Compositor) => {
-                if self.input.interaction.initiator() == Some(button) {
+                if !matches!(self.input.gesture, Some(TouchpadGesture::Pan))
+                    && self.input.interaction.initiator() == Some(button)
+                {
                     out.extend(self.end_interaction());
                 } else if let Interaction::ElementMove { pan, .. } = &mut self.input.interaction
                     && pan.is_some_and(|p| p.button == button)
