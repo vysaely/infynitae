@@ -1413,6 +1413,10 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
     );
     shell.live = true;
     let (fetch_tx, fetch_rx) = channel::channel::<Fetched>();
+    let (icon_tx, icon_rx) = channel::channel::<()>();
+    crate::icons::set_icon_wakeup(move || {
+        let _ = icon_tx.send(());
+    });
     let (notify_tx, notify_rx) = channel::channel::<crate::notify::Incoming>();
     let output_state = OutputState::new(&globals, &qh);
     let existing: Vec<_> = output_state.outputs().collect();
@@ -1476,6 +1480,18 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
                     // a card that grew or shrank: the input region follows
                     for os in &mut app.outputs {
                         os.set_input_region(&app.compositor, &app.shell);
+                    }
+                }
+            }
+        })
+        .map_err(|e| e.to_string())?;
+    handle
+        .insert_source(icon_rx, |evt, _, app| {
+            if let channel::Event::Msg(()) = evt {
+                if app.shell.open.is_some() {
+                    for os in &mut app.outputs {
+                        os.dirty = true;
+                        os.render_if_needed(&app.qh, &app.shell);
                     }
                 }
             }

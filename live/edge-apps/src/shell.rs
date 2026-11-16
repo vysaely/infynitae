@@ -612,6 +612,7 @@ impl Shell {
             return false;
         }
         let cfg = Config::from_text(&std::fs::read_to_string(path).unwrap_or_default());
+        crate::icons::clear_icon_cache();
         if cfg.panels == self.cfg.panels && cfg.favorites == self.cfg.favorites {
             // the same panels and cards: keep them (an open list, the accent picker stay as they
             // are while a setting is written); the colours and the cards' data follow
@@ -630,6 +631,9 @@ impl Shell {
     pub fn rebuild_panels(&mut self, cfg: Config, apps: Option<Vec<App>>) {
         self.transient = None;
         if let Some(a) = apps {
+            if a != self.apps {
+                crate::icons::clear_icon_cache();
+            }
             self.apps = a;
         }
         self.theme = Theme::from_config(&cfg);
@@ -2507,7 +2511,9 @@ mod tests {
             Vec::new(),
             &cfg_path,
         );
+        let gen0 = crate::icons::global_icon_generation();
         assert!(!sh.reload_if_changed_at(&cfg_path));
+        assert_eq!(crate::icons::global_icon_generation(), gen0);
         std::fs::write(&cfg_path, "ACCENT=\"#445566\"\n").unwrap();
         let future = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
         std::fs::File::options()
@@ -2518,6 +2524,21 @@ mod tests {
             .unwrap();
         assert!(sh.reload_if_changed_at(&cfg_path));
         assert_eq!(sh.cfg.accent, [0x44, 0x55, 0x66]);
+        let gen1 = crate::icons::global_icon_generation();
+        assert!(gen1 > gen0, "config reload should clear icon cache");
+
+        sh.rebuild_panels(
+            sh.cfg.clone(),
+            Some(vec![App {
+                id: "new-app".into(),
+                name: "New App".into(),
+                ..Default::default()
+            }]),
+        );
+        assert!(
+            crate::icons::global_icon_generation() > gen1,
+            "app list change should clear icon cache"
+        );
 
         // 2. Config does not exist at start, then is created after start.
         let new_cfg_path = dir.join("config-new");

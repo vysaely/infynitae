@@ -2145,4 +2145,61 @@ mod tests {
         assert!(card.event(&Event::Scroll { hit: None, dy: 1.0 }, &cx, &mut out));
         assert!(!card.event(&Event::Scroll { hit: None, dy: 1.0 }, &cx, &mut out));
     }
+
+    #[test]
+    fn first_draw_of_apps_card_with_200_entries_does_not_stall_on_icon_io() {
+        let th = Theme::from_config(&crate::config::Config::from_text(""));
+        let apps: Vec<App> = (0..200)
+            .map(|i| App {
+                id: format!("bench-app-{i:03}"),
+                name: format!("Bench App {i:03}"),
+                icon: format!("nonexistent-bench-icon-{i:03}"),
+                exec: "true".into(),
+                categories: vec!["Utility".into()],
+                ..Default::default()
+            })
+            .collect();
+        let cx = test_cx(&th, Size::L, &apps);
+        let card = AppsListCard::default();
+        let h = card.height(&cx, 340.0);
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 360, h.ceil() as i32 + 20)
+            .unwrap();
+        let cr = cairo::Context::new(&surf).unwrap();
+        let mut hits = Hits::new(None, None);
+
+        let t0 = std::time::Instant::now();
+        card.draw(&cr, &cx, (10.0, 10.0, 340.0, h), &mut hits);
+        let apps_card_ms = t0.elapsed().as_secs_f64() * 1000.0;
+
+        // Also time queuing all 200 distinct uncached icons directly on the UI thread.
+        let cache = crate::icons::IconCache::new(|| {
+            crate::icons::IconSearch::with_dirs(Vec::new(), None)
+        });
+        let t1 = std::time::Instant::now();
+        for (i, app) in apps.iter().enumerate() {
+            crate::icons::draw_app_icon_with(
+                &cache,
+                &cr,
+                &cx,
+                &app.icon,
+                &app.name,
+                10.0,
+                10.0 + (i % 10) as f64 * 32.0,
+                28.0,
+            );
+        }
+        let all_200_ms = t1.elapsed().as_secs_f64() * 1000.0;
+        eprintln!(
+            "apps_200_first_draw: card={apps_card_ms:.3} ms, 200_icons={all_200_ms:.3} ms"
+        );
+        assert!(
+            apps_card_ms < 100.0,
+            "first AppsListCard::draw stalled: {apps_card_ms:.3} ms"
+        );
+        assert!(
+            all_200_ms < 250.0,
+            "first 200-icon draw stalled: {all_200_ms:.3} ms"
+        );
+        cache.wait_idle();
+    }
 }

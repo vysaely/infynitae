@@ -129,6 +129,12 @@ fn render_backdrop(th: &theme::Theme, light: bool, env_bg: Option<&str>) -> them
 
 /// Draws what the shell shows on a `w x h` screen into the PNG file `out`.
 fn paint(sh: &shell::Shell, w: i32, h: i32, out: &str) -> Result<(), String> {
+    if let Ok(scratch) = cairo::ImageSurface::create(cairo::Format::ARgb32, w, h) {
+        if let Ok(cr) = cairo::Context::new(&scratch) {
+            sh.draw(&cr, w as f64, h as f64);
+        }
+    }
+    icons::wait_icon_idle();
     let surface =
         cairo::ImageSurface::create(cairo::Format::ARgb32, w, h).map_err(|e| e.to_string())?;
     let cr = cairo::Context::new(&surface).map_err(|e| e.to_string())?;
