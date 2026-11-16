@@ -1221,6 +1221,7 @@ delegate_compositor!(WaylandState);
 delegate_fractional_scale!(WaylandState);
 delegate_output!(WaylandState);
 delegate_pointer_constraints!(WaylandState);
+smithay::delegate_pointer_gestures!(WaylandState);
 delegate_presentation!(WaylandState);
 delegate_relative_pointer!(WaylandState);
 delegate_seat!(WaylandState);

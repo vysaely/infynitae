@@ -353,6 +353,75 @@ impl WaylandState {
                     ptr.frame(self);
                 }
             }
+            Effect::GestureSwipeBegin { fingers, time_ms } => {
+                let event = GestureSwipeBeginEvent {
+                    serial: SERIAL_COUNTER.next_serial(),
+                    time: time_ms,
+                    fingers,
+                };
+                ptr.gesture_swipe_begin(self, &event);
+            }
+            Effect::GestureSwipeUpdate { delta, time_ms } => {
+                let event = GestureSwipeUpdateEvent {
+                    time: time_ms,
+                    delta: convert::global_delta(delta),
+                };
+                ptr.gesture_swipe_update(self, &event);
+            }
+            Effect::GestureSwipeEnd { cancelled, time_ms } => {
+                let event = GestureSwipeEndEvent {
+                    serial: SERIAL_COUNTER.next_serial(),
+                    time: time_ms,
+                    cancelled,
+                };
+                ptr.gesture_swipe_end(self, &event);
+            }
+            Effect::GesturePinchBegin { fingers, time_ms } => {
+                let event = GesturePinchBeginEvent {
+                    serial: SERIAL_COUNTER.next_serial(),
+                    time: time_ms,
+                    fingers,
+                };
+                ptr.gesture_pinch_begin(self, &event);
+            }
+            Effect::GesturePinchUpdate {
+                delta,
+                scale,
+                rotation,
+                time_ms,
+            } => {
+                let event = GesturePinchUpdateEvent {
+                    time: time_ms,
+                    delta: convert::global_delta(delta),
+                    scale,
+                    rotation,
+                };
+                ptr.gesture_pinch_update(self, &event);
+            }
+            Effect::GesturePinchEnd { cancelled, time_ms } => {
+                let event = GesturePinchEndEvent {
+                    serial: SERIAL_COUNTER.next_serial(),
+                    time: time_ms,
+                    cancelled,
+                };
+                ptr.gesture_pinch_end(self, &event);
+            }
+            Effect::GestureHoldBegin { fingers, time_ms } => {
+                let event = GestureHoldBeginEvent {
+                    serial: SERIAL_COUNTER.next_serial(),
+                    time: time_ms,
+                    fingers,
+                };
+                ptr.gesture_hold_begin(self, &event);
+            }
+            Effect::GestureHoldEnd { cancelled, time_ms } => {
+                let event = GestureHoldEndEvent {
+                    serial: SERIAL_COUNTER.next_serial(),
+                    time: time_ms,
+                    cancelled,
+                };
+                ptr.gesture_hold_end(self, &event);
+            }
             Effect::PointerZeroOutputBegin => {
                 let popup_target = self.popup_grab.as_ref().and_then(|g| {
                     if !g.has_ended() {
