@@ -3907,6 +3907,13 @@ fn handle_input(data: &mut LoopData, event: InputEvent<LibinputInputBackend>) {
                 log_line!("[infynitae] Touchscreen: {}", device.name());
                 data.state.enable_touch();
             }
+            if device.has_capability(smithay::reexports::input::DeviceCapability::Switch)
+                && device
+                    .switch_has_switch(smithay::reexports::input::event::switch::Switch::TabletMode)
+                    == Ok(true)
+            {
+                data.state.set_has_tablet_mode_switch(true);
+            }
             let is_kb =
                 device.has_capability(smithay::reexports::input::DeviceCapability::Keyboard);
             let is_ptr =
@@ -3938,6 +3945,16 @@ fn handle_input(data: &mut LoopData, event: InputEvent<LibinputInputBackend>) {
             data.input_devices
                 .retain(|d| d.sysname() != device.sysname());
             data.last_abs_pointer = None;
+            if device.has_capability(smithay::reexports::input::DeviceCapability::Switch)
+                && !data.input_devices.iter().any(|d| {
+                    d.has_capability(smithay::reexports::input::DeviceCapability::Switch)
+                        && d.switch_has_switch(
+                            smithay::reexports::input::event::switch::Switch::TabletMode,
+                        ) == Ok(true)
+                })
+            {
+                data.state.set_has_tablet_mode_switch(false);
+            }
             if device.has_capability(smithay::reexports::input::DeviceCapability::Touch) {
                 let had_slot = data
                     .touch_slots

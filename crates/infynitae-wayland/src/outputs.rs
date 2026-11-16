@@ -333,6 +333,7 @@ impl WaylandState {
     /// The convertible went into tablet mode (`on`) or out of it: the session's on-screen
     /// keyboard follows (`launch.sh tablet-mode`, OSK).
     pub fn tablet_mode_changed(&mut self, on: bool) {
+        self.osk_tablet_mode(on);
         self.spawn_action_with("tablet-mode", if on { "on" } else { "off" });
     }
 
