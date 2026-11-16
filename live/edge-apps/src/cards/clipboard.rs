@@ -253,8 +253,8 @@ fn parse_binary_image(body: &str) -> Option<String> {
 }
 
 fn parse_cliphist(out: &str) -> Vec<ClipItem> {
-    let home = std::env::var("HOME").ok().filter(|h| h.len() > 1);
-    parse_cliphist_with_home(out, home.as_deref())
+    let home = crate::paths::home();
+    parse_cliphist_with_home(out, home.as_deref().and_then(|p| p.to_str()))
 }
 
 fn parse_cliphist_with_home(out: &str, home: Option<&str>) -> Vec<ClipItem> {

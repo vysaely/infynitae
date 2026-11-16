@@ -1169,7 +1169,7 @@ impl GpuSource {
             .and_then(|v| v.to_str())
             .map(str::trim)
             .filter(|s| !s.is_empty())
-            .map(crate::config::expand_home_path);
+            .map(crate::paths::expand_home);
         let lab_dir = cfg.monitor_log_dir.clone().or(from_env);
         Self {
             drm_dir: PathBuf::from("/sys/class/drm"),

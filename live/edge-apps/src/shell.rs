@@ -394,6 +394,9 @@ pub struct Shell {
     pub window_menu: Option<WindowMenu>,
     /// the config file's time when it was last read (None: not looked at yet)
     pub config_mtime: Option<std::time::SystemTime>,
+    /// desktop-entry folders and their modification times when `apps` was last read
+    pub app_dirs: Vec<std::path::PathBuf>,
+    pub apps_mtime: Vec<Option<std::time::SystemTime>>,
     pub panel_scroll: f64,
     pub live: bool,
     pub save_paths: Option<(std::path::PathBuf, std::path::PathBuf)>,
@@ -406,10 +409,22 @@ fn file_mtime(path: &std::path::Path) -> Option<std::time::SystemTime> {
 
 impl Shell {
     pub fn new(cfg: Config, apps: Vec<App>) -> Shell {
-        Self::new_at(cfg, apps, &crate::config::config_path())
+        let path = crate::config::config_path();
+        let mut sh = Self::new_with_config_path(cfg, apps, path.as_deref());
+        sh.set_app_dirs(crate::app::dirs());
+        sh
     }
 
+    #[cfg(test)]
     pub fn new_at(cfg: Config, apps: Vec<App>, config_path: &std::path::Path) -> Shell {
+        Self::new_with_config_path(cfg, apps, Some(config_path))
+    }
+
+    fn new_with_config_path(
+        cfg: Config,
+        apps: Vec<App>,
+        config_path: Option<&std::path::Path>,
+    ) -> Shell {
         let theme = Theme::from_config(&cfg);
         let panels = cfg
             .panels
@@ -427,7 +442,9 @@ impl Shell {
             notes: Vec::new(),
             notify: Default::default(),
             ask: Default::default(),
-            config_mtime: file_mtime(config_path),
+            config_mtime: config_path.and_then(file_mtime),
+            app_dirs: Vec::new(),
+            apps_mtime: Vec::new(),
             transient: None,
             edit_menu: None,
             window_menu: None,
@@ -895,7 +912,10 @@ impl Shell {
     /// again and rebuild the panels, the open one staying open. Never while a panel is edited
     /// (Done saves that one). True when it reloaded.
     pub fn reload_if_changed(&mut self) -> bool {
-        self.reload_if_changed_at(&crate::config::config_path())
+        let Some(path) = crate::config::config_path() else {
+            return false;
+        };
+        self.reload_if_changed_at(&path)
     }
 
     pub fn reload_if_changed_at(&mut self, path: &std::path::Path) -> bool {
@@ -925,6 +945,51 @@ impl Shell {
         self.open = open.and_then(|n| self.panels.iter().position(|ps| ps.panel.name == n));
         self.fetch_needed = true;
         true
+    }
+
+    pub fn set_app_dirs(&mut self, dirs: Vec<std::path::PathBuf>) {
+        let mtimes = crate::app::dir_mtimes(&dirs);
+        self.set_app_dirs_with_mtimes(dirs, mtimes);
+    }
+
+    pub fn set_app_dirs_with_mtimes(
+        &mut self,
+        dirs: Vec<std::path::PathBuf>,
+        mtimes: Vec<Option<std::time::SystemTime>>,
+    ) {
+        self.app_dirs = dirs;
+        self.apps_mtime = mtimes;
+    }
+
+    /// Replaces `self.apps` and rebuilds panels when the app list changed, keeping any open
+    /// non-transient panel open. Returns true when panels were rebuilt.
+    pub fn apply_apps(&mut self, apps: Vec<App>) -> bool {
+        if apps == self.apps || self.edit.active || self.transient.is_some() {
+            return false;
+        }
+        let open_name = self
+            .open
+            .and_then(|i| self.panels.get(i))
+            .map(|ps| ps.panel.name.clone());
+        self.rebuild_panels(self.cfg.clone(), Some(apps));
+        self.open = open_name.and_then(|n| self.panels.iter().position(|ps| ps.panel.name == n));
+        self.fetch_needed = true;
+        true
+    }
+
+    /// Stats `self.app_dirs` and reloads `self.apps` synchronously when any folder's modification
+    /// time changed. Used outside the Wayland loop (`!self.live`).
+    pub fn refresh_apps_if_changed(&mut self) -> bool {
+        if self.edit.active || self.app_dirs.is_empty() {
+            return false;
+        }
+        let mtimes = crate::app::dir_mtimes(&self.app_dirs);
+        if mtimes == self.apps_mtime {
+            return false;
+        }
+        self.apps_mtime = mtimes;
+        let apps = crate::app::load(&self.app_dirs);
+        self.apply_apps(apps)
     }
 
     pub fn rebuild_panels(&mut self, cfg: Config, apps: Option<Vec<App>>) {
@@ -1030,6 +1095,9 @@ impl Shell {
         }
         if self.open == Some(idx) {
             return if by_hover { false } else { self.close_at(now) };
+        }
+        if !self.live {
+            self.refresh_apps_if_changed();
         }
         self.window_menu = None;
         if self.editing() {
@@ -1769,9 +1837,9 @@ impl Shell {
     /// A request in the ask file (SIGRTMIN+3), or a cancel: loaded, queued after one already
     /// asking. True when what shows changed. A question closes the open panel.
     pub fn ask_load(&mut self) -> bool {
-        let cancel = crate::wayland::runtime_path(crate::ask::ASK_CANCEL_FILE);
+        let cancel = crate::paths::runtime_path(crate::ask::ASK_CANCEL_FILE);
         let mut changed = crate::ask::handle_cancel_from_path(&mut self.ask, &cancel);
-        let req = crate::wayland::runtime_path(crate::ask::ASK_FILE);
+        let req = crate::paths::runtime_path(crate::ask::ASK_FILE);
         changed |= crate::ask::load_from_path(&mut self.ask, &req);
         changed |= crate::ask::check_asker_gone(&mut self.ask);
         if self.ask.ask.on {
@@ -3756,5 +3824,67 @@ mod tests {
         frame(&sh);
         assert!(sh.key(Key::Escape));
         assert!(!sh.active());
+    }
+
+    #[test]
+    fn new_app_in_desktop_folder_appears_when_panel_opens() {
+        let dir = std::env::temp_dir().join(format!(
+            "infynitae-shell-apps-refresh-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let apps_dir = dir.join("applications");
+        std::fs::create_dir_all(&apps_dir).unwrap();
+        let cfg =
+            Config::from_text("PANEL_APPS=\"SUPER+A top right 380 apps/apps discord/messages\"\n");
+        let mut sh = Shell::new(cfg, crate::app::load(std::slice::from_ref(&apps_dir)));
+        sh.set_app_dirs(vec![apps_dir.clone()]);
+        assert!(sh.apps.is_empty());
+        let idx = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "apps")
+            .unwrap();
+        assert_eq!(sh.panels[idx].cards[1].provider.id(), "");
+        assert_eq!(sh.panels[idx].cards[1].app_id, None);
+
+        // Add a new .desktop file while all panels are closed.
+        std::fs::write(
+            apps_dir.join("discord.desktop"),
+            "[Desktop Entry]\nName=Discord\nExec=discord\n",
+        )
+        .unwrap();
+        let t1 = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
+        std::fs::File::open(&apps_dir)
+            .unwrap()
+            .set_modified(t1)
+            .unwrap();
+        assert!(
+            sh.apps.is_empty(),
+            "apps stay unchanged while panels are closed"
+        );
+
+        assert!(sh.open_panel(idx, false, Instant::now()));
+        assert_eq!(
+            sh.apps.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(),
+            vec!["discord"]
+        );
+        assert_eq!(sh.panels[idx].cards[1].provider.id(), "chat");
+        assert_eq!(sh.panels[idx].cards[1].app_id.as_deref(), Some("discord"));
+
+        // Removing the .desktop file updates sh.apps and card ownership on the next open too.
+        assert!(sh.close_at(Instant::now()));
+        std::fs::remove_file(apps_dir.join("discord.desktop")).unwrap();
+        let t2 = t1 + std::time::Duration::from_secs(5);
+        std::fs::File::open(&apps_dir)
+            .unwrap()
+            .set_modified(t2)
+            .unwrap();
+        assert!(sh.open_panel(idx, false, Instant::now()));
+        assert!(sh.apps.is_empty());
+        assert_eq!(sh.panels[idx].cards[1].provider.id(), "");
+        assert_eq!(sh.panels[idx].cards[1].app_id, None);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

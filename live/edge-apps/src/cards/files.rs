@@ -879,32 +879,6 @@ fn unquote_shell_dir(raw: &str) -> String {
     }
 }
 
-fn expand_home(val: &str, home: &Path) -> Option<PathBuf> {
-    if val == "$HOME" || val == "$HOME/" || val == "${HOME}" || val == "${HOME}/" {
-        return Some(home.to_path_buf());
-    }
-    if let Some(rest) = val
-        .strip_prefix("$HOME/")
-        .or_else(|| val.strip_prefix("${HOME}/"))
-    {
-        let trimmed = rest.trim_end_matches('/');
-        return Some(if trimmed.is_empty() {
-            home.to_path_buf()
-        } else {
-            home.join(trimmed)
-        });
-    }
-    if val.starts_with('/') {
-        let trimmed = val.trim_end_matches('/');
-        return Some(PathBuf::from(if trimmed.is_empty() {
-            "/"
-        } else {
-            trimmed
-        }));
-    }
-    None
-}
-
 /// Parses `~/.config/user-dirs.dirs` into `(key, path)` pairs, ordered so primary folders
 /// (`Documents`, `Downloads`, `Pictures`, `Videos`, `Music`, `Desktop`) appear before extra XDG
 /// entries, `Public`, and `Templates`.
@@ -923,10 +897,8 @@ pub fn parse_user_dirs(text: &str, home: &Path) -> Vec<PathBuf> {
             continue;
         }
         let unquoted = unquote_shell_dir(val);
-        let Some(path) = expand_home(&unquoted, home) else {
-            continue;
-        };
-        if path == home {
+        let path = crate::paths::expand_home_with(&unquoted, Some(home));
+        if !path.is_absolute() || path == home {
             continue;
         }
         entries.push((key.to_string(), path));
@@ -1114,10 +1086,7 @@ pub struct FoldersSource {
 
 impl FoldersSource {
     pub fn system() -> Self {
-        let home = std::env::var_os("HOME")
-            .filter(|s| !s.is_empty())
-            .map(PathBuf::from)
-            .unwrap_or_default();
+        let home = crate::paths::home().unwrap_or_default();
         Self { home }
     }
 

@@ -131,8 +131,7 @@ pub enum Quiet {
 
 /// Do not disturb or a game, from the files the switches and launch.sh keep.
 pub fn quiet_now() -> Quiet {
-    let rt = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".into());
-    let dir = std::path::Path::new(&rt).join("infynitae");
+    let dir = crate::paths::runtime_path("infynitae");
     if dir.join("game-quiet").exists() {
         Quiet::Game
     } else if dir.join("do-not-disturb").exists() {
@@ -145,8 +144,8 @@ pub fn quiet_now() -> Quiet {
 /// Text from a sender on one line: whitespace runs as one space, control characters gone, at most
 /// 255 bytes, the home folder as `~` (copied from the old edge's clipboard module).
 pub fn sanitize_inline_text(src: &str) -> String {
-    let home = std::env::var("HOME").ok().filter(|h| h.len() > 1);
-    sanitize_inline_text_with_home(src, home.as_deref())
+    let home = crate::paths::home();
+    sanitize_inline_text_with_home(src, home.as_deref().and_then(|p| p.to_str()))
 }
 
 pub fn sanitize_inline_text_with_home(src: &str, home: Option<&str>) -> String {

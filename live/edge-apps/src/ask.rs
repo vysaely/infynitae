@@ -199,8 +199,8 @@ pub fn parse_reply_payload(got: &str) -> Option<Option<String>> {
 
 /// Notifies the edge that this asker is cancelling, writes `ASK_CANCEL_FILE`, and signals the edge.
 pub fn tell_edge_cancel(edge_pid: i32, my_pid: u32, fifo_str: &str) {
-    let cancel_path = crate::wayland::runtime_path(&format!("{ASK_CANCEL_FILE}.{my_pid}"));
-    let target = crate::wayland::runtime_path(ASK_CANCEL_FILE);
+    let cancel_path = crate::paths::runtime_path(&format!("{ASK_CANCEL_FILE}.{my_pid}"));
+    let target = crate::paths::runtime_path(ASK_CANCEL_FILE);
     if std::fs::write(&cancel_path, format!("{fifo_str}\n{my_pid}\n")).is_ok() {
         let _ = std::fs::rename(&cancel_path, &target);
     }
@@ -256,7 +256,7 @@ pub fn run_client<S: AsRef<str>>(args: &[S]) -> u8 {
     }
 
     let my_pid = std::process::id();
-    let fifo_path = crate::wayland::runtime_path(&format!("{ASK_PIPE_PREFIX}{my_pid}"));
+    let fifo_path = crate::paths::runtime_path(&format!("{ASK_PIPE_PREFIX}{my_pid}"));
     let _ = std::fs::remove_file(&fifo_path);
     let Ok(fifo_c) = CString::new(fifo_path.as_os_str().as_bytes()) else {
         return 3;
@@ -308,9 +308,9 @@ pub fn run_client<S: AsRef<str>>(args: &[S]) -> u8 {
         None
     };
 
-    let req_path = crate::wayland::runtime_path(ASK_FILE);
+    let req_path = crate::paths::runtime_path(ASK_FILE);
 
-    let tmp_path = crate::wayland::runtime_path(&format!("{ASK_FILE}-new.{my_pid}"));
+    let tmp_path = crate::paths::runtime_path(&format!("{ASK_FILE}-new.{my_pid}"));
     let fifo_str = fifo_path.to_string_lossy();
     let content = format_request(&fifo_str, &cli, &items);
     if std::fs::write(&tmp_path, content).is_err() {
@@ -938,7 +938,7 @@ pub fn load_from_path_with_prefix(
 
 /// Loads `$XDG_RUNTIME_DIR/infynitae-edge-rs.ask` into `world.ask`.
 pub fn load_from_path(world: &mut World, req_path: &Path) -> bool {
-    let prefix = crate::wayland::runtime_path(ASK_PIPE_PREFIX)
+    let prefix = crate::paths::runtime_path(ASK_PIPE_PREFIX)
         .to_string_lossy()
         .into_owned();
     let uid = unsafe { libc::getuid() };

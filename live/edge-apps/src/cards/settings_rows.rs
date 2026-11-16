@@ -116,10 +116,11 @@ pub struct ConfigSource {
 
 impl ConfigSource {
     pub fn system() -> ConfigSource {
-        let home = std::env::var("HOME").unwrap_or_default();
         ConfigSource {
-            config: crate::config::config_path(),
-            defaults: PathBuf::from(&home).join("infynitae/config/config"),
+            config: crate::config::config_path().unwrap_or_default(),
+            defaults: crate::paths::home()
+                .map(|h| h.join("infynitae/config/config"))
+                .unwrap_or_default(),
             path: std::env::var("PATH").unwrap_or_default(),
         }
     }

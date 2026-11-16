@@ -122,15 +122,10 @@ pub struct SharesSource {
 
 impl SharesSource {
     pub fn system() -> SharesSource {
-        let state = std::env::var_os("XDG_STATE_HOME")
-            .filter(|v| !v.is_empty())
-            .map(PathBuf::from)
-            .unwrap_or_else(|| {
-                let home = std::env::var_os("HOME").unwrap_or_default();
-                PathBuf::from(home).join(".local/state")
-            });
         SharesSource {
-            path: state.join("infynitae/screenshare-allowed"),
+            path: crate::paths::state_dir()
+                .map(|s| s.join("infynitae/screenshare-allowed"))
+                .unwrap_or_default(),
             use_fixture: true,
         }
     }

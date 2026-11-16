@@ -89,6 +89,14 @@ pub fn parse_entry(id: &str, text: &str) -> Option<App> {
     (!hidden && !app.name.is_empty() && !app.exec.is_empty()).then_some(app)
 }
 
+/// Modification time of each folder in `dirs` (`None` when a folder does not exist or cannot be
+/// statted).
+pub fn dir_mtimes(dirs: &[PathBuf]) -> Vec<Option<std::time::SystemTime>> {
+    dirs.iter()
+        .map(|d| std::fs::metadata(d).and_then(|m| m.modified()).ok())
+        .collect()
+}
+
 /// The desktop entries in `dirs`, first folder first: a file name seen once (even hidden) hides the
 /// same name in later folders. Sorted by name.
 pub fn load(dirs: &[PathBuf]) -> Vec<App> {
@@ -126,7 +134,7 @@ pub fn load(dirs: &[PathBuf]) -> Vec<App> {
 
 /// The folders desktop entries are found in, in the order they are read.
 pub fn dirs() -> Vec<PathBuf> {
-    let home = std::env::var("HOME").ok().filter(|s| !s.is_empty());
+    let home = crate::paths::home();
     let mut d = Vec::new();
     match std::env::var("XDG_DATA_HOME")
         .ok()
@@ -135,12 +143,12 @@ pub fn dirs() -> Vec<PathBuf> {
         Some(dh) => d.push(PathBuf::from(dh).join("applications")),
         None => {
             if let Some(h) = &home {
-                d.push(Path::new(h).join(".local/share/applications"))
+                d.push(h.join(".local/share/applications"))
             }
         }
     }
     if let Some(h) = &home {
-        d.push(Path::new(h).join(".local/share/flatpak/exports/share/applications"));
+        d.push(h.join(".local/share/flatpak/exports/share/applications"));
     }
     let data_dirs = std::env::var("XDG_DATA_DIRS")
         .ok()
