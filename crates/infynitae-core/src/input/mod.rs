@@ -68,6 +68,11 @@ impl InputClock {
         self.0 = Some(self.0.map_or(time_us, |t| t.max(time_us)));
     }
 
+    /// The latest accepted event's time in microseconds (0 before the first).
+    pub(crate) fn now_us(self) -> u64 {
+        self.0.unwrap_or(0)
+    }
+
     /// The time of an event Core synthesises, on the wire.
     pub(crate) fn wire_ms(self) -> u32 {
         self.0.map_or(0, wire_ms)

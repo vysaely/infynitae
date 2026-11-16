@@ -100,6 +100,20 @@ impl FocusModel {
         fx
     }
 
+    /// [`Self::set_focus`] at input time `now_us`: a window the pointer focused and kept long
+    /// enough is recorded as used first, so a click or a shell command moving focus away does
+    /// not drop it from the Super+Tab history (AUDIT_FOCUS_HOVER finding 8).
+    pub fn set_focus_at(&mut self, now_us: u64, next: Option<ElementId>) -> Vec<Effect> {
+        self.settle_hover(now_us);
+        self.set_focus(next)
+    }
+
+    /// [`Self::focus_next`] at input time `now_us`, settling a hover first (as [`Self::set_focus_at`]).
+    pub fn focus_next_at(&mut self, now_us: u64, live_elements: &[ElementId]) -> Vec<Effect> {
+        self.settle_hover(now_us);
+        self.focus_next(live_elements)
+    }
+
     /// The pointer crossed into `next` (focus follows the mouse) at `now_us`: the focus moves, and
     /// `next` counts as used only once it stayed focused a moment ([`Self::settle_hover`]).
     pub fn hover_focus(&mut self, next: Option<ElementId>, now_us: u64) -> Vec<Effect> {

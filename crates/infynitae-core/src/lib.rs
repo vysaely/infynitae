@@ -806,7 +806,7 @@ impl Core {
             if self.focus.layer().is_some() {
                 out.extend(self.focus.set_target_under_layer(hovered));
             } else {
-                out.extend(self.focus.set_focus(hovered));
+                out.extend(self.focus.set_focus_at(self.input.clock.now_us(), hovered));
             }
         }
     }
@@ -1037,7 +1037,7 @@ impl Core {
         if target.is_some_and(|id| self.hidden_by_presentation(id)) {
             return Ok(Vec::new());
         }
-        let mut fx = self.focus.set_focus(target);
+        let mut fx = self.focus.set_focus_at(self.input.clock.now_us(), target);
         fx.extend(self.reconcile_constraints());
         Ok(fx)
     }
@@ -1232,7 +1232,10 @@ impl Core {
         let live = self.focusable_elements();
         let (mut fx, attention) = match self.focus.focus_attention(&live) {
             Some(fx) => (fx, true),
-            None => (self.focus.focus_next(&live), false),
+            None => (
+                self.focus.focus_next_at(self.input.clock.now_us(), &live),
+                false,
+            ),
         };
         // Super+Tab brings the newly focused window to the front; what lies under the pointer may
         // have changed, so it gets one true-position event (M10), as after a camera write

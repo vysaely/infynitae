@@ -436,7 +436,10 @@ impl Core {
         let q = crate::geom::Q16_ONE;
         let (target, location, anchor) = if let Some(hit) = element {
             self.raise_by_user(hit.element);
-            out.extend(self.focus.set_focus(Some(hit.element)));
+            out.extend(
+                self.focus
+                    .set_focus_at(self.input.clock.now_us(), Some(hit.element)),
+            );
             (
                 crate::protocol::PointerTarget {
                     surface: hit.surface,
@@ -598,7 +601,10 @@ impl Core {
         };
         self.touches.canvas_to_window(hit.element);
         self.raise_by_user(hit.element);
-        out.extend(self.focus.set_focus(Some(hit.element)));
+        out.extend(
+            self.focus
+                .set_focus_at(self.input.clock.now_us(), Some(hit.element)),
+        );
     }
 
     /// A finger of the window gesture moved to `p`: once the fingers moved or spread
@@ -1360,7 +1366,10 @@ impl Core {
         let pt = crate::geom::OutputLogicalPoint { x: at.0, y: at.1 };
         if let Some(hit) = self.hit_test(output, pt) {
             self.raise_by_user(hit.element);
-            out.extend(self.focus.set_focus(Some(hit.element)));
+            out.extend(
+                self.focus
+                    .set_focus_at(self.input.clock.now_us(), Some(hit.element)),
+            );
             self.recenter_on_element_at(proof, output, hit.element, false, false, out);
         } else if let Some(camera) = self.cameras.camera_for_output(output) {
             self.zoom_reset(proof, output, camera, out);
@@ -1472,7 +1481,10 @@ impl Core {
     /// Raises `element` and gives it keyboard focus, as a user's pick of that window.
     fn raise_and_focus(&mut self, element: crate::stage::ElementId, out: &mut Vec<Effect>) {
         let raised = self.raise_by_user(element);
-        out.extend(self.focus.set_focus(Some(element)));
+        out.extend(
+            self.focus
+                .set_focus_at(self.input.clock.now_us(), Some(element)),
+        );
         out.extend(self.reconcile_constraints());
         if raised
             && matches!(self.pointer, pointer::PointerState::Located { .. })
@@ -1507,7 +1519,10 @@ impl Core {
             }
         }
         let raised = self.raise_by_user(primary);
-        out.extend(self.focus.set_focus(Some(primary)));
+        out.extend(
+            self.focus
+                .set_focus_at(self.input.clock.now_us(), Some(primary)),
+        );
         out.extend(self.reconcile_constraints());
         if raised
             && matches!(self.pointer, pointer::PointerState::Located { .. })
@@ -1900,7 +1915,7 @@ impl Core {
         }
         let mut out = Vec::new();
         self.show_chosen(id, &mut out);
-        out.extend(self.focus.set_focus(Some(id)));
+        out.extend(self.focus.set_focus_at(self.input.clock.now_us(), Some(id)));
         out.extend(self.reconcile_constraints());
         Ok(out)
     }
@@ -2698,7 +2713,10 @@ impl Core {
         {
             let element = hit.element;
             self.raise_by_user(element);
-            out.extend(self.focus.set_focus(Some(element)));
+            out.extend(
+                self.focus
+                    .set_focus_at(self.input.clock.now_us(), Some(element)),
+            );
             out.push(Effect::DismissPopupGrab(element));
             // the pointer's Canvas position (R1): the hit's surface origin plus its local position
             let press = crate::geom::CanvasPos {
@@ -2859,7 +2877,10 @@ impl Core {
         if let Some(hit) = element {
             // the clicked window is under the pointer: raising it changes no pointer target
             self.raise_by_user(hit.element);
-            out.extend(self.focus.set_focus(Some(hit.element)));
+            out.extend(
+                self.focus
+                    .set_focus_at(self.input.clock.now_us(), Some(hit.element)),
+            );
         } else if let Some(h) = on_layer
             && self
                 .layer(h.layer)
@@ -3373,7 +3394,7 @@ impl Core {
                         output: target_output,
                     };
                     if self.focus.target() != Some(id) {
-                        out.extend(self.focus.set_focus(Some(id)));
+                        out.extend(self.focus.set_focus_at(self.input.clock.now_us(), Some(id)));
                         out.extend(self.reconcile_constraints());
                     }
                     if let Ok((_, t_fx)) = self.toplevel_request(id, request) {
@@ -7644,8 +7665,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "AUDIT_FOCUS_HOVER: settle_hover is omitted on non-keyboard focus switches so >=300ms hovered window is dropped from history"]
-    fn audit_hover_over_300ms_before_non_keyboard_focus_switch_is_dropped_from_history() {
+    fn hover_over_300ms_before_a_non_keyboard_focus_switch_stays_in_history() {
         use crate::ShellCommand;
         use crate::stage::ElementRef;
         let (mut c, mut i, mut s, mut t) = Core::new(PersistedCameras::default());
