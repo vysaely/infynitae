@@ -234,6 +234,18 @@ impl FocusModel {
     /// Target loss (K7, M11): focused element was destroyed or unmapped.
     /// The successor policy selects the most recently focused live element.
     pub fn target_lost(&mut self, dead: ElementId, live_elements: &[ElementId]) -> Vec<Effect> {
+        self.target_lost_to(dead, live_elements, None)
+    }
+
+    /// [`Self::target_lost`] with the successor already chosen (`Some(next)`, strict focus: the
+    /// window under the pointer or none), so the focus moves once instead of first to the last
+    /// used window and then again (AUDIT_FOCUS_HOVER finding 6). `None`: the last used live one.
+    pub fn target_lost_to(
+        &mut self,
+        dead: ElementId,
+        live_elements: &[ElementId],
+        chosen: Option<Option<ElementId>>,
+    ) -> Vec<Effect> {
         self.history.retain(|&e| e != dead);
         if live_elements.is_empty() {
             self.initial_eligible = true;
@@ -243,11 +255,12 @@ impl FocusModel {
             return Vec::new();
         }
         self.hovered_since = None;
-        let successor = self
-            .history
-            .iter()
-            .copied()
-            .find(|e| live_elements.contains(e));
+        let successor = chosen.unwrap_or_else(|| {
+            self.history
+                .iter()
+                .copied()
+                .find(|e| live_elements.contains(e))
+        });
         let prev = self.target;
         self.target = successor;
         // the successor is focused: its attention mark goes

@@ -3440,8 +3440,7 @@ impl Core {
                         .into_iter()
                         .filter(|&e| e != id)
                         .collect();
-                    out.extend(self.focus.target_lost(id, &live));
-                    self.strict_successor(id, &mut out);
+                    out.extend(self.lose_focus_target(id, &live));
                     self.invalidate_all_frames();
                     self.membership_pass_element(id, &mut out);
                     out.extend(self.visibility_pass());
@@ -7559,8 +7558,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "AUDIT_FOCUS_HOVER: strict_successor runs after target_lost, emitting double KeyboardFocus and clearing MRU attention"]
-    fn audit_strict_successor_emits_double_focus_and_clears_attention() {
+    fn strict_successor_moves_focus_once_and_keeps_attention() {
         let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
         let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
         c.set_focus_follows_mouse(true);
