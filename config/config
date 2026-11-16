@@ -71,6 +71,11 @@ TOUCHPAD_NATURAL_SCROLL="false"
     # default: false
     # options: false  · true
 
+TOUCHPAD_GESTURES="true"
+    # Three-finger swipe pans the canvas, four-finger pinch zooms, four-finger swipe up opens overview
+    # default: true
+    # options: true  · false  (false: apps get all gestures)
+
 SUPER_FREES_CURSOR="true"
     # Holding Super frees a cursor a game captured (Dota…)
     # default: true

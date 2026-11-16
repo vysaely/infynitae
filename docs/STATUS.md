@@ -18,7 +18,7 @@ edges on other hardware.
   (gnome-keyring, or infynitae-keyring once switched via `infynitae-keyring`'s `tools/switch.sh`), USB automount (infynitae-automount on udisks2: encrypted drives ask for their passphrase, a notification opens or ejects a drive, `infynitae-automount eject` makes every drive safe to pull; right click a drive's folder in PCManFM-Qt, "Format drive...", to erase it as exFAT, FAT32 or ext4, `infynitae-format-drive` from a terminal), the control menu (Super+A: Wi-Fi, Bluetooth, volume
   for all sound or one app, sound output, power mode), global shortcuts for
   apps, layer shell for bars, X11 apps through xwayland-satellite (can be disabled with `XWAYLAND=false`), VRR and direct scanout for
-  games, idle screen-off and auto-lock. Config defaults match documented settings: `FOCUS_FOLLOWS_MOUSE` is strict, `PAN_MODE` is free, `SQUARE_CORNERS` and `TOUCHPAD_TAP` are true.
+  games, idle screen-off and auto-lock. Config defaults match documented settings: `FOCUS_FOLLOWS_MOUSE` is strict, `PAN_MODE` is free, `SQUARE_CORNERS`, `TOUCHPAD_TAP`, and `TOUCHPAD_GESTURES` are true.
 - **Screen sharing:** a screen or a single window, through the portal or screencopy (screencopy hides the cursor by default). The
   portal asks before an app's first share (this time, always, or deny; `SCREENSHARE_ASK`, defaults to `app`). A
   private window (`PRIVACY_APPS`, which accepts spaces or commas, `PRIVACY_TITLES` separated by commas, Super+Shift+P) is never shared, and nothing
@@ -85,6 +85,11 @@ These pass the test suite but have not run on a real screen or device yet:
 - **Touchscreens** as real touch (`wl_touch`): apps get each finger, so scrolling, pinching and
   gestures work inside them. A tap focuses the window under it. A finger on empty canvas drags
   the canvas; two fingers pinch-zoom it around their midpoint.
+- **Touchpad gestures** (`zwp_pointer_gestures_v1`, `TOUCHPAD_GESTURES`, true by default):
+  three-finger swipe pans the canvas 1:1 with the fingers, four-finger pinch zooms around the
+  cursor, and four-finger swipe up toggles the overview; two-finger gestures, holds, and all
+  gestures when `TOUCHPAD_GESTURES=false` go to the hovered app. Tested in core unit tests and
+  headless Wayland client tests (`t1_touchpad_gestures`); not yet tested on real touchpad hardware.
 - **Virtual screen** (`VIRTUAL_SCREEN`, on by default): with no screen connected (a monitor off
   that reports itself unplugged, or none at all), a virtual 1920x1080 screen stands in, so remote
   desktop still has a screen; it goes once a real one is connected. A monitor that is off but

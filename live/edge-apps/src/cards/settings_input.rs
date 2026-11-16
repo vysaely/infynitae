@@ -119,6 +119,15 @@ pub const TABLE: &[Setting] = &[
         needs: &[],
     },
     Setting {
+        key: "TOUCHPAD_GESTURES",
+        name: "Canvas touchpad gestures",
+        says: "",
+        control: ON_OFF,
+        after: After::Save,
+        more: false,
+        needs: &[],
+    },
+    Setting {
         key: "SUPER_FREES_CURSOR",
         name: "Super frees a captured pointer",
         says: "",
@@ -269,7 +278,7 @@ impl InputCard {
             return false;
         }
         match TABLE[i].key {
-            "TOUCHPAD_TAP" | "TOUCHPAD_NATURAL_SCROLL" => self.has_touchpad(),
+            "TOUCHPAD_TAP" | "TOUCHPAD_NATURAL_SCROLL" | "TOUCHPAD_GESTURES" => self.has_touchpad(),
             "XKB_DEFAULT_OPTIONS" => self.multi_layout(),
             _ => true,
         }
@@ -997,10 +1006,16 @@ P: Phys=usb-0000:75:00.4-2.4/input0
         assert_eq!(c.status(&cx), Status::Ready);
         let tap = row_idx("TOUCHPAD_TAP");
         let nat = row_idx("TOUCHPAD_NATURAL_SCROLL");
+        let gest = row_idx("TOUCHPAD_GESTURES");
         let opts = row_idx("XKB_DEFAULT_OPTIONS");
         let (rows, more) = c.shown(&cx);
         assert!(!more);
-        assert!(!rows.contains(&tap) && !rows.contains(&nat) && !rows.contains(&opts));
+        assert!(
+            !rows.contains(&tap)
+                && !rows.contains(&nat)
+                && !rows.contains(&gest)
+                && !rows.contains(&opts)
+        );
         assert_eq!(rows.len(), 7);
 
         // Searching "tap" or "switch" does not reveal hidden rows
@@ -1016,23 +1031,28 @@ P: Phys=usb-0000:75:00.4-2.4/input0
         c.apply("config", &data(&[("XKB_DEFAULT_LAYOUT", "us,")], &[], &[]));
         assert!(!c.shown(&cx).0.contains(&opts));
 
-        // Multiple layouts ("us,de") + touchpad present reveals all 10 rows
+        // Multiple layouts ("us,de") + touchpad present reveals all 11 rows
         c.apply(
             "config",
             &data(&[("XKB_DEFAULT_LAYOUT", "us,de")], &[], &[]),
         );
         c.apply("touchpad", &TouchpadData { present: true });
         let (rows, _) = c.shown(&cx);
-        assert_eq!(rows.len(), 10);
-        assert!(rows.contains(&tap) && rows.contains(&nat) && rows.contains(&opts));
+        assert_eq!(rows.len(), 11);
+        assert!(
+            rows.contains(&tap)
+                && rows.contains(&nat)
+                && rows.contains(&gest)
+                && rows.contains(&opts)
+        );
 
         // At S: More hides the 3 M rows and shows a More row
         cx.size = Size::S;
         let (s_rows, more) = c.shown(&cx);
         assert!(more);
-        assert_eq!(s_rows.len(), 7);
+        assert_eq!(s_rows.len(), 8);
         assert!(c.event(&press(MORE), &cx, &mut Vec::new()));
-        assert_eq!(c.shown(&cx).0.len(), 10);
+        assert_eq!(c.shown(&cx).0.len(), 11);
     }
 
     #[test]
