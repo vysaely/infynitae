@@ -451,8 +451,26 @@ impl crate::Core {
             .iter()
             .position(|r| r.id == id)
             .ok_or(ProtocolError::StaleElement)?;
+        let (was_mapped, was_exclusive, had_on_this_layer, all_on_this_layer) = {
+            let r = &self.layers[i];
+            let was_mapped = r.mapped();
+            let was_exclusive = was_mapped
+                && r.layer().above_canvas()
+                && r.state.keyboard == KeyboardInteractivity::Exclusive;
+            let on_layer = |tp: &crate::touch::TouchPoint| {
+                matches!(tp.anchor, crate::touch::Anchor::Layer { .. })
+                    && r.tree
+                        .as_ref()
+                        .is_some_and(|t| t.surfaces.iter().any(|s| s.key == tp.target.surface))
+            };
+            (
+                was_mapped,
+                was_exclusive,
+                self.touches.any_point(on_layer),
+                self.touches.all_points_on(on_layer),
+            )
+        };
         let r = &mut self.layers[i];
-        let was_mapped = r.mapped();
         let before = (r.geometry, r.state);
         // what is under the pointer can change without the root changing: a popup opens or closes
         let reshaped = r.tree.as_ref().is_none_or(|old| !same_shape(old, &tree));
@@ -484,6 +502,21 @@ impl crate::Core {
             fx.extend(self.layer_scale(i));
         }
         fx.extend(self.layer_keyboard(i));
+        let now_exclusive = {
+            let r = &self.layers[i];
+            mapped
+                && r.layer().above_canvas()
+                && r.state.keyboard == KeyboardInteractivity::Exclusive
+        };
+        let cancel_touch = (had_on_this_layer
+            && (!mapped || (was_exclusive && state.keyboard == KeyboardInteractivity::None)))
+            || (now_exclusive && self.touches.on_output(output) && !all_on_this_layer);
+        if cancel_touch {
+            if self.touches.clear() {
+                fx.push(Effect::TouchCancel);
+            }
+            self.touch_resize_settle(&mut fx);
+        }
         if changed {
             self.invalidate_frame(output);
             self.layer_pointer(output, &mut fx);
@@ -497,6 +530,17 @@ impl crate::Core {
         let Some(i) = self.layers.iter().position(|r| r.id == id) else {
             return Vec::new();
         };
+        let had_touch = {
+            let r = &self.layers[i];
+            self.touches.any_point(|tp| {
+                matches!(tp.anchor, crate::touch::Anchor::Layer { .. })
+                    && (r
+                        .tree
+                        .as_ref()
+                        .is_some_and(|t| t.surfaces.iter().any(|s| s.key == tp.target.surface))
+                        || r.entered.contains(&tp.target.surface))
+            })
+        };
         let r = self.layers.remove(i);
         let mut fx: Vec<Effect> = r
             .entered
@@ -506,6 +550,10 @@ impl crate::Core {
                 surface,
             })
             .collect();
+        if had_touch && self.touches.clear() {
+            fx.push(Effect::TouchCancel);
+        }
+        self.touch_resize_settle(&mut fx);
         fx.extend(self.focus.layer_release(id));
         fx.extend(self.relayout(r.output));
         self.invalidate_frame(r.output);

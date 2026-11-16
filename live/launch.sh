@@ -70,9 +70,7 @@ case "$ACTION" in
         fi
         ;;
     tablet-mode)
-        # the convertible folded (on) or opened (off). The on-screen keyboard no longer follows
-        # it: it opens when a text field is tapped (the compositor asks, `osk` below; 2026-11-07).
-        # Opened, a keyboard that is showing goes away.
+        # the convertible folded (on) or opened (off): opened, a keyboard that is showing goes away.
         [ "$2" = off ] && sh "$0" osk hide
         ;;
     osk)

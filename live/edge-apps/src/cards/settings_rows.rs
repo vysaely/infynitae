@@ -198,6 +198,7 @@ pub const FILE_ONLY: &[&str] = &[
     "ZOOM_SHARPEN",
     "VIRTUAL_SCREEN",
     "OSK",
+    "TOUCH_EDGE_SWIPE",
     "AUTO_ROTATE",
     "OUTPUT_LAYOUT",
     "LAUNCHER",

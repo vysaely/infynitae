@@ -627,6 +627,23 @@ impl Core {
             std::mem::swap(&mut self.membership, &mut next);
         }
         self.membership_next = next;
+        for &o in outputs {
+            if self.presentation(o).is_some()
+                && !self.is_presentation_suppressed(o)
+                && self.touches.on_output(o)
+            {
+                let frame_above = self.layer_frame(o).above;
+                let kept_above = self.touches.all_points_on(|tp| {
+                    tp.output == o
+                        && matches!(tp.anchor, crate::touch::Anchor::Layer { .. })
+                        && frame_above.iter().any(|e| e.surface == tp.target.surface)
+                });
+                if !kept_above && self.touches.clear() {
+                    out.push(Effect::TouchCancel);
+                }
+                self.touch_resize_settle(out);
+            }
+        }
         let on_one = matches!(self.pointer, crate::pointer::PointerState::Located { output, .. } if outputs.contains(&output));
         out.extend(self.reconcile_constraints());
         if on_one && !self.input.interaction.active() && !self.locked() {
@@ -1637,6 +1654,7 @@ impl Core {
             }
             (Lifecycle::Mapped, false) => {
                 // null-buffer commit: unmap; identity and anchor kept, snapshot dropped
+                self.cancel_element_touches(id, out);
                 self.input.interaction.orphan_element(id);
                 if self.resize.is_some_and(|r| r.element == id) {
                     self.resize = None;
@@ -1758,6 +1776,8 @@ impl Core {
             slot.frame.entries.retain(|e| e.element != id);
         }
         let before = self.presentations();
+        let mut fx = Vec::new();
+        self.cancel_element_touches(id, &mut fx);
         let existed = self.stage.destroy(id);
         if !existed {
             return Vec::new();
@@ -1765,7 +1785,7 @@ impl Core {
         self.frame_liveness.destroyed(id);
         let live: Vec<ElementId> = self.focusable_elements();
         let had = self.focus.target() == Some(id);
-        let mut fx = self.focus.target_lost(id, &live);
+        fx.extend(self.focus.target_lost(id, &live));
         if had {
             self.strict_successor(id, &mut fx);
         }
@@ -1797,6 +1817,26 @@ impl Core {
         fx.extend(vis);
         fx.extend(self.reconcile_constraints());
         fx
+    }
+
+    /// Cancels touches targeting `id` (unmapped or destroyed while a finger is down).
+    fn cancel_element_touches(&mut self, id: ElementId, out: &mut Vec<Effect>) {
+        if self
+            .touches
+            .window
+            .as_ref()
+            .is_some_and(|g| g.element == id)
+        {
+            self.touches.end_window();
+        }
+        let on_element = self.touches.any_point(|tp| {
+            tp.anchor == crate::touch::Anchor::Canvas
+                && self.stage.element_containing_surface(tp.target.surface) == Some(id)
+        });
+        if on_element && self.touches.clear() {
+            out.push(Effect::TouchCancel);
+        }
+        self.touch_resize_settle(out);
     }
 
     /// M3: the constraint target for a popup of `parent`: the anchor output's viewport,
