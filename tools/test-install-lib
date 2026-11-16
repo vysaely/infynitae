@@ -203,4 +203,32 @@ check "live/99-infynitae-memory.conf has a comment" "$has_comment" "1"
 has_call=$(grep -c 'install_speed_settings' "$REPO_DIR/live/install-lib.sh" || true)
 check "install_system_files delegates to install_speed_settings" "$([ "$has_call" -ge 2 ] && echo yes || echo no)" "yes"
 
+# 7. Power-key suspend detection covers convertibles and touchscreen+battery handhelds, not desktops
+PS_DIR="$TMP/power_supply"
+mkdir -p "$PS_DIR/AC"
+got_no_bat=$(INFYNITAE_POWER_SUPPLY="$PS_DIR" bash -c ". '$REPO_DIR/live/install-lib.sh' && has_battery && echo yes || echo no" 2>/dev/null || echo missing)
+check "has_battery is false when only AC exists" "$got_no_bat" "no"
+
+mkdir -p "$PS_DIR/BAT1"
+got_bat=$(INFYNITAE_POWER_SUPPLY="$PS_DIR" bash -c ". '$REPO_DIR/live/install-lib.sh' && has_battery && echo yes || echo no" 2>/dev/null || echo missing)
+check "has_battery is true when BAT1 exists" "$got_bat" "yes"
+
+check_power_key() {
+    label="$1" tablet="$2" accel="$3" touch="$4" bat="$5" want="$6"
+    got=$(bash -c "
+        . '$REPO_DIR/live/install-lib.sh'
+        has_tablet_mode_switch() { $tablet; }
+        has_accelerometer() { $accel; }
+        has_touchscreen() { $touch; }
+        has_battery() { $bat; }
+        wants_power_key_suspend && echo yes || echo no
+    " 2>/dev/null || echo missing)
+    check "$label" "$got" "$want"
+}
+check_power_key "power key suspend on convertible (tablet switch)" true false false false yes
+check_power_key "power key suspend on convertible (accelerometer)" false true false false yes
+check_power_key "power key suspend on handheld (touchscreen + battery)" false false true true yes
+check_power_key "no power key suspend on desktop with USB touchscreen" false false true false no
+check_power_key "no power key suspend on clamshell laptop without touchscreen" false false false true no
+
 exit $fail
