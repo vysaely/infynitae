@@ -365,6 +365,11 @@ fn run() -> ExitCode {
                 && !fp.eq_ignore_ascii_case("exclusive"),
         );
     }
+    if let Ok(es) = std::env::var("TOUCH_EDGE_SWIPE")
+        && let Some(on) = infynitae_wayland::parse_bool(&es)
+    {
+        core.set_touch_edge_swipe(on);
+    }
 
     if let Ok(sea) = std::env::var("SUPER_ENTER_ACTION") {
         if sea.eq_ignore_ascii_case("fit") {
@@ -453,6 +458,11 @@ fn run() -> ExitCode {
                         core.set_touchpad_gestures(
                             infynitae_wayland::parse_bool(val) != Some(false),
                         );
+                    }
+                    "TOUCH_EDGE_SWIPE" => {
+                        if let Some(on) = infynitae_wayland::parse_bool(val) {
+                            core.set_touch_edge_swipe(on);
+                        }
                     }
                     "OUTPUT_SCALE" => {
                         if scale_120.is_none()

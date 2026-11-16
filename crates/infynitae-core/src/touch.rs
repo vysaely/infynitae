@@ -79,6 +79,7 @@ pub(crate) struct Touches {
     last_tap: Option<Tap>,
     /// A window gesture that was resizing ended: its last configure is to be sent.
     resize_done: bool,
+    pub(crate) edge_swipe: Option<EdgeSwipeCandidate>,
 }
 
 /// Three or more fingers on a window: they move or resize it.
@@ -351,6 +352,7 @@ impl Touches {
         self.canvas = None;
         self.end_window();
         self.last_tap = None;
+        self.edge_swipe = None;
         let any = !self.points.is_empty();
         self.points.clear();
         any
@@ -373,7 +375,122 @@ impl Touches {
             && self.canvas.is_none()
             && self.window.is_none()
     }
+}
 
+/// Screen edge an inward touch swipe starts from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ScreenEdge {
+    Top,
+    Bottom,
+    Left,
+    Right,
+}
+
+/// Outcome of advancing an edge-swipe candidate on a touch motion.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum EdgeSwipeStep {
+    Pending,
+    Trigger((f64, f64)),
+    Cancel,
+}
+
+/// A single finger near an output edge that might swipe inward to open that side's edge panel.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct EdgeSwipeCandidate {
+    pub(crate) slot: u32,
+    pub(crate) output: OutputId,
+    pub(crate) edge: ScreenEdge,
+    pub(crate) start: (f64, f64),
+    pub(crate) extent: (f64, f64),
+}
+
+impl EdgeSwipeCandidate {
+    /// Max distance from an output edge for `TouchDown` to start an edge swipe (logical px).
+    const ZONE_PX: f64 = 24.0;
+    /// Min inward travel to trigger opening the edge panel (logical px).
+    const INWARD_PX: f64 = 28.0;
+    /// Narrow outer strip (`hover_strip` / bezel) within which an existing overlay does not block swiping.
+    const STRIP_PX: f64 = 4.0;
+
+    /// Arms a candidate if `p` starts within `ZONE_PX` of an edge of `extent`.
+    pub(crate) fn from_edge(
+        slot: u32,
+        output: OutputId,
+        p: (f64, f64),
+        extent: (f64, f64),
+    ) -> Option<Self> {
+        let (w, h) = extent;
+        if w <= 0.0 || h <= 0.0 {
+            return None;
+        }
+        let d_top = p.1.max(0.0);
+        let d_bot = (h - p.1).max(0.0);
+        let d_left = p.0.max(0.0);
+        let d_right = (w - p.0).max(0.0);
+        let (edge, dist) = [
+            (ScreenEdge::Top, d_top),
+            (ScreenEdge::Bottom, d_bot),
+            (ScreenEdge::Left, d_left),
+            (ScreenEdge::Right, d_right),
+        ]
+        .into_iter()
+        .min_by(|a, b| a.1.total_cmp(&b.1))?;
+        (dist <= Self::ZONE_PX).then_some(Self {
+            slot,
+            output,
+            edge,
+            start: p,
+            extent,
+        })
+    }
+
+    /// True if `p` lies in the outermost `STRIP_PX` border of `extent`.
+    pub(crate) fn within_strip(p: (f64, f64), extent: (f64, f64)) -> bool {
+        let (w, h) = extent;
+        p.0 <= Self::STRIP_PX
+            || p.0 >= w - Self::STRIP_PX
+            || p.1 <= Self::STRIP_PX
+            || p.1 >= h - Self::STRIP_PX
+    }
+
+    /// Evaluates motion to `p`: returns `Trigger(edge_point)` when the swipe commits inward.
+    pub(crate) fn step(&self, p: (f64, f64)) -> EdgeSwipeStep {
+        let (w, h) = self.extent;
+        let max_x = (w - 0.5).max(0.5);
+        let max_y = (h - 0.5).max(0.5);
+        let (inward, lateral, edge_pt) = match self.edge {
+            ScreenEdge::Top => (
+                p.1 - self.start.1,
+                (p.0 - self.start.0).abs(),
+                (self.start.0.clamp(0.5, max_x), 0.5),
+            ),
+            ScreenEdge::Bottom => (
+                self.start.1 - p.1,
+                (p.0 - self.start.0).abs(),
+                (self.start.0.clamp(0.5, max_x), max_y),
+            ),
+            ScreenEdge::Left => (
+                p.0 - self.start.0,
+                (p.1 - self.start.1).abs(),
+                (0.5, self.start.1.clamp(0.5, max_y)),
+            ),
+            ScreenEdge::Right => (
+                self.start.0 - p.0,
+                (p.1 - self.start.1).abs(),
+                (max_x, self.start.1.clamp(0.5, max_y)),
+            ),
+        };
+        if lateral >= Self::INWARD_PX || inward <= -12.0 {
+            EdgeSwipeStep::Cancel
+        } else if inward >= Self::INWARD_PX && inward > lateral {
+            EdgeSwipeStep::Trigger(edge_pt)
+        } else {
+            EdgeSwipeStep::Pending
+        }
+    }
+}
+
+impl Touches {
     /// A finger on empty canvas of `output`, whose camera is `camera`: it joins the gesture there.
     /// `false` while a gesture holds another output's canvas (the finger is ignored).
     pub(crate) fn canvas_down(
@@ -628,5 +745,30 @@ mod tests {
         );
         assert!(t.get(0).is_some() && t.get(1).is_some(), "nothing changed");
         assert_eq!(Touches::default().take_window_fingers(o), None);
+    }
+
+    #[test]
+    fn edge_swipe_candidate_recognizes_inward_motion_and_rejects_parallel() {
+        let o = OutputId::for_test(1);
+        let extent = (1920.0, 1080.0);
+
+        let top = EdgeSwipeCandidate::from_edge(0, o, (420.0, 10.0), extent).expect("top zone");
+        assert_eq!(top.edge, ScreenEdge::Top);
+        assert_eq!(top.step((420.0, 20.0)), EdgeSwipeStep::Pending);
+        assert_eq!(
+            top.step((420.0, 42.0)),
+            EdgeSwipeStep::Trigger((420.0, 0.5))
+        );
+
+        let right =
+            EdgeSwipeCandidate::from_edge(0, o, (1910.0, 300.0), extent).expect("right zone");
+        assert_eq!(right.edge, ScreenEdge::Right);
+        assert_eq!(
+            right.step((1875.0, 300.0)),
+            EdgeSwipeStep::Trigger((1919.5, 300.0))
+        );
+
+        assert_eq!(right.step((1910.0, 340.0)), EdgeSwipeStep::Cancel);
+        assert!(EdgeSwipeCandidate::from_edge(0, o, (500.0, 500.0), extent).is_none());
     }
 }

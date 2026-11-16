@@ -949,3 +949,226 @@ fn stationary_finger_cancel_reaches_client() {
         r.ls.probe.log
     );
 }
+
+#[test]
+fn edge_swipe_from_screen_edges_opens_hover_strip_and_cancels_touch() {
+    use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::Layer;
+    use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::{
+        Anchor, KeyboardInteractivity,
+    };
+
+    let (mut r, _touch) = rig();
+    r.ls.bind_layer_shell();
+    r.ls.pump();
+    let qh = r.ls.qh.clone();
+
+    let strip_top = r.ls.probe.layer_surface(
+        &qh,
+        "STRIP_TOP",
+        Layer::Overlay,
+        Anchor::Top,
+        (400, 2),
+        0,
+        KeyboardInteractivity::None,
+    );
+    let strip_bot = r.ls.probe.layer_surface(
+        &qh,
+        "STRIP_BOT",
+        Layer::Overlay,
+        Anchor::Bottom,
+        (400, 2),
+        0,
+        KeyboardInteractivity::None,
+    );
+    let strip_left = r.ls.probe.layer_surface(
+        &qh,
+        "STRIP_LEFT",
+        Layer::Overlay,
+        Anchor::Left,
+        (2, 400),
+        0,
+        KeyboardInteractivity::None,
+    );
+    let strip_right = r.ls.probe.layer_surface(
+        &qh,
+        "STRIP_RIGHT",
+        Layer::Overlay,
+        Anchor::Right,
+        (2, 400),
+        0,
+        KeyboardInteractivity::None,
+    );
+    r.ls.pump();
+    for s in [strip_top, strip_bot, strip_left, strip_right] {
+        r.ls.probe.draw(&qh, s);
+    }
+    r.ls.pump();
+
+    for (start, step, strip_label) in [
+        ((960.0, 10.0), (960.0, 48.0), "STRIP_TOP"),
+        ((960.0, 1070.0), (960.0, 1032.0), "STRIP_BOT"),
+        ((10.0, 540.0), (48.0, 540.0), "STRIP_LEFT"),
+        ((1910.0, 540.0), (1872.0, 540.0), "STRIP_RIGHT"),
+    ] {
+        // Put pointer in the middle before each swipe.
+        let _ = infynitae_backend_headless::pointer_motion(
+            &mut r.ls.state,
+            &mut r.ls.input,
+            (0.0, 0.0),
+            (0.0, 0.0),
+            r.t + 1,
+        );
+        r.t += 1000;
+        r.ls.probe.log.clear();
+        r.ls.probe.ptr.clear();
+
+        down(&mut r, 0, start);
+        motion(&mut r, 0, step);
+        up(&mut r, 0);
+
+        assert!(
+            r.ls.probe
+                .ptr
+                .iter()
+                .any(|l| l.starts_with(&format!("enter {strip_label} "))),
+            "inward swipe from {start:?} -> {step:?} should move pointer onto {strip_label}: ptr={:?} log={:?}",
+            r.ls.probe.ptr,
+            r.ls.probe.log
+        );
+    }
+
+    // Swiping in while a window is under the finger cancels the window's touch too.
+    let (p_top_on_w, _) = on_w(&mut r);
+    // W covers 560..1360 x 240..840 in Rig::x8, so resize/reposition or map a near-top strip test:
+    // Tap at (960, 250) isn't near edge, so move pointer out and map a near-edge window.
+    let w_top = r.ls.probe.toplevel(&qh, "WTOP", (1800, 1070), 0);
+    r.ls.pump();
+    r.ls.probe.draw(&qh, w_top);
+    r.ls.pump();
+    r.frame();
+    let _ = p_top_on_w;
+    r.ls.probe.log.clear();
+    down(&mut r, 0, (960.0, 12.0));
+    assert!(
+        r.ls.probe.log.iter().any(|l| l.starts_with("down 0 WTOP")),
+        "initial finger near edge starts on WTOP: {:?}",
+        r.ls.probe.log
+    );
+    r.ls.probe.log.clear();
+    r.ls.probe.ptr.clear();
+    motion(&mut r, 0, (960.0, 50.0));
+    up(&mut r, 0);
+    assert!(
+        r.ls.probe.log.contains(&"cancel".to_string()),
+        "inward edge swipe should cancel WTOP's touch: {:?}",
+        r.ls.probe.log
+    );
+    assert!(
+        r.ls.probe
+            .ptr
+            .iter()
+            .any(|l| l.starts_with("enter STRIP_TOP ")),
+        "inward edge swipe over WTOP should enter STRIP_TOP: {:?}",
+        r.ls.probe.ptr
+    );
+}
+
+#[test]
+fn edge_swipe_ignores_parallel_drag_and_open_panel() {
+    use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::Layer;
+    use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::{
+        Anchor, KeyboardInteractivity,
+    };
+
+    let (mut r, _touch) = rig();
+    r.ls.bind_layer_shell();
+    r.ls.pump();
+    let qh = r.ls.qh.clone();
+
+    let strip_top = r.ls.probe.layer_surface(
+        &qh,
+        "STRIP_TOP",
+        Layer::Overlay,
+        Anchor::Top,
+        (400, 2),
+        0,
+        KeyboardInteractivity::None,
+    );
+    let open_bot = r.ls.probe.layer_surface(
+        &qh,
+        "OPEN_BOT",
+        Layer::Top,
+        Anchor::Bottom | Anchor::Left | Anchor::Right,
+        (0, 200),
+        0,
+        KeyboardInteractivity::None,
+    );
+    r.ls.pump();
+    r.ls.probe.draw(&qh, strip_top);
+    r.ls.probe.draw(&qh, open_bot);
+    r.ls.pump();
+
+    // 1. Parallel drag along top edge does not open STRIP_TOP.
+    r.ls.probe.log.clear();
+    r.ls.probe.ptr.clear();
+    down(&mut r, 0, (960.0, 10.0));
+    motion(&mut r, 0, (1010.0, 10.0));
+    up(&mut r, 0);
+    assert!(
+        !r.ls
+            .probe
+            .ptr
+            .iter()
+            .any(|l| l.starts_with("enter STRIP_TOP")),
+        "parallel drag along edge must not trigger edge swipe: {:?}",
+        r.ls.probe.ptr
+    );
+
+    // 2. Touch starting inside an open panel/OSK near the bottom edge stays with that layer surface.
+    r.ls.probe.log.clear();
+    r.ls.probe.ptr.clear();
+    down(&mut r, 0, (500.0, 1068.0));
+    motion(&mut r, 0, (500.0, 1020.0));
+    up(&mut r, 0);
+    assert!(
+        r.ls.probe
+            .log
+            .iter()
+            .any(|l| l.starts_with("down 0 OPEN_BOT"))
+            && r.ls.probe.log.iter().any(|l| l.starts_with("motion 0"))
+            && !r.ls.probe.log.contains(&"cancel".to_string()),
+        "finger on an open bottom layer/OSK must not trigger edge swipe cancel: {:?}",
+        r.ls.probe.log
+    );
+
+    // 3. TOUCH_EDGE_SWIPE="false" disables edge swipe and removing the line reverts to true.
+    let home = infynitae_wayland::cursor::TestTempDir::new("touch-edge-swipe");
+    let cfg_dir = home.path().join(".config/infynitae");
+    std::fs::create_dir_all(&cfg_dir).unwrap();
+    std::fs::write(cfg_dir.join("config"), "TOUCH_EDGE_SWIPE=\"false\"\n").unwrap();
+    r.ls.state.set_config_home(home.path().to_path_buf());
+    r.ls.state.reload_config();
+    assert!(!r.ls.state.core().touch_edge_swipe());
+
+    r.ls.probe.log.clear();
+    r.ls.probe.ptr.clear();
+    down(&mut r, 0, (960.0, 10.0));
+    motion(&mut r, 0, (960.0, 50.0));
+    up(&mut r, 0);
+    assert!(
+        !r.ls
+            .probe
+            .ptr
+            .iter()
+            .any(|l| l.starts_with("enter STRIP_TOP")),
+        "TOUCH_EDGE_SWIPE=\"false\" must disable edge swipe: {:?}",
+        r.ls.probe.ptr
+    );
+
+    std::fs::write(cfg_dir.join("config"), "").unwrap();
+    r.ls.state.reload_config();
+    assert!(
+        r.ls.state.core().touch_edge_swipe(),
+        "removing TOUCH_EDGE_SWIPE must revert to default true"
+    );
+}

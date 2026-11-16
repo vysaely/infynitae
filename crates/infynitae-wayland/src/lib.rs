@@ -1246,6 +1246,7 @@ impl WaylandState {
                 let mut touchpad_gestures = std::env::var("TOUCHPAD_GESTURES")
                     .map_or(true, |v| parse_bool(&v).unwrap_or(true));
                 let mut hardware_cursor = true;
+                let mut touch_edge_swipe = true;
                 let mut overlay_planes = false;
                 let mut wine_transparency = true;
                 let mut frame_guard = DEFAULT_FRAME_GUARD;
@@ -1408,6 +1409,9 @@ impl WaylandState {
                                 let enabled = !val.trim().eq_ignore_ascii_case("exclusive")
                                     && parse_bool(val).unwrap_or(true);
                                 self.core.set_fullscreen_pan(enabled);
+                            }
+                            "TOUCH_EDGE_SWIPE" => {
+                                touch_edge_swipe = parse_bool(val).unwrap_or(true);
                             }
                             "KEEP_ON_TOP" => {
                                 self.core
@@ -1608,6 +1612,7 @@ impl WaylandState {
                 self.scaling_filter = scaling_filter;
                 self.direct_scanout = Some(direct_scanout);
                 self.hardware_cursor = hardware_cursor;
+                self.core.set_touch_edge_swipe(touch_edge_swipe);
                 self.overlay_planes = overlay_planes;
                 self.wine_transparency = wine_transparency;
                 self.frame_guard_percent = frame_guard;

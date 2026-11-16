@@ -76,6 +76,11 @@ TOUCHPAD_GESTURES="true"
     # default: true
     # options: true  · false  (false: apps get all gestures)
 
+TOUCH_EDGE_SWIPE="true"
+    # Swiping in from a screen edge opens the panel on that side
+    # default: true
+    # options: true  · false
+
 SUPER_FREES_CURSOR="true"
     # Holding Super frees a cursor a game captured (Dota…)
     # default: true

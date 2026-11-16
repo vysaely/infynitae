@@ -533,6 +533,8 @@ pub struct Core {
     pub fullscreen_pan: bool,
     /// Whether compositor touchpad gestures (3-finger swipe, 4-finger pinch/swipe) are enabled.
     pub touchpad_gestures: bool,
+    /// Whether swiping in from a screen edge opens the edge panel on that side (`TOUCH_EDGE_SWIPE`).
+    pub touch_edge_swipe: bool,
     /// Whether newly opened windows receive focus on map.
     pub focus_on_open: bool,
     /// The user's key bindings (`set_key_bindings`).
@@ -647,6 +649,7 @@ impl Core {
                 left_fullscreen: Vec::new(),
                 fullscreen_pan: false,
                 touchpad_gestures: true,
+                touch_edge_swipe: true,
                 focus_on_open: false,
                 key_bindings: input::keys::UserBindings::default(),
                 key_capture: None,
@@ -923,6 +926,19 @@ impl Core {
     /// Read access to whether compositor touchpad gestures are enabled.
     pub fn touchpad_gestures(&self) -> bool {
         self.touchpad_gestures
+    }
+
+    /// Sets whether swiping in from a screen edge opens the edge panel on that side.
+    pub fn set_touch_edge_swipe(&mut self, enabled: bool) {
+        self.touch_edge_swipe = enabled;
+        if !enabled {
+            self.touches.edge_swipe = None;
+        }
+    }
+
+    /// Read access to whether touch edge swipe is enabled.
+    pub fn touch_edge_swipe(&self) -> bool {
+        self.touch_edge_swipe
     }
 
     /// Sets whether newly opened windows receive focus on map.

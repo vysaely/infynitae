@@ -220,6 +220,7 @@ impl Core {
                 }
                 self.input.clock.accepted(time_us);
                 self.closed_windows.clear();
+                self.arm_edge_swipe(slot, output, p);
                 self.touch_down(slot, output, p, ms(time_us), out);
                 self.touch_resize_settle(out);
                 self.physical_input_activity = true;
@@ -230,6 +231,10 @@ impl Core {
                     return Err(EntryError::InvalidEvent);
                 }
                 self.input.clock.accepted(time_us);
+                if self.step_edge_swipe(slot, p, out) {
+                    self.physical_input_activity = true;
+                    return Ok(());
+                }
                 if self.touches.on_window(slot) {
                     self.window_gesture_step(slot, p, out);
                     self.physical_input_activity = true;
@@ -246,6 +251,9 @@ impl Core {
             }
             PhysicalEvent::TouchUp { slot, time_us } => {
                 self.input.clock.accepted(time_us);
+                if self.touches.edge_swipe.is_some_and(|e| e.slot == slot) {
+                    self.touches.edge_swipe = None;
+                }
                 let crate::touch::Lift {
                     on_surface,
                     double_tap,
@@ -694,6 +702,71 @@ impl Core {
         }
         self.touch_resize_settle(&mut out);
         out
+    }
+
+    /// Arms a screen-edge swipe candidate when the first finger lands near an output edge
+    /// (unless it landed inside an open non-strip overlay or panel).
+    fn arm_edge_swipe(&mut self, slot: u32, output: output::OutputId, p: (f64, f64)) {
+        if !self.touch_edge_swipe || self.locked() {
+            self.touches.edge_swipe = None;
+            return;
+        }
+        let no_other_fingers = !self.touches.any_point(|_| true)
+            && self.touches.canvas.is_none()
+            && self.touches.window.is_none();
+        if !no_other_fingers {
+            self.touches.edge_swipe = None;
+            return;
+        }
+        let Some(o) = self.output(output) else {
+            return;
+        };
+        let extent = o.logical_extent();
+        let Some(candidate) = crate::touch::EdgeSwipeCandidate::from_edge(slot, output, p, extent)
+        else {
+            return;
+        };
+        // An above-canvas layer more than STRIP_PX inside the screen is an open panel or OSK,
+        // not the closed 2px edge hover strip: leave its touches alone.
+        let on_open_overlay = self.layer_hit(output, p, true).is_some()
+            && !crate::touch::EdgeSwipeCandidate::within_strip(p, extent);
+        if !on_open_overlay {
+            self.touches.edge_swipe = Some(candidate);
+        }
+    }
+
+    /// Advances an armed edge-swipe candidate; returns `true` when it opens an edge panel.
+    fn step_edge_swipe(&mut self, slot: u32, p: (f64, f64), out: &mut Vec<Effect>) -> bool {
+        let Some(cand) = self.touches.edge_swipe else {
+            return false;
+        };
+        if cand.slot != slot {
+            return false;
+        }
+        match cand.step(p) {
+            crate::touch::EdgeSwipeStep::Pending => false,
+            crate::touch::EdgeSwipeStep::Cancel => {
+                self.touches.edge_swipe = None;
+                false
+            }
+            crate::touch::EdgeSwipeStep::Trigger(edge_pt) => {
+                self.touches.edge_swipe = None;
+                // Only hijack into pointer-at-edge if an above-canvas strip exists on that edge.
+                if self.layer_hit(cand.output, edge_pt, true).is_none() {
+                    return false;
+                }
+                if self.touches.clear() {
+                    out.push(Effect::TouchCancel);
+                }
+                self.touch_resize_settle(out);
+                self.pointer = pointer::PointerState::Located {
+                    output: cand.output,
+                    p: edge_pt,
+                };
+                self.true_position_into(out);
+                true
+            }
+        }
     }
 
     /// [`Core::physical_input`] into a new `Vec`: for tests and one-off callers. It allocates;
