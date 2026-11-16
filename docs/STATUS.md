@@ -89,8 +89,17 @@ These pass the test suite but have not run on a real screen or device yet:
 - **Auto-rotate** on convertibles (`AUTO_ROTATE`, needs iio-sensor-proxy): the laptop's own
   screen turns with the device.
 - **Touchscreens** as real touch (`wl_touch`): apps get each finger, so scrolling, pinching and
-  gestures work inside them. A tap focuses the window under it. A finger on empty canvas drags
-  the canvas; two fingers pinch-zoom it around their midpoint.
+  gestures work inside them. Each touch device maps to its matching output (by `WL_OUTPUT`,
+  physical size in mm, internal panel, pointer output, or first screen), tracks active slots
+  per output, and turns with the output's rotation and scale. A tap focuses the window under
+  it. A finger on empty canvas drags the canvas; two fingers pinch-zoom it around their
+  midpoint; three fingers on a window move or resize it. Swiping in from a screen edge opens
+  that side's edge panel (`TOUCH_EDGE_SWIPE`, on by default). Active touches cancel cleanly when
+  a window unmaps or closes, an exclusive panel opens or closes, fullscreen starts, the output
+  rotates or unplugs, a touchscreen disconnects, the session locks or pauses, or `TouchCancel`
+  arrives; `TouchFrame` events are delivered. Tested in `infynitae-backend-drm` unit tests and
+  headless Wayland client tests (`t1_touch`, `t1_lock_touch`, `audit_input_lifecycle`); not yet
+  tested on real touchscreen hardware.
 - **Touchpad gestures** (`zwp_pointer_gestures_v1`, `TOUCHPAD_GESTURES`, true by default):
   three-finger swipe pans the canvas 1:1 with the fingers, four-finger pinch zooms around the
   cursor, and four-finger swipe up toggles the overview; two-finger gestures, holds, and all
@@ -107,14 +116,16 @@ These pass the test suite but have not run on a real screen or device yet:
   marked) and can save it as the default in `mimeapps.list`, which GTK, KDE and `xdg-open` share;
   `xdg-open` says so when no app opens a type. KDE apps (Dolphin) get the menu file their "Open
   With" needs. File managers' "Open Terminal Here" runs `TERMINAL` (`xdg-terminal-exec`).
-- **Tablet mode** (convertibles; `OSK`, `--no-osk`): folded, an on-screen keyboard
-  (squeekboard) runs and shows for text fields; opened, it is stopped, so the keyboard types
-  into apps directly (running, it is an input method, and on a ThinkPad a terminal then took
-  text only from it). In a terminal its backspace does nothing (it deletes text the terminal
-  does not report). The lock screen has its own key grid
-  at the first tap, and while locked a finger reaches only the lock surface, so the password
-  never leaves the lock screen. Tested off-screen and in the test suite; not yet on a
-  touchscreen.
+- **Tablet mode** (convertibles; `OSK`, `--no-osk`): squeekboard runs hidden from the session's
+  start. When the device has a `TabletMode` switch, `OSK="auto"` shows squeekboard on text-field
+  taps only in tablet mode and hides it when leaving tablet mode; on devices without a
+  `TabletMode` switch, text-field taps show it (`OSK="always"` adds mouse clicks; `OSK="off"`
+  is manual only). Running, it is an input method, and on a ThinkPad a terminal then took text
+  only from it; in a terminal its backspace does nothing (it deletes text the terminal does not
+  report). The lock screen has its own key grid at the first tap, and while locked a finger
+  reaches only the lock surface, so the password never leaves the lock screen. Tested in the
+  headless test suite (`t1_input_method`, `t1_lock_touch`); not yet tested on real convertible
+  or touchscreen hardware.
 - **Out of GPU memory, windows stay open:** when the GPU resets or refuses the compositor's work
   (seen with a model training on it), the compositor makes a new renderer instead of being
   aborted by Mesa; the screens freeze until memory frees up. Tested: context loss handling on this
