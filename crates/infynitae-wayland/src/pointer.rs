@@ -635,6 +635,21 @@ impl WaylandState {
         kb.unset_grab(self);
     }
 
+    /// Before the keyboard focus moves to the lock surface or a panel: an open popup is closed
+    /// (its client told `popup_done`) and any keyboard grab let go. A popup's grab refuses a focus
+    /// on another client's surface, so the first key went to the popup (AUDIT_INPUT_LIFECYCLE
+    /// finding 2: with the lock, possibly the start of the password).
+    pub(crate) fn end_keyboard_grabs_for_focus(&mut self) {
+        if let Some(mut g) = self.popup_grab.take()
+            && !g.has_ended()
+        {
+            g.ungrab(smithay::desktop::PopupUngrabStrategy::All);
+        }
+        if self.keyboard_handle().is_grabbed() {
+            self.keyboard_unset_grab();
+        }
+    }
+
     pub(crate) fn set_keyboard_grab(
         &mut self,
         kb: &smithay::input::keyboard::KeyboardHandle<WaylandState>,

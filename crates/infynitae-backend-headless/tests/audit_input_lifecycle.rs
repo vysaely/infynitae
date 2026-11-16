@@ -191,7 +191,6 @@ fn send_key_lock_aware(r: &mut Rig, key: u32, pressed: bool) {
 /// `kb.set_focus(lock_surface)` before `keyboard_unset_grab()`, so `PopupKeyboardGrab::set_focus`
 /// rejects the focus change and the first keystroke after locking hits the app's popup.
 #[test]
-#[ignore = "AUDIT_INPUT_LIFECYCLE: start_locked/lock_now skips popup cleanup and lock_key routes first key to popup"]
 fn lock_now_with_popup_grab_routes_first_key_to_popup_and_leaves_held_key() {
     let mut r = Rig::x8();
     r.button(BTN_LEFT, true, none());
@@ -303,7 +302,6 @@ fn lock_now_with_popup_grab_routes_first_key_to_popup_and_leaves_held_key() {
 /// `popup_grab`. `PopupKeyboardGrab::set_focus` drops the focus change, leaving keyboard input
 /// stuck on the popup behind the layer panel.
 #[test]
-#[ignore = "AUDIT_INPUT_LIFECYCLE: Effect::LayerKeyboardFocus skips popup grab teardown"]
 fn layer_keyboard_focus_does_not_dismiss_popup_grab() {
     let mut r = Rig::x8();
     r.button(BTN_LEFT, true, none());
