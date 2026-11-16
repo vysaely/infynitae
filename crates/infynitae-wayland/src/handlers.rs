@@ -949,6 +949,7 @@ impl SeatHandler for WaylandState {
         set_data_device_focus(&self.dh, seat, client.clone());
         set_primary_focus(&self.dh, seat, client);
         self.update_shortcuts_inhibit(focused);
+        self.update_tablet_pad_focus(focused);
     }
 }
 
@@ -1283,9 +1284,175 @@ impl smithay::wayland::xdg_foreign::XdgForeignHandler for WaylandState {
     }
 }
 
-/// Tablet tools are not offered yet; cursor-shape asks for this handler, and its default
-/// (a tool's cursor image is ignored) is what applies.
-impl smithay::wayland::tablet_manager::TabletSeatHandler for WaylandState {}
+impl smithay::wayland::tablet_manager::TabletSeatHandler for WaylandState {
+    fn tablet_tool_image(
+        &mut self,
+        _tool: &smithay::backend::input::TabletToolDescriptor,
+        image: smithay::input::pointer::CursorImageStatus,
+    ) {
+        self.set_tablet_tool_cursor(image);
+    }
+}
+
+smithay::reexports::wayland_server::delegate_global_dispatch!(WaylandState: [
+    smithay::reexports::wayland_protocols::wp::tablet::zv2::server::zwp_tablet_manager_v2::ZwpTabletManagerV2: ()
+] => smithay::wayland::tablet_manager::TabletManagerState);
+smithay::reexports::wayland_server::delegate_dispatch!(WaylandState: [
+    smithay::reexports::wayland_protocols::wp::tablet::zv2::server::zwp_tablet_tool_v2::ZwpTabletToolV2: smithay::wayland::tablet_manager::TabletToolUserData
+] => smithay::wayland::tablet_manager::TabletManagerState);
+smithay::reexports::wayland_server::delegate_dispatch!(WaylandState: [
+    smithay::reexports::wayland_protocols::wp::tablet::zv2::server::zwp_tablet_v2::ZwpTabletV2: smithay::wayland::tablet_manager::TabletUserData
+] => smithay::wayland::tablet_manager::TabletManagerState);
+
+impl
+    smithay::reexports::wayland_server::Dispatch<
+        smithay::reexports::wayland_protocols::wp::tablet::zv2::server::zwp_tablet_manager_v2::ZwpTabletManagerV2,
+        (),
+        WaylandState,
+    > for WaylandState
+{
+    fn request(
+        state: &mut Self,
+        client: &smithay::reexports::wayland_server::Client,
+        resource: &smithay::reexports::wayland_protocols::wp::tablet::zv2::server::zwp_tablet_manager_v2::ZwpTabletManagerV2,
+        request: smithay::reexports::wayland_protocols::wp::tablet::zv2::server::zwp_tablet_manager_v2::Request,
+        data: &(),
+        dh: &smithay::reexports::wayland_server::DisplayHandle,
+        data_init: &mut smithay::reexports::wayland_server::DataInit<'_, Self>,
+    ) {
+        use smithay::reexports::wayland_protocols::wp::tablet::zv2::server::zwp_tablet_manager_v2::Request;
+        let request = match request {
+            Request::GetTabletSeat { tablet_seat, seat } => {
+                let ours = smithay::input::Seat::<WaylandState>::from_resource(&seat)
+                    .is_some_and(|s| s == state.seat);
+                if !ours {
+                    return;
+                }
+                let seat_obj = data_init.init(tablet_seat, ());
+                let tablet_seat = smithay::reexports::wayland_server::New::wrap(seat_obj.clone());
+                <smithay::wayland::tablet_manager::TabletManagerState as smithay::reexports::wayland_server::Dispatch<
+                    smithay::reexports::wayland_protocols::wp::tablet::zv2::server::zwp_tablet_manager_v2::ZwpTabletManagerV2,
+                    (),
+                    Self,
+                >>::request(
+                    state,
+                    client,
+                    resource,
+                    Request::GetTabletSeat { tablet_seat, seat },
+                    data,
+                    dh,
+                    data_init,
+                );
+                state.tablet_seat_bound(client, &seat_obj);
+                return;
+            }
+            other => other,
+        };
+        <smithay::wayland::tablet_manager::TabletManagerState as smithay::reexports::wayland_server::Dispatch<
+            smithay::reexports::wayland_protocols::wp::tablet::zv2::server::zwp_tablet_manager_v2::ZwpTabletManagerV2,
+            (),
+            Self,
+        >>::request(state, client, resource, request, data, dh, data_init);
+    }
+}
+
+// Needed to satisfy `DataInit::init(tablet_seat, ())` before delegating to `TabletManagerState`,
+// which immediately replaces the object's data with `TabletSeatUserData`.
+impl
+    smithay::reexports::wayland_server::Dispatch<
+        smithay::reexports::wayland_protocols::wp::tablet::zv2::server::zwp_tablet_seat_v2::ZwpTabletSeatV2,
+        (),
+        WaylandState,
+    > for WaylandState
+{
+    fn request(
+        _state: &mut Self,
+        _client: &smithay::reexports::wayland_server::Client,
+        _resource: &smithay::reexports::wayland_protocols::wp::tablet::zv2::server::zwp_tablet_seat_v2::ZwpTabletSeatV2,
+        _request: smithay::reexports::wayland_protocols::wp::tablet::zv2::server::zwp_tablet_seat_v2::Request,
+        _data: &(),
+        _dh: &smithay::reexports::wayland_server::DisplayHandle,
+        _data_init: &mut smithay::reexports::wayland_server::DataInit<'_, Self>,
+    ) {
+    }
+}
+
+impl
+    smithay::reexports::wayland_server::Dispatch<
+        smithay::reexports::wayland_protocols::wp::tablet::zv2::server::zwp_tablet_seat_v2::ZwpTabletSeatV2,
+        smithay::wayland::tablet_manager::TabletSeatUserData,
+        WaylandState,
+    > for WaylandState
+{
+    fn request(
+        state: &mut Self,
+        client: &smithay::reexports::wayland_server::Client,
+        resource: &smithay::reexports::wayland_protocols::wp::tablet::zv2::server::zwp_tablet_seat_v2::ZwpTabletSeatV2,
+        request: smithay::reexports::wayland_protocols::wp::tablet::zv2::server::zwp_tablet_seat_v2::Request,
+        data: &smithay::wayland::tablet_manager::TabletSeatUserData,
+        dh: &smithay::reexports::wayland_server::DisplayHandle,
+        data_init: &mut smithay::reexports::wayland_server::DataInit<'_, Self>,
+    ) {
+        <smithay::wayland::tablet_manager::TabletManagerState as smithay::reexports::wayland_server::Dispatch<
+            smithay::reexports::wayland_protocols::wp::tablet::zv2::server::zwp_tablet_seat_v2::ZwpTabletSeatV2,
+            smithay::wayland::tablet_manager::TabletSeatUserData,
+            Self,
+        >>::request(state, client, resource, request, data, dh, data_init);
+    }
+
+    fn destroyed(
+        state: &mut Self,
+        client: smithay::reexports::wayland_server::backend::ClientId,
+        resource: &smithay::reexports::wayland_protocols::wp::tablet::zv2::server::zwp_tablet_seat_v2::ZwpTabletSeatV2,
+        data: &smithay::wayland::tablet_manager::TabletSeatUserData,
+    ) {
+        use smithay::reexports::wayland_server::Resource;
+        state.tablet_seat_destroyed(&resource.id());
+        <smithay::wayland::tablet_manager::TabletManagerState as smithay::reexports::wayland_server::Dispatch<
+            smithay::reexports::wayland_protocols::wp::tablet::zv2::server::zwp_tablet_seat_v2::ZwpTabletSeatV2,
+            smithay::wayland::tablet_manager::TabletSeatUserData,
+            Self,
+        >>::destroyed(state, client, resource, data);
+    }
+}
+
+impl
+    smithay::reexports::wayland_server::Dispatch<
+        smithay::reexports::wayland_protocols::wp::tablet::zv2::server::zwp_tablet_pad_v2::ZwpTabletPadV2,
+        (),
+        WaylandState,
+    > for WaylandState
+{
+    fn request(
+        _state: &mut Self,
+        _client: &smithay::reexports::wayland_server::Client,
+        _resource: &smithay::reexports::wayland_protocols::wp::tablet::zv2::server::zwp_tablet_pad_v2::ZwpTabletPadV2,
+        _request: smithay::reexports::wayland_protocols::wp::tablet::zv2::server::zwp_tablet_pad_v2::Request,
+        _data: &(),
+        _dh: &smithay::reexports::wayland_server::DisplayHandle,
+        _data_init: &mut smithay::reexports::wayland_server::DataInit<'_, Self>,
+    ) {
+    }
+}
+
+impl
+    smithay::reexports::wayland_server::Dispatch<
+        smithay::reexports::wayland_protocols::wp::tablet::zv2::server::zwp_tablet_pad_group_v2::ZwpTabletPadGroupV2,
+        (),
+        WaylandState,
+    > for WaylandState
+{
+    fn request(
+        _state: &mut Self,
+        _client: &smithay::reexports::wayland_server::Client,
+        _resource: &smithay::reexports::wayland_protocols::wp::tablet::zv2::server::zwp_tablet_pad_group_v2::ZwpTabletPadGroupV2,
+        _request: smithay::reexports::wayland_protocols::wp::tablet::zv2::server::zwp_tablet_pad_group_v2::Request,
+        _data: &(),
+        _dh: &smithay::reexports::wayland_server::DisplayHandle,
+        _data_init: &mut smithay::reexports::wayland_server::DataInit<'_, Self>,
+    ) {
+    }
+}
 delegate_xdg_shell!(WaylandState);
 delegate_xdg_activation!(WaylandState);
 delegate_xdg_decoration!(WaylandState);

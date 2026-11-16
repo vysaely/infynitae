@@ -1434,17 +1434,27 @@ where
     R: Renderer + ImportAll + ImportMem,
     R::TextureId: Send + Clone + 'static,
 {
-    let PointerState::Located { output: o, p } = state.core.pointer() else {
-        return Ok(());
+    let default_status = CursorImageStatus::default_named();
+    let (p, cursor_status) = match state.tablet_cursor(output) {
+        crate::pointer::TabletCursor::OnOutput { p, status } => {
+            (p, status.unwrap_or(&default_status))
+        }
+        crate::pointer::TabletCursor::OnOtherOutput => return Ok(()),
+        crate::pointer::TabletCursor::Inactive => {
+            let PointerState::Located { output: o, p } = state.core.pointer() else {
+                return Ok(());
+            };
+            if o != output {
+                return Ok(());
+            }
+            (p, &state.cursor)
+        }
     };
-    if o != output {
-        return Ok(());
-    }
     let Some(scale) = state.core.output(output).map(|m| m.scale) else {
         return Ok(());
     };
     let px = |v: f64| (v * scale).round() as i32;
-    match &state.cursor {
+    match cursor_status {
         CursorImageStatus::Hidden => {}
         CursorImageStatus::Named(icon) if icon.name() == "none" => {}
         CursorImageStatus::Surface(surface) if surface.is_alive() => {
@@ -1486,7 +1496,7 @@ where
         }
         // a named cursor, or a cursor surface that is gone: the theme's image, or fallback arrow
         _ => {
-            let icon_name = match &state.cursor {
+            let icon_name = match cursor_status {
                 CursorImageStatus::Named(icon) => icon.name(),
                 _ => "default",
             };

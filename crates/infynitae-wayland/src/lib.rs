@@ -55,6 +55,7 @@ pub mod xwayland;
 
 pub use handlers::ACTIVATION_TOKENS_KEPT;
 pub use keyboard::PreemptionStrategy;
+pub use pointer::{TabletAxes, TabletEvent, TabletPadDescriptor, tablet_tool_button};
 
 use infynitae_core::Core;
 use infynitae_core::stage::ElementId;
@@ -347,6 +348,13 @@ pub struct WaylandState {
     touch_last: Vec<(u32, infynitae_core::geom::CanvasPos)>,
     /// Lock-surface touch slots `(slot, (x, y))` for cancelling stationary fingers on the lock.
     lock_touch_last: Vec<(u32, (f64, f64))>,
+    /// `zwp_tablet_manager_v2`: pens, drawing tablets and pad buttons (`pointer`).
+    #[expect(
+        dead_code,
+        reason = "owns the zwp_tablet_manager_v2 global for the state's lifetime"
+    )]
+    tablet_manager: smithay::wayland::tablet_manager::TabletManagerState,
+    pub(crate) tablet: pointer::TabletState,
     foreign_toplevels: std::collections::HashMap<
         ElementId,
         smithay::wayland::foreign_toplevel_list::ForeignToplevelHandle,
@@ -807,6 +815,10 @@ impl WaylandState {
             tearing: tearing::Tearing::new(display),
             touch_last: Vec::new(),
             lock_touch_last: Vec::new(),
+            tablet_manager: smithay::wayland::tablet_manager::TabletManagerState::new::<Self>(
+                display,
+            ),
+            tablet: pointer::TabletState::default(),
             foreign_toplevels: std::collections::HashMap::new(),
             shortcuts_inhibit: shortcuts_inhibit::ShortcutsInhibitState::new(display),
             wlr_toplevels: wlr_toplevels::WlrToplevelsState::new(display, trust.gate(Cap::Windows)),

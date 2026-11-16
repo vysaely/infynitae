@@ -151,6 +151,13 @@ pub enum PhysicalEvent {
     TouchFrame,
     /// The touchscreen gave up the touches (a gesture taken by the hardware, a palm).
     TouchCancel,
+    /// A tablet stylus tapped on `output` at `p` (output logical px): focuses and raises the
+    /// window under it like a touch tap.
+    TabletTap {
+        output: output::OutputId,
+        p: (f64, f64),
+        time_us: u64,
+    },
     /// Focus, raise and jump the camera to a mapped window chosen by the user in a bar or list.
     JumpToWindow { element: stage::ElementId },
     /// A touchpad swipe gesture began (`fingers` fingers).
@@ -2323,6 +2330,18 @@ impl Core {
         let pointer::PointerState::Located { output, p } = self.pointer else {
             return None;
         };
+        self.route_point(output, p)
+    }
+
+    /// Routes an output logical point `(output, p)` through `output`'s layer surfaces and
+    /// `ProjectionFrame` (F-HIT-1, F-UNPROJECT-1), returning the hit target (if any) and the
+    /// Canvas position (or layer-local position when `origin` is `(0, 0)`). Shared by the seat
+    /// pointer and tablet tools.
+    pub fn route_point(
+        &mut self,
+        output: output::OutputId,
+        p: (f64, f64),
+    ) -> Option<(Option<protocol::PointerTarget>, geom::CanvasPos)> {
         let pt = geom::OutputLogicalPoint { x: p.0, y: p.1 };
         // L3: overlay and top surfaces first, then the Canvas, then bottom and background. A layer
         // surface's events are in its own surface-local frame: origin 0, the location the position
@@ -2361,6 +2380,37 @@ impl Core {
                 },
             ),
             None => (None, view.unproject(pt)),
+        })
+    }
+
+    /// Unprojects `p` (output logical px) through `output`'s view into Canvas coordinates (or
+    /// relative to `layer_offset` for a layer surface), building the output's `ProjectionFrame`
+    /// on demand if needed.
+    pub fn unproject_point(
+        &mut self,
+        output: output::OutputId,
+        p: (f64, f64),
+        layer_offset: Option<(f64, f64)>,
+    ) -> Option<geom::CanvasPos> {
+        if let Some((ox, oy)) = layer_offset {
+            return Some(geom::CanvasPos {
+                x: geom::q16(p.0 - ox),
+                y: geom::q16(p.1 - oy),
+            });
+        }
+        if self.current_frame(output).is_none() {
+            self.render_list(output).ok()?;
+        }
+        let view = self.current_frame(output)?.view;
+        Some(view.unproject(geom::OutputLogicalPoint { x: p.0, y: p.1 }))
+    }
+
+    /// Whether `surface` belongs to a layer surface tree rather than a Canvas window.
+    pub fn is_layer_surface(&self, surface: snapshot::SurfaceKey) -> bool {
+        self.layers.iter().any(|l| {
+            l.tree
+                .as_ref()
+                .is_some_and(|t| t.surfaces.iter().any(|s| s.key == surface))
         })
     }
 

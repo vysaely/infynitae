@@ -43,8 +43,9 @@ use smithay::backend::egl::{EGLContext, EGLDisplay};
 use smithay::backend::input::{
     AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, GestureBeginEvent,
     GestureEndEvent, GesturePinchUpdateEvent, GestureSwipeUpdateEvent, InputEvent, KeyState,
-    KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent, PointerMotionEvent, Switch,
-    SwitchState, SwitchToggleEvent,
+    KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent, PointerMotionEvent, ProximityState,
+    Switch, SwitchState, SwitchToggleEvent, TabletToolButtonEvent, TabletToolEvent,
+    TabletToolProximityEvent, TabletToolTipEvent, TabletToolTipState,
 };
 use smithay::backend::libinput::{LibinputInputBackend, LibinputSessionInterface};
 use smithay::backend::renderer::damage::OutputDamageTracker;
@@ -1614,10 +1615,14 @@ pub fn run_console_with(
         .map_err(|e| format!("DRM events: {e}"))?;
     handle
         .insert_source(
-            LibinputInputBackend::new(libinput.clone()),
-            |event, _, data| {
-                handle_input(data, event);
+            Generic::new(libinput.clone(), Interest::READ, Mode::Level),
+            |_, _, data| {
+                let _ = data.libinput.dispatch();
+                while let Some(event) = data.libinput.next() {
+                    dispatch_libinput_event(data, event);
+                }
                 data.session.request_frame();
+                Ok(PostAction::Continue)
             },
         )
         .map_err(|e| format!("input events: {e}"))?;
@@ -3764,6 +3769,10 @@ fn handle_input(data: &mut LoopData, event: InputEvent<LibinputInputBackend>) {
             .with_effects(|core, fx| core.physical_input(port, ev, fx));
         return;
     }
+    if let Some(ev) = tablet_event(data, &event) {
+        core_tablet(data, ev);
+        return;
+    }
     match event {
         InputEvent::Keyboard { event } => {
             let key = event.key_code().raw().saturating_sub(8);
@@ -3914,6 +3923,30 @@ fn handle_input(data: &mut LoopData, event: InputEvent<LibinputInputBackend>) {
             {
                 data.state.set_has_tablet_mode_switch(true);
             }
+            if device.has_capability(smithay::reexports::input::DeviceCapability::TabletTool) {
+                log_line!("[infynitae] Tablet: {}", device.name());
+                let desc = smithay::wayland::tablet_manager::TabletDescriptor::from(&device);
+                data.state.add_tablet(&desc);
+            }
+            if device.has_capability(smithay::reexports::input::DeviceCapability::TabletPad) {
+                log_line!("[infynitae] Tablet pad: {}", device.name());
+                let buttons = device.tablet_pad_number_of_buttons().max(0) as u32;
+                let modes = (0..device.tablet_pad_number_of_mode_groups().max(0) as u32)
+                    .filter_map(|i| device.tablet_pad_mode_group(i))
+                    .map(|g| g.number_of_modes())
+                    .max()
+                    .unwrap_or(1)
+                    .max(1);
+                let path = Some(format!("/dev/input/{}", device.sysname()));
+                data.state
+                    .add_tablet_pad(infynitae_wayland::TabletPadDescriptor {
+                        sysname: device.sysname().to_owned(),
+                        path,
+                        buttons,
+                        modes,
+                        tablet: smithay::wayland::tablet_manager::TabletDescriptor::from(&device),
+                    });
+            }
             let is_kb =
                 device.has_capability(smithay::reexports::input::DeviceCapability::Keyboard);
             let is_ptr =
@@ -3972,6 +4005,13 @@ fn handle_input(data: &mut LoopData, event: InputEvent<LibinputInputBackend>) {
                 if !any_touch_left {
                     data.state.disable_touch();
                 }
+            }
+            if device.has_capability(smithay::reexports::input::DeviceCapability::TabletTool) {
+                let desc = smithay::wayland::tablet_manager::TabletDescriptor::from(&device);
+                data.state.remove_tablet(&desc);
+            }
+            if device.has_capability(smithay::reexports::input::DeviceCapability::TabletPad) {
+                data.state.remove_tablet_pad(device.sysname());
             }
         }
         _ => {}
@@ -4180,7 +4220,7 @@ fn core_touch(data: &mut LoopData, ev: PhysicalEvent) {
         .with_effects(|core, fx| core.physical_input(port, ev, fx));
 }
 
-struct TouchScreenCandidate<'a> {
+struct InputScreenCandidate<'a> {
     id: OutputId,
     connector: &'a str,
     physical_size: (u32, u32),
@@ -4192,16 +4232,16 @@ fn is_internal_connector(connector: &str) -> bool {
         .any(|p| connector.starts_with(p))
 }
 
-/// Chooses which connected screen owns a touch device:
+/// Chooses which connected screen owns a touch or tablet device:
 /// 1. Explicit libinput `WL_OUTPUT` udev mapping (`device.output_name()`). If set, it binds
 ///    exclusively to that connector name (`None` when that output is not connected).
 /// 2. Non-zero physical size match (`device.size()` in mm vs DRM `physical_size` within 15 mm),
 ///    breaking ties by internal panel > pointer output > first screen.
 /// 3. Internal panel (`eDP`, `LVDS`, `DSI`), else `pointer_output`, else first connected screen.
-fn select_touch_screen(
+fn select_input_screen(
     output_name: Option<&str>,
     device_size_mm: Option<(f64, f64)>,
-    screens: &[TouchScreenCandidate<'_>],
+    screens: &[InputScreenCandidate<'_>],
     pointer_output: Option<OutputId>,
 ) -> Option<OutputId> {
     if let Some(name) = output_name.filter(|s| !s.is_empty()) {
@@ -4236,7 +4276,25 @@ fn select_touch_screen(
         .map(|s| s.id)
 }
 
-/// Converts a panel-pixel touch point `(px, py)` on a panel of physical size `phys` into the
+fn pointer_output_id(core: &infynitae_core::Core) -> Option<OutputId> {
+    match core.pointer() {
+        infynitae_core::pointer::PointerState::Located { output, .. } => Some(output),
+        infynitae_core::pointer::PointerState::NoOutput => None,
+    }
+}
+
+fn screen_candidates(screens: &[Screen]) -> Vec<InputScreenCandidate<'_>> {
+    screens
+        .iter()
+        .map(|s| InputScreenCandidate {
+            id: s.id,
+            connector: &s.connector_name,
+            physical_size: s.physical_size,
+        })
+        .collect()
+}
+
+/// Converts a panel-pixel point `(px, py)` on a panel of physical size `phys` into the
 /// output's logical coordinates using `transform` and `scale`.
 fn touch_point_to_output_logical(
     panel_px: (f64, f64),
@@ -4250,7 +4308,7 @@ fn touch_point_to_output_logical(
 }
 
 /// Where a touch is: on `pinned_output` (for motions in an active slot), else the screen
-/// selected for `event.device()` (`select_touch_screen`); in that screen's logical px, turned
+/// selected for `event.device()` (`select_input_screen`); in that screen's logical px, turned
 /// with its rotation (the touchscreen reports the panel's own orientation).
 fn touch_position<E>(
     data: &LoopData,
@@ -4264,21 +4322,14 @@ where
     let target_id = match pinned_output {
         Some(id) => id,
         None => {
-            let pointer_output = match core.pointer() {
-                infynitae_core::pointer::PointerState::Located { output, .. } => Some(output),
-                infynitae_core::pointer::PointerState::NoOutput => None,
-            };
-            let candidates: Vec<TouchScreenCandidate<'_>> = data
-                .screens
-                .iter()
-                .map(|s| TouchScreenCandidate {
-                    id: s.id,
-                    connector: &s.connector_name,
-                    physical_size: s.physical_size,
-                })
-                .collect();
+            let candidates = screen_candidates(&data.screens);
             let dev = Event::device(event);
-            select_touch_screen(dev.output_name(), dev.size(), &candidates, pointer_output)?
+            select_input_screen(
+                dev.output_name(),
+                dev.size(),
+                &candidates,
+                pointer_output_id(core),
+            )?
         }
     };
     let screen = data.screens.iter().find(|s| s.id == target_id)?;
@@ -4293,6 +4344,221 @@ where
         model.scale,
     );
     Some((screen.id, p))
+}
+
+fn dispatch_libinput_event(data: &mut LoopData, event: smithay::reexports::input::Event) {
+    use smithay::backend::libinput::PointerScrollAxis;
+    use smithay::reexports::input::Event as LE;
+    use smithay::reexports::input::event::{
+        DeviceEvent, EventTrait, GestureEvent, KeyboardEvent, PointerEvent, SwitchEvent,
+        TabletPadEvent, TabletToolEvent as LTE, TouchEvent as LTouchEvent,
+        gesture::{GestureHoldEvent, GesturePinchEvent, GestureSwipeEvent},
+        tablet_pad::TabletPadEventTrait,
+    };
+    let mapped = match event {
+        LE::Device(DeviceEvent::Added(e)) => Some(InputEvent::DeviceAdded { device: e.device() }),
+        LE::Device(DeviceEvent::Removed(e)) => {
+            Some(InputEvent::DeviceRemoved { device: e.device() })
+        }
+        LE::Touch(LTouchEvent::Down(event)) => Some(InputEvent::TouchDown { event }),
+        LE::Touch(LTouchEvent::Motion(event)) => Some(InputEvent::TouchMotion { event }),
+        LE::Touch(LTouchEvent::Up(event)) => Some(InputEvent::TouchUp { event }),
+        LE::Touch(LTouchEvent::Cancel(event)) => Some(InputEvent::TouchCancel { event }),
+        LE::Touch(LTouchEvent::Frame(event)) => Some(InputEvent::TouchFrame { event }),
+        LE::Keyboard(KeyboardEvent::Key(event)) => Some(InputEvent::Keyboard { event }),
+        LE::Pointer(PointerEvent::Motion(event)) => Some(InputEvent::PointerMotion { event }),
+        LE::Pointer(PointerEvent::MotionAbsolute(event)) => {
+            Some(InputEvent::PointerMotionAbsolute { event })
+        }
+        LE::Pointer(PointerEvent::ScrollWheel(event)) => Some(InputEvent::PointerAxis {
+            event: PointerScrollAxis::Wheel(event),
+        }),
+        LE::Pointer(PointerEvent::ScrollFinger(event)) => Some(InputEvent::PointerAxis {
+            event: PointerScrollAxis::Finger(event),
+        }),
+        LE::Pointer(PointerEvent::ScrollContinuous(event)) => Some(InputEvent::PointerAxis {
+            event: PointerScrollAxis::Continuous(event),
+        }),
+        LE::Pointer(PointerEvent::Button(event)) => Some(InputEvent::PointerButton { event }),
+        LE::Gesture(GestureEvent::Swipe(GestureSwipeEvent::Begin(event))) => {
+            Some(InputEvent::GestureSwipeBegin { event })
+        }
+        LE::Gesture(GestureEvent::Swipe(GestureSwipeEvent::Update(event))) => {
+            Some(InputEvent::GestureSwipeUpdate { event })
+        }
+        LE::Gesture(GestureEvent::Swipe(GestureSwipeEvent::End(event))) => {
+            Some(InputEvent::GestureSwipeEnd { event })
+        }
+        LE::Gesture(GestureEvent::Pinch(GesturePinchEvent::Begin(event))) => {
+            Some(InputEvent::GesturePinchBegin { event })
+        }
+        LE::Gesture(GestureEvent::Pinch(GesturePinchEvent::Update(event))) => {
+            Some(InputEvent::GesturePinchUpdate { event })
+        }
+        LE::Gesture(GestureEvent::Pinch(GesturePinchEvent::End(event))) => {
+            Some(InputEvent::GesturePinchEnd { event })
+        }
+        LE::Gesture(GestureEvent::Hold(GestureHoldEvent::Begin(event))) => {
+            Some(InputEvent::GestureHoldBegin { event })
+        }
+        LE::Gesture(GestureEvent::Hold(GestureHoldEvent::End(event))) => {
+            Some(InputEvent::GestureHoldEnd { event })
+        }
+        LE::Tablet(LTE::Axis(event)) => Some(InputEvent::TabletToolAxis { event }),
+        LE::Tablet(LTE::Proximity(event)) => Some(InputEvent::TabletToolProximity { event }),
+        LE::Tablet(LTE::Tip(event)) => Some(InputEvent::TabletToolTip { event }),
+        LE::Tablet(LTE::Button(event)) => Some(InputEvent::TabletToolButton { event }),
+        LE::Switch(SwitchEvent::Toggle(event)) => Some(InputEvent::SwitchToggle { event }),
+        LE::TabletPad(TabletPadEvent::Button(btn)) => {
+            user_activity(data);
+            let pressed = matches!(
+                btn.button_state(),
+                smithay::reexports::input::event::tablet_pad::ButtonState::Pressed
+            );
+            let dev = btn.device();
+            data.state.tablet_pad_button(
+                dev.sysname(),
+                btn.button_number(),
+                pressed,
+                btn.time_usec(),
+            );
+            None
+        }
+        _ => None,
+    };
+    if let Some(ev) = mapped {
+        handle_input(data, ev);
+    }
+}
+
+fn tablet_axes<E>(event: &E) -> infynitae_wayland::TabletAxes
+where
+    E: TabletToolEvent<LibinputInputBackend>,
+{
+    infynitae_wayland::TabletAxes {
+        pressure: event.pressure_has_changed().then(|| event.pressure()),
+        distance: event.distance_has_changed().then(|| event.distance()),
+        tilt: (event.tilt_x_has_changed() || event.tilt_y_has_changed())
+            .then(|| (event.tilt_x(), event.tilt_y())),
+        rotation: event.rotation_has_changed().then(|| event.rotation()),
+        slider: event.slider_has_changed().then(|| event.slider_position()),
+        wheel: event
+            .wheel_has_changed()
+            .then(|| (event.wheel_delta(), event.wheel_delta_discrete())),
+    }
+}
+
+fn tablet_position<E>(data: &LoopData, event: &E) -> Option<(OutputId, (f64, f64))>
+where
+    E: AbsolutePositionEvent<LibinputInputBackend>,
+{
+    let core = data.state.core();
+    let dev = Event::device(event);
+    let candidates = screen_candidates(&data.screens);
+    if let Some(screen_id) = select_input_screen(
+        dev.output_name(),
+        dev.size(),
+        &candidates,
+        pointer_output_id(core),
+    ) {
+        let screen = data.screens.iter().find(|s| s.id == screen_id)?;
+        let model = core.output(screen.id)?;
+        let p = touch_point_to_output_logical(
+            (
+                event.x_transformed(screen.size.0),
+                event.y_transformed(screen.size.1),
+            ),
+            screen.size,
+            model.transform,
+            model.scale,
+        );
+        return Some((screen.id, p));
+    }
+    if dev.output_name().is_some_and(|s| !s.is_empty()) {
+        return None;
+    }
+    let virtual_screen = data.virtual_screen.as_ref()?;
+    let model = core.output(virtual_screen.id)?;
+    let (view_w, view_h) = model.view_size();
+    let x = event.x_transformed(view_w as i32);
+    let y = event.y_transformed(view_h as i32);
+    let scale = model.scale.max(0.001);
+    Some((virtual_screen.id, (x / scale, y / scale)))
+}
+
+fn tablet_event(
+    data: &LoopData,
+    event: &InputEvent<LibinputInputBackend>,
+) -> Option<infynitae_wayland::TabletEvent> {
+    use smithay::wayland::tablet_manager::TabletDescriptor;
+    Some(match event {
+        InputEvent::TabletToolProximity { event } => match event.state() {
+            ProximityState::In => {
+                let (output, p) = tablet_position(data, event)?;
+                let dev = Event::device(event);
+                infynitae_wayland::TabletEvent::ProximityIn {
+                    tablet: TabletDescriptor::from(&dev),
+                    tool: TabletToolEvent::tool(event),
+                    output,
+                    p,
+                    axes: tablet_axes(event),
+                    time_us: Event::time(event),
+                }
+            }
+            ProximityState::Out => infynitae_wayland::TabletEvent::ProximityOut {
+                tool: TabletToolEvent::tool(event),
+                time_us: Event::time(event),
+            },
+        },
+        InputEvent::TabletToolAxis { event } => {
+            let (output, p) = tablet_position(data, event)?;
+            let dev = Event::device(event);
+            infynitae_wayland::TabletEvent::Axis {
+                tablet: TabletDescriptor::from(&dev),
+                tool: TabletToolEvent::tool(event),
+                output,
+                p,
+                axes: tablet_axes(event),
+                time_us: Event::time(event),
+            }
+        }
+        InputEvent::TabletToolTip { event } => {
+            let (output, p) = tablet_position(data, event)?;
+            let dev = Event::device(event);
+            infynitae_wayland::TabletEvent::Tip {
+                tablet: TabletDescriptor::from(&dev),
+                tool: TabletToolEvent::tool(event),
+                output,
+                p,
+                down: matches!(
+                    TabletToolTipEvent::tip_state(event),
+                    TabletToolTipState::Down
+                ),
+                axes: tablet_axes(event),
+                time_us: Event::time(event),
+            }
+        }
+        InputEvent::TabletToolButton { event } => infynitae_wayland::TabletEvent::Button {
+            tool: TabletToolEvent::tool(event),
+            button: infynitae_wayland::tablet_tool_button::<LibinputInputBackend>(event),
+            pressed: matches!(
+                TabletToolButtonEvent::button_state(event),
+                ButtonState::Pressed
+            ),
+            time_us: Event::time(event),
+        },
+        _ => return None,
+    })
+}
+
+fn core_tablet(data: &mut LoopData, ev: infynitae_wayland::TabletEvent) {
+    let phys = data.state.tablet_event(ev);
+    let port = &mut data.input_port;
+    for p in phys {
+        let _ = data
+            .state
+            .with_effects(|core, fx| core.physical_input(port, p, fx));
+    }
 }
 
 fn update_keyboard_leds(
@@ -5430,12 +5696,12 @@ mod tests {
             .unwrap();
 
         let laptop_and_ext = [
-            TouchScreenCandidate {
+            InputScreenCandidate {
                 id: edp,
                 connector: "eDP-1",
                 physical_size: (294, 165),
             },
-            TouchScreenCandidate {
+            InputScreenCandidate {
                 id: hdmi,
                 connector: "HDMI-A-1",
                 physical_size: (527, 296),
@@ -5444,54 +5710,54 @@ mod tests {
 
         // 1. Explicit WL_OUTPUT (output_name) selects the second/external output over internal.
         assert_eq!(
-            select_touch_screen(Some("HDMI-A-1"), None, &laptop_and_ext, Some(edp)),
+            select_input_screen(Some("HDMI-A-1"), None, &laptop_and_ext, Some(edp)),
             Some(hdmi)
         );
         // Unconnected WL_OUTPUT does not leak touches to another output.
         assert_eq!(
-            select_touch_screen(Some("DP-2"), None, &laptop_and_ext, Some(edp)),
+            select_input_screen(Some("DP-2"), None, &laptop_and_ext, Some(edp)),
             None
         );
 
         // 2. Without WL_OUTPUT, physical size match picks the second output over internal eDP-1.
         assert_eq!(
-            select_touch_screen(None, Some((528.0, 295.0)), &laptop_and_ext, Some(edp)),
+            select_input_screen(None, Some((528.0, 295.0)), &laptop_and_ext, Some(edp)),
             Some(hdmi)
         );
 
         // 3. No WL_OUTPUT and no size match falls back to internal panel even if pointer is elsewhere.
         assert_eq!(
-            select_touch_screen(None, None, &laptop_and_ext, Some(hdmi)),
+            select_input_screen(None, None, &laptop_and_ext, Some(hdmi)),
             Some(edp)
         );
         assert_eq!(
-            select_touch_screen(None, Some((100.0, 100.0)), &laptop_and_ext, Some(hdmi)),
+            select_input_screen(None, Some((100.0, 100.0)), &laptop_and_ext, Some(hdmi)),
             Some(edp)
         );
 
         // 4. Desktop with two external monitors: size picks second monitor even if pointer is on first.
         let two_ext = [
-            TouchScreenCandidate {
+            InputScreenCandidate {
                 id: dp,
                 connector: "DP-1",
                 physical_size: (600, 340),
             },
-            TouchScreenCandidate {
+            InputScreenCandidate {
                 id: hdmi,
                 connector: "HDMI-A-1",
                 physical_size: (344, 194),
             },
         ];
         assert_eq!(
-            select_touch_screen(None, Some((345.0, 193.0)), &two_ext, Some(dp)),
+            select_input_screen(None, Some((345.0, 193.0)), &two_ext, Some(dp)),
             Some(hdmi)
         );
         // Without size match or internal monitor, falls back to pointer output, then first.
         assert_eq!(
-            select_touch_screen(None, None, &two_ext, Some(hdmi)),
+            select_input_screen(None, None, &two_ext, Some(hdmi)),
             Some(hdmi)
         );
-        assert_eq!(select_touch_screen(None, None, &two_ext, None), Some(dp));
+        assert_eq!(select_input_screen(None, None, &two_ext, None), Some(dp));
     }
 
     #[test]
