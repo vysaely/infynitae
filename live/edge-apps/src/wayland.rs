@@ -4,7 +4,7 @@
 //! threads for sources, detached actions, and the `org.freedesktop.Notifications` strip.
 
 use crate::card::{Action, Button, Data, Source, Window};
-use crate::shell::{Shell, ARRIVE_LIFT};
+use crate::shell::{OutputId, Shell, ARRIVE_LIFT};
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState, Region},
     delegate_compositor, delegate_keyboard, delegate_layer, delegate_output, delegate_pointer,
@@ -18,9 +18,17 @@ use smithay_client_toolkit::{
         },
         calloop_wayland_source::WaylandSource,
         client::{
+            delegate_noop,
             globals::registry_queue_init,
             protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface},
             Connection, Dispatch, QueueHandle,
+        },
+        protocols::wp::{
+            fractional_scale::v1::client::{
+                wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1,
+                wp_fractional_scale_v1::{self, WpFractionalScaleV1},
+            },
+            viewporter::client::{wp_viewport::WpViewport, wp_viewporter::WpViewporter},
         },
         protocols_wlr::foreign_toplevel::v1::client::{
             zwlr_foreign_toplevel_handle_v1::{self, ZwlrForeignToplevelHandleV1},
@@ -101,15 +109,27 @@ struct BufferSlot {
     prev_box: Option<(i32, i32, i32, i32)>,
 }
 
+fn scaled_dimension(logical: u32, scale_120: u32) -> u32 {
+    ((u64::from(logical) * u64::from(scale_120.max(1)) + 60) / 120).max(1) as u32
+}
+
 struct OutputSurface {
+    id: OutputId,
     output: wl_output::WlOutput,
+    frac_scale: Option<WpFractionalScaleV1>,
+    viewport: Option<WpViewport>,
     layer: LayerSurface,
     pool: SlotPool,
     slots: [Option<BufferSlot>; 2],
-    /// the box last committed (in either buffer): the next frame damages it too
+    last_slot: usize,
+    /// the box last committed (in either buffer, in buffer px): the next frame damages it too
     committed_box: Option<(i32, i32, i32, i32)>,
     width: u32,
     height: u32,
+    integer_scale: i32,
+    fractional_scale_120: Option<u32>,
+    last_buffer_scale: i32,
+    last_viewport_dest: Option<(i32, i32)>,
     buf_size: (u32, u32),
     configured: bool,
     mapped_closed: bool,
@@ -122,17 +142,83 @@ struct OutputSurface {
     frame_pending: bool,
 }
 
+impl Drop for OutputSurface {
+    fn drop(&mut self) {
+        if let Some(fs) = self.frac_scale.take() {
+            fs.destroy();
+        }
+        if let Some(vp) = self.viewport.take() {
+            vp.destroy();
+        }
+    }
+}
+
 impl OutputSurface {
+    fn effective_scale_120(&self) -> u32 {
+        self.fractional_scale_120
+            .unwrap_or_else(|| (self.integer_scale.max(1) as u32) * 120)
+    }
+
+    fn effective_scale(&self) -> f64 {
+        if self.viewport.is_some() {
+            f64::from(self.effective_scale_120()) / 120.0
+        } else {
+            f64::from(self.integer_scale.max(1))
+        }
+    }
+
+    fn target_buf_size(&self) -> (u32, u32) {
+        if self.width == 0 || self.height == 0 {
+            return (0, 0);
+        }
+        if self.viewport.is_some() {
+            let s120 = self.effective_scale_120();
+            (
+                scaled_dimension(self.width, s120),
+                scaled_dimension(self.height, s120),
+            )
+        } else {
+            let s = self.integer_scale.max(1) as u32;
+            (
+                self.width.saturating_mul(s).max(1),
+                self.height.saturating_mul(s).max(1),
+            )
+        }
+    }
+
+    fn apply_surface_scale(&mut self) {
+        let wl = self.layer.wl_surface();
+        if let Some(vp) = &self.viewport {
+            if self.last_buffer_scale != 1 {
+                wl.set_buffer_scale(1);
+                self.last_buffer_scale = 1;
+            }
+            let dest = (self.width as i32, self.height as i32);
+            if self.last_viewport_dest != Some(dest) {
+                vp.set_destination(dest.0, dest.1);
+                self.last_viewport_dest = Some(dest);
+            }
+        } else {
+            let s = self.integer_scale.max(1);
+            if self.last_buffer_scale != s {
+                wl.set_buffer_scale(s);
+                self.last_buffer_scale = s;
+            }
+        }
+    }
+
     fn set_input_region(&self, compositor: &CompositorState, shell: &Shell) {
         let Ok(region) = Region::new(compositor) else {
             return;
         };
         let (w, h) = (self.width as f64, self.height as f64);
+        let show_here = shell.visible_on(self.id);
         if w > 0.0 && h > 0.0 {
-            if shell.ask.ask.on {
+            if show_here && shell.ask.ask.on {
                 // the question takes the whole screen: a click outside it cancels
                 region.add(0, 0, w.ceil() as i32, h.ceil() as i32);
-            } else if let Some(idx) = shell.open {
+            } else if show_here && shell.open.is_some() {
+                let idx = shell.open.unwrap();
                 // opened by its key: the whole screen, so a click outside reaches the edge and
                 // closes it; opened by hover: the panel and the way to it, so leaving closes it
                 let r = if shell.opened_by_hover {
@@ -166,8 +252,8 @@ impl OutputSurface {
     }
 
     fn apply_mode(&mut self, qh: &QueueHandle<App>, compositor: &CompositorState, shell: &Shell) {
-        let visible = shell.visible();
-        if !visible && self.fullscreen_under {
+        let show_here = shell.visible_on(self.id);
+        if !show_here && self.fullscreen_under {
             if !self.unmapped {
                 // a null buffer unmaps a layer surface; it maps again after a commit and its configure
                 self.layer.wl_surface().attach(None, 0, 0);
@@ -179,6 +265,7 @@ impl OutputSurface {
                 self.dirty = false;
                 self.frame_pending = false;
                 self.committed_box = None;
+                self.last_viewport_dest = None;
                 for slot in self.slots.iter_mut().flatten() {
                     slot.prev_box = None;
                 }
@@ -193,10 +280,14 @@ impl OutputSurface {
         if !self.configured || self.width == 0 || self.height == 0 {
             return;
         }
-        self.layer
-            .set_keyboard_interactivity(keyboard_interactivity(shell));
+        let kb = if show_here {
+            keyboard_interactivity(shell)
+        } else {
+            KeyboardInteractivity::None
+        };
+        self.layer.set_keyboard_interactivity(kb);
         self.set_input_region(compositor, shell);
-        if visible {
+        if show_here {
             self.dirty = true;
             self.mapped_closed = false;
             self.clear_pending = false;
@@ -204,15 +295,18 @@ impl OutputSurface {
         } else {
             self.dirty = false;
             self.frame_pending = false;
-            self.clear_and_commit(qh);
+            self.clear_and_commit(qh, shell.visible());
         }
     }
 
     fn ensure_pool_size(&mut self) {
-        if self.buf_size != (self.width, self.height) {
+        let target = self.target_buf_size();
+        if self.buf_size != target {
             self.slots = [None, None];
-            self.buf_size = (self.width, self.height);
-            let need = (self.width as usize) * (self.height as usize) * 4 * 2;
+            self.buf_size = target;
+            self.committed_box = None;
+            self.mapped_closed = false;
+            let need = (target.0 as usize) * (target.1 as usize) * 4 * 2;
             if self.pool.len() < need {
                 let _ = self.pool.resize(need);
             }
@@ -221,7 +315,10 @@ impl OutputSurface {
 
     fn acquire_slot(&mut self) -> Option<usize> {
         self.ensure_pool_size();
-        let (w, h) = (self.width as i32, self.height as i32);
+        let (w, h) = (self.buf_size.0 as i32, self.buf_size.1 as i32);
+        if w <= 0 || h <= 0 {
+            return None;
+        }
         for i in 0..2 {
             if self.slots[i].is_none() {
                 if let Ok((buffer, _)) =
@@ -262,12 +359,15 @@ impl OutputSurface {
 
     /// Closed: a clear frame, damaging what this buffer held and what is on screen (the other
     /// buffer's box); with both buffers still held, again on the next frame callback.
-    fn clear_and_commit(&mut self, qh: &QueueHandle<App>) {
-        if self.mapped_closed {
+    fn clear_and_commit(&mut self, qh: &QueueHandle<App>, any_visible: bool) {
+        if self.mapped_closed && self.buf_size == self.target_buf_size() {
+            self.apply_surface_scale();
             self.layer.commit();
+            if !any_visible {
+                crate::boxes::dump_closed();
+            }
             return;
         }
-        let (w, h) = (self.width as i32, self.height as i32);
         let Some(idx) = self.acquire_slot() else {
             self.clear_pending = true;
             let wl = self.layer.wl_surface();
@@ -275,12 +375,15 @@ impl OutputSurface {
             self.layer.commit();
             return;
         };
+        let (w, h) = (self.buf_size.0 as i32, self.buf_size.1 as i32);
         self.clear_pending = false;
+        self.apply_surface_scale();
         let slot = self.slots[idx].as_mut().unwrap();
         let old = slot.prev_box.take();
         if let Some(canvas) = slot.buffer.canvas(&mut self.pool) {
-            if let Some(r) = old {
-                Self::clear_box(canvas, w * 4, w, h, r);
+            match old {
+                Some(r) => Self::clear_box(canvas, w * 4, w, h, r),
+                None => canvas.fill(0),
             }
         }
         let shown = self.committed_box.take();
@@ -293,17 +396,22 @@ impl OutputSurface {
         }
         if slot.buffer.attach_to(wl).is_ok() {
             self.mapped_closed = true;
+            self.last_slot = idx;
             self.layer.commit();
         }
-        crate::boxes::dump_closed();
+        if !any_visible {
+            crate::boxes::dump_closed();
+        }
     }
 
     fn render_if_needed(&mut self, qh: &QueueHandle<App>, shell: &Shell) {
-        if !self.configured || !self.dirty || self.frame_pending || !shell.visible() {
+        if !self.configured || !self.dirty || self.frame_pending || !shell.visible_on(self.id) {
             return;
         }
-        let (w, h) = (self.width as i32, self.height as i32);
-        let stride = w * 4;
+        let (lw, lh) = (self.width as f64, self.height as f64);
+        let Some((bx, by, bw, bh)) = shell.shown_box(lw, lh) else {
+            return;
+        };
         let Some(slot_idx) = self.acquire_slot() else {
             // both buffers still held: commit unchanged and draw on the callback
             let wl = self.layer.wl_surface();
@@ -312,40 +420,41 @@ impl OutputSurface {
             self.frame_pending = true;
             return;
         };
-        let Some((bx, by, bw, bh)) = shell.shown_box(w as f64, h as f64) else {
-            return;
-        };
-        let pad = 4;
+        let (buf_w, buf_h) = (self.buf_size.0 as i32, self.buf_size.1 as i32);
+        let stride = buf_w * 4;
+        let (sx, sy) = (f64::from(buf_w) / lw, f64::from(buf_h) / lh);
+        let pad = 4.0;
         let lift = if !shell.ask.ask.on && (shell.open_ms.is_finite() || shell.is_closing()) {
-            ARRIVE_LIFT.max(crate::shell::LEAVE_DROP).ceil() as i32
+            ARRIVE_LIFT.max(crate::shell::LEAVE_DROP).ceil()
         } else {
-            0
+            0.0
         };
-        let new_box = (
-            (bx.floor() as i32 - pad).max(0),
-            (by.floor() as i32 - pad).max(0),
-            (bw.ceil() as i32 + 2 * pad).min(w),
-            (bh.ceil() as i32 + 2 * pad + lift).min(h),
-        );
+        let x0 = ((bx - pad) * sx).floor().max(0.0) as i32;
+        let y0 = ((by - pad) * sy).floor().max(0.0) as i32;
+        let x1 = ((bx + bw + pad) * sx).ceil().min(f64::from(buf_w)) as i32;
+        let y1 = ((by + bh + pad + lift) * sy).ceil().min(f64::from(buf_h)) as i32;
+        let new_box = (x0, y0, (x1 - x0).max(0), (y1 - y0).max(0));
+        self.apply_surface_scale();
         let slot = self.slots[slot_idx].as_mut().unwrap();
         let old_box = slot.prev_box.replace(new_box);
         if let Some(canvas) = slot.buffer.canvas(&mut self.pool) {
             match old_box {
-                Some(r) => Self::clear_box(canvas, stride, w, h, r),
+                Some(r) => Self::clear_box(canvas, stride, buf_w, buf_h, r),
                 None => canvas.fill(0),
             }
-            Self::clear_box(canvas, stride, w, h, new_box);
+            Self::clear_box(canvas, stride, buf_w, buf_h, new_box);
             if let Ok(surface) = unsafe {
                 cairo::ImageSurface::create_for_data_unsafe(
                     canvas.as_mut_ptr(),
                     cairo::Format::ARgb32,
-                    w,
-                    h,
+                    buf_w,
+                    buf_h,
                     stride,
                 )
             } {
                 if let Ok(cr) = cairo::Context::new(&surface) {
-                    shell.draw(&cr, w as f64, h as f64);
+                    cr.scale(sx, sy);
+                    shell.draw_on(self.id, &cr, lw, lh);
                 }
                 surface.flush();
             }
@@ -362,9 +471,10 @@ impl OutputSurface {
         self.frame_pending = true;
         self.dirty = false;
         if slot.buffer.attach_to(wl).is_ok() {
+            self.last_slot = slot_idx;
             self.layer.commit();
         }
-        crate::boxes::dump(shell, w as f64, h as f64);
+        crate::boxes::dump_on(shell, self.id, lw, lh);
     }
 }
 
@@ -557,13 +667,20 @@ struct App {
     compositor: CompositorState,
     layer_shell: LayerShell,
     shm: Shm,
+    viewporter: Option<WpViewporter>,
+    fractional_scale_mgr: Option<WpFractionalScaleManagerV1>,
     qh: QueueHandle<App>,
     outputs: Vec<OutputSurface>,
+    next_output_id: OutputId,
     toplevels: Vec<Toplevel>,
     next_toplevel_id: u64,
     fullscreen_changed: bool,
     keyboard: Option<wl_keyboard::WlKeyboard>,
     pointer: Option<wl_pointer::WlPointer>,
+    keyboard_output: Option<OutputId>,
+    current_pointer_output: Option<OutputId>,
+    last_pointer_output: Option<OutputId>,
+    last_display_scale: f64,
     modifiers: Modifiers,
     shell: Shell,
     fetch_tx: Sender<Fetched>,
@@ -627,7 +744,18 @@ impl App {
         let Ok(pool) = SlotPool::new(4096, &self.shm) else {
             return;
         };
+        let integer_scale = self
+            .output_state
+            .info(&output)
+            .map_or(1, |i| i.scale_factor.max(1));
         let surface = self.compositor.create_surface(&self.qh);
+        let (viewport, frac_scale) = match (&self.viewporter, &self.fractional_scale_mgr) {
+            (Some(vp), Some(fs)) => (
+                Some(vp.get_viewport(&surface, &self.qh, ())),
+                Some(fs.get_fractional_scale(&surface, &self.qh, surface.clone())),
+            ),
+            _ => (None, None),
+        };
         let layer = self.layer_shell.create_layer_surface(
             &self.qh,
             surface,
@@ -639,14 +767,24 @@ impl App {
         layer.set_exclusive_zone(-1);
         layer.set_keyboard_interactivity(KeyboardInteractivity::None);
         layer.commit();
+        let id = self.next_output_id;
+        self.next_output_id += 1;
         self.outputs.push(OutputSurface {
+            id,
             output,
+            frac_scale,
+            viewport,
             layer,
             pool,
             slots: [None, None],
+            last_slot: 0,
             committed_box: None,
             width: 0,
             height: 0,
+            integer_scale,
+            fractional_scale_120: None,
+            last_buffer_scale: 1,
+            last_viewport_dest: None,
             buf_size: (0, 0),
             configured: false,
             mapped_closed: false,
@@ -658,11 +796,76 @@ impl App {
         });
     }
 
-    fn surface_dims(&self, surface: &wl_surface::WlSurface) -> Option<(f64, f64)> {
-        self.outputs
-            .iter()
-            .find(|o| o.layer.wl_surface() == surface && o.configured)
-            .map(|o| (o.width as f64, o.height as f64))
+    fn key_target_output(&self) -> Option<OutputId> {
+        let valid = |id: OutputId| self.outputs.iter().any(|o| o.id == id);
+        if let Some(id) = self.keyboard_output.filter(|&id| valid(id)) {
+            return Some(id);
+        }
+        if let Some(id) = self.toplevels.iter().find(|t| t.focused).and_then(|t| {
+            self.outputs
+                .iter()
+                .find(|o| t.outputs.contains(&o.output))
+                .map(|o| o.id)
+        }) {
+            return Some(id);
+        }
+        if let Some(id) = self.current_pointer_output.filter(|&id| valid(id)) {
+            return Some(id);
+        }
+        if let Some(id) = self.last_pointer_output.filter(|&id| valid(id)) {
+            return Some(id);
+        }
+        self.outputs.first().map(|o| o.id)
+    }
+
+    fn sync_output_scale(&mut self, output: &wl_output::WlOutput, qh: &QueueHandle<App>) {
+        let Some(info) = self.output_state.info(output) else {
+            return;
+        };
+        let scale = info.scale_factor.max(1);
+        let mut need_sync = false;
+        if let Some(os) = self.outputs.iter_mut().find(|o| &o.output == output) {
+            if os.integer_scale != scale {
+                os.integer_scale = scale;
+                if os.viewport.is_none() {
+                    os.mapped_closed = false;
+                    if self.shell.visible_on(os.id) {
+                        os.dirty = true;
+                        need_sync = true;
+                    } else {
+                        os.apply_mode(qh, &self.compositor, &self.shell);
+                    }
+                }
+            }
+        }
+        if let Some(pl) = self.popups.as_mut().filter(|p| &p.output == output) {
+            if pl.integer_scale != scale {
+                pl.integer_scale = scale;
+                if pl.viewport.is_none() {
+                    pl.render(qh, &self.compositor, &self.shell);
+                }
+            }
+        }
+        if need_sync {
+            self.sync_all();
+        }
+    }
+
+    fn update_display_scale(&mut self) {
+        let target = self
+            .shell
+            .visible_output()
+            .or_else(|| self.key_target_output());
+        let scale = target
+            .and_then(|id| self.outputs.iter().find(|o| o.id == id))
+            .map_or(1.0, OutputSurface::effective_scale);
+        if (scale - self.last_display_scale).abs() > 1e-4 {
+            self.last_display_scale = scale;
+            crate::icons::set_display_scale(scale);
+            if self.shell.open.is_some() {
+                self.shell.fetch_needed = true;
+            }
+        }
     }
 
     /// Reloads config, theme and boards when changed on disk, marking active surfaces dirty.
@@ -672,7 +875,9 @@ impl App {
         }
         if self.shell.visible() {
             for os in &mut self.outputs {
-                os.dirty = true;
+                if self.shell.visible_on(os.id) {
+                    os.dirty = true;
+                }
             }
         }
         true
@@ -685,6 +890,7 @@ impl App {
         if self.shell.open.is_some() {
             self.shell.now = chrono::Local::now().naive_local();
         }
+        self.update_display_scale();
         let force = self.shell.take_fetch_needed();
         self.fetch_due(force);
         for os in &mut self.outputs {
@@ -860,15 +1066,16 @@ impl App {
     }
 
     fn handle_signal_byte(&mut self, b: u8) {
+        let target = self.key_target_output();
         let changed = match b {
             b'Q' => {
                 self.exit = true;
                 false
             }
-            b'W' => self.shell.toggle_named("windows"),
-            b'C' => self.shell.toggle_named("control"),
-            b'V' => self.shell.toggle_named("clipboard"),
-            b'A' => self.shell.toggle_named("apps"),
+            b'W' => self.shell.toggle_named_on(target, "windows"),
+            b'C' => self.shell.toggle_named_on(target, "control"),
+            b'V' => self.shell.toggle_named_on(target, "clipboard"),
+            b'A' => self.shell.toggle_named_on(target, "apps"),
             b'P' => {
                 let name = std::fs::read_to_string(runtime_path(PANEL_FILE)).unwrap_or_default();
                 let name = name.trim();
@@ -876,13 +1083,16 @@ impl App {
                     self.exit = true;
                     false
                 } else {
-                    self.shell.toggle_named(name)
+                    self.shell.toggle_named_on(target, name)
                 }
             }
             b'K' => {
                 // a question in the ask file, or a cancel; else: fetch the open panel's data again
                 // (a script changed something)
                 if self.shell.ask_load() {
+                    if self.shell.ask.ask.on && self.shell.visible_output().is_none() {
+                        self.shell.set_ask_output(target);
+                    }
                     true
                 } else {
                     self.fetch_due(true);
@@ -893,6 +1103,30 @@ impl App {
         };
         if changed {
             self.sync_all();
+        }
+    }
+
+    fn remove_output_matching(&mut self, pred: impl Fn(&OutputSurface) -> bool) {
+        let removed: Vec<OutputId> = self
+            .outputs
+            .iter()
+            .filter(|o| pred(o))
+            .map(|o| o.id)
+            .collect();
+        self.outputs.retain(|o| !pred(o));
+        for id in removed {
+            if self.current_pointer_output == Some(id) {
+                self.current_pointer_output = None;
+            }
+            if self.last_pointer_output == Some(id) {
+                self.last_pointer_output = None;
+            }
+            if self.keyboard_output == Some(id) {
+                self.keyboard_output = None;
+            }
+            if self.shell.visible_output() == Some(id) {
+                self.shell.close();
+            }
         }
     }
 }
@@ -934,10 +1168,45 @@ impl CompositorHandler for App {
     fn scale_factor_changed(
         &mut self,
         _: &Connection,
-        _: &QueueHandle<Self>,
-        _: &wl_surface::WlSurface,
-        _: i32,
+        qh: &QueueHandle<Self>,
+        surface: &wl_surface::WlSurface,
+        new_factor: i32,
     ) {
+        let factor = new_factor.max(1);
+        let mut need_sync = false;
+        if let Some(os) = self
+            .outputs
+            .iter_mut()
+            .find(|o| o.layer.wl_surface() == surface)
+        {
+            if os.integer_scale != factor {
+                os.integer_scale = factor;
+                if os.viewport.is_none() {
+                    os.mapped_closed = false;
+                    if self.shell.visible_on(os.id) {
+                        os.dirty = true;
+                        need_sync = true;
+                    } else {
+                        os.apply_mode(qh, &self.compositor, &self.shell);
+                    }
+                }
+            }
+        }
+        if let Some(pl) = self
+            .popups
+            .as_mut()
+            .filter(|p| p.layer.wl_surface() == surface)
+        {
+            if pl.integer_scale != factor {
+                pl.integer_scale = factor;
+                if pl.viewport.is_none() {
+                    pl.render(qh, &self.compositor, &self.shell);
+                }
+            }
+        }
+        if need_sync {
+            self.sync_all();
+        }
     }
     fn transform_changed(
         &mut self,
@@ -954,6 +1223,7 @@ impl CompositorHandler for App {
         surface: &wl_surface::WlSurface,
         _: u32,
     ) {
+        let is_output_surface = self.outputs.iter().any(|o| o.layer.wl_surface() == surface);
         if self.shell.active()
             || self.popups.as_ref().is_some_and(|p| {
                 p.layer.wl_surface() == surface && !self.shell.notify.popups.is_empty()
@@ -961,31 +1231,33 @@ impl CompositorHandler for App {
         {
             let _ = self.reload_config();
         }
-        // an animation running (arrival, leaving, a list opening, drag autoscroll): draw again
-        let was_visible = self.shell.visible();
-        let animating =
-            was_visible && (self.shell.tick(Instant::now()) || self.shell.wants_frame());
-        let ended = self.was_animating && !animating;
-        let closed_finished = was_visible && !self.shell.visible();
-        self.was_animating = animating;
-        if let Some(os) = self
-            .outputs
-            .iter_mut()
-            .find(|o| o.layer.wl_surface() == surface)
-        {
-            os.frame_pending = false;
-            if animating {
-                os.dirty = true;
+        if is_output_surface {
+            // an animation running (arrival, leaving, a list opening, drag autoscroll): draw again
+            let was_visible = self.shell.visible();
+            let animating =
+                was_visible && (self.shell.tick(Instant::now()) || self.shell.wants_frame());
+            let ended = self.was_animating && !animating;
+            let closed_finished = was_visible && !self.shell.visible();
+            self.was_animating = animating;
+            if let Some(os) = self
+                .outputs
+                .iter_mut()
+                .find(|o| o.layer.wl_surface() == surface)
+            {
+                os.frame_pending = false;
+                if animating && self.shell.visible_on(os.id) {
+                    os.dirty = true;
+                }
+                if os.dirty && self.shell.visible_on(os.id) {
+                    os.render_if_needed(qh, &self.shell);
+                } else if os.clear_pending && !self.shell.visible_on(os.id) {
+                    os.clear_and_commit(qh, self.shell.visible());
+                }
             }
-            if os.dirty {
-                os.render_if_needed(qh, &self.shell);
-            } else if os.clear_pending {
-                os.clear_and_commit(qh);
+            if ended || closed_finished {
+                // the panel's size settled or its leaving fade ended: input region / clear follows
+                self.sync_all();
             }
-        }
-        if ended || closed_finished {
-            // the panel's size settled or its leaving fade ended: input region / clear follows
-            self.sync_all();
         }
         if let Some(pl) = self
             .popups
@@ -1018,17 +1290,25 @@ impl OutputHandler for App {
     fn output_state(&mut self) -> &mut OutputState {
         &mut self.output_state
     }
-    fn new_output(&mut self, _: &Connection, _: &QueueHandle<Self>, output: wl_output::WlOutput) {
-        self.create_output_surface(output);
+    fn new_output(&mut self, _: &Connection, qh: &QueueHandle<Self>, output: wl_output::WlOutput) {
+        self.create_output_surface(output.clone());
+        self.sync_output_scale(&output, qh);
     }
-    fn update_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
+    fn update_output(
+        &mut self,
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+        output: wl_output::WlOutput,
+    ) {
+        self.sync_output_scale(&output, qh);
+    }
     fn output_destroyed(
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
         output: wl_output::WlOutput,
     ) {
-        self.outputs.retain(|o| o.output != output);
+        self.remove_output_matching(|o| o.output == output);
         if self.popups.as_ref().is_some_and(|p| p.output == output) {
             // the next pop-up makes the strip again, on the first screen left
             self.popups = None;
@@ -1038,7 +1318,7 @@ impl OutputHandler for App {
 
 impl LayerShellHandler for App {
     fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, layer: &LayerSurface) {
-        self.outputs.retain(|o| &o.layer != layer);
+        self.remove_output_matching(|o| &o.layer == layer);
         if self.popups.as_ref().is_some_and(|p| &p.layer == layer) {
             self.popups = None;
         }
@@ -1151,20 +1431,35 @@ impl KeyboardHandler for App {
         _: &Connection,
         _: &QueueHandle<Self>,
         _: &wl_keyboard::WlKeyboard,
-        _: &wl_surface::WlSurface,
+        surface: &wl_surface::WlSurface,
         _: u32,
         _: &[u32],
         _: &[Keysym],
     ) {
+        self.keyboard_output = self
+            .outputs
+            .iter()
+            .find(|o| o.layer.wl_surface() == surface)
+            .map(|o| o.id);
     }
     fn leave(
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
         _: &wl_keyboard::WlKeyboard,
-        _: &wl_surface::WlSurface,
+        surface: &wl_surface::WlSurface,
         _: u32,
     ) {
+        if let Some(id) = self
+            .outputs
+            .iter()
+            .find(|o| o.layer.wl_surface() == surface)
+            .map(|o| o.id)
+        {
+            if self.keyboard_output == Some(id) {
+                self.keyboard_output = None;
+            }
+        }
     }
     fn press_key(
         &mut self,
@@ -1267,15 +1562,28 @@ impl PointerHandler for App {
                 }
                 continue;
             }
-            let Some((w, h)) = self.surface_dims(&event.surface) else {
+            let Some((os_id, w, h)) = self
+                .outputs
+                .iter()
+                .find(|o| o.layer.wl_surface() == &event.surface && o.configured)
+                .map(|o| (o.id, o.width as f64, o.height as f64))
+            else {
                 continue;
             };
             let (x, y) = event.position;
+            let now = Instant::now();
             changed |= match event.kind {
                 PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
-                    self.shell.pointer_motion(w, h, x, y)
+                    self.current_pointer_output = Some(os_id);
+                    self.last_pointer_output = Some(os_id);
+                    self.shell.pointer_motion_on(os_id, w, h, x, y, now)
                 }
-                PointerEventKind::Leave { .. } => self.shell.pointer_leave(),
+                PointerEventKind::Leave { .. } => {
+                    if self.current_pointer_output == Some(os_id) {
+                        self.current_pointer_output = None;
+                    }
+                    self.shell.pointer_leave_on(os_id, now)
+                }
                 PointerEventKind::Press { button, .. } => {
                     let b = match button {
                         BTN_LEFT => Button::Left,
@@ -1283,16 +1591,16 @@ impl PointerHandler for App {
                         BTN_MIDDLE => Button::Middle,
                         _ => continue,
                     };
-                    self.shell.click(w, h, x, y, b)
+                    self.shell.click_on(os_id, w, h, x, y, b)
                 }
-                PointerEventKind::Release { .. } => self.shell.release(),
+                PointerEventKind::Release { .. } => self.shell.release_on(os_id),
                 PointerEventKind::Axis { vertical, .. } => {
                     let dy = if vertical.discrete != 0 {
                         vertical.discrete as f64
                     } else {
                         vertical.absolute
                     };
-                    dy.abs() > 0.0 && self.shell.scroll(x, y, dy)
+                    dy.abs() > 0.0 && self.shell.scroll_on(os_id, w, h, x, y, dy)
                 }
             };
         }
@@ -1319,6 +1627,57 @@ delegate_keyboard!(App);
 delegate_pointer!(App);
 delegate_layer!(App);
 delegate_registry!(App);
+delegate_noop!(App: ignore WpViewporter);
+delegate_noop!(App: ignore WpViewport);
+delegate_noop!(App: ignore WpFractionalScaleManagerV1);
+
+impl Dispatch<WpFractionalScaleV1, wl_surface::WlSurface> for App {
+    fn event(
+        state: &mut Self,
+        _: &WpFractionalScaleV1,
+        event: wp_fractional_scale_v1::Event,
+        surface: &wl_surface::WlSurface,
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+    ) {
+        let wp_fractional_scale_v1::Event::PreferredScale { scale } = event else {
+            return;
+        };
+        if scale == 0 {
+            return;
+        }
+        let mut need_sync = false;
+        if let Some(os) = state
+            .outputs
+            .iter_mut()
+            .find(|o| o.layer.wl_surface() == surface)
+        {
+            if os.fractional_scale_120 != Some(scale) {
+                os.fractional_scale_120 = Some(scale);
+                os.mapped_closed = false;
+                if state.shell.visible_on(os.id) {
+                    os.dirty = true;
+                    need_sync = true;
+                } else {
+                    os.apply_mode(qh, &state.compositor, &state.shell);
+                }
+            }
+        }
+        if let Some(pl) = state
+            .popups
+            .as_mut()
+            .filter(|p| p.layer.wl_surface() == surface)
+        {
+            if pl.fractional_scale_120 != Some(scale) {
+                pl.fractional_scale_120 = Some(scale);
+                pl.render(qh, &state.compositor, &state.shell);
+            }
+        }
+        if need_sync {
+            state.sync_all();
+        }
+    }
+}
 
 impl ProvidesRegistryState for App {
     fn registry(&mut self) -> &mut RegistryState {
@@ -1479,9 +1838,18 @@ pub fn run(initial_panel: Option<&str>) -> Result<(), String> {
     res
 }
 
-fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
-    let conn = Connection::connect_to_env().map_err(|e| e.to_string())?;
-    let (globals, event_queue) = registry_queue_init(&conn).map_err(|e| e.to_string())?;
+fn init_app(
+    conn: &Connection,
+    shell: Shell,
+    fetch_tx: Sender<Fetched>,
+) -> Result<
+    (
+        App,
+        smithay_client_toolkit::reexports::client::EventQueue<App>,
+    ),
+    String,
+> {
+    let (globals, event_queue) = registry_queue_init(conn).map_err(|e| e.to_string())?;
     let qh = event_queue.handle();
     let compositor =
         CompositorState::bind(&globals, &qh).map_err(|e| format!("wl_compositor: {e}"))?;
@@ -1489,18 +1857,13 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
         LayerShell::bind(&globals, &qh).map_err(|e| format!("zwlr_layer_shell_v1: {e}"))?;
     let shm = Shm::bind(&globals, &qh).map_err(|e| format!("wl_shm: {e}"))?;
     let _toplevel_mgr: Option<ZwlrForeignToplevelManagerV1> = globals.bind(&qh, 1..=3, ()).ok();
+    let viewporter: Option<WpViewporter> = globals.bind(&qh, 1..=1, ()).ok();
+    let fractional_scale_mgr: Option<WpFractionalScaleManagerV1> = if viewporter.is_some() {
+        globals.bind(&qh, 1..=1, ()).ok()
+    } else {
+        None
+    };
 
-    let mut shell = Shell::new(
-        crate::config::Config::load(),
-        crate::app::load(&crate::app::dirs()),
-    );
-    shell.live = true;
-    let (fetch_tx, fetch_rx) = channel::channel::<Fetched>();
-    let (icon_tx, icon_rx) = channel::channel::<()>();
-    crate::icons::set_icon_wakeup(move || {
-        let _ = icon_tx.send(());
-    });
-    let (notify_tx, notify_rx) = channel::channel::<crate::notify::Incoming>();
     let output_state = OutputState::new(&globals, &qh);
     let existing: Vec<_> = output_state.outputs().collect();
     let mut app = App {
@@ -1510,13 +1873,20 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
         compositor,
         layer_shell,
         shm,
+        viewporter,
+        fractional_scale_mgr,
         qh: qh.clone(),
         outputs: Vec::new(),
+        next_output_id: 1,
         toplevels: Vec::new(),
         next_toplevel_id: 1,
         fullscreen_changed: false,
         keyboard: None,
         pointer: None,
+        keyboard_output: None,
+        current_pointer_output: None,
+        last_pointer_output: None,
+        last_display_scale: 1.0,
         modifiers: Modifiers::default(),
         shell,
         fetch_tx,
@@ -1528,6 +1898,26 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
         notify_conn: None,
         exit: false,
     };
+    for output in existing {
+        app.create_output_surface(output);
+    }
+    Ok((app, event_queue))
+}
+
+fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
+    let conn = Connection::connect_to_env().map_err(|e| e.to_string())?;
+    let mut shell = Shell::new(
+        crate::config::Config::load(),
+        crate::app::load(&crate::app::dirs()),
+    );
+    shell.live = true;
+    let (fetch_tx, fetch_rx) = channel::channel::<Fetched>();
+    let (icon_tx, icon_rx) = channel::channel::<()>();
+    crate::icons::set_icon_wakeup(move || {
+        let _ = icon_tx.send(());
+    });
+    let (notify_tx, notify_rx) = channel::channel::<crate::notify::Incoming>();
+    let (mut app, event_queue) = init_app(&conn, shell, fetch_tx)?;
     // the session's notifications (NOTIFICATIONS "auto" or "edge"), unless another daemon has them
     if app.shell.cfg.serves_notifications() {
         match crate::notify_server::start(notify_tx) {
@@ -1538,13 +1928,11 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
             Err(e) => eprintln!("infynitae-edge-apps: notifications: not serving: {e}"),
         }
     }
-    for output in existing {
-        app.create_output_surface(output);
-    }
     // catch any config change or creation between startup and the first event-loop wait
     app.shell.reload_if_changed();
     if let Some(name) = initial_panel {
-        app.shell.toggle_named(name);
+        let target = app.key_target_output();
+        app.shell.toggle_named_on(target, name);
     }
     app.sync_all();
 
@@ -1564,12 +1952,12 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
             let reloaded = app.reload_config();
             if (changed || reloaded) && app.shell.open.is_some() {
                 for os in &mut app.outputs {
-                    os.dirty = true;
-                    os.render_if_needed(&app.qh, &app.shell);
-                }
-                // a card that grew or shrank: the input region follows
-                for os in &mut app.outputs {
-                    os.set_input_region(&app.compositor, &app.shell);
+                    if app.shell.visible_on(os.id) {
+                        os.dirty = true;
+                        os.render_if_needed(&app.qh, &app.shell);
+                        // a card that grew or shrank: the input region follows
+                        os.set_input_region(&app.compositor, &app.shell);
+                    }
                 }
             }
         })
@@ -1579,8 +1967,10 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
             if let channel::Event::Msg(()) = evt {
                 if app.shell.open.is_some() {
                     for os in &mut app.outputs {
-                        os.dirty = true;
-                        os.render_if_needed(&app.qh, &app.shell);
+                        if app.shell.visible_on(os.id) {
+                            os.dirty = true;
+                            os.render_if_needed(&app.qh, &app.shell);
+                        }
                     }
                 }
             }
@@ -1631,6 +2021,9 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
     write_runtime_file(&features_file, "ask\n");
     // a question sent before the edge started
     if app.shell.ask_load() {
+        if app.shell.ask.ask.on && app.shell.visible_output().is_none() {
+            app.shell.set_ask_output(app.key_target_output());
+        }
         app.sync_all();
     }
     while !app.exit {
@@ -1643,8 +2036,10 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
             app.shell.now = now;
             if app.shell.wants_clock() && minute_key(prev) != minute_key(now) {
                 for os in &mut app.outputs {
-                    os.dirty = true;
-                    os.render_if_needed(&app.qh, &app.shell);
+                    if app.shell.visible_on(os.id) {
+                        os.dirty = true;
+                        os.render_if_needed(&app.qh, &app.shell);
+                    }
                 }
             }
             app.fetch_due(false);
@@ -1730,11 +2125,17 @@ fn next_minute_timeout(now: chrono::NaiveDateTime) -> Duration {
 /// window.
 struct PopupLayer {
     output: wl_output::WlOutput,
+    frac_scale: Option<WpFractionalScaleV1>,
+    viewport: Option<WpViewport>,
     layer: LayerSurface,
     pool: SlotPool,
     buffer: Option<Buffer>,
     width: u32,
     height: u32,
+    integer_scale: i32,
+    fractional_scale_120: Option<u32>,
+    last_buffer_scale: i32,
+    last_viewport_dest: Option<(i32, i32)>,
     configured: bool,
     /// a buffer is attached (the surface shows)
     mapped: bool,
@@ -1745,13 +2146,47 @@ struct PopupLayer {
     pointer: Option<(f64, f64)>,
 }
 
+impl Drop for PopupLayer {
+    fn drop(&mut self) {
+        if let Some(fs) = self.frac_scale.take() {
+            fs.destroy();
+        }
+        if let Some(vp) = self.viewport.take() {
+            vp.destroy();
+        }
+    }
+}
+
 /// The strip's width: the cards, their margin from the screen's right, a little room.
 const POPUP_STRIP_W: u32 = (crate::notify::POPUP_W + crate::notify::MARGIN + 16.0) as u32;
 
 impl PopupLayer {
     fn new(app: &App, output: wl_output::WlOutput) -> Option<PopupLayer> {
         let pool = SlotPool::new(4096, &app.shm).ok()?;
+        let integer_scale = app
+            .outputs
+            .iter()
+            .find(|o| o.output == output)
+            .map(|o| o.integer_scale)
+            .or_else(|| {
+                app.output_state
+                    .info(&output)
+                    .map(|i| i.scale_factor.max(1))
+            })
+            .unwrap_or(1);
+        let fractional_scale_120 = app
+            .outputs
+            .iter()
+            .find(|o| o.output == output)
+            .and_then(|o| o.fractional_scale_120);
         let surface = app.compositor.create_surface(&app.qh);
+        let (viewport, frac_scale) = match (&app.viewporter, &app.fractional_scale_mgr) {
+            (Some(vp), Some(fs)) => (
+                Some(vp.get_viewport(&surface, &app.qh, ())),
+                Some(fs.get_fractional_scale(&surface, &app.qh, surface.clone())),
+            ),
+            _ => (None, None),
+        };
         let layer = app.layer_shell.create_layer_surface(
             &app.qh,
             surface,
@@ -1771,17 +2206,65 @@ impl PopupLayer {
         layer.commit();
         Some(PopupLayer {
             output,
+            frac_scale,
+            viewport,
             layer,
             pool,
             buffer: None,
             width: 0,
             height: 0,
+            integer_scale,
+            fractional_scale_120,
+            last_buffer_scale: 1,
+            last_viewport_dest: None,
             configured: false,
             mapped: false,
             frame_pending: false,
             again: false,
             pointer: None,
         })
+    }
+
+    fn target_buf_size(&self) -> (u32, u32) {
+        if self.width == 0 || self.height == 0 {
+            return (0, 0);
+        }
+        if self.viewport.is_some() {
+            let s120 = self
+                .fractional_scale_120
+                .unwrap_or_else(|| (self.integer_scale.max(1) as u32) * 120);
+            (
+                scaled_dimension(self.width, s120),
+                scaled_dimension(self.height, s120),
+            )
+        } else {
+            let s = self.integer_scale.max(1) as u32;
+            (
+                self.width.saturating_mul(s).max(1),
+                self.height.saturating_mul(s).max(1),
+            )
+        }
+    }
+
+    fn apply_surface_scale(&mut self) {
+        let wl = self.layer.wl_surface();
+        if let Some(vp) = &self.viewport {
+            if self.last_buffer_scale != 1 {
+                wl.set_buffer_scale(1);
+                self.last_buffer_scale = 1;
+            }
+            let dest = (self.width as i32, self.height as i32);
+            if self.last_viewport_dest != Some(dest) {
+                vp.set_destination(dest.0, dest.1);
+                self.last_viewport_dest = Some(dest);
+            }
+        } else {
+            let s = self.integer_scale.max(1);
+            if self.last_buffer_scale != s {
+                wl.set_buffer_scale(s);
+                self.last_buffer_scale = s;
+            }
+        }
     }
 
     /// Shows the pop-ups as they are now (or unmaps the strip when there are none).
@@ -1796,6 +2279,7 @@ impl PopupLayer {
                 self.configured = false;
                 self.buffer = None;
                 self.pointer = None;
+                self.last_viewport_dest = None;
             }
             return;
         }
@@ -1809,41 +2293,49 @@ impl PopupLayer {
             self.again = true;
             return;
         }
-        let (w, h) = (self.width as i32, self.height as i32);
-        let stride = w * 4;
-        let Ok((buffer, canvas)) = self
-            .pool
-            .create_buffer(w, h, stride, wl_shm::Format::Argb8888)
+        let (lw, lh) = (self.width as f64, self.height as f64);
+        let (bw_u, bh_u) = self.target_buf_size();
+        let (bw, bh) = (bw_u as i32, bh_u as i32);
+        if bw <= 0 || bh <= 0 {
+            return;
+        }
+        let stride = bw * 4;
+        let Ok((buffer, canvas)) =
+            self.pool
+                .create_buffer(bw, bh, stride, wl_shm::Format::Argb8888)
         else {
             return;
         };
         canvas.fill(0);
         let now = Instant::now();
+        let (sx, sy) = (f64::from(bw) / lw, f64::from(bh) / lh);
         if let Ok(surface) = unsafe {
             cairo::ImageSurface::create_for_data_unsafe(
                 canvas.as_mut_ptr(),
                 cairo::Format::ARgb32,
-                w,
-                h,
+                bw,
+                bh,
                 stride,
             )
         } {
             if let Ok(cr) = cairo::Context::new(&surface) {
-                crate::notify::draw(&cr, &shell.theme, n, w as f64, self.pointer, now);
+                cr.scale(sx, sy);
+                crate::notify::draw(&cr, &shell.theme, n, lw, self.pointer, now);
             }
             surface.flush();
         }
         // only the cards take the pointer; the rest of the strip lets clicks through
         if let Ok(region) = Region::new(compositor) {
-            for (_, r) in crate::notify::layout(n, w as f64) {
+            for (_, r) in crate::notify::layout(n, lw) {
                 region.add(r.0 as i32, r.1 as i32, r.2.ceil() as i32, r.3.ceil() as i32);
             }
             self.layer
                 .wl_surface()
                 .set_input_region(Some(region.wl_region()));
         }
+        self.apply_surface_scale();
         let wl = self.layer.wl_surface();
-        wl.damage_buffer(0, 0, w, h);
+        wl.damage_buffer(0, 0, bw, bh);
         // a card still sliding in: the next frame too
         let arriving = n.popups.iter().any(|p| {
             now.saturating_duration_since(p.born).as_secs_f64() * 1000.0 < crate::notify::ARRIVE_MS
@@ -2431,5 +2923,939 @@ mod tests {
             KeyboardInteractivity::Exclusive,
             "key-opened panel takes Exclusive keyboard interactivity at once"
         );
+    }
+
+    #[derive(Clone, Debug)]
+    struct MockOutputSpec {
+        width: i32,
+        height: i32,
+        scale: i32,
+        fractional_120: u32,
+    }
+
+    #[derive(Clone, Debug)]
+    struct CommittedSurfaceState {
+        buffer_size: Option<(i32, i32)>,
+        buffer_scale: i32,
+        viewport_dest: Option<(i32, i32)>,
+        input_rects: Vec<(i32, i32, i32, i32)>,
+        keyboard_interactivity: u32,
+    }
+
+    #[derive(Default)]
+    struct MockServerState {
+        surfaces: HashMap<u32, usize>,
+        surface_commits: HashMap<u32, Vec<CommittedSurfaceState>>,
+        surface_scale: HashMap<u32, i32>,
+        surface_buf: HashMap<u32, Option<u32>>,
+        surface_input: HashMap<u32, Vec<(i32, i32, i32, i32)>>,
+        surface_viewport_dest: HashMap<u32, Option<(i32, i32)>>,
+        surface_kb: HashMap<u32, u32>,
+        layers_by_surface: HashMap<u32, u32>,
+        layer_to_surface: HashMap<u32, u32>,
+        layer_to_output_global: HashMap<u32, u32>,
+        buffers: HashMap<u32, (i32, i32)>,
+        regions: HashMap<u32, Vec<(i32, i32, i32, i32)>>,
+        viewports: HashMap<u32, u32>,
+        frac_scales: HashMap<u32, u32>,
+        output_globals: HashMap<u32, u32>,
+        output_obj_to_global: HashMap<u32, u32>,
+        pointer_id: Option<u32>,
+        toplevel_mgr_id: Option<u32>,
+        next_serial: u32,
+        next_server_id: u32,
+    }
+
+    struct MockWayland {
+        server_sock: std::os::unix::net::UnixStream,
+        state: Arc<std::sync::Mutex<MockServerState>>,
+        join: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl MockWayland {
+        fn start(specs: Vec<MockOutputSpec>, offer_fractional: bool) -> (Self, Connection) {
+            use std::os::unix::net::UnixStream;
+            let (client_sock, server_sock) = UnixStream::pair().unwrap();
+            let write_sock = server_sock.try_clone().unwrap();
+            let conn = Connection::from_socket(client_sock).unwrap();
+            let state = Arc::new(std::sync::Mutex::new(MockServerState {
+                next_serial: 10,
+                next_server_id: 0xff00_0000,
+                ..Default::default()
+            }));
+            let st_thread = Arc::clone(&state);
+
+            let join = std::thread::spawn(move || {
+                Self::serve(server_sock, specs, offer_fractional, st_thread);
+            });
+
+            (
+                Self {
+                    server_sock: write_sock,
+                    state,
+                    join: Some(join),
+                },
+                conn,
+            )
+        }
+
+        fn push_u32(buf: &mut Vec<u8>, v: u32) {
+            buf.extend_from_slice(&v.to_ne_bytes());
+        }
+
+        fn push_i32(buf: &mut Vec<u8>, v: i32) {
+            buf.extend_from_slice(&v.to_ne_bytes());
+        }
+
+        fn push_str(buf: &mut Vec<u8>, s: &str) {
+            let bytes = s.as_bytes();
+            let len = bytes.len() + 1;
+            Self::push_u32(buf, len as u32);
+            buf.extend_from_slice(bytes);
+            buf.push(0);
+            while !buf.len().is_multiple_of(4) {
+                buf.push(0);
+            }
+        }
+
+        fn push_array(buf: &mut Vec<u8>, data: &[u8]) {
+            Self::push_u32(buf, data.len() as u32);
+            buf.extend_from_slice(data);
+            while !buf.len().is_multiple_of(4) {
+                buf.push(0);
+            }
+        }
+
+        fn msg(obj: u32, opcode: u16, body: &[u8]) -> Vec<u8> {
+            let size = (8 + body.len()) as u32;
+            let mut out = Vec::with_capacity(size as usize);
+            out.extend_from_slice(&obj.to_ne_bytes());
+            out.extend_from_slice(&((size << 16) | u32::from(opcode)).to_ne_bytes());
+            out.extend_from_slice(body);
+            out
+        }
+
+        fn write_all(sock: &std::os::unix::net::UnixStream, data: &[u8]) {
+            use std::io::Write;
+            let mut s = sock;
+            let _ = s.write_all(data);
+        }
+
+        fn recv_chunk(sock: &std::os::unix::net::UnixStream, out: &mut Vec<u8>) -> bool {
+            let mut buf = [0u8; 4096];
+            let mut cmsg_buf = [0u8; 256];
+            let mut iov = libc::iovec {
+                iov_base: buf.as_mut_ptr().cast(),
+                iov_len: buf.len(),
+            };
+            let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
+            msg.msg_iov = &mut iov;
+            msg.msg_iovlen = 1;
+            msg.msg_control = cmsg_buf.as_mut_ptr().cast();
+            msg.msg_controllen = cmsg_buf.len();
+            let n = unsafe { libc::recvmsg(sock.as_raw_fd(), &mut msg, 0) };
+            if n <= 0 {
+                return false;
+            }
+            unsafe {
+                let mut cmsg = libc::CMSG_FIRSTHDR(&msg);
+                while !cmsg.is_null() {
+                    if (*cmsg).cmsg_level == libc::SOL_SOCKET
+                        && (*cmsg).cmsg_type == libc::SCM_RIGHTS
+                    {
+                        let data_ptr = libc::CMSG_DATA(cmsg);
+                        let data_len = (*cmsg).cmsg_len - libc::CMSG_LEN(0) as usize;
+                        for off in (0..data_len).step_by(4) {
+                            let mut fd_bytes = [0u8; 4];
+                            std::ptr::copy_nonoverlapping(
+                                data_ptr.add(off),
+                                fd_bytes.as_mut_ptr(),
+                                4,
+                            );
+                            let fd = i32::from_ne_bytes(fd_bytes);
+                            libc::close(fd);
+                        }
+                    }
+                    cmsg = libc::CMSG_NXTHDR(&msg, cmsg);
+                }
+            }
+            out.extend_from_slice(&buf[..n as usize]);
+            true
+        }
+
+        fn read_u32(b: &[u8], off: &mut usize) -> u32 {
+            let v = u32::from_ne_bytes(b[*off..*off + 4].try_into().unwrap());
+            *off += 4;
+            v
+        }
+
+        fn read_i32(b: &[u8], off: &mut usize) -> i32 {
+            let v = i32::from_ne_bytes(b[*off..*off + 4].try_into().unwrap());
+            *off += 4;
+            v
+        }
+
+        fn read_str(b: &[u8], off: &mut usize) -> String {
+            let len = Self::read_u32(b, off) as usize;
+            let s = String::from_utf8_lossy(&b[*off..*off + len.saturating_sub(1)]).into_owned();
+            let padded = (len + 3) & !3;
+            *off += padded;
+            s
+        }
+
+        fn serve(
+            sock: std::os::unix::net::UnixStream,
+            specs: Vec<MockOutputSpec>,
+            offer_fractional: bool,
+            state: Arc<std::sync::Mutex<MockServerState>>,
+        ) {
+            #[derive(Clone, Copy)]
+            enum Obj {
+                Display,
+                Registry,
+                Compositor,
+                Shm,
+                ShmPool,
+                Buffer,
+                LayerShell,
+                LayerSurface,
+                Surface,
+                Region,
+                Seat,
+                Pointer,
+                Keyboard,
+                Output,
+                Viewporter,
+                Viewport,
+                FracMgr,
+                FracScale,
+                ToplevelMgr,
+            }
+            let mut objs: HashMap<u32, Obj> = HashMap::new();
+            objs.insert(1, Obj::Display);
+
+            let mut globals: Vec<(u32, &'static str, u32)> = vec![
+                (1, "wl_compositor", 6),
+                (2, "wl_shm", 1),
+                (3, "wl_seat", 7),
+                (4, "zwlr_layer_shell_v1", 4),
+                (5, "zwlr_foreign_toplevel_manager_v1", 3),
+            ];
+            if offer_fractional {
+                globals.push((6, "wp_viewporter", 1));
+                globals.push((7, "wp_fractional_scale_manager_v1", 1));
+            }
+            let out_base = 10u32;
+            for idx in 0..specs.len() {
+                globals.push((out_base + idx as u32, "wl_output", 4));
+            }
+
+            let mut pending = Vec::<u8>::new();
+            loop {
+                if !Self::recv_chunk(&sock, &mut pending) {
+                    return;
+                }
+                while pending.len() >= 8 {
+                    let obj_id = u32::from_ne_bytes(pending[0..4].try_into().unwrap());
+                    let word = u32::from_ne_bytes(pending[4..8].try_into().unwrap());
+                    let size = (word >> 16) as usize;
+                    let opcode = (word & 0xffff) as u16;
+                    if size < 8 || pending.len() < size {
+                        break;
+                    }
+                    let frame = pending.drain(..size).collect::<Vec<u8>>();
+                    let body = &frame[8..];
+                    let mut off = 0usize;
+                    let mut out_bytes = Vec::new();
+                    match objs.get(&obj_id).copied() {
+                        Some(Obj::Display) => match opcode {
+                            0 => {
+                                let cb = Self::read_u32(body, &mut off);
+                                let mut b = Vec::new();
+                                Self::push_u32(&mut b, 0);
+                                out_bytes.extend(Self::msg(cb, 0, &b));
+                                let mut d = Vec::new();
+                                Self::push_u32(&mut d, cb);
+                                out_bytes.extend(Self::msg(1, 1, &d));
+                            }
+                            1 => {
+                                let reg = Self::read_u32(body, &mut off);
+                                objs.insert(reg, Obj::Registry);
+                                for &(name, iface, ver) in &globals {
+                                    let mut b = Vec::new();
+                                    Self::push_u32(&mut b, name);
+                                    Self::push_str(&mut b, iface);
+                                    Self::push_u32(&mut b, ver);
+                                    out_bytes.extend(Self::msg(reg, 0, &b));
+                                }
+                            }
+                            _ => {}
+                        },
+                        Some(Obj::Registry) if opcode == 0 => {
+                            let name = Self::read_u32(body, &mut off);
+                            let iface = Self::read_str(body, &mut off);
+                            let _ver = Self::read_u32(body, &mut off);
+                            let new_id = Self::read_u32(body, &mut off);
+                            match iface.as_str() {
+                                "wl_compositor" => {
+                                    objs.insert(new_id, Obj::Compositor);
+                                }
+                                "wl_shm" => {
+                                    objs.insert(new_id, Obj::Shm);
+                                    for fmt in [0u32, 1u32] {
+                                        let mut b = Vec::new();
+                                        Self::push_u32(&mut b, fmt);
+                                        out_bytes.extend(Self::msg(new_id, 0, &b));
+                                    }
+                                }
+                                "wl_seat" => {
+                                    objs.insert(new_id, Obj::Seat);
+                                    let mut b = Vec::new();
+                                    Self::push_u32(&mut b, 3); // pointer | keyboard
+                                    out_bytes.extend(Self::msg(new_id, 0, &b));
+                                    let mut nb = Vec::new();
+                                    Self::push_str(&mut nb, "seat0");
+                                    out_bytes.extend(Self::msg(new_id, 1, &nb));
+                                }
+                                "zwlr_layer_shell_v1" => {
+                                    objs.insert(new_id, Obj::LayerShell);
+                                }
+                                "wp_viewporter" => {
+                                    objs.insert(new_id, Obj::Viewporter);
+                                }
+                                "wp_fractional_scale_manager_v1" => {
+                                    objs.insert(new_id, Obj::FracMgr);
+                                }
+                                "zwlr_foreign_toplevel_manager_v1" => {
+                                    objs.insert(new_id, Obj::ToplevelMgr);
+                                    state.lock().unwrap().toplevel_mgr_id = Some(new_id);
+                                }
+                                "wl_output" => {
+                                    let out_idx = (name - out_base) as usize;
+                                    objs.insert(new_id, Obj::Output);
+                                    let mut st = state.lock().unwrap();
+                                    st.output_globals.insert(out_idx as u32, new_id);
+                                    st.output_obj_to_global.insert(new_id, out_idx as u32);
+                                    let spec = &specs[out_idx];
+                                    let mut gb = Vec::new();
+                                    Self::push_i32(&mut gb, 0);
+                                    Self::push_i32(&mut gb, 0);
+                                    Self::push_i32(&mut gb, spec.width);
+                                    Self::push_i32(&mut gb, spec.height);
+                                    Self::push_i32(&mut gb, 0);
+                                    Self::push_str(&mut gb, "Mock");
+                                    Self::push_str(&mut gb, "Out");
+                                    Self::push_i32(&mut gb, 0);
+                                    out_bytes.extend(Self::msg(new_id, 0, &gb));
+                                    let mut mb = Vec::new();
+                                    Self::push_u32(&mut mb, 3); // current | preferred
+                                    Self::push_i32(&mut mb, spec.width * spec.scale);
+                                    Self::push_i32(&mut mb, spec.height * spec.scale);
+                                    Self::push_i32(&mut mb, 60_000);
+                                    out_bytes.extend(Self::msg(new_id, 1, &mb));
+                                    let mut sb = Vec::new();
+                                    Self::push_i32(&mut sb, spec.scale);
+                                    out_bytes.extend(Self::msg(new_id, 3, &sb));
+                                    out_bytes.extend(Self::msg(new_id, 2, &[]));
+                                }
+                                _ => {}
+                            }
+                        }
+                        Some(Obj::Compositor) => match opcode {
+                            0 => {
+                                let sid = Self::read_u32(body, &mut off);
+                                objs.insert(sid, Obj::Surface);
+                                state.lock().unwrap().surface_scale.insert(sid, 1);
+                            }
+                            1 => {
+                                let rid = Self::read_u32(body, &mut off);
+                                objs.insert(rid, Obj::Region);
+                                state.lock().unwrap().regions.insert(rid, Vec::new());
+                            }
+                            _ => {}
+                        },
+                        Some(Obj::Region) => match opcode {
+                            0 => {
+                                state.lock().unwrap().regions.remove(&obj_id);
+                            }
+                            1 => {
+                                let x = Self::read_i32(body, &mut off);
+                                let y = Self::read_i32(body, &mut off);
+                                let w = Self::read_i32(body, &mut off);
+                                let h = Self::read_i32(body, &mut off);
+                                if let Some(list) = state.lock().unwrap().regions.get_mut(&obj_id) {
+                                    list.push((x, y, w, h));
+                                }
+                            }
+                            _ => {}
+                        },
+                        Some(Obj::Shm) if opcode == 0 => {
+                            let pid = Self::read_u32(body, &mut off);
+                            objs.insert(pid, Obj::ShmPool);
+                        }
+                        Some(Obj::ShmPool) if opcode == 0 => {
+                            let bid = Self::read_u32(body, &mut off);
+                            let _offset = Self::read_i32(body, &mut off);
+                            let w = Self::read_i32(body, &mut off);
+                            let h = Self::read_i32(body, &mut off);
+                            objs.insert(bid, Obj::Buffer);
+                            state.lock().unwrap().buffers.insert(bid, (w, h));
+                        }
+                        Some(Obj::LayerShell) if opcode == 0 => {
+                            let lid = Self::read_u32(body, &mut off);
+                            let sid = Self::read_u32(body, &mut off);
+                            let out_obj = Self::read_u32(body, &mut off);
+                            objs.insert(lid, Obj::LayerSurface);
+                            let mut st = state.lock().unwrap();
+                            st.layers_by_surface.insert(sid, lid);
+                            st.layer_to_surface.insert(lid, sid);
+                            if let Some(&gidx) = st.output_obj_to_global.get(&out_obj) {
+                                st.layer_to_output_global.insert(lid, gidx);
+                                st.surfaces.insert(sid, gidx as usize);
+                                if let Some(fsid) = st
+                                    .frac_scales
+                                    .iter()
+                                    .find(|(_, &s)| s == sid)
+                                    .map(|(&f, _)| f)
+                                {
+                                    let s120 = specs[gidx as usize].fractional_120;
+                                    let mut b = Vec::new();
+                                    Self::push_u32(&mut b, s120);
+                                    out_bytes.extend(Self::msg(fsid, 0, &b));
+                                }
+                            }
+                        }
+                        Some(Obj::LayerSurface) if opcode == 4 => {
+                            let kb = Self::read_u32(body, &mut off);
+                            let mut st = state.lock().unwrap();
+                            if let Some(&sid) = st.layer_to_surface.get(&obj_id) {
+                                st.surface_kb.insert(sid, kb);
+                            }
+                        }
+                        Some(Obj::Viewporter) if opcode == 1 => {
+                            let vid = Self::read_u32(body, &mut off);
+                            let sid = Self::read_u32(body, &mut off);
+                            objs.insert(vid, Obj::Viewport);
+                            state.lock().unwrap().viewports.insert(vid, sid);
+                        }
+                        Some(Obj::Viewport) if opcode == 2 => {
+                            let w = Self::read_i32(body, &mut off);
+                            let h = Self::read_i32(body, &mut off);
+                            let mut st = state.lock().unwrap();
+                            if let Some(&sid) = st.viewports.get(&obj_id) {
+                                st.surface_viewport_dest.insert(sid, Some((w, h)));
+                            }
+                        }
+                        Some(Obj::FracMgr) if opcode == 1 => {
+                            let fsid = Self::read_u32(body, &mut off);
+                            let sid = Self::read_u32(body, &mut off);
+                            objs.insert(fsid, Obj::FracScale);
+                            let mut st = state.lock().unwrap();
+                            st.frac_scales.insert(fsid, sid);
+                            if let Some(&out_idx) = st.surfaces.get(&sid) {
+                                let s120 = specs[out_idx].fractional_120;
+                                let mut b = Vec::new();
+                                Self::push_u32(&mut b, s120);
+                                out_bytes.extend(Self::msg(fsid, 0, &b));
+                            }
+                        }
+                        Some(Obj::Seat) => match opcode {
+                            0 => {
+                                let pid = Self::read_u32(body, &mut off);
+                                objs.insert(pid, Obj::Pointer);
+                                state.lock().unwrap().pointer_id = Some(pid);
+                            }
+                            1 => {
+                                let kid = Self::read_u32(body, &mut off);
+                                objs.insert(kid, Obj::Keyboard);
+                            }
+                            _ => {}
+                        },
+                        Some(Obj::Surface) => match opcode {
+                            1 => {
+                                let bid = Self::read_u32(body, &mut off);
+                                state
+                                    .lock()
+                                    .unwrap()
+                                    .surface_buf
+                                    .insert(obj_id, (bid != 0).then_some(bid));
+                            }
+                            3 => {
+                                let cb = Self::read_u32(body, &mut off);
+                                let mut b = Vec::new();
+                                Self::push_u32(&mut b, 0);
+                                out_bytes.extend(Self::msg(cb, 0, &b));
+                                let mut d = Vec::new();
+                                Self::push_u32(&mut d, cb);
+                                out_bytes.extend(Self::msg(1, 1, &d));
+                            }
+                            5 => {
+                                let rid = Self::read_u32(body, &mut off);
+                                let mut st = state.lock().unwrap();
+                                let rects = st.regions.get(&rid).cloned().unwrap_or_default();
+                                st.surface_input.insert(obj_id, rects);
+                            }
+                            6 => {
+                                let mut st = state.lock().unwrap();
+                                let lid = st.layers_by_surface.get(&obj_id).copied();
+                                let prev_had_commit = st
+                                    .surface_commits
+                                    .get(&obj_id)
+                                    .is_some_and(|v| !v.is_empty());
+                                if let (Some(lid), false) = (lid, prev_had_commit) {
+                                    if let Some(&gidx) = st.layer_to_output_global.get(&lid) {
+                                        st.next_serial += 1;
+                                        let serial = st.next_serial;
+                                        let spec = &specs[gidx as usize];
+                                        let mut cb = Vec::new();
+                                        Self::push_u32(&mut cb, serial);
+                                        Self::push_u32(&mut cb, spec.width as u32);
+                                        Self::push_u32(&mut cb, spec.height as u32);
+                                        out_bytes.extend(Self::msg(lid, 0, &cb));
+                                    }
+                                }
+                                let buf_id = st.surface_buf.get(&obj_id).copied().flatten();
+                                let buf_sz = buf_id.and_then(|b| st.buffers.get(&b).copied());
+                                if let Some(bid) = buf_id {
+                                    out_bytes.extend(Self::msg(bid, 0, &[]));
+                                }
+                                let snap = CommittedSurfaceState {
+                                    buffer_size: buf_sz,
+                                    buffer_scale: *st.surface_scale.get(&obj_id).unwrap_or(&1),
+                                    viewport_dest: st
+                                        .surface_viewport_dest
+                                        .get(&obj_id)
+                                        .copied()
+                                        .flatten(),
+                                    input_rects: st
+                                        .surface_input
+                                        .get(&obj_id)
+                                        .cloned()
+                                        .unwrap_or_default(),
+                                    keyboard_interactivity: *st
+                                        .surface_kb
+                                        .get(&obj_id)
+                                        .unwrap_or(&0),
+                                };
+                                st.surface_commits.entry(obj_id).or_default().push(snap);
+                            }
+                            8 => {
+                                let scale = Self::read_i32(body, &mut off);
+                                state.lock().unwrap().surface_scale.insert(obj_id, scale);
+                            }
+                            _ => {}
+                        },
+                        _ => {}
+                    }
+                    if !out_bytes.is_empty() {
+                        Self::write_all(&sock, &out_bytes);
+                    }
+                }
+            }
+        }
+
+        fn send_raw(&self, bytes: Vec<u8>) {
+            Self::write_all(&self.server_sock, &bytes);
+        }
+
+        fn send_output_scale(&self, output_idx: u32, scale: i32) {
+            let out_id = *self
+                .state
+                .lock()
+                .unwrap()
+                .output_globals
+                .get(&output_idx)
+                .unwrap();
+            let mut sb = Vec::new();
+            Self::push_i32(&mut sb, scale);
+            let mut raw = Self::msg(out_id, 3, &sb);
+            raw.extend(Self::msg(out_id, 2, &[]));
+            self.send_raw(raw);
+        }
+
+        fn send_surface_preferred_buffer_scale(&self, surface_id: u32, scale: i32) {
+            let mut sb = Vec::new();
+            Self::push_i32(&mut sb, scale);
+            self.send_raw(Self::msg(surface_id, 2, &sb));
+        }
+
+        fn send_preferred_scale(&self, surface_id: u32, scale_120: u32) {
+            let fs_id = self
+                .state
+                .lock()
+                .unwrap()
+                .frac_scales
+                .iter()
+                .find(|(_, &sid)| sid == surface_id)
+                .map(|(&fid, _)| fid)
+                .unwrap();
+            let mut b = Vec::new();
+            Self::push_u32(&mut b, scale_120);
+            self.send_raw(Self::msg(fs_id, 0, &b));
+        }
+
+        fn send_pointer_move(&self, surface_id: u32, x: f64, y: f64, enter: bool) {
+            let mut st = self.state.lock().unwrap();
+            let pid = st.pointer_id.unwrap();
+            st.next_serial += 1;
+            let serial = st.next_serial;
+            drop(st);
+            let mut raw = Vec::new();
+            let fx = (x * 256.0).round() as i32;
+            let fy = (y * 256.0).round() as i32;
+            if enter {
+                let mut eb = Vec::new();
+                Self::push_u32(&mut eb, serial);
+                Self::push_u32(&mut eb, surface_id);
+                Self::push_i32(&mut eb, fx);
+                Self::push_i32(&mut eb, fy);
+                raw.extend(Self::msg(pid, 0, &eb));
+            } else {
+                let mut mb = Vec::new();
+                Self::push_u32(&mut mb, 100);
+                Self::push_i32(&mut mb, fx);
+                Self::push_i32(&mut mb, fy);
+                raw.extend(Self::msg(pid, 2, &mb));
+            }
+            raw.extend(Self::msg(pid, 5, &[]));
+            self.send_raw(raw);
+        }
+
+        fn send_pointer_click(&self, button: u32) {
+            let mut st = self.state.lock().unwrap();
+            let pid = st.pointer_id.unwrap();
+            st.next_serial += 1;
+            let s1 = st.next_serial;
+            st.next_serial += 1;
+            let s2 = st.next_serial;
+            drop(st);
+            let mut raw = Vec::new();
+            let mut pb = Vec::new();
+            Self::push_u32(&mut pb, s1);
+            Self::push_u32(&mut pb, 110);
+            Self::push_u32(&mut pb, button);
+            Self::push_u32(&mut pb, 1); // pressed
+            raw.extend(Self::msg(pid, 3, &pb));
+            raw.extend(Self::msg(pid, 5, &[]));
+            let mut rb = Vec::new();
+            Self::push_u32(&mut rb, s2);
+            Self::push_u32(&mut rb, 111);
+            Self::push_u32(&mut rb, button);
+            Self::push_u32(&mut rb, 0); // released
+            raw.extend(Self::msg(pid, 3, &rb));
+            raw.extend(Self::msg(pid, 5, &[]));
+            self.send_raw(raw);
+        }
+
+        fn send_focused_toplevel(&self, output_idx: u32) {
+            let mut st = self.state.lock().unwrap();
+            let mgr = st.toplevel_mgr_id.unwrap();
+            let out_id = *st.output_globals.get(&output_idx).unwrap();
+            let handle = st.next_server_id;
+            st.next_server_id += 1;
+            drop(st);
+            let mut raw = Vec::new();
+            let mut tb = Vec::new();
+            Self::push_u32(&mut tb, handle);
+            raw.extend(Self::msg(mgr, 0, &tb));
+            let mut ob = Vec::new();
+            Self::push_u32(&mut ob, out_id);
+            raw.extend(Self::msg(handle, 2, &ob));
+            // zwlr_foreign_toplevel_handle_v1::State::Activated = 2
+            let mut sb = Vec::new();
+            Self::push_array(&mut sb, &2u32.to_ne_bytes());
+            raw.extend(Self::msg(handle, 4, &sb));
+            raw.extend(Self::msg(handle, 5, &[]));
+            self.send_raw(raw);
+        }
+
+        fn last_commit(&self, surface_id: u32) -> CommittedSurfaceState {
+            self.state
+                .lock()
+                .unwrap()
+                .surface_commits
+                .get(&surface_id)
+                .and_then(|v| v.last())
+                .cloned()
+                .expect("surface must have at least one commit")
+        }
+    }
+
+    impl Drop for MockWayland {
+        fn drop(&mut self) {
+            let _ = self.server_sock.shutdown(std::net::Shutdown::Both);
+            if let Some(j) = self.join.take() {
+                let _ = j.join();
+            }
+        }
+    }
+
+    fn surface_wl_id(os: &OutputSurface) -> u32 {
+        use smithay_client_toolkit::reexports::client::Proxy;
+        os.layer.wl_surface().id().protocol_id()
+    }
+
+    fn surface_has_nonzero_pixels(os: &mut OutputSurface) -> bool {
+        let idx = os.last_slot;
+        let Some(slot) = &os.slots[idx] else {
+            return false;
+        };
+        slot.buffer
+            .canvas(&mut os.pool)
+            .is_some_and(|bytes| bytes.iter().any(|&b| b != 0))
+    }
+
+    #[test]
+    fn headless_integer_scale_creates_scaled_buffers_and_updates_on_scale_change() {
+        let (mock, conn) = MockWayland::start(
+            vec![MockOutputSpec {
+                width: 1280,
+                height: 800,
+                scale: 2,
+                fractional_120: 240,
+            }],
+            false,
+        );
+        let mut sh = Shell::new(
+            crate::config::Config::from_text(
+                "PANEL_CONTROL=\"SUPER+A top right 380 settings/power\"\n",
+            ),
+            Vec::new(),
+        );
+        sh.apply(
+            "settings",
+            "power",
+            &crate::cards::settings::parse_power("* balanced:\n  performance:\n")
+                as &dyn std::any::Any,
+        );
+        let (fetch_tx, _fetch_rx) = channel::channel::<Fetched>();
+        let (mut app, mut eq) = init_app(&conn, sh, fetch_tx).unwrap();
+        eq.roundtrip(&mut app).unwrap();
+        assert_eq!(app.outputs.len(), 1);
+        assert!(app.outputs[0].configured);
+        assert!(app.outputs[0].viewport.is_none());
+
+        let sid = surface_wl_id(&app.outputs[0]);
+        let target = app.key_target_output();
+        assert!(app.shell.toggle_named_on(target, "control"));
+        app.shell.open_ms = f64::INFINITY;
+        app.shell.opened_at = None;
+        app.sync_all();
+        eq.roundtrip(&mut app).unwrap();
+
+        let c1 = mock.last_commit(sid);
+        assert_eq!(c1.buffer_size, Some((2560, 1600)));
+        assert_eq!(c1.buffer_scale, 2);
+        assert_eq!(c1.viewport_dest, None);
+        assert_eq!(c1.input_rects, vec![(0, 0, 1280, 800)]);
+        assert!(surface_has_nonzero_pixels(&mut app.outputs[0]));
+
+        // Compositor updates wl_output scale to 3; buffers and set_buffer_scale follow.
+        mock.send_output_scale(0, 3);
+        eq.roundtrip(&mut app).unwrap();
+        eq.roundtrip(&mut app).unwrap();
+
+        let c2 = mock.last_commit(sid);
+        assert_eq!(c2.buffer_size, Some((3840, 2400)));
+        assert_eq!(c2.buffer_scale, 3);
+
+        // wl_surface::preferred_buffer_scale (CompositorHandler::scale_factor_changed) updates too.
+        mock.send_surface_preferred_buffer_scale(sid, 2);
+        eq.roundtrip(&mut app).unwrap();
+        eq.roundtrip(&mut app).unwrap();
+
+        let c3 = mock.last_commit(sid);
+        assert_eq!(c3.buffer_size, Some((2560, 1600)));
+        assert_eq!(c3.buffer_scale, 2);
+    }
+
+    #[test]
+    fn headless_fractional_scale_uses_viewport_and_scaled_buffer() {
+        let (mock, conn) = MockWayland::start(
+            vec![MockOutputSpec {
+                width: 1280,
+                height: 800,
+                scale: 2,
+                fractional_120: 180, // 1.5x
+            }],
+            true,
+        );
+        let mut sh = Shell::new(
+            crate::config::Config::from_text(
+                "PANEL_CONTROL=\"SUPER+A top right 380 settings/power\"\n",
+            ),
+            Vec::new(),
+        );
+        sh.apply(
+            "settings",
+            "power",
+            &crate::cards::settings::parse_power("* balanced:\n  performance:\n")
+                as &dyn std::any::Any,
+        );
+        let (fetch_tx, _fetch_rx) = channel::channel::<Fetched>();
+        let (mut app, mut eq) = init_app(&conn, sh, fetch_tx).unwrap();
+        eq.roundtrip(&mut app).unwrap();
+        assert!(app.outputs[0].viewport.is_some());
+        assert_eq!(app.outputs[0].fractional_scale_120, Some(180));
+
+        let sid = surface_wl_id(&app.outputs[0]);
+        let target = app.key_target_output();
+        assert!(app.shell.toggle_named_on(target, "control"));
+        app.shell.open_ms = f64::INFINITY;
+        app.shell.opened_at = None;
+        app.sync_all();
+        eq.roundtrip(&mut app).unwrap();
+
+        let c1 = mock.last_commit(sid);
+        assert_eq!(c1.buffer_size, Some((1920, 1200)));
+        assert_eq!(c1.viewport_dest, Some((1280, 800)));
+        assert_eq!(c1.buffer_scale, 1);
+        assert!((app.last_display_scale - 1.5).abs() < 1e-4);
+
+        // Preferred scale changes to 2.0x (240/120).
+        mock.send_preferred_scale(sid, 240);
+        eq.roundtrip(&mut app).unwrap();
+        eq.roundtrip(&mut app).unwrap();
+
+        let c2 = mock.last_commit(sid);
+        assert_eq!(c2.buffer_size, Some((2560, 1600)));
+        assert_eq!(c2.viewport_dest, Some((1280, 800)));
+        assert_eq!(c2.buffer_scale, 1);
+        assert!((app.last_display_scale - 2.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn headless_two_outputs_shows_panel_on_one_output_and_routes_click() {
+        let (mock, conn) = MockWayland::start(
+            vec![
+                MockOutputSpec {
+                    width: 1920,
+                    height: 1080,
+                    scale: 1,
+                    fractional_120: 120,
+                },
+                MockOutputSpec {
+                    width: 1280,
+                    height: 800,
+                    scale: 2,
+                    fractional_120: 240,
+                },
+            ],
+            false,
+        );
+        let mut sh = Shell::new(
+            crate::config::Config::from_text(
+                "PANEL_CONTROL=\"SUPER+A top right 380 hover settings/power\"\n",
+            ),
+            Vec::new(),
+        );
+        sh.apply(
+            "settings",
+            "power",
+            &crate::cards::settings::parse_power("* balanced:\n  performance:\n")
+                as &dyn std::any::Any,
+        );
+        let (fetch_tx, _fetch_rx) = channel::channel::<Fetched>();
+        let (mut app, mut eq) = init_app(&conn, sh, fetch_tx).unwrap();
+        eq.roundtrip(&mut app).unwrap();
+        assert_eq!(app.outputs.len(), 2);
+
+        let sid1 = surface_wl_id(&app.outputs[0]);
+        let sid2 = surface_wl_id(&app.outputs[1]);
+        let out2_id = app.outputs[1].id;
+        let ctrl_idx = app
+            .shell
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "control")
+            .unwrap();
+
+        // Open by hover on Output 2's 2 px strip with injected Instants (no sleep).
+        let strip2 = app.shell.hover_strip(ctrl_idx, 1280.0, 800.0);
+        let t0 = Instant::now();
+        assert!(!app.shell.pointer_motion_on(
+            out2_id,
+            1280.0,
+            800.0,
+            strip2.0 + 10.0,
+            strip2.1 + 1.0,
+            t0
+        ));
+        assert!(app
+            .shell
+            .hover_tick(t0 + Duration::from_millis(crate::shell::HOVER_OPEN_MS as u64)));
+        assert_eq!(app.shell.open, Some(ctrl_idx));
+        assert_eq!(app.shell.open_output, Some(out2_id));
+        app.shell.open_ms = f64::INFINITY;
+        app.shell.opened_at = None;
+        app.sync_all();
+        eq.roundtrip(&mut app).unwrap();
+
+        // Output 2 draws at 2560x1600; Output 1 stays clear with only its 2 px hover strips.
+        let c1 = mock.last_commit(sid1);
+        let c2 = mock.last_commit(sid2);
+        assert_eq!(c2.buffer_size, Some((2560, 1600)));
+        assert!(surface_has_nonzero_pixels(&mut app.outputs[1]));
+        assert!(!surface_has_nonzero_pixels(&mut app.outputs[0]));
+        assert_eq!(c1.keyboard_interactivity, 0); // KeyboardInteractivity::None
+        let expected_strips1: Vec<(i32, i32, i32, i32)> = (0..app.shell.panels.len())
+            .filter(|&i| app.shell.panels[i].panel.hover)
+            .map(|i| {
+                let s = app.shell.hover_strip(i, 1920.0, 1080.0);
+                (
+                    s.0.floor() as i32,
+                    s.1.floor() as i32,
+                    s.2.ceil() as i32,
+                    s.3.ceil() as i32,
+                )
+            })
+            .collect();
+        assert_eq!(c1.input_rects, expected_strips1);
+
+        // Pointer event on Output 1 (while Output 2 shows the panel) does not close or click Output 2.
+        let s1 = expected_strips1[0];
+        mock.send_pointer_move(sid1, f64::from(s1.0) + 10.0, f64::from(s1.1) + 1.0, true);
+        mock.send_pointer_click(BTN_LEFT);
+        eq.roundtrip(&mut app).unwrap();
+        assert_eq!(app.shell.open, Some(ctrl_idx));
+        assert_eq!(app.shell.open_output, Some(out2_id));
+        assert!(app.shell.actions.is_empty());
+
+        // Click the second power choice ("performance") on Output 2 in logical coordinates.
+        let perf_rect = app.shell.frame_hits(Some(out2_id))[0].2.list[1].1;
+        mock.send_pointer_move(sid2, perf_rect.0 + 5.0, perf_rect.1 + 5.0, true);
+        mock.send_pointer_click(BTN_LEFT);
+        eq.roundtrip(&mut app).unwrap();
+        assert!(
+            app.shell.actions.iter().any(|(a, _, _, _)| matches!(
+                a,
+                Action::Run(cmd) if cmd.contains("performance")
+            )) || app.queued.lock().unwrap().contains_key("settings/power"),
+            "click on Output 2 must trigger performance action"
+        );
+        app.shell.actions.clear();
+
+        // Close, focus a toplevel on Output 2, and open by key/signal -> opens on Output 2 only.
+        assert!(app.shell.close_at(t0));
+        app.shell
+            .tick(t0 + Duration::from_millis(crate::shell::LEAVE_MS as u64 + 10));
+        app.shell
+            .tick(t0 + Duration::from_millis(crate::shell::LEAVE_MS as u64 + 60));
+        app.sync_all();
+        eq.roundtrip(&mut app).unwrap();
+
+        mock.send_focused_toplevel(1);
+        eq.roundtrip(&mut app).unwrap();
+        app.handle_signal_byte(b'C');
+        app.shell.open_ms = f64::INFINITY;
+        app.shell.opened_at = None;
+        eq.roundtrip(&mut app).unwrap();
+        app.outputs[1].dirty = true;
+        app.sync_all();
+        eq.roundtrip(&mut app).unwrap();
+
+        assert_eq!(app.shell.open_output, Some(out2_id));
+        assert!(surface_has_nonzero_pixels(&mut app.outputs[1]));
+        assert!(!surface_has_nonzero_pixels(&mut app.outputs[0]));
     }
 }
