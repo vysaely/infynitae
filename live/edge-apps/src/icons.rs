@@ -1286,6 +1286,7 @@ mod tests {
             notes: &[],
             list_above: false,
             editing: false,
+            room: f64::INFINITY,
         };
 
         let sample_center = |icon: &str| -> [u8; 4] {
@@ -1384,6 +1385,7 @@ mod tests {
             notes: &[],
             list_above: false,
             editing: false,
+            room: f64::INFINITY,
         };
 
         // 1x draw queues and caches 32x32.

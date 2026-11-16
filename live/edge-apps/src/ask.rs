@@ -1154,6 +1154,18 @@ fn draw_inner(cr: &Context, th: &Theme, ask: &AskState, (gx, gy, gw, gh): Rect) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Clears O_NONBLOCK on a test's reply-pipe reader.
+    fn blocking(f: &std::fs::File) {
+        use std::os::fd::AsRawFd;
+        let fd = f.as_raw_fd();
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+        assert!(flags >= 0);
+        assert_eq!(
+            unsafe { libc::fcntl(fd, libc::F_SETFL, flags & !libc::O_NONBLOCK) },
+            0
+        );
+    }
     use std::io::Read;
     use std::os::fd::FromRawFd;
 
@@ -1339,6 +1351,9 @@ mod tests {
             Some("ask:answer:Erase everything")
         );
 
+        // blocking read to the end: another test's command can hold a copy of the write end
+        // between fork and exec, and a non-blocking read then fails with WouldBlock
+        blocking(&reader);
         let mut got = String::new();
         reader.read_to_string(&mut got).unwrap();
         assert_eq!(got, "1\nErase everything\n");
@@ -1581,6 +1596,9 @@ mod tests {
         assert!(key(&mut world, 0xff0d, None));
         assert!(!world.ask.on);
 
+        // blocking read to the end: another test's command can hold a copy of the write end
+        // between fork and exec, and a non-blocking read then fails with WouldBlock
+        blocking(&reader2);
         let mut got = String::new();
         reader2.read_to_string(&mut got).unwrap();
         assert_eq!(got, "1\nA2\n");

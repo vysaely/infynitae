@@ -68,6 +68,9 @@ pub struct Cx<'a> {
     /// the panel is at the bottom edge: lists open over their row
     pub list_above: bool,
     pub editing: bool,
+    /// the body height this card may take: infinite unless its panel would be taller than the
+    /// screen, then a flexible card (`Card::flexible`) gets less and shows fewer items
+    pub room: f64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -87,6 +90,13 @@ pub trait Card {
     fn apply(&mut self, key: &str, data: &dyn std::any::Any) -> bool;
 
     fn status(&self, cx: &Cx) -> Status;
+
+    /// It can show less when its panel is taller than the screen (a list that shows fewer items
+    /// and counts the rest in its title): the panel gives it less `Cx::room` instead of cutting a
+    /// card in half at the screen's edge.
+    fn flexible(&self) -> bool {
+        false
+    }
 
     /// Whether the core draws its header (title and app). A card that says what it is by itself
     /// (a search field) goes without.

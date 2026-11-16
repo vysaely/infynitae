@@ -556,13 +556,26 @@ impl Shell {
             notes: &self.notes,
             list_above,
             editing: self.editing(),
+            room: f64::INFINITY,
         }
+    }
+
+    fn panel_width(ps: &PanelState, w: f64) -> f64 {
+        if ps.panel.width > 0 {
+            ps.panel.width as f64
+        } else {
+            380.0
+        }
+        .min((w - 2.0 * MARGIN).max(0.0))
     }
 
     /// A card's whole height (its box: header, body, padding) at `width`; 0 when it hides, or a
     /// placeholder's height while editing.
-    fn card_h(&self, pc: &Placed, width: f64, list_above: bool) -> f64 {
-        let cx = self.cx(pc.size, pc.app_id.as_deref(), list_above);
+    fn card_h(&self, pc: &Placed, width: f64, list_above: bool, room: f64) -> f64 {
+        let cx = Cx {
+            room,
+            ..self.cx(pc.size, pc.app_id.as_deref(), list_above)
+        };
         let head = if pc.card.header(&cx) { HEAD_H } else { 0.0 };
         match pc.card.status(&cx) {
             Status::Hidden if cx.editing => crate::edit::PLACEHOLDER_H,
@@ -583,19 +596,70 @@ impl Shell {
         })
     }
 
+    /// The body room of each card of panel `idx` (by card index): infinite, unless the panel
+    /// would be taller than the screen; then the flexible cards, bottom one first, give up what
+    /// is over (a card is never cut at the screen's edge just because it is long: 2026-11-14,
+    /// the control panel's notifications ran under the screen's bottom).
+    pub fn rooms(&self, idx: usize, w: f64, h: f64) -> Vec<f64> {
+        draw::with_font(&self.theme.font, || {
+            self.panel_rooms(&self.panels[idx], w, h)
+        })
+    }
+
+    fn panel_rooms(&self, ps: &PanelState, w: f64, h: f64) -> Vec<f64> {
+        let mut rooms = vec![f64::INFINITY; ps.cards.len()];
+        if self.editing() {
+            return rooms;
+        }
+        let avail = (h - 2.0 * MARGIN).max(0.0);
+        let (_, _, content_h) = self.layout_panel_with(ps, w, h, &rooms);
+        let mut over = content_h - avail;
+        if over <= 0.0 {
+            return rooms;
+        }
+        let above = ps.panel.side == Side::Bottom;
+        let pw = Self::panel_width(ps, w);
+        let body_w = pw - 2.0 * (PAD_X - 8.0);
+        for (i, pc) in ps.cards.iter().enumerate().rev() {
+            if over <= 0.0 {
+                break;
+            }
+            if !pc.card.flexible() {
+                continue;
+            }
+            let cx = self.cx(pc.size, pc.app_id.as_deref(), above);
+            if pc.card.status(&cx) != Status::Ready {
+                continue;
+            }
+            let body = pc.card.height(&cx, body_w);
+            let room = (body - over).max(0.0);
+            let given = pc.card.height(&Cx { room, ..cx }, body_w);
+            rooms[i] = room;
+            over -= body - given;
+        }
+        rooms
+    }
+
     fn layout_panel_local(
         &self,
         ps: &PanelState,
         w: f64,
         h: f64,
     ) -> (Rect, Vec<(usize, Rect)>, f64) {
+        let rooms = self.panel_rooms(ps, w, h);
+        self.layout_panel_with(ps, w, h, &rooms)
+    }
+
+    /// `layout_panel_local` with each card's body room given.
+    fn layout_panel_with(
+        &self,
+        ps: &PanelState,
+        w: f64,
+        h: f64,
+        rooms: &[f64],
+    ) -> (Rect, Vec<(usize, Rect)>, f64) {
         let editing = self.editing();
-        let pw = if ps.panel.width > 0 {
-            ps.panel.width as f64
-        } else {
-            380.0
-        }
-        .min((w - 2.0 * MARGIN).max(0.0));
+        let pw = Self::panel_width(ps, w);
         let above = ps.panel.side == Side::Bottom;
         let mut rows: Vec<Vec<(usize, f64)>> = Vec::new();
         let mut i = 0;
@@ -609,12 +673,12 @@ impl Shell {
             {
                 let half = (pw - GAP) / 2.0;
                 rows.push(vec![
-                    (i, self.card_h(a, half, above)),
-                    (i + 1, self.card_h(next.unwrap(), half, above)),
+                    (i, self.card_h(a, half, above, rooms[i])),
+                    (i + 1, self.card_h(next.unwrap(), half, above, rooms[i + 1])),
                 ]);
                 i += 2;
             } else {
-                rows.push(vec![(i, self.card_h(a, pw, above))]);
+                rows.push(vec![(i, self.card_h(a, pw, above, rooms[i]))]);
                 i += 1;
             }
         }
@@ -635,10 +699,50 @@ impl Shell {
                 + heights.iter().sum::<f64>()
                 + (GAP + strip) * rows.len().saturating_sub(1) as f64
         };
-        let ph = content_h.min((h - 2.0 * MARGIN).max(0.0));
+        // Taller than the screen: the rows flow into more columns side by side (first column on
+        // the left), when they fit across the screen; otherwise one column that scrolls.
+        let avail = (h - 2.0 * MARGIN).max(0.0);
+        let mut col_of = vec![0usize; rows.len()];
+        let mut cols = 1usize;
+        if !editing && content_h > avail && rows.len() > 1 {
+            let mut y = 0.0;
+            let mut c = 0usize;
+            for (k, rh) in heights.iter().enumerate() {
+                if y > 0.0 && y + rh > avail {
+                    c += 1;
+                    y = 0.0;
+                }
+                col_of[k] = c;
+                y += rh + GAP;
+            }
+            if (c + 1) as f64 * pw + c as f64 * GAP <= w - 2.0 * MARGIN {
+                cols = c + 1;
+            } else {
+                col_of.fill(0);
+            }
+        }
+        let content_h = if cols > 1 {
+            let mut tallest: f64 = 0.0;
+            for c in 0..cols {
+                let rows_in: Vec<f64> = heights
+                    .iter()
+                    .zip(&col_of)
+                    .filter(|(_, k)| **k == c)
+                    .map(|(rh, _)| *rh)
+                    .collect();
+                tallest = tallest.max(
+                    rows_in.iter().sum::<f64>() + GAP * rows_in.len().saturating_sub(1) as f64,
+                );
+            }
+            tallest
+        } else {
+            content_h
+        };
+        let tw = cols as f64 * pw + (cols - 1) as f64 * GAP;
+        let ph = content_h.min(avail);
         let p = &ps.panel;
         let (along_w, size) = if p.side.horizontal() {
-            (w, pw)
+            (w, tw)
         } else {
             (h, ph)
         };
@@ -652,21 +756,27 @@ impl Shell {
             Side::Top => (along, MARGIN),
             Side::Bottom => (along, h - ph - MARGIN),
             Side::Left => (MARGIN, along),
-            Side::Right => (w - pw - MARGIN, along),
+            Side::Right => (w - tw - MARGIN, along),
         };
         let mut out = Vec::new();
         let mut y = strip;
-        for (row, rh) in rows.iter().zip(&heights) {
+        let mut col = 0usize;
+        for ((row, rh), c) in rows.iter().zip(&heights).zip(&col_of) {
+            if *c != col {
+                col = *c;
+                y = strip;
+            }
+            let x0 = col as f64 * (pw + GAP);
             if row.len() == 2 {
                 let half = (pw - GAP) / 2.0;
-                out.push((row[0].0, (0.0, y, half, row[0].1)));
-                out.push((row[1].0, (half + GAP, y, half, row[1].1)));
+                out.push((row[0].0, (x0, y, half, row[0].1)));
+                out.push((row[1].0, (x0 + half + GAP, y, half, row[1].1)));
             } else {
-                out.push((row[0].0, (0.0, y, pw, row[0].1)));
+                out.push((row[0].0, (x0, y, pw, row[0].1)));
             }
             y += rh + GAP + strip;
         }
-        ((ox, oy, pw, ph), out, content_h)
+        ((ox, oy, tw, ph), out, content_h)
     }
 
     /// Panel `idx` on a screen of `w x h`: its box, and each shown card's screen rectangle (halves
@@ -2379,6 +2489,22 @@ impl Shell {
     fn card_event(&mut self, idx: usize, ci: usize, ev: &Event) -> bool {
         let editing = self.editing();
         let above = self.panels[idx].panel.side == Side::Bottom;
+        let (w, h) = self
+            .open_output
+            .or(self.last_output)
+            .and_then(|id| self.frames.borrow().get(&id).map(|f| f.screen))
+            .unwrap_or_else(|| {
+                if self.last_output.is_some() {
+                    self.last_screen
+                } else {
+                    self.frame_screen.get()
+                }
+            });
+        let room = self
+            .rooms(idx, w, h)
+            .get(ci)
+            .copied()
+            .unwrap_or(f64::INFINITY);
         let pc = &mut self.panels[idx].cards[ci];
         let mut out = Vec::new();
         let changed = {
@@ -2395,6 +2521,7 @@ impl Shell {
                 notes: &self.notes,
                 list_above: above,
                 editing,
+                room,
             };
             pc.card.event(ev, &cx, &mut out)
         };
@@ -2496,7 +2623,9 @@ impl Shell {
         }
         let c = self.closing.as_ref()?;
         let ps = c.transient.as_ref().or_else(|| self.panels.get(c.idx))?;
-        Some(self.layout_panel_local(ps, w, h).0)
+        Some(draw::with_font(&self.theme.font, || {
+            self.layout_panel_local(ps, w, h).0
+        }))
     }
 
     /// A request in the ask file (SIGRTMIN+3), or a cancel: loaded, queued after one already
@@ -2818,7 +2947,10 @@ impl Shell {
                 };
                 self.keyboard = true;
                 self.selected = Some((order[next].0, order[next].1));
-                self.scroll_to_hit(idx, order[next].2, next == 0);
+                let top_of_col = next == 0
+                    || (order[next].0 != order[next - 1].0
+                        && order[next].2 .1 < order[next - 1].2 .1);
+                self.scroll_to_hit(idx, order[next].2, top_of_col);
                 true
             }
             Key::Left | Key::Right => {
@@ -3136,7 +3268,8 @@ impl Shell {
         let pointer = self.pointer_for(output);
         let interactive = closing_p.is_none();
         let editing = interactive && self.editing();
-        let (pbox, local_rects, content_h) = self.layout_panel_local(ps, w, h);
+        let rooms = self.panel_rooms(ps, w, h);
+        let (pbox, local_rects, content_h) = self.layout_panel_with(ps, w, h, &rooms);
         let max_scroll = (content_h - pbox.3).max(0.0);
         let scroll = scroll_pos.clamp(0.0, max_scroll);
         let rects: Vec<(usize, Rect)> = local_rects
@@ -3159,7 +3292,10 @@ impl Shell {
         cr.clip();
         for (ci, r) in &rects {
             let pc = &ps.cards[*ci];
-            let cx = self.cx(pc.size, pc.app_id.as_deref(), above);
+            let cx = Cx {
+                room: rooms[*ci],
+                ..self.cx(pc.size, pc.app_id.as_deref(), above)
+            };
             let status = pc.card.status(&cx);
             let sel = if !interactive || editing {
                 None
@@ -3499,6 +3635,225 @@ mod tests {
         let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 1280, 800).unwrap();
         let cr = cairo::Context::new(&surf).unwrap();
         sh.draw(&cr, 1280.0, 800.0);
+    }
+
+    #[test]
+    fn a_panel_taller_than_the_screen_shows_fewer_notifications_instead_of_cutting_the_card() {
+        // 2026-11-14: the control panel ran under the screen's bottom edge and cut the
+        // notifications card in half (the panel scrolled, but nothing showed it)
+        let mut sh = shell("SUPER+A bottom right 380 notifications/list");
+        sh.notes = (0..8)
+            .map(|i| crate::card::Note {
+                id: i,
+                app: format!("App{i}"),
+                summary: format!("Title {i}"),
+                body: "body".into(),
+                actions: vec![],
+                urgency: 1,
+                time: "12:00".into(),
+            })
+            .collect();
+        let idx = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "control")
+            .unwrap();
+        // room for everything: nothing is limited
+        assert!(sh
+            .rooms(idx, 1920.0, 1080.0)
+            .iter()
+            .all(|r| r.is_infinite()));
+        let (_, _, tall) = sh.layout_local(idx, 1920.0, 1080.0);
+        // a short screen: the list gives up whole notifications until the panel fits
+        let h = 300.0;
+        let rooms = sh.rooms(idx, 1920.0, h);
+        assert!(rooms[0].is_finite());
+        let (pbox, rects, content_h) = sh.layout_local(idx, 1920.0, h);
+        assert!(content_h < tall);
+        assert!(
+            content_h <= h - 2.0 * MARGIN,
+            "{content_h} > {}",
+            h - 2.0 * MARGIN
+        );
+        assert!(rects.iter().all(|(_, r)| r.1 + r.3 <= pbox.3 + 0.5));
+        // the title counts the ones left out
+        let pc = &sh.panels[idx].cards[0];
+        let cx = Cx {
+            room: rooms[0],
+            ..sh.cx(pc.size, None, true)
+        };
+        assert!(pc.card.title(&cx).is_some_and(|t| t.contains("more")));
+    }
+
+    #[test]
+    fn a_panel_taller_than_the_screen_flows_into_a_second_column() {
+        let sh = shell("SUPER+A bottom right 380 calendar/clock settings/network settings/bluetooth settings/power settings/session");
+        let idx = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "control")
+            .unwrap();
+        let (one, rects1, h1) = sh.layout_local(idx, 1920.0, 1080.0);
+        assert!(
+            rects1.iter().all(|(_, r)| r.0 == 0.0),
+            "one column when it fits"
+        );
+        // a screen too short for the cards in one column
+        let h = h1 * 0.7 + 2.0 * MARGIN;
+        let (pbox, rects, content_h) = sh.layout_local(idx, 1920.0, h);
+        assert!(content_h <= h - 2.0 * MARGIN);
+        assert!(rects.iter().any(|(_, r)| r.0 > 0.0), "a second column");
+        assert!(pbox.2 > one.2, "the panel is wider");
+        // right-aligned: it still ends at the screen's right margin, and every card is inside it
+        assert!((pbox.0 + pbox.2 - (1920.0 - MARGIN)).abs() < 0.5);
+        assert!(rects
+            .iter()
+            .all(|(_, r)| r.1 + r.3 <= pbox.3 + 0.5 && r.0 + r.2 <= pbox.2 + 0.5));
+        // too narrow for two columns: one column that scrolls, as before
+        let (narrow, rects_n, _) = sh.layout_local(idx, 600.0, h);
+        assert!(rects_n.iter().all(|(_, r)| r.0 == 0.0) && narrow.2 <= 600.0);
+    }
+
+    #[test]
+    fn keyboard_down_crosses_from_column_one_to_column_two_and_closing_keeps_columns() {
+        let mut sh = shell("SUPER+A top right 380 settings/power settings/session windows/list");
+        sh.apply(
+            "settings",
+            "power",
+            &parse_power("* balanced:\n  power-saver:\n  performance:\n") as &dyn std::any::Any,
+        );
+        sh.windows = (1..=4)
+            .map(|i| Window {
+                id: i,
+                title: format!("Win {i}"),
+                app_id: "kitty".into(),
+                focused: i == 1,
+            })
+            .collect();
+        let idx = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "control")
+            .unwrap();
+        let out: OutputId = 7;
+        assert!(sh.open_panel_on(Some(out), idx, false, Instant::now()));
+        sh.open_ms = f64::INFINITY;
+
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 1280, 400).unwrap();
+        let cr = cairo::Context::new(&surf).unwrap();
+        let pbox = sh.draw_on(out, &cr, 1280.0, 400.0).unwrap();
+        let (_, local_rects, content_h) = sh.layout_local(idx, 1280.0, 400.0);
+        assert!(content_h <= 400.0 - 2.0 * MARGIN);
+        assert_eq!(local_rects[0].1 .0, 0.0);
+        assert_eq!(local_rects[1].1 .0, 0.0);
+        assert_eq!(local_rects[2].1 .0, 380.0 + GAP);
+
+        let order = sh.hit_order();
+        let col1_count = order.iter().take_while(|(ci, _, _)| *ci < 2).count();
+        assert!(col1_count > 0 && col1_count < order.len());
+        // Step through every hit in column 1.
+        for _ in 0..col1_count {
+            assert!(sh.key(Key::Down));
+        }
+        let (ci1, hit1) = sh.selected.unwrap();
+        assert_eq!(ci1, 1, "on the last card of column 1");
+        let r1 = order
+            .iter()
+            .find(|(c, h, _)| *c == ci1 && *h == hit1)
+            .unwrap()
+            .2;
+        assert!(r1.0 < pbox.0 + 380.0);
+
+        // Next Down crosses to the first hit of column 2 (windows/list).
+        assert!(sh.key(Key::Down));
+        let (ci2, hit2) = sh.selected.unwrap();
+        assert_eq!(ci2, 2, "crossed to column 2");
+        let r2 = order
+            .iter()
+            .find(|(c, h, _)| *c == ci2 && *h == hit2)
+            .unwrap()
+            .2;
+        assert!(r2.0 >= pbox.0 + 380.0 + GAP);
+        assert!(r2.0 + r2.2 <= pbox.0 + pbox.2 && r2.1 >= pbox.1 && r2.1 + r2.3 <= pbox.1 + pbox.3);
+
+        // Enter on a window row in column 2 focuses it and starts the closing fade with the same columns.
+        while sh.selected.is_some_and(|(c, h)| c == 2 && h == 0) {
+            assert!(sh.key(Key::Down));
+        }
+        assert!(sh.key(Key::Enter));
+        assert!(sh
+            .actions
+            .iter()
+            .any(|(a, ..)| matches!(a, Action::Focus(1))));
+        assert!(sh.is_closing());
+        assert_eq!(sh.shown_box(1280.0, 400.0), Some(pbox));
+        assert_eq!(sh.draw_on(out, &cr, 1280.0, 400.0), Some(pbox));
+    }
+
+    #[test]
+    fn scale_1_5_lays_out_columns_and_hits_in_logical_pixels() {
+        // A 1920x1080 display at scale 1.5 has a 1280x720 logical viewport and a 1920x1080 device buffer.
+        let mut sh = shell(
+            "SUPER+A bottom right 380 calendar/clock:m settings/network settings/bluetooth settings/power settings/session windows/list",
+        );
+        sh.apply(
+            "settings",
+            "power",
+            &parse_power("* balanced:\n  power-saver:\n  performance:\n") as &dyn std::any::Any,
+        );
+        sh.windows = (1..=6)
+            .map(|i| Window {
+                id: i,
+                title: format!("Win {i}"),
+                app_id: "firefox".into(),
+                focused: i == 1,
+            })
+            .collect();
+        let idx = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "control")
+            .unwrap();
+        // At 1920x1080 logical (scale 1.0) the cards fit in one 380 px column; at 1280x720 logical
+        // (scale 1.5 on a 1920x1080 panel) they flow into two columns in logical px.
+        let (one, rects_1x, _) = sh.layout_local(idx, 1920.0, 1080.0);
+        assert_eq!(one.2, 380.0);
+        assert!(rects_1x.iter().all(|(_, r)| r.0 == 0.0));
+
+        let (lw, lh) = (1280.0, 720.0);
+        let (pbox, local_rects, content_h) = sh.layout_local(idx, lw, lh);
+        assert_eq!(pbox.2, 2.0 * 380.0 + GAP);
+        assert!((pbox.0 + pbox.2 - (lw - MARGIN)).abs() < 0.5);
+        assert!(content_h <= lh - 2.0 * MARGIN);
+        assert!(local_rects.iter().any(|(_, r)| r.0 == 380.0 + GAP));
+
+        let out: OutputId = 15;
+        assert!(sh.open_panel_on(Some(out), idx, false, Instant::now()));
+        sh.open_ms = f64::INFINITY;
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 1920, 1080).unwrap();
+        let cr = cairo::Context::new(&surf).unwrap();
+        cr.scale(1.5, 1.5);
+        assert_eq!(sh.draw_on(out, &cr, lw, lh), Some(pbox));
+
+        // Per-output frame stores column 2 card and hit rectangles in logical px.
+        let frames = sh.frame_hits(Some(out));
+        let (_, col2_card_r, col2_hits) = frames
+            .iter()
+            .find(|(_, r, _)| r.0 >= pbox.0 + 380.0)
+            .expect("column 2 card in per-output frame");
+        assert!((col2_card_r.0 - (pbox.0 + 380.0 + GAP)).abs() < 0.5);
+        assert!(col2_card_r.0 + col2_card_r.2 <= lw - MARGIN + 0.5);
+        let win_hit = col2_hits
+            .list
+            .iter()
+            .find(|(id, _)| *id == 1)
+            .expect("first window row hit in column 2")
+            .1;
+        assert!(sh.click_on(out, lw, lh, win_hit.0 + 4.0, win_hit.1 + 4.0, Button::Left));
+        assert!(sh
+            .actions
+            .iter()
+            .any(|(a, ..)| matches!(a, Action::Focus(1))));
     }
 
     #[test]
@@ -4353,10 +4708,10 @@ mod tests {
         assert!(sh.open_panel(idx, false, Instant::now()));
         sh.open_ms = f64::INFINITY;
 
-        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 1280, 400).unwrap();
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 600, 400).unwrap();
         let cr = cairo::Context::new(&surf).unwrap();
-        let pbox = sh.draw(&cr, 1280.0, 400.0).unwrap();
-        let (_, _, content_h) = sh.layout_local(idx, 1280.0, 400.0);
+        let pbox = sh.draw(&cr, 600.0, 400.0).unwrap();
+        let (_, _, content_h) = sh.layout_local(idx, 600.0, 400.0);
         assert!(
             content_h > pbox.3,
             "precondition: panel is taller than screen"
@@ -4375,7 +4730,7 @@ mod tests {
             sh.panel_scroll > 0.0,
             "panel_scroll should advance past the fold"
         );
-        sh.draw(&cr, 1280.0, 400.0);
+        sh.draw(&cr, 600.0, 400.0);
         let (ci, hit) = sh.selected.unwrap();
         let r = sh
             .hit_order()
@@ -4434,10 +4789,10 @@ mod tests {
         assert!(sh.open_panel(idx, false, Instant::now()));
         sh.open_ms = f64::INFINITY;
 
-        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 1280, 400).unwrap();
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 600, 400).unwrap();
         let cr = cairo::Context::new(&surf).unwrap();
-        let pbox = sh.draw(&cr, 1280.0, 400.0).unwrap();
-        let (_, layout_rects) = sh.layout(idx, 1280.0, 400.0);
+        let pbox = sh.draw(&cr, 600.0, 400.0).unwrap();
+        let (_, layout_rects) = sh.layout(idx, 600.0, 400.0);
         // notifications/list (index 0) is Hidden, app1/app and app2/app share one row (half-width).
         assert_eq!(layout_rects[0].0, 1);
         assert_eq!(layout_rects[0].1 .1, layout_rects[1].1 .1);
@@ -4447,7 +4802,7 @@ mod tests {
         let mut saw_scrolled = false;
         for step in 0..total_hits {
             assert!(sh.key(Key::Down));
-            sh.draw(&cr, 1280.0, 400.0);
+            sh.draw(&cr, 600.0, 400.0);
             if sh.panel_scroll > 0.0 {
                 saw_scrolled = true;
             }
@@ -4470,7 +4825,7 @@ mod tests {
 
         // Wrapping past the last hit returns to the first hit and scrolls back to top.
         assert!(sh.key(Key::Down));
-        sh.draw(&cr, 1280.0, 400.0);
+        sh.draw(&cr, 600.0, 400.0);
         assert_eq!(sh.panel_scroll, 0.0);
         let first = sh.hit_order()[0];
         assert_eq!(sh.selected, Some((first.0, first.1)));
@@ -4800,10 +5155,10 @@ mod tests {
             .unwrap();
         assert!(sh.open_panel(idx, false, Instant::now()));
         sh.open_ms = f64::INFINITY;
-        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 1280, 300).unwrap();
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 600, 300).unwrap();
         let cr = cairo::Context::new(&surf).unwrap();
-        let pbox = sh.draw(&cr, 1280.0, 300.0).unwrap();
-        let (_, _, content_h) = sh.layout_local(idx, 1280.0, 300.0);
+        let pbox = sh.draw(&cr, 600.0, 300.0).unwrap();
+        let (_, _, content_h) = sh.layout_local(idx, 600.0, 300.0);
         assert!(content_h > pbox.3 + 80.0);
 
         let sx = pbox.0 + 10.0;
@@ -4845,10 +5200,10 @@ mod tests {
         assert!(sh.open_panel(idx, false, Instant::now()));
         sh.open_ms = f64::INFINITY;
 
-        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 1280, 340).unwrap();
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 600, 340).unwrap();
         let cr = cairo::Context::new(&surf).unwrap();
-        let pbox = sh.draw(&cr, 1280.0, 340.0).unwrap();
-        let (_, _, content_h) = sh.layout_local(idx, 1280.0, 340.0);
+        let pbox = sh.draw(&cr, 600.0, 340.0).unwrap();
+        let (_, _, content_h) = sh.layout_local(idx, 600.0, 340.0);
         assert!(content_h > pbox.3 + 80.0);
 
         // Over settings/power (non-scrolling card): pixel amounts apply 1:1.
@@ -4872,7 +5227,7 @@ mod tests {
 
         // Reset panel scroll and test card -> panel handover on windows/list (10 windows, 6 visible -> max_scroll = 4).
         sh.panel_scroll = 0.0;
-        sh.draw(&cr, 1280.0, 340.0);
+        sh.draw(&cr, 600.0, 340.0);
         let win_pt = {
             let f = sh.frame.borrow();
             let r = f[1].1;
@@ -4984,10 +5339,10 @@ mod tests {
         assert!(sh.open_panel(idx, false, Instant::now()));
         sh.open_ms = f64::INFINITY;
 
-        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 1280, 360).unwrap();
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 600, 360).unwrap();
         let cr = cairo::Context::new(&surf).unwrap();
-        let pbox = sh.draw(&cr, 1280.0, 360.0).unwrap();
-        let (_, _, content_h) = sh.layout_local(idx, 1280.0, 360.0);
+        let pbox = sh.draw(&cr, 600.0, 360.0).unwrap();
+        let (_, _, content_h) = sh.layout_local(idx, 600.0, 360.0);
         let max_scroll = (content_h - pbox.3).max(0.0);
         assert!(max_scroll > 50.0);
 
@@ -5198,9 +5553,9 @@ mod tests {
         assert!(sh.open_panel(idx, false, Instant::now()));
         sh.open_ms = f64::INFINITY;
 
-        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 1280, 320).unwrap();
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 600, 320).unwrap();
         let cr = cairo::Context::new(&surf).unwrap();
-        sh.draw(&cr, 1280.0, 320.0);
+        sh.draw(&cr, 600.0, 320.0);
 
         let switch_r = sh.frame.borrow()[0]
             .2
@@ -5212,7 +5567,7 @@ mod tests {
         let sx = switch_r.0 + switch_r.2 / 2.0;
         let sy = switch_r.1 + switch_r.3 / 2.0;
 
-        assert!(sh.touch_down(1280.0, 320.0, 0, sx, sy));
+        assert!(sh.touch_down(600.0, 320.0, 0, sx, sy));
         assert!(sh.touch_motion(0, sx, sy - 40.0));
         assert!((sh.panel_scroll - 40.0).abs() < 1e-6);
         let _ = sh.touch_up(0);
@@ -5335,9 +5690,9 @@ mod tests {
         assert!(sh.open_panel_on(Some(out2), idx, false, Instant::now()));
         sh.open_ms = f64::INFINITY;
 
-        let surf2 = cairo::ImageSurface::create(cairo::Format::ARgb32, 1280, 300).unwrap();
+        let surf2 = cairo::ImageSurface::create(cairo::Format::ARgb32, 600, 300).unwrap();
         let cr2 = cairo::Context::new(&surf2).unwrap();
-        let pbox2 = sh.draw_on(out2, &cr2, 1280.0, 300.0).unwrap();
+        let pbox2 = sh.draw_on(out2, &cr2, 600.0, 300.0).unwrap();
 
         // Scroll and touch on out1 (not showing the panel) do nothing.
         assert!(!sh.scroll_on(out1, 1920.0, 1080.0, 100.0, 100.0, 10.0));
@@ -5347,13 +5702,13 @@ mod tests {
         assert_eq!(sh.open, Some(idx));
 
         // Scroll on out2 moves panel_scroll on out2.
-        assert!(sh.scroll_on(out2, 1280.0, 300.0, pbox2.0 + 10.0, pbox2.1 + 10.0, 5.0));
+        assert!(sh.scroll_on(out2, 600.0, 300.0, pbox2.0 + 10.0, pbox2.1 + 10.0, 5.0));
         assert!((sh.panel_scroll - 5.0).abs() < 1e-6);
 
         // Touch tap on performance button on out2 activates it.
-        sh.draw_on(out2, &cr2, 1280.0, 300.0);
+        sh.draw_on(out2, &cr2, 600.0, 300.0);
         let perf_r = sh.frame_hits(Some(out2))[0].2.list[2].1;
-        assert!(sh.touch_down_on(out2, 1280.0, 300.0, 0, perf_r.0 + 4.0, perf_r.1 + 4.0));
+        assert!(sh.touch_down_on(out2, 600.0, 300.0, 0, perf_r.0 + 4.0, perf_r.1 + 4.0));
         assert!(sh.touch_up(0));
         assert!(sh
             .actions
