@@ -1831,12 +1831,8 @@ impl Shell {
             frame.push((*ci, *r, hits));
         }
         if max_scroll > 0.0 {
-            let thumb_h = ((pbox.3 / content_h) * pbox.3).clamp(24.0, pbox.3);
-            let track = (pbox.3 - thumb_h).max(1.0);
-            let thumb_y = pbox.1 + (scroll / max_scroll) * track;
-            draw::round_rect(cr, pbox.0 + pbox.2 - 4.0, thumb_y, 3.0, thumb_h, 1.5);
-            draw::set(cr, th.muted.alpha(0.35));
-            let _ = cr.fill();
+            let sb_cx = self.cx(Size::M, None, above);
+            crate::ui::scrollbar(cr, &sb_cx, pbox, content_h, scroll);
         }
         cr.restore().ok();
         if editing {

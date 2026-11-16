@@ -1174,6 +1174,7 @@ impl AboutCard {
                 let max_scroll = total.saturating_sub(MAX_LOAD_ROWS);
                 let start = self.load_scroll.min(max_scroll);
                 let end = (start + MAX_LOAD_ROWS).min(total);
+                let list_top = y;
                 for i in start..end {
                     let f = &self.info.saved_files[i];
                     if let Some(h) = hits.as_deref_mut() {
@@ -1193,6 +1194,15 @@ impl AboutCard {
                         );
                     }
                     y += ui::ROW_H;
+                }
+                if hits.is_some() {
+                    ui::scrollbar(
+                        cr,
+                        cx,
+                        (body.0, list_top, body.2, (end - start) as f64 * ui::ROW_H),
+                        total as f64 * ui::ROW_H,
+                        start as f64 * ui::ROW_H,
+                    );
                 }
             }
         }

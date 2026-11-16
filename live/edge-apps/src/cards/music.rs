@@ -1553,6 +1553,7 @@ fn draw_large(
         y += 24.0;
 
         let start = queue_scroll.min(p.queue.len().saturating_sub(MAX_QUEUE_VISIBLE));
+        let queue_top = y;
         for (i, song) in p
             .queue
             .iter()
@@ -1613,6 +1614,18 @@ fn draw_large(
             }
             y += QUEUE_ROW_H;
         }
+        ui::scrollbar(
+            cr,
+            cx,
+            (
+                body.0,
+                queue_top,
+                body.2,
+                MAX_QUEUE_VISIBLE as f64 * QUEUE_ROW_H,
+            ),
+            p.queue.len() as f64 * QUEUE_ROW_H,
+            start as f64 * QUEUE_ROW_H,
+        );
     }
 }
 

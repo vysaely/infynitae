@@ -8,7 +8,7 @@
 
 use crate::card::{Cx, Hits, Rect};
 use crate::draw::{self, Text};
-use crate::theme::Rgba;
+use crate::theme::{Rgba, Theme};
 use cairo::Context;
 use std::f64::consts::PI;
 
@@ -659,6 +659,85 @@ pub fn list_row(
     lit
 }
 
+/// A thin scroll bar on the right edge of `view` when `content_h` exceeds `view.3`.
+pub fn scrollbar(cr: &Context, cx: &Cx, view: Rect, content_h: f64, scroll: f64) {
+    let max_scroll = content_h - view.3;
+    if max_scroll <= 0.01 || view.3 <= 0.0 {
+        return;
+    }
+    let thumb_h = ((view.3 / content_h) * view.3).clamp(24.0_f64.min(view.3), view.3);
+    let track = (view.3 - thumb_h).max(1.0);
+    let frac = (scroll / max_scroll).clamp(0.0, 1.0);
+    let thumb_y = view.1 + frac * track;
+    draw::round_rect(cr, view.0 + view.2 - 4.0, thumb_y, 3.0, thumb_h, 1.5);
+    draw::set(cr, cx.theme.muted.alpha(0.35));
+    let _ = cr.fill();
+}
+
+/// Content and padding for a single-line text field.
+pub struct TextField<'a> {
+    pub value: &'a str,
+    pub placeholder: &'a str,
+    pub focused: bool,
+    pub show_caret: bool,
+    pub left_pad: f64,
+    pub right_pad: f64,
+}
+
+/// A single-line text field with rounded background, focus border, placeholder, and optional
+/// caret. Returns the caret's x coordinate.
+pub fn text_field(cr: &Context, th: &Theme, r: Rect, f: &TextField) -> f64 {
+    let rad = th.small_radius().max(4.0);
+    draw::round_rect(cr, r.0.round(), r.1.round(), r.2.round(), r.3.round(), rad);
+    draw::set(cr, th.track);
+    let _ = cr.fill();
+    draw::round_rect(
+        cr,
+        r.0.round() + 0.5,
+        r.1.round() + 0.5,
+        (r.2.round() - 1.0).max(0.0),
+        (r.3.round() - 1.0).max(0.0),
+        (rad - 0.5).max(0.0),
+    );
+    draw::set(cr, if f.focused { th.accent } else { th.edge });
+    cr.set_line_width(1.0);
+    let _ = cr.stroke();
+
+    let tx = r.0 + f.left_pad;
+    let max_w = (r.2 - f.left_pad - f.right_pad).max(10.0);
+    let caret_x = if f.value.is_empty() {
+        if !f.placeholder.is_empty() {
+            let ph_t = Text {
+                size: draw::SIZE_BODY,
+                bold: false,
+                color: th.muted,
+                text: f.placeholder,
+            };
+            let (_, ph) = draw::measure(cr, &ph_t);
+            draw::text_max(cr, tx, r.1 + (r.3 - ph) / 2.0, max_w, &ph_t);
+        }
+        tx
+    } else {
+        let val_t = Text {
+            size: draw::SIZE_BODY,
+            bold: false,
+            color: th.text,
+            text: f.value,
+        };
+        let (vw, vh) = draw::measure(cr, &val_t);
+        draw::text_max(cr, tx, r.1 + (r.3 - vh) / 2.0, max_w, &val_t);
+        (tx + vw.min(max_w) + 1.5).min(r.0 + r.2 - f.right_pad)
+    }
+    .round();
+
+    if f.show_caret {
+        draw::set(cr, th.accent);
+        cr.rectangle(caret_x, (r.1 + (r.3 - 14.0) / 2.0).round(), 1.5, 14.0);
+        let _ = cr.fill();
+    }
+    caret_x
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -928,5 +1007,105 @@ mod tests {
             accent_red, 0,
             "expected no red alert pixels on accent state"
         );
+    }
+
+    #[test]
+    fn scrollbar_draws_only_when_content_overflows_and_tracks_scroll() {
+        let th = crate::theme::Theme::from_config(&crate::config::Config::from_text(""));
+        let cx = test_cx(&th);
+        let view = (0.0, 10.0, 200.0, 100.0);
+
+        let no_overflow = render_pixel(210, 120, |cr| scrollbar(cr, &cx, view, 100.0, 0.0), (197, 15));
+        assert_eq!(no_overflow[3], 0, "no scrollbar when content fits");
+
+        let top_start = render_pixel(210, 120, |cr| scrollbar(cr, &cx, view, 400.0, 0.0), (197, 15));
+        let top_end = render_pixel(210, 120, |cr| scrollbar(cr, &cx, view, 400.0, 0.0), (197, 105));
+        assert!(top_start[3] > 0, "thumb drawn at top when scroll is 0");
+        assert_eq!(top_end[3], 0, "bottom clear when scroll is 0");
+
+        let bot_start =
+            render_pixel(210, 120, |cr| scrollbar(cr, &cx, view, 400.0, 300.0), (197, 15));
+        let bot_end =
+            render_pixel(210, 120, |cr| scrollbar(cr, &cx, view, 400.0, 300.0), (197, 105));
+        assert_eq!(bot_start[3], 0, "top clear at bottom of scroll");
+        assert!(bot_end[3] > 0, "thumb drawn at bottom at max scroll");
+    }
+
+    #[test]
+    fn text_field_returns_caret_position_and_draws_caret_when_shown() {
+        let th = crate::theme::Theme::from_config(&crate::config::Config::from_text(
+            "ACCENT=\"#3366ee\"\n",
+        ));
+        let r = (10.0, 10.0, 240.0, 40.0);
+        let mut caret_empty = 0.0;
+        let mut caret_abc = 0.0;
+        let caret_px = render_pixel(
+            260,
+            60,
+            |cr| {
+                caret_empty = text_field(
+                    cr,
+                    &th,
+                    r,
+                    &TextField {
+                        value: "",
+                        placeholder: "Search",
+                        focused: false,
+                        show_caret: false,
+                        left_pad: 12.0,
+                        right_pad: 12.0,
+                    },
+                );
+            },
+            (22, 30),
+        );
+        let with_text = render_pixel(
+            260,
+            60,
+            |cr| {
+                caret_abc = text_field(
+                    cr,
+                    &th,
+                    r,
+                    &TextField {
+                        value: "abc",
+                        placeholder: "Search",
+                        focused: true,
+                        show_caret: true,
+                        left_pad: 12.0,
+                        right_pad: 12.0,
+                    },
+                );
+            },
+            // Sample at returned caret_abc after computing it below; we verify via second render.
+            (22, 30),
+        );
+        assert_eq!(caret_empty, 22.0);
+        assert!(caret_abc > caret_empty);
+        let caret_drawn = render_pixel(
+            260,
+            60,
+            |cr| {
+                text_field(
+                    cr,
+                    &th,
+                    r,
+                    &TextField {
+                        value: "abc",
+                        placeholder: "Search",
+                        focused: true,
+                        show_caret: true,
+                        left_pad: 12.0,
+                        right_pad: 12.0,
+                    },
+                );
+            },
+            (caret_abc as usize, 30),
+        );
+        assert!(
+            caret_drawn[0] > caret_drawn[2] && caret_drawn[3] > 200,
+            "caret should be drawn in accent blue at caret_abc={caret_abc}: {caret_drawn:?}"
+        );
+        let _ = (caret_px, with_text);
     }
 }

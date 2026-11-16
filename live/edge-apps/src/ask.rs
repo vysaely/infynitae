@@ -25,7 +25,7 @@ fn is_left_button(button: u32) -> bool {
     button == 1 || button == 0x110
 }
 use crate::draw::{self, Text, PAD_X, PAD_Y};
-use crate::theme::{Rgba, Theme};
+use crate::theme::Theme;
 use cairo::Context;
 use std::ffi::CString;
 use std::io::Read;
@@ -1081,56 +1081,24 @@ fn draw_inner(cr: &Context, th: &Theme, ask: &AskState, (gx, gy, gw, gh): Rect) 
     if ask.text {
         let fx = gx + PAD_X;
         let fw = (gw - 2.0 * PAD_X).max(20.0);
-        let r = th.small_radius().max(4.0);
-        draw::round_rect(cr, fx.round(), top.round(), fw.round(), FIELD_H.round(), r);
-        draw::set(cr, th.track);
-        let _ = cr.fill();
-        draw::round_rect(
-            cr,
-            fx.round() + 0.5,
-            top.round() + 0.5,
-            fw.round() - 1.0,
-            FIELD_H.round() - 1.0,
-            (r - 0.5).max(0.0),
-        );
-        draw::set(cr, Rgba(th.accent.0, th.accent.1, th.accent.2, 0.65));
-        cr.set_line_width(1.0);
-        let _ = cr.stroke();
-
         let shown = if ask.secret {
             "\u{2022}".repeat(ask.buf.chars().count())
         } else {
             ask.buf.clone()
         };
-        let cy = top + FIELD_H / 2.0;
-        let tx = fx + 12.0;
-        let max_w = (fw - 28.0).max(10.0);
-        let tw = if !shown.is_empty() {
-            draw::text_max(
-                cr,
-                tx,
-                cy - 8.0,
-                max_w,
-                &Text {
-                    size: 13.0,
-                    bold: false,
-                    color: th.text,
-                    text: &shown,
-                },
-            )
-        } else {
-            0.0
-        };
-        let caret_x = (tx
-            + if shown.is_empty() {
-                0.0
-            } else {
-                tw.min(max_w) + 2.0
-            })
-        .round();
-        draw::set(cr, th.accent);
-        cr.rectangle(caret_x, (cy - 7.0).round(), 1.5, 14.0);
-        let _ = cr.fill();
+        crate::ui::text_field(
+            cr,
+            th,
+            (fx, top, fw, FIELD_H),
+            &crate::ui::TextField {
+                value: &shown,
+                placeholder: "",
+                focused: true,
+                show_caret: true,
+                left_pad: 12.0,
+                right_pad: 16.0,
+            },
+        );
 
         draw::text_max(
             cr,
@@ -1158,7 +1126,7 @@ fn draw_inner(cr: &Context, th: &Theme, ask: &AskState, (gx, gy, gw, gh): Rect) 
                     ROW_H - 2.0,
                     r,
                 );
-                draw::set(cr, Rgba(th.accent.0, th.accent.1, th.accent.2, 0.18));
+                draw::set(cr, th.accent.alpha(crate::ui::CHOSEN_ALPHA));
                 let _ = cr.fill();
             }
             draw::text_max(

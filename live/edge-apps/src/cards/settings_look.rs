@@ -1873,6 +1873,15 @@ impl LookCard {
                 None,
             );
         }
+        if entries.len() > vis && lr.3 >= vis as f64 * ui::LIST_ROW_H {
+            ui::scrollbar(
+                cr,
+                cx,
+                (lr.0, lr.1 + 4.0, lr.2, (lr.3 - 8.0).max(0.0)),
+                entries.len() as f64 * ui::LIST_ROW_H,
+                start as f64 * ui::LIST_ROW_H,
+            );
+        }
     }
     fn draw_accent_picker(&self, cr: &Context, cx: &Cx, hits: &mut Hits, lr: Rect) {
         ui::list_box(cr, cx, lr);
