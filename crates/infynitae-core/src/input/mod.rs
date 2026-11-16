@@ -10,12 +10,33 @@ pub mod interaction;
 pub mod keys;
 pub mod ownership;
 
+/// Active touchpad gesture ownership decided at gesture begin.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum TouchpadGesture {
+    /// 3-finger swipe panning the canvas via `Interaction::CameraPan`.
+    Pan,
+    /// 4-finger pinch zooming the canvas around the cursor (`prev_scale` starts at 1.0).
+    Pinch { prev_scale: f64 },
+    /// 4-finger swipe detecting upward motion to toggle overview.
+    FourFingerSwipe { dx: f64, dy: f64, triggered: bool },
+    /// Gesture forwarded to the focused/hovered client.
+    Client(GestureKind),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GestureKind {
+    Swipe,
+    Pinch,
+    Hold,
+}
+
 /// Core's input state. The pointer position is not here: it is OBJ-20 (`Core.pointer`).
 #[derive(Debug, Default)]
 pub(crate) struct InputState {
     pub(crate) ownership: ownership::Ownership,
     pub(crate) key_ownership: ownership::Ownership,
     pub(crate) interaction: interaction::Interaction,
+    pub(crate) gesture: Option<TouchpadGesture>,
     pub(crate) clock: InputClock,
     pub(crate) modifiers: bindings::Modifiers,
     /// Saved cluster elements and their initial anchors/sizes at drag start.
@@ -403,5 +424,364 @@ mod tests {
         button(&mut c, &mut i, BTN_MIDDLE, true, logo());
         motion(&mut c, &mut i, (1.0, 0.0));
         assert!(c.current_frame(a).is_none(), "stale frame kept");
+    }
+
+    #[test]
+    fn three_finger_swipe_pans_the_camera_and_ends_with_true_position() {
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        rig(&mut c, &mut t);
+        let fx = c
+            .physical_input_vec(
+                &mut i,
+                PhysicalEvent::GestureSwipeBegin {
+                    fingers: 3,
+                    time_us: 1000,
+                },
+            )
+            .unwrap();
+        assert!(fx.is_empty());
+        assert!(matches!(c.interaction(), Interaction::CameraPan { .. }));
+        let fx = c
+            .physical_input_vec(
+                &mut i,
+                PhysicalEvent::GestureSwipeUpdate {
+                    delta: (30.0, -15.0),
+                    time_us: 2000,
+                },
+            )
+            .unwrap();
+        assert!(
+            !fx.iter()
+                .any(|e| matches!(e, Effect::GestureSwipeUpdate { .. })),
+            "compositor pan must not reach client: {fx:?}"
+        );
+        assert_eq!(c.cameras().center(0), Some(pos(-30, 15)));
+        let fx = c
+            .physical_input_vec(
+                &mut i,
+                PhysicalEvent::GestureSwipeEnd {
+                    cancelled: false,
+                    time_us: 3000,
+                },
+            )
+            .unwrap();
+        assert_eq!(c.interaction(), Interaction::Idle);
+        assert!(matches!(fx.last(), Some(Effect::PointerFrame)));
+    }
+
+    #[test]
+    fn four_finger_pinch_zooms_around_cursor() {
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        rig(&mut c, &mut t);
+        // Move pointer off-centre to (1160, 640): offset (+200, +100) from screen centre (960, 540).
+        motion(&mut c, &mut i, (200.0, 100.0));
+        let fx = c
+            .physical_input_vec(
+                &mut i,
+                PhysicalEvent::GesturePinchBegin {
+                    fingers: 4,
+                    time_us: 1000,
+                },
+            )
+            .unwrap();
+        assert!(fx.is_empty());
+        let fx = c
+            .physical_input_vec(
+                &mut i,
+                PhysicalEvent::GesturePinchUpdate {
+                    delta: (5.0, 5.0),
+                    scale: 2.0,
+                    rotation: 0.0,
+                    time_us: 2000,
+                },
+            )
+            .unwrap();
+        assert!(
+            !fx.iter()
+                .any(|e| matches!(e, Effect::GesturePinchUpdate { .. }))
+        );
+        assert_eq!(c.cameras().zoom(0), Some(2.0));
+        // C_new = (0, 0) + (200, 100) * (1/1 - 1/2) = (100, 50)
+        assert_eq!(c.cameras().center(0), Some(pos(100, 50)));
+        let fx = c
+            .physical_input_vec(
+                &mut i,
+                PhysicalEvent::GesturePinchEnd {
+                    cancelled: false,
+                    time_us: 3000,
+                },
+            )
+            .unwrap();
+        assert!(
+            !fx.iter()
+                .any(|e| matches!(e, Effect::GesturePinchEnd { .. }))
+        );
+    }
+
+    #[test]
+    fn four_finger_swipe_up_toggles_overview_once_per_gesture() {
+        let (mut c, mut i, mut s, mut t) = Core::new(PersistedCameras::default());
+        rig(&mut c, &mut t);
+        // Add a second window away from origin so overview changes camera zoom/center.
+        let id2 = c.toplevel_created();
+        let make_tree = |mapped: bool| SurfaceTree {
+            geometry: LocalRect {
+                loc: LocalPoint::default(),
+                size: LocalSize { w: 400, h: 300 },
+            },
+            surfaces: vec![SnapshotSurface {
+                key: skey(2),
+                role: SurfaceRole::Root,
+                size: if mapped {
+                    LocalSize { w: 400, h: 300 }
+                } else {
+                    LocalSize::default()
+                },
+                mapped,
+                input: InputRegion::Infinite,
+                frame_requested: false,
+            }],
+        };
+        c.toplevel_committed(id2, make_tree(false)).unwrap();
+        c.toplevel_committed(id2, make_tree(true)).unwrap();
+        c.shell_command(
+            &mut s,
+            crate::ShellCommand::MoveElement {
+                element: crate::stage::ElementRef {
+                    instance: c.stage().instance(),
+                    element: id2,
+                },
+                to: (3000.0, 2000.0),
+                stream: crate::ShellStream::Atomic,
+            },
+        )
+        .unwrap();
+        let cam_before = c.cameras().center(0);
+        let zoom_before = c.cameras().zoom(0);
+
+        c.physical_input_vec(
+            &mut i,
+            PhysicalEvent::GestureSwipeBegin {
+                fingers: 4,
+                time_us: 1000,
+            },
+        )
+        .unwrap();
+        // Horizontal swipe does not trigger overview.
+        c.physical_input_vec(
+            &mut i,
+            PhysicalEvent::GestureSwipeUpdate {
+                delta: (60.0, -10.0),
+                time_us: 2000,
+            },
+        )
+        .unwrap();
+        assert_eq!(c.cameras().zoom(0), zoom_before);
+        c.physical_input_vec(
+            &mut i,
+            PhysicalEvent::GestureSwipeEnd {
+                cancelled: false,
+                time_us: 3000,
+            },
+        )
+        .unwrap();
+
+        // Upward swipe triggers overview once.
+        c.physical_input_vec(
+            &mut i,
+            PhysicalEvent::GestureSwipeBegin {
+                fingers: 4,
+                time_us: 4000,
+            },
+        )
+        .unwrap();
+        c.physical_input_vec(
+            &mut i,
+            PhysicalEvent::GestureSwipeUpdate {
+                delta: (0.0, -50.0),
+                time_us: 5000,
+            },
+        )
+        .unwrap();
+        let zoom_overview = c.cameras().zoom(0);
+        assert_ne!(zoom_overview, zoom_before);
+        // Further upward motion in the same gesture does not toggle overview back.
+        c.physical_input_vec(
+            &mut i,
+            PhysicalEvent::GestureSwipeUpdate {
+                delta: (0.0, -50.0),
+                time_us: 6000,
+            },
+        )
+        .unwrap();
+        assert_eq!(c.cameras().zoom(0), zoom_overview);
+        c.physical_input_vec(
+            &mut i,
+            PhysicalEvent::GestureSwipeEnd {
+                cancelled: false,
+                time_us: 7000,
+            },
+        )
+        .unwrap();
+        assert_ne!(c.cameras().center(0), cam_before);
+    }
+
+    #[test]
+    fn two_finger_gestures_and_disabled_compositor_gestures_go_to_client() {
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        rig(&mut c, &mut t);
+
+        // Two-finger pinch goes to client even when touchpad_gestures is true.
+        let fx = c
+            .physical_input_vec(
+                &mut i,
+                PhysicalEvent::GesturePinchBegin {
+                    fingers: 2,
+                    time_us: 1000,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            fx,
+            vec![Effect::GesturePinchBegin {
+                fingers: 2,
+                time_ms: 1
+            }]
+        );
+        let fx = c
+            .physical_input_vec(
+                &mut i,
+                PhysicalEvent::GesturePinchUpdate {
+                    delta: (1.0, -2.0),
+                    scale: 1.5,
+                    rotation: 10.0,
+                    time_us: 2000,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            fx,
+            vec![Effect::GesturePinchUpdate {
+                delta: (1.0, -2.0),
+                scale: 1.5,
+                rotation: 10.0,
+                time_ms: 2
+            }]
+        );
+        assert_eq!(c.cameras().zoom(0), Some(1.0));
+        let fx = c
+            .physical_input_vec(
+                &mut i,
+                PhysicalEvent::GesturePinchEnd {
+                    cancelled: false,
+                    time_us: 3000,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            fx,
+            vec![Effect::GesturePinchEnd {
+                cancelled: false,
+                time_ms: 3
+            }]
+        );
+
+        // Hold goes to client.
+        let fx = c
+            .physical_input_vec(
+                &mut i,
+                PhysicalEvent::GestureHoldBegin {
+                    fingers: 2,
+                    time_us: 4000,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            fx,
+            vec![Effect::GestureHoldBegin {
+                fingers: 2,
+                time_ms: 4
+            }]
+        );
+        let fx = c
+            .physical_input_vec(
+                &mut i,
+                PhysicalEvent::GestureHoldEnd {
+                    cancelled: true,
+                    time_us: 5000,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            fx,
+            vec![Effect::GestureHoldEnd {
+                cancelled: true,
+                time_ms: 5
+            }]
+        );
+
+        // TOUCHPAD_GESTURES=false sends 3-finger swipes to client.
+        c.set_touchpad_gestures(false);
+        let fx = c
+            .physical_input_vec(
+                &mut i,
+                PhysicalEvent::GestureSwipeBegin {
+                    fingers: 3,
+                    time_us: 6000,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            fx,
+            vec![Effect::GestureSwipeBegin {
+                fingers: 3,
+                time_ms: 6
+            }]
+        );
+        let fx = c
+            .physical_input_vec(
+                &mut i,
+                PhysicalEvent::GestureSwipeUpdate {
+                    delta: (25.0, 10.0),
+                    time_us: 7000,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            fx,
+            vec![Effect::GestureSwipeUpdate {
+                delta: (25.0, 10.0),
+                time_ms: 7
+            }]
+        );
+        assert_eq!(c.cameras().center(0), Some(pos(0, 0)));
+        let fx = c
+            .physical_input_vec(
+                &mut i,
+                PhysicalEvent::GestureSwipeEnd {
+                    cancelled: false,
+                    time_us: 8000,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            fx,
+            vec![Effect::GestureSwipeEnd {
+                cancelled: false,
+                time_ms: 8
+            }]
+        );
+
+        // Non-finite gesture values are rejected.
+        assert_eq!(
+            c.physical_input_vec(
+                &mut i,
+                PhysicalEvent::GestureSwipeUpdate {
+                    delta: (f64::NAN, 0.0),
+                    time_us: 9000,
+                },
+            ),
+            Err(crate::EntryError::InvalidEvent)
+        );
     }
 }

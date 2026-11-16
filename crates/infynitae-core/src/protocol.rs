@@ -65,6 +65,27 @@ pub enum Effect {
     PointerAxis { axis: Axis, time_ms: u32 },
     /// `wl_pointer.frame`: ends the events of one physical event.
     PointerFrame,
+    /// Client-routed touchpad swipe gesture begin (`zwp_pointer_gesture_swipe_v1`).
+    GestureSwipeBegin { fingers: u32, time_ms: u32 },
+    /// Client-routed touchpad swipe gesture update (`zwp_pointer_gesture_swipe_v1`).
+    GestureSwipeUpdate { delta: (f64, f64), time_ms: u32 },
+    /// Client-routed touchpad swipe gesture end (`zwp_pointer_gesture_swipe_v1`).
+    GestureSwipeEnd { cancelled: bool, time_ms: u32 },
+    /// Client-routed touchpad pinch gesture begin (`zwp_pointer_gesture_pinch_v1`).
+    GesturePinchBegin { fingers: u32, time_ms: u32 },
+    /// Client-routed touchpad pinch gesture update (`zwp_pointer_gesture_pinch_v1`).
+    GesturePinchUpdate {
+        delta: (f64, f64),
+        scale: f64,
+        rotation: f64,
+        time_ms: u32,
+    },
+    /// Client-routed touchpad pinch gesture end (`zwp_pointer_gesture_pinch_v1`).
+    GesturePinchEnd { cancelled: bool, time_ms: u32 },
+    /// Client-routed touchpad hold gesture begin (`zwp_pointer_gesture_hold_v1`).
+    GestureHoldBegin { fingers: u32, time_ms: u32 },
+    /// Client-routed touchpad hold gesture end (`zwp_pointer_gesture_hold_v1`).
+    GestureHoldEnd { cancelled: bool, time_ms: u32 },
     /// The last output is gone (M10 → NoOutput, EE-3): install the zero-output grab with
     /// `Focus::Clear` (one `wl_pointer.leave`, nothing delivered while installed).
     PointerZeroOutputBegin,

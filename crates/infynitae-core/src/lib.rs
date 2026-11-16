@@ -153,6 +153,27 @@ pub enum PhysicalEvent {
     TouchCancel,
     /// Focus, raise and jump the camera to a mapped window chosen by the user in a bar or list.
     JumpToWindow { element: stage::ElementId },
+    /// A touchpad swipe gesture began (`fingers` fingers).
+    GestureSwipeBegin { fingers: u32, time_us: u64 },
+    /// A touchpad swipe gesture moved by `delta` (logical px).
+    GestureSwipeUpdate { delta: (f64, f64), time_us: u64 },
+    /// A touchpad swipe gesture ended (or was cancelled).
+    GestureSwipeEnd { cancelled: bool, time_us: u64 },
+    /// A touchpad pinch gesture began (`fingers` fingers).
+    GesturePinchBegin { fingers: u32, time_us: u64 },
+    /// A touchpad pinch gesture updated (`delta`, absolute `scale` from begin, `rotation` in degrees).
+    GesturePinchUpdate {
+        delta: (f64, f64),
+        scale: f64,
+        rotation: f64,
+        time_us: u64,
+    },
+    /// A touchpad pinch gesture ended (or was cancelled).
+    GesturePinchEnd { cancelled: bool, time_us: u64 },
+    /// A touchpad hold gesture began (`fingers` fingers).
+    GestureHoldBegin { fingers: u32, time_us: u64 },
+    /// A touchpad hold gesture ended (or was cancelled).
+    GestureHoldEnd { cancelled: bool, time_us: u64 },
 }
 
 /// A semantic command from the trusted shell (C7.2, INV-SHELL-1): a value Core validates and then
@@ -494,6 +515,8 @@ pub struct Core {
     pub(crate) overview_at: Vec<(output::OutputId, CameraView)>,
     /// Whether Super+Middle pan or camera navigation moves out of fullscreen presentation.
     pub fullscreen_pan: bool,
+    /// Whether compositor touchpad gestures (3-finger swipe, 4-finger pinch/swipe) are enabled.
+    pub touchpad_gestures: bool,
     /// Whether newly opened windows receive focus on map.
     pub focus_on_open: bool,
     /// The user's key bindings (`set_key_bindings`).
@@ -604,6 +627,7 @@ impl Core {
                 maximized_at: Vec::new(),
                 left_fullscreen: Vec::new(),
                 fullscreen_pan: false,
+                touchpad_gestures: true,
                 focus_on_open: false,
                 key_bindings: input::keys::UserBindings::default(),
                 key_capture: None,
@@ -869,6 +893,16 @@ impl Core {
     /// Read access to whether fullscreen pan is enabled.
     pub fn fullscreen_pan(&self) -> bool {
         self.fullscreen_pan
+    }
+
+    /// Sets whether compositor touchpad gestures are enabled (false = all gestures go to apps).
+    pub fn set_touchpad_gestures(&mut self, enabled: bool) {
+        self.touchpad_gestures = enabled;
+    }
+
+    /// Read access to whether compositor touchpad gestures are enabled.
+    pub fn touchpad_gestures(&self) -> bool {
+        self.touchpad_gestures
     }
 
     /// Sets whether newly opened windows receive focus on map.
@@ -1429,7 +1463,16 @@ impl Core {
             E::PointerRelative { target, .. } => {
                 recipients[0] = target.and_then(|t| self.frame_kick_surface(t.surface));
             }
-            E::PointerButton { .. } | E::PointerAxis { .. } => {
+            E::PointerButton { .. }
+            | E::PointerAxis { .. }
+            | E::GestureSwipeBegin { .. }
+            | E::GestureSwipeUpdate { .. }
+            | E::GestureSwipeEnd { .. }
+            | E::GesturePinchBegin { .. }
+            | E::GesturePinchUpdate { .. }
+            | E::GesturePinchEnd { .. }
+            | E::GestureHoldBegin { .. }
+            | E::GestureHoldEnd { .. } => {
                 recipients[0] = self
                     .frame_liveness
                     .pointer_surface

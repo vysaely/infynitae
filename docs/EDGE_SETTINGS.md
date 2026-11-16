@@ -246,11 +246,12 @@ lists; whether night light re-reads the temperature while on. Brightness stays i
 | Acceleration | Switch | `MOUSE_ACCEL_PROFILE` | `adaptive` / `flat` | save |
 | Tap to click | Switch | `TOUCHPAD_TAP` | | save |
 | Scroll follows the fingers | Switch | `TOUCHPAD_NATURAL_SCROLL` | | save |
+| Canvas touchpad gestures | Switch | `TOUCHPAD_GESTURES` | | save |
 | M Super frees a captured pointer | Switch | `SUPER_FREES_CURSOR` | | save |
 | M Switch layouts with | Pick | `XKB_DEFAULT_OPTIONS` | None `""`, Alt+Shift `grp:alt_shift_toggle`, Super+Space `grp:win_space_toggle`, Caps Lock `grp:caps_toggle`; a value with other options shows "Set in the file" and is not changed | restart |
 | M Keys heard by X11 apps | Pick | `XWAYLAND_KEYS` | None `off`, Modifiers, Shortcuts, All | save |
 
-Hidden: the two touchpad rows unless a device in `/proc/bus/input/devices` has "Touchpad" in its
+Hidden: the three touchpad rows unless a device in `/proc/bus/input/devices` has "Touchpad" in its
 name (source `touchpad`, a file read; a touchpad named otherwise is missed: known gap, the file still
 works). "Switch layouts with" with one layout. Layouts is text in this stage: a list of the 100-odd
 names in `/usr/share/X11/xkb/rules/evdev.lst` is a later step.

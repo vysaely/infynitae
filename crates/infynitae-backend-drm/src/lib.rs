@@ -41,7 +41,8 @@ use smithay::backend::drm::{DrmDevice, DrmDeviceFd, DrmEvent};
 use smithay::backend::egl::fence::EGLFence;
 use smithay::backend::egl::{EGLContext, EGLDisplay};
 use smithay::backend::input::{
-    AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, InputEvent, KeyState,
+    AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, GestureBeginEvent,
+    GestureEndEvent, GesturePinchUpdateEvent, GestureSwipeUpdateEvent, InputEvent, KeyState,
     KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent, PointerMotionEvent, Switch,
     SwitchState, SwitchToggleEvent, TouchEvent,
 };
@@ -3688,6 +3689,13 @@ fn handle_input(data: &mut LoopData, event: InputEvent<LibinputInputBackend>) {
         }
         return;
     }
+    if let Some(ev) = gesture_physical(&event) {
+        let port = &mut data.input_port;
+        let _ = data
+            .state
+            .with_effects(|core, fx| core.physical_input(port, ev, fx));
+        return;
+    }
     match event {
         InputEvent::Keyboard { event } => {
             let key = event.key_code().raw().saturating_sub(8);
@@ -4000,6 +4008,53 @@ fn touch_physical(
         },
         InputEvent::TouchCancel { .. } => PhysicalEvent::TouchCancel,
         InputEvent::TouchFrame { .. } => PhysicalEvent::TouchFrame,
+        _ => return None,
+    })
+}
+
+/// Converts a libinput touchpad gesture event into Core's `PhysicalEvent`.
+fn gesture_physical(event: &InputEvent<LibinputInputBackend>) -> Option<PhysicalEvent> {
+    Some(match event {
+        InputEvent::GestureSwipeBegin { event } => PhysicalEvent::GestureSwipeBegin {
+            fingers: GestureBeginEvent::fingers(event),
+            time_us: Event::time(event),
+        },
+        InputEvent::GestureSwipeUpdate { event } => PhysicalEvent::GestureSwipeUpdate {
+            delta: (
+                GestureSwipeUpdateEvent::delta_x(event),
+                GestureSwipeUpdateEvent::delta_y(event),
+            ),
+            time_us: Event::time(event),
+        },
+        InputEvent::GestureSwipeEnd { event } => PhysicalEvent::GestureSwipeEnd {
+            cancelled: GestureEndEvent::cancelled(event),
+            time_us: Event::time(event),
+        },
+        InputEvent::GesturePinchBegin { event } => PhysicalEvent::GesturePinchBegin {
+            fingers: GestureBeginEvent::fingers(event),
+            time_us: Event::time(event),
+        },
+        InputEvent::GesturePinchUpdate { event } => PhysicalEvent::GesturePinchUpdate {
+            delta: (
+                GesturePinchUpdateEvent::delta_x(event),
+                GesturePinchUpdateEvent::delta_y(event),
+            ),
+            scale: GesturePinchUpdateEvent::scale(event),
+            rotation: GesturePinchUpdateEvent::rotation(event),
+            time_us: Event::time(event),
+        },
+        InputEvent::GesturePinchEnd { event } => PhysicalEvent::GesturePinchEnd {
+            cancelled: GestureEndEvent::cancelled(event),
+            time_us: Event::time(event),
+        },
+        InputEvent::GestureHoldBegin { event } => PhysicalEvent::GestureHoldBegin {
+            fingers: GestureBeginEvent::fingers(event),
+            time_us: Event::time(event),
+        },
+        InputEvent::GestureHoldEnd { event } => PhysicalEvent::GestureHoldEnd {
+            cancelled: GestureEndEvent::cancelled(event),
+            time_us: Event::time(event),
+        },
         _ => return None,
     })
 }

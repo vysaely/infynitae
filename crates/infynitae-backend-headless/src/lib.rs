@@ -147,6 +147,125 @@ pub fn pointer_axis(
     inject(state, port, PhysicalEvent::PointerAxis { axis, time_us })
 }
 
+/// Touchpad swipe gesture begin on the virtual touchpad.
+pub fn gesture_swipe_begin(
+    state: &mut WaylandState,
+    port: &mut InputPort,
+    fingers: u32,
+    time_us: u64,
+) -> Result<(), EntryError> {
+    inject(
+        state,
+        port,
+        PhysicalEvent::GestureSwipeBegin { fingers, time_us },
+    )
+}
+
+/// Touchpad swipe gesture update on the virtual touchpad (logical delta).
+pub fn gesture_swipe_update(
+    state: &mut WaylandState,
+    port: &mut InputPort,
+    delta: (f64, f64),
+    time_us: u64,
+) -> Result<(), EntryError> {
+    inject(
+        state,
+        port,
+        PhysicalEvent::GestureSwipeUpdate { delta, time_us },
+    )
+}
+
+/// Touchpad swipe gesture end on the virtual touchpad.
+pub fn gesture_swipe_end(
+    state: &mut WaylandState,
+    port: &mut InputPort,
+    cancelled: bool,
+    time_us: u64,
+) -> Result<(), EntryError> {
+    inject(
+        state,
+        port,
+        PhysicalEvent::GestureSwipeEnd { cancelled, time_us },
+    )
+}
+
+/// Touchpad pinch gesture begin on the virtual touchpad.
+pub fn gesture_pinch_begin(
+    state: &mut WaylandState,
+    port: &mut InputPort,
+    fingers: u32,
+    time_us: u64,
+) -> Result<(), EntryError> {
+    inject(
+        state,
+        port,
+        PhysicalEvent::GesturePinchBegin { fingers, time_us },
+    )
+}
+
+/// Touchpad pinch gesture update on the virtual touchpad.
+pub fn gesture_pinch_update(
+    state: &mut WaylandState,
+    port: &mut InputPort,
+    delta: (f64, f64),
+    scale: f64,
+    rotation: f64,
+    time_us: u64,
+) -> Result<(), EntryError> {
+    inject(
+        state,
+        port,
+        PhysicalEvent::GesturePinchUpdate {
+            delta,
+            scale,
+            rotation,
+            time_us,
+        },
+    )
+}
+
+/// Touchpad pinch gesture end on the virtual touchpad.
+pub fn gesture_pinch_end(
+    state: &mut WaylandState,
+    port: &mut InputPort,
+    cancelled: bool,
+    time_us: u64,
+) -> Result<(), EntryError> {
+    inject(
+        state,
+        port,
+        PhysicalEvent::GesturePinchEnd { cancelled, time_us },
+    )
+}
+
+/// Touchpad hold gesture begin on the virtual touchpad.
+pub fn gesture_hold_begin(
+    state: &mut WaylandState,
+    port: &mut InputPort,
+    fingers: u32,
+    time_us: u64,
+) -> Result<(), EntryError> {
+    inject(
+        state,
+        port,
+        PhysicalEvent::GestureHoldBegin { fingers, time_us },
+    )
+}
+
+/// Touchpad hold gesture end on the virtual touchpad.
+pub fn gesture_hold_end(
+    state: &mut WaylandState,
+    port: &mut InputPort,
+    cancelled: bool,
+    time_us: u64,
+) -> Result<(), EntryError> {
+    inject(
+        state,
+        port,
+        PhysicalEvent::GestureHoldEnd { cancelled, time_us },
+    )
+}
+
 /// A physical key event on the virtual keyboard (evdev keycode and press/release).
 /// Submitted through `InputPort` (C1.5, INV-INPUT-1, K1–K3).
 pub fn keyboard_key(
