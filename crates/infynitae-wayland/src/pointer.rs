@@ -736,7 +736,7 @@ impl WaylandState {
     /// finger with an event since its last frame, which leaves out a finger that is held
     /// still: each one is sent its last location again first (a motion to where it is), so the
     /// cancel reaches every client holding a finger.
-    pub(crate) fn cancel_touches(&mut self) {
+    pub fn cancel_touches(&mut self) {
         let Some(touch) = self.seat.get_touch() else {
             self.touch_last.clear();
             return;

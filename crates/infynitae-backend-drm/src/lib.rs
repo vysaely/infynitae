@@ -44,7 +44,7 @@ use smithay::backend::input::{
     AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, GestureBeginEvent,
     GestureEndEvent, GesturePinchUpdateEvent, GestureSwipeUpdateEvent, InputEvent, KeyState,
     KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent, PointerMotionEvent, Switch,
-    SwitchState, SwitchToggleEvent, TouchEvent,
+    SwitchState, SwitchToggleEvent,
 };
 use smithay::backend::libinput::{LibinputInputBackend, LibinputSessionInterface};
 use smithay::backend::renderer::damage::OutputDamageTracker;
@@ -60,6 +60,7 @@ use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::{EventLoop, Interest, Mode, PostAction};
 use smithay::reexports::drm::control::{Device, ModeTypeFlags, connector, crtc, property};
 use smithay::reexports::input::Libinput;
+use smithay::reexports::input::event::touch::TouchEventSlot;
 use smithay::reexports::rustix::fs::OFlags;
 use smithay::reexports::wayland_server::Display;
 use smithay::utils::{DeviceFd, Rectangle};
@@ -287,6 +288,10 @@ struct Screen {
     id: OutputId,
     /// The connector it is shown on (hotplug finds it by this).
     connector: connector::Handle,
+    /// Connector name (e.g. `eDP-1`, `HDMI-A-1`) for matching `WL_OUTPUT` touch devices.
+    connector_name: String,
+    /// Panel physical dimensions in mm `(width, height)`, `(0, 0)` when unknown.
+    physical_size: (u32, u32),
     crtc: crtc::Handle,
     size: (i32, i32),
     compositor: Compositor,
@@ -547,6 +552,9 @@ struct LoopData {
     keyboards: Vec<smithay::reexports::input::Device>,
     /// All active input devices (keyboards, mice, touchpads) for live config updates.
     input_devices: Vec<smithay::reexports::input::Device>,
+    /// Active touch slots: `(seat_slot, device sysname, output)` so motions stay on the touch's
+    /// initial output and unplugging one touchscreen cancels its slots.
+    touch_slots: Vec<(u32, String, OutputId)>,
     /// Last absolute pointer logical position, used to compute delta for absolute devices (e.g. RustDesk, tablets).
     last_abs_pointer: Option<(f64, f64)>,
     /// Set of known mapped element IDs for detecting newly mapped windows.
@@ -886,6 +894,7 @@ fn rescan_screens(data: &mut LoopData) {
     );
     for id in gone {
         data.screens.retain(|s| s.id != id);
+        data.touch_slots.retain(|(_, _, o)| *o != id);
         data.gamma_screens.lock().unwrap().remove(&id);
         match data
             .state
@@ -1095,9 +1104,12 @@ fn connect_screen(
         (true, Some(false)) => log_line!("[infynitae] Screen {name}: VRR off"),
         (true, None) => log_line!("[infynitae] Screen {name}: VRR while a window is fullscreen"),
     }
+    let physical_size = conn.size().unwrap_or((0, 0));
     let screen = Screen {
         id,
         connector: handle,
+        connector_name: name.clone(),
+        physical_size,
         crtc,
         size,
         compositor,
@@ -1143,7 +1155,7 @@ fn connect_screen(
             .collect(),
     };
     // VRR as tools see it: allowed (always on, or while a window is fullscreen) or off
-    let (mm_w, mm_h) = conn.size().unwrap_or((0, 0));
+    let (mm_w, mm_h) = physical_size;
     state.set_output_head_info(
         id,
         HeadInfo {
@@ -1493,6 +1505,11 @@ pub fn run_console_with(
         .insert_source(seat_notifier, |event, _, data| match event {
             SeatEvent::PauseSession => {
                 log_line!("[infynitae] Session paused (VT switched away)");
+                if !data.touch_slots.is_empty() {
+                    data.touch_slots.clear();
+                    core_touch(data, PhysicalEvent::TouchCancel);
+                    data.state.cancel_touches();
+                }
                 data.libinput.suspend();
                 data.drm.pause();
                 data.active = false;
@@ -1647,6 +1664,7 @@ pub fn run_console_with(
         held_by_device: Vec::new(),
         keyboards: Vec::new(),
         input_devices: Vec::new(),
+        touch_slots: Vec::new(),
         last_abs_pointer: None,
         known_mapped: HashSet::new(),
         last_mapped_generation: u64::MAX,
@@ -3918,13 +3936,23 @@ fn handle_input(data: &mut LoopData, event: InputEvent<LibinputInputBackend>) {
             data.input_devices
                 .retain(|d| d.sysname() != device.sysname());
             data.last_abs_pointer = None;
-            if device.has_capability(smithay::reexports::input::DeviceCapability::Touch)
-                && !data
+            if device.has_capability(smithay::reexports::input::DeviceCapability::Touch) {
+                let had_slot = data
+                    .touch_slots
+                    .iter()
+                    .any(|(_, sys, _)| sys == device.sysname());
+                let any_touch_left = data
                     .input_devices
                     .iter()
-                    .any(|d| d.has_capability(smithay::reexports::input::DeviceCapability::Touch))
-            {
-                data.state.disable_touch();
+                    .any(|d| d.has_capability(smithay::reexports::input::DeviceCapability::Touch));
+                if !any_touch_left || had_slot {
+                    data.touch_slots.clear();
+                    core_touch(data, PhysicalEvent::TouchCancel);
+                    data.state.cancel_touches();
+                }
+                if !any_touch_left {
+                    data.state.disable_touch();
+                }
             }
         }
         _ => {}
@@ -4027,34 +4055,52 @@ fn core_key(data: &mut LoopData, key: u32, pressed: bool, time_us: u64) {
 }
 
 /// A libinput touch event as Core's (and the lock's) touch: where it is on which screen
-/// (`touch_position`), its slot and time. `None` for any other event, or a touch off every screen.
+/// (`touch_position`), its seat-wide slot and time. `None` for any other event, or a touch off
+/// every screen.
 fn touch_physical(
-    data: &LoopData,
+    data: &mut LoopData,
     event: &InputEvent<LibinputInputBackend>,
 ) -> Option<PhysicalEvent> {
     Some(match event {
         InputEvent::TouchDown { event } => {
-            let (output, p) = touch_position(data, event)?;
+            let slot = TouchEventSlot::seat_slot(event);
+            let sysname = Event::device(event).sysname().to_owned();
+            let (output, p) = touch_position(data, event, None)?;
+            data.touch_slots.retain(|(s, _, _)| *s != slot);
+            data.touch_slots.push((slot, sysname, output));
             PhysicalEvent::TouchDown {
-                slot: touch_slot(TouchEvent::slot(event)),
+                slot,
                 output,
                 p,
                 time_us: Event::time(event),
             }
         }
         InputEvent::TouchMotion { event } => {
-            let (_, p) = touch_position(data, event)?;
+            let slot = TouchEventSlot::seat_slot(event);
+            let pinned = data
+                .touch_slots
+                .iter()
+                .find(|(s, _, _)| *s == slot)
+                .map(|(_, _, o)| *o)?;
+            let (_, p) = touch_position(data, event, Some(pinned))?;
             PhysicalEvent::TouchMotion {
-                slot: touch_slot(TouchEvent::slot(event)),
+                slot,
                 p,
                 time_us: Event::time(event),
             }
         }
-        InputEvent::TouchUp { event } => PhysicalEvent::TouchUp {
-            slot: touch_slot(TouchEvent::slot(event)),
-            time_us: Event::time(event),
-        },
-        InputEvent::TouchCancel { .. } => PhysicalEvent::TouchCancel,
+        InputEvent::TouchUp { event } => {
+            let slot = TouchEventSlot::seat_slot(event);
+            data.touch_slots.retain(|(s, _, _)| *s != slot);
+            PhysicalEvent::TouchUp {
+                slot,
+                time_us: Event::time(event),
+            }
+        }
+        InputEvent::TouchCancel { .. } => {
+            data.touch_slots.clear();
+            PhysicalEvent::TouchCancel
+        }
         InputEvent::TouchFrame { .. } => PhysicalEvent::TouchFrame,
         _ => return None,
     })
@@ -4115,47 +4161,119 @@ fn core_touch(data: &mut LoopData, ev: PhysicalEvent) {
         .with_effects(|core, fx| core.physical_input(port, ev, fx));
 }
 
-/// A libinput slot as Core's (one per finger; a device without slots has one finger).
-fn touch_slot(slot: smithay::backend::input::TouchSlot) -> u32 {
-    u32::try_from(i32::from(slot)).unwrap_or(0)
+struct TouchScreenCandidate<'a> {
+    id: OutputId,
+    connector: &'a str,
+    physical_size: (u32, u32),
 }
 
-/// Where a touch is: on the laptop's own panel (the touchscreen is part of it), else the screen
-/// the pointer is on, else the first; in that screen's logical px, turned with its rotation
-/// (the touchscreen reports the panel's own orientation).
-fn touch_position<E>(data: &LoopData, event: &E) -> Option<(OutputId, (f64, f64))>
+fn is_internal_connector(connector: &str) -> bool {
+    ["eDP", "LVDS", "DSI"]
+        .iter()
+        .any(|p| connector.starts_with(p))
+}
+
+/// Chooses which connected screen owns a touch device:
+/// 1. Explicit libinput `WL_OUTPUT` udev mapping (`device.output_name()`). If set, it binds
+///    exclusively to that connector name (`None` when that output is not connected).
+/// 2. Non-zero physical size match (`device.size()` in mm vs DRM `physical_size` within 15 mm),
+///    breaking ties by internal panel > pointer output > first screen.
+/// 3. Internal panel (`eDP`, `LVDS`, `DSI`), else `pointer_output`, else first connected screen.
+fn select_touch_screen(
+    output_name: Option<&str>,
+    device_size_mm: Option<(f64, f64)>,
+    screens: &[TouchScreenCandidate<'_>],
+    pointer_output: Option<OutputId>,
+) -> Option<OutputId> {
+    if let Some(name) = output_name.filter(|s| !s.is_empty()) {
+        return screens.iter().find(|s| s.connector == name).map(|s| s.id);
+    }
+    if let Some((dw, dh)) = device_size_mm.filter(|&(w, h)| w > 0.0 && h > 0.0) {
+        const SIZE_TOLERANCE_MM: f64 = 15.0;
+        let best = screens
+            .iter()
+            .filter(|s| s.physical_size.0 > 0 && s.physical_size.1 > 0)
+            .filter_map(|s| {
+                let (sw, sh) = (f64::from(s.physical_size.0), f64::from(s.physical_size.1));
+                let dx = (dw - sw).abs();
+                let dy = (dh - sh).abs();
+                (dx <= SIZE_TOLERANCE_MM && dy <= SIZE_TOLERANCE_MM).then_some((
+                    ((dx + dy) * 1000.0).round() as u64,
+                    u8::from(!is_internal_connector(s.connector)),
+                    u8::from(Some(s.id) != pointer_output),
+                    s.id,
+                ))
+            })
+            .min_by_key(|&(err, not_internal, not_ptr, _)| (err, not_internal, not_ptr));
+        if let Some((_, _, _, id)) = best {
+            return Some(id);
+        }
+    }
+    screens
+        .iter()
+        .find(|s| is_internal_connector(s.connector))
+        .or_else(|| screens.iter().find(|s| Some(s.id) == pointer_output))
+        .or_else(|| screens.first())
+        .map(|s| s.id)
+}
+
+/// Converts a panel-pixel touch point `(px, py)` on a panel of physical size `phys` into the
+/// output's logical coordinates using `transform` and `scale`.
+fn touch_point_to_output_logical(
+    panel_px: (f64, f64),
+    phys: (i32, i32),
+    transform: Transform,
+    scale: f64,
+) -> (f64, f64) {
+    let (x, y) = convert::panel_point_to_view(panel_px, phys, transform);
+    let scale = scale.max(0.001);
+    (x / scale, y / scale)
+}
+
+/// Where a touch is: on `pinned_output` (for motions in an active slot), else the screen
+/// selected for `event.device()` (`select_touch_screen`); in that screen's logical px, turned
+/// with its rotation (the touchscreen reports the panel's own orientation).
+fn touch_position<E>(
+    data: &LoopData,
+    event: &E,
+    pinned_output: Option<OutputId>,
+) -> Option<(OutputId, (f64, f64))>
 where
     E: AbsolutePositionEvent<LibinputInputBackend>,
 {
     let core = data.state.core();
-    let internal = |s: &&Screen| {
-        core.output(s.id).is_some_and(|o| {
-            ["eDP", "LVDS", "DSI"]
+    let target_id = match pinned_output {
+        Some(id) => id,
+        None => {
+            let pointer_output = match core.pointer() {
+                infynitae_core::pointer::PointerState::Located { output, .. } => Some(output),
+                infynitae_core::pointer::PointerState::NoOutput => None,
+            };
+            let candidates: Vec<TouchScreenCandidate<'_>> = data
+                .screens
                 .iter()
-                .any(|p| o.key.connector.starts_with(p))
-        })
+                .map(|s| TouchScreenCandidate {
+                    id: s.id,
+                    connector: &s.connector_name,
+                    physical_size: s.physical_size,
+                })
+                .collect();
+            let dev = Event::device(event);
+            select_touch_screen(dev.output_name(), dev.size(), &candidates, pointer_output)?
+        }
     };
-    let pointer_output = match core.pointer() {
-        infynitae_core::pointer::PointerState::Located { output, .. } => Some(output),
-        infynitae_core::pointer::PointerState::NoOutput => None,
-    };
-    let screen = data
-        .screens
-        .iter()
-        .find(internal)
-        .or_else(|| data.screens.iter().find(|s| Some(s.id) == pointer_output))
-        .or_else(|| data.screens.first())?;
+    let screen = data.screens.iter().find(|s| s.id == target_id)?;
     let model = core.output(screen.id)?;
-    let (x, y) = convert::panel_point_to_view(
+    let p = touch_point_to_output_logical(
         (
             event.x_transformed(screen.size.0),
             event.y_transformed(screen.size.1),
         ),
         screen.size,
         model.transform,
+        model.scale,
     );
-    let scale = model.scale.max(0.001);
-    Some((screen.id, (x / scale, y / scale)))
+    Some((screen.id, p))
 }
 
 fn update_keyboard_leds(
@@ -5264,5 +5382,122 @@ mod tests {
             redrawn_res.damage.is_some(),
             "reset_buffers forces a full redraw even when elements are unchanged"
         );
+    }
+
+    #[test]
+    fn touch_output_selection_prefers_udev_name_then_physical_size_then_internal_then_pointer() {
+        let (mut core, _, _, mut token) = Core::new(Default::default());
+        let make_output = |connector: &str| OutputDescriptor {
+            key: OutputKey {
+                device: "test".into(),
+                connector: connector.into(),
+                make: "Test".into(),
+                model: "Test".into(),
+                serial: None,
+            },
+            mode: (1920, 1080),
+            transform: infynitae_core::output::Transform::Normal,
+            scale_120: 120,
+            refresh_mhz: 60_000,
+        };
+        let (edp, _) = core
+            .output_connected(&mut token, make_output("eDP-1"))
+            .unwrap();
+        let (hdmi, _) = core
+            .output_connected(&mut token, make_output("HDMI-A-1"))
+            .unwrap();
+        let (dp, _) = core
+            .output_connected(&mut token, make_output("DP-1"))
+            .unwrap();
+
+        let laptop_and_ext = [
+            TouchScreenCandidate {
+                id: edp,
+                connector: "eDP-1",
+                physical_size: (294, 165),
+            },
+            TouchScreenCandidate {
+                id: hdmi,
+                connector: "HDMI-A-1",
+                physical_size: (527, 296),
+            },
+        ];
+
+        // 1. Explicit WL_OUTPUT (output_name) selects the second/external output over internal.
+        assert_eq!(
+            select_touch_screen(Some("HDMI-A-1"), None, &laptop_and_ext, Some(edp)),
+            Some(hdmi)
+        );
+        // Unconnected WL_OUTPUT does not leak touches to another output.
+        assert_eq!(
+            select_touch_screen(Some("DP-2"), None, &laptop_and_ext, Some(edp)),
+            None
+        );
+
+        // 2. Without WL_OUTPUT, physical size match picks the second output over internal eDP-1.
+        assert_eq!(
+            select_touch_screen(None, Some((528.0, 295.0)), &laptop_and_ext, Some(edp)),
+            Some(hdmi)
+        );
+
+        // 3. No WL_OUTPUT and no size match falls back to internal panel even if pointer is elsewhere.
+        assert_eq!(
+            select_touch_screen(None, None, &laptop_and_ext, Some(hdmi)),
+            Some(edp)
+        );
+        assert_eq!(
+            select_touch_screen(None, Some((100.0, 100.0)), &laptop_and_ext, Some(hdmi)),
+            Some(edp)
+        );
+
+        // 4. Desktop with two external monitors: size picks second monitor even if pointer is on first.
+        let two_ext = [
+            TouchScreenCandidate {
+                id: dp,
+                connector: "DP-1",
+                physical_size: (600, 340),
+            },
+            TouchScreenCandidate {
+                id: hdmi,
+                connector: "HDMI-A-1",
+                physical_size: (344, 194),
+            },
+        ];
+        assert_eq!(
+            select_touch_screen(None, Some((345.0, 193.0)), &two_ext, Some(dp)),
+            Some(hdmi)
+        );
+        // Without size match or internal monitor, falls back to pointer output, then first.
+        assert_eq!(
+            select_touch_screen(None, None, &two_ext, Some(hdmi)),
+            Some(hdmi)
+        );
+        assert_eq!(select_touch_screen(None, None, &two_ext, None), Some(dp));
+    }
+
+    #[test]
+    fn touch_point_in_view_handles_rotation_and_scale() {
+        let phys = (1920, 1080);
+        // Normal at 1.5x scale: panel (300, 150) -> logical (200, 100).
+        let p = touch_point_to_output_logical((300.0, 150.0), phys, Transform::Normal, 1.5);
+        assert!((p.0 - 200.0).abs() < 1e-6 && (p.1 - 100.0).abs() < 1e-6);
+
+        // R90 at 1.5x scale: view size is (1080, 1920) -> logical (720, 1280).
+        // Panel (0, 1080) is view top-left (0, 0); panel (1920, 0) is view bottom-right.
+        let tl = touch_point_to_output_logical((0.0, 1080.0), phys, Transform::R90, 1.5);
+        assert!(tl.0.abs() < 1e-6 && tl.1.abs() < 1e-6, "tl={tl:?}");
+        let br = touch_point_to_output_logical((1920.0, 0.0), phys, Transform::R90, 1.5);
+        assert!(
+            (br.0 - 720.0).abs() < 1e-6 && (br.1 - 1280.0).abs() < 1e-6,
+            "br={br:?}"
+        );
+
+        // R180 at 2.0x scale: panel (1920, 1080) -> view (0, 0).
+        let r180 = touch_point_to_output_logical((1920.0, 1080.0), phys, Transform::R180, 2.0);
+        assert!(r180.0.abs() < 1e-6 && r180.1.abs() < 1e-6, "r180={r180:?}");
+
+        // R270 at 1.0x scale: panel (1920, 0) -> view (0, 0).
+        let r270 = touch_point_to_output_logical((1920.0, 0.0), phys, Transform::R270, 1.0);
+        assert!(r270.0.abs() < 1e-6 && r270.1.abs() < 1e-6, "r270={r270:?}");
     }
 }
