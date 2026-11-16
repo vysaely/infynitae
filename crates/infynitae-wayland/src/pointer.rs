@@ -726,6 +726,8 @@ impl WaylandState {
 
     /// The seat's touch goes (the last touchscreen was removed): fingers down are given up.
     pub fn disable_touch(&mut self) {
+        let fx = self.core.clear_touches();
+        self.apply(&fx);
         self.cancel_touches();
         if self.seat.get_touch().is_some() {
             self.seat.remove_touch();
@@ -739,12 +741,21 @@ impl WaylandState {
     pub fn cancel_touches(&mut self) {
         let Some(touch) = self.seat.get_touch() else {
             self.touch_last.clear();
+            self.lock_touch_last.clear();
             return;
         };
         for (slot, location) in std::mem::take(&mut self.touch_last) {
             let event = TouchMotionEvent {
                 slot: Some(slot).into(),
                 location: convert::canvas_to_global(location),
+                time: 0,
+            };
+            touch.motion(self, None, &event);
+        }
+        for (slot, p) in std::mem::take(&mut self.lock_touch_last) {
+            let event = TouchMotionEvent {
+                slot: Some(slot).into(),
+                location: p.into(),
                 time: 0,
             };
             touch.motion(self, None, &event);
@@ -771,6 +782,8 @@ impl WaylandState {
                 },
             ) => {
                 if let Some(touch) = touch {
+                    self.lock_touch_last.retain(|(s, _)| *s != slot);
+                    self.lock_touch_last.push((slot, p));
                     // a lock surface covers its screen from its origin: the screen point is
                     // the surface point
                     let event = TouchDownEvent {
@@ -784,6 +797,9 @@ impl WaylandState {
             }
             (LockTouchRoute::Lock, P::TouchMotion { slot, p, time_us }) => {
                 if let Some(touch) = touch {
+                    if let Some(last) = self.lock_touch_last.iter_mut().find(|(s, _)| *s == slot) {
+                        last.1 = p;
+                    }
                     let event = TouchMotionEvent {
                         slot: Some(slot).into(),
                         location: p.into(),
@@ -794,6 +810,7 @@ impl WaylandState {
             }
             (LockTouchRoute::Lock, P::TouchUp { slot, time_us }) => {
                 if let Some(touch) = touch {
+                    self.lock_touch_last.retain(|(s, _)| *s != slot);
                     let event = TouchUpEvent {
                         slot: Some(slot).into(),
                         serial: SERIAL_COUNTER.next_serial(),
@@ -808,9 +825,7 @@ impl WaylandState {
                 }
             }
             (LockTouchRoute::Lock, P::TouchCancel) => {
-                if let Some(touch) = touch {
-                    touch.cancel(self);
-                }
+                self.cancel_touches();
             }
             _ => {}
         }

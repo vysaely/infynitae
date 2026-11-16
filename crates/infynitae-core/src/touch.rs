@@ -363,6 +363,17 @@ impl Touches {
             || self.window.as_ref().is_some_and(|g| g.output == output)
     }
 
+    pub(crate) fn any_point(&self, mut f: impl FnMut(&TouchPoint) -> bool) -> bool {
+        self.points.iter().any(|(_, p)| f(p))
+    }
+
+    pub(crate) fn all_points_on(&self, mut f: impl FnMut(&TouchPoint) -> bool) -> bool {
+        !self.points.is_empty()
+            && self.points.iter().all(|(_, p)| f(p))
+            && self.canvas.is_none()
+            && self.window.is_none()
+    }
+
     /// A finger on empty canvas of `output`, whose camera is `camera`: it joins the gesture there.
     /// `false` while a gesture holds another output's canvas (the finger is ignored).
     pub(crate) fn canvas_down(

@@ -680,10 +680,20 @@ impl Core {
     }
 
     /// A window gesture that was resizing ended: the last configure, without `resizing`.
-    fn touch_resize_settle(&mut self, out: &mut Vec<Effect>) {
+    pub(crate) fn touch_resize_settle(&mut self, out: &mut Vec<Effect>) {
         if self.touches.take_resize_done() && self.resize.is_some_and(|r| !r.released) {
             self.end_resize(out);
         }
+    }
+
+    /// Cancels any active touches in Core (when the touchscreen disconnects or the session locks).
+    pub fn clear_touches(&mut self) -> Vec<Effect> {
+        let mut out = Vec::new();
+        if self.touches.clear() {
+            out.push(Effect::TouchCancel);
+        }
+        self.touch_resize_settle(&mut out);
+        out
     }
 
     /// [`Core::physical_input`] into a new `Vec`: for tests and one-off callers. It allocates;
@@ -3524,8 +3534,13 @@ impl Core {
         // F-LATTICE-1: a new k_O or view_O sets the reference again; otherwise it is kept
         self.update_lattice(output);
         self.invalidate_frame(output);
+        let touch_cancelled = self.touches.on_output(output) && self.touches.clear();
         self.pointer = pointer::reconfigured(self.pointer, &model);
         let mut fx = vec![Effect::OutputChanged(output)];
+        if touch_cancelled {
+            fx.push(Effect::TouchCancel);
+        }
+        self.touch_resize_settle(&mut fx);
         // its layer surfaces are arranged in the new extent and told the new scale (L1)
         fx.extend(self.layers_output_reconfigured(output));
         fx.extend(self.fullscreen_output_reconfigured(output));
@@ -3565,8 +3580,13 @@ impl Core {
         let model = slot.clone();
         self.update_lattice(output);
         self.invalidate_frame(output);
+        let touch_cancelled = self.touches.on_output(output) && self.touches.clear();
         self.pointer = pointer::reconfigured(self.pointer, &model);
         let mut fx = vec![Effect::OutputChanged(output)];
+        if touch_cancelled {
+            fx.push(Effect::TouchCancel);
+        }
+        self.touch_resize_settle(&mut fx);
         fx.extend(self.layers_output_reconfigured(output));
         fx.extend(self.fullscreen_output_reconfigured(output));
         fx.extend(self.visibility_pass());
@@ -3634,6 +3654,7 @@ impl Core {
         if touch_cancelled {
             fx.push(Effect::TouchCancel);
         }
+        self.touch_resize_settle(&mut fx);
         fx.extend(self.visibility_pass());
         fx.extend(restored);
         fx.extend(pointer_fx);

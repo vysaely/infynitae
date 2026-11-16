@@ -746,7 +746,6 @@ fn dismiss_popup_grab_on_camera_pan_steals_keyboard_from_exclusive_layer() {
 /// An active canvas touch slot remains in `Core::touches`, so a single finger tap on a window `W`
 /// after touchscreen reconnect is absorbed as a second finger of the stale canvas gesture.
 #[test]
-#[ignore = "AUDIT_INPUT_LIFECYCLE: disable_touch never sends TouchCancel to Core leaving stale touch slots"]
 fn disable_touch_leaves_core_touch_state_active() {
     let mut r = Rig::x8();
     r.ls.state.enable_touch();
@@ -782,6 +781,9 @@ fn disable_touch_leaves_core_touch_state_active() {
     r.ls.state.disable_touch();
     r.ls.pump();
     r.ls.state.enable_touch();
+    r.ls.pump();
+    // Seat's old TouchHandle was removed on disable; clients re-bind wl_touch when capability returns.
+    let _touch_rebound = seat.get_touch(&qh, ());
     r.ls.pump();
     r.ls.probe.log.clear();
 
@@ -941,7 +943,6 @@ fn click_grab_kept_while_client_surface_unmapped() {
 /// `PhysicalEvent::TouchCancel` into Core. An active canvas touch slot remains in `Core::touches`
 /// across lock and unlock, absorbing a subsequent single-finger tap on window `W`.
 #[test]
-#[ignore = "AUDIT_INPUT_LIFECYCLE: SessionLockHandler::lock does not send TouchCancel to Core"]
 fn session_lock_leaves_core_touch_state_active_across_unlock() {
     let mut r = Rig::x8();
     r.ls.state.enable_touch();

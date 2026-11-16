@@ -131,6 +131,9 @@ impl WaylandState {
             // the caller starts a locker now; the compositor starts one again if it doesn't hold
             l.relaunched = Some(std::time::Instant::now());
         }
+        let fx = self.core.clear_touches();
+        self.apply(&fx);
+        self.cancel_touches();
         let kb = self.keyboard_handle();
         kb.set_focus(self, None, SERIAL_COUNTER.next_serial());
     }
@@ -465,6 +468,8 @@ impl SessionLockHandler for WaylandState {
         }
         self.keyboard_unset_grab();
         // a finger held on a window is given up: nothing reaches a window while locked
+        let fx = self.core.clear_touches();
+        self.apply(&fx);
         self.cancel_touches();
         let kb = self.keyboard_handle();
         kb.set_focus(self, None, SERIAL_COUNTER.next_serial());

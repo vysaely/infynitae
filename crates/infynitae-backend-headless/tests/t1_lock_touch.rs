@@ -63,6 +63,7 @@ impl Dispatch<WlTouch, ()> for Probe {
             } => format!("down {id} {} {x:.1},{y:.1}", label(st, &surface)),
             wl_touch::Event::Motion { id, x, y, .. } => format!("motion {id} {x:.1},{y:.1}"),
             wl_touch::Event::Up { id, .. } => format!("up {id}"),
+            wl_touch::Event::Frame => "frame".into(),
             wl_touch::Event::Cancel => "cancel".into(),
             _ => return,
         };
@@ -241,6 +242,28 @@ fn a_lock_finger_stays_with_the_lock_past_the_unlock_then_touch_is_core_s() {
     assert!(
         r.ls.probe.log.iter().any(|l| l.starts_with("down 2 W")),
         "unlocked, touch is Core's again: {:?}",
+        r.ls.probe.log
+    );
+}
+
+#[test]
+fn stationary_finger_on_lock_surface_receives_cancel_and_frames() {
+    let (mut r, _touch) = rig();
+    let _lock = lock(&mut r);
+    r.ls.probe.log.clear();
+    down(&mut r, 1, (50.0, 50.0));
+    assert!(
+        r.ls.probe
+            .log
+            .contains(&"down 1 lock 50.0,50.0".to_string())
+    );
+    assert!(r.ls.probe.log.contains(&"frame".to_string()));
+
+    r.ls.probe.log.clear();
+    touch(&mut r, PhysicalEvent::TouchCancel);
+    assert!(
+        r.ls.probe.log.contains(&"cancel".to_string()),
+        "stationary finger on lock surface should receive wl_touch.cancel: {:?}",
         r.ls.probe.log
     );
 }

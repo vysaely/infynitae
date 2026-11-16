@@ -345,6 +345,8 @@ pub struct WaylandState {
     tearing: tearing::Tearing,
     /// Each finger's last location sent (`touch`: a cancel needs it).
     touch_last: Vec<(u32, infynitae_core::geom::CanvasPos)>,
+    /// Lock-surface touch slots `(slot, (x, y))` for cancelling stationary fingers on the lock.
+    lock_touch_last: Vec<(u32, (f64, f64))>,
     foreign_toplevels: std::collections::HashMap<
         ElementId,
         smithay::wayland::foreign_toplevel_list::ForeignToplevelHandle,
@@ -804,6 +806,7 @@ impl WaylandState {
             idle_inhibit: idle_inhibit::IdleInhibit::new(display),
             tearing: tearing::Tearing::new(display),
             touch_last: Vec::new(),
+            lock_touch_last: Vec::new(),
             foreign_toplevels: std::collections::HashMap::new(),
             shortcuts_inhibit: shortcuts_inhibit::ShortcutsInhibitState::new(display),
             wlr_toplevels: wlr_toplevels::WlrToplevelsState::new(display, trust.gate(Cap::Windows)),
