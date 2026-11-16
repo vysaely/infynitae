@@ -68,6 +68,12 @@ These pass the test suite but have not run on a real screen or device yet:
     invoking a notification action keeps older unread notifications; the memory card protects the
     compositor and session processes; touch-and-hold emits a right click; the control panel
     spells everything out.
+  - **Window menu and Keep on top (2026-11-16):** `xdg_toplevel.show_window_menu` (right click on a
+    client title bar) and the configurable `BIND_WINDOW_MENU` binding open a menu in the edge
+    with Keep on top (check mark when on), Minimize, Maximize or Restore, Fullscreen and Close;
+    `KEEP_ON_TOP` is editable on the Windows settings card. Tested in `infynitae-core`,
+    `infynitae-ipc`, `infynitae-backend-headless` and `infynitae-edge-apps`; not yet tried in the
+    live desktop session on real hardware.
   - **Shorter shortcut dispatch** (24 ms of shell setup a press down to 8 ms), the wallpaper no longer
     keeps its decoded image (about 70 MB with a large wallpaper); edge system and memory modules
     read GPU telemetry, temperatures, and memory directly from `/proc` and `/sys` without subshells.
