@@ -77,9 +77,17 @@ has_tablet_mode_switch() {
     awk '/^B: SW=/ { split($2, a, "="); n = split(a[2], w, " ");
         if (and(strtonum("0x" w[n]), 2)) found = 1 } END { exit !found }' /proc/bus/input/devices 2>/dev/null
 }
+# a battery (laptop or handheld)
+has_battery() {
+    ls -d "${INFYNITAE_POWER_SUPPLY:-/sys/class/power_supply}"/BAT* >/dev/null 2>&1
+}
+# convertibles and handhelds (touchscreen + battery): a power-button tap suspends instead of powering off
+wants_power_key_suspend() {
+    has_tablet_mode_switch || has_accelerometer || { has_touchscreen && has_battery; }
+}
 # an Intel CPU in a laptop (a battery): thermald manages its heat
 intel_laptop() {
-    grep -q GenuineIntel /proc/cpuinfo 2>/dev/null && ls -d /sys/class/power_supply/BAT* >/dev/null 2>&1
+    grep -q GenuineIntel /proc/cpuinfo 2>/dev/null && has_battery
 }
 # a file manager other than Thunar is in use: Thunar is not added beside it
 other_file_manager() {
@@ -332,8 +340,8 @@ PORTAL
         fi
         rm -f "$tmp"
     fi
-    # a convertible's power button works like a tablet's: a tap sleeps, holding it shuts down
-    if has_tablet_mode_switch || has_accelerometer; then
+    # a convertible's or handheld's power button works like a tablet's: a tap sleeps, holding it shuts down
+    if wants_power_key_suspend; then
         if ! cmp -s "$src/live/50-infynitae-power-key.conf" /etc/systemd/logind.conf.d/50-infynitae-power-key.conf; then
             install_root_file "$src/live/50-infynitae-power-key.conf" \
                 /etc/systemd/logind.conf.d/50-infynitae-power-key.conf 644

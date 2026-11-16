@@ -77,8 +77,8 @@ These pass the test suite but have not run on a real screen or device yet:
 - **Monitor hotplug:** a screen plugged in, unplugged or woken is found about 1.5 s after the
   last change, and the session can start with no screen and wait for one. A sleeping screen is
   never removed while asleep.
-- **Rotation, mode and VRR changes** from display tools or `OUTPUT_<NAME>_*` (`OUTPUT_<NAME>_TRANSFORM`, `OUTPUT_<NAME>_MODE`, `OUTPUT_<NAME>_SCALE`, `OUTPUT_<NAME>_RATE`; checked by `config-check`). `OUTPUT_ORDER` accepts spaces or commas and overrides `OUTPUT_LAYOUT` with a warning. Captures
-  and touch turn with the screen. VRR as tools see it is whether a screen may use it (on, or
+- **Rotation, mode and VRR changes** from display tools or `OUTPUT_<NAME>_*` (`OUTPUT_<NAME>_TRANSFORM`, `OUTPUT_<NAME>_MODE`, `OUTPUT_<NAME>_SCALE`, `OUTPUT_<NAME>_RATE`; checked by `config-check`). When `OUTPUT_<NAME>_TRANSFORM` is unset, `backend-drm` reads the connector's DRM `"panel orientation"` property (for sideways handheld and tablet panels such as 800x1280). `OUTPUT_ORDER` accepts spaces or commas and overrides `OUTPUT_LAYOUT` with a warning. Captures
+  and touch turn with the screen (unit-tested for `panel orientation` mapping and tested in the headless suite for touch on a rotated 800x1280 output; reading the DRM property from a real panel is not yet tested on hardware). VRR as tools see it is whether a screen may use it (on, or
   auto while fullscreen); turning it off from a tool lasts until the screen reconnects.
 - **Auto-rotate** on convertibles (`AUTO_ROTATE`, needs iio-sensor-proxy): the laptop's own
   screen turns with the device.
@@ -155,8 +155,8 @@ These pass the test suite but have not run on a real screen or device yet:
 - **Password store unlocked at login:** gnome-keyring (or infynitae-keyring once enabled with `infynitae-keyring`'s `tools/switch.sh`) starts before the start lock screen, and
   the lock screen's password opens it (`pam_gnome_keyring`), so apps no longer ask for a second
   password. Not yet tested on hardware.
-- **Laptop lid:** closing it with another screen connected moves everything to that screen
-  until the lid opens. With no other screen, logind suspends as usual.
+- **Laptop lid and handheld power key:** closing the lid with another screen connected moves everything to that screen
+  until the lid opens. With no other screen, logind suspends as usual. On convertibles and touchscreen handhelds with a battery, the installer adds `50-infynitae-power-key.conf` so a short power-button press suspends and a long press shuts down (tested in `tools/test-install-lib`, not yet on handheld hardware).
 - **Night light, screen power,** the capture dot, single-window sharing.
 - **Recent display and lock fixes:** the lock confirmed only once it is on screen, idle
   screen-off staying off, per-screen scale for touch and tablets, region screencopy over dmabuf.
