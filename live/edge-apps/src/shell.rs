@@ -217,6 +217,131 @@ pub enum Key {
     Super(char),
 }
 
+/// One of the five items in the compositor's window menu (`xdg_toplevel.show_window_menu`
+/// or `BIND_WINDOW_MENU`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WindowMenuAction {
+    KeepOnTop,
+    Minimize,
+    Maximize,
+    Fullscreen,
+    Close,
+}
+
+/// The window menu shown at `at` for `element` (`[instance, element]`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WindowMenu {
+    pub element: (u64, u64),
+    pub at: (f64, f64),
+    pub on_top: bool,
+    pub maximized: bool,
+    pub fullscreen: bool,
+}
+
+impl WindowMenu {
+    /// The menu's items in order: `(action, label, checked)`.
+    pub fn items(&self) -> [(WindowMenuAction, &'static str, bool); 5] {
+        [
+            (WindowMenuAction::KeepOnTop, "Keep on top", self.on_top),
+            (WindowMenuAction::Minimize, "Minimize", false),
+            (
+                WindowMenuAction::Maximize,
+                if self.maximized {
+                    "Restore"
+                } else {
+                    "Maximize"
+                },
+                false,
+            ),
+            (WindowMenuAction::Fullscreen, "Fullscreen", false),
+            (WindowMenuAction::Close, "Close", false),
+        ]
+    }
+
+    /// The shell IPC command line for `action` on `self.element`.
+    pub fn command_line(&self, action: WindowMenuAction) -> String {
+        let (inst, elem) = self.element;
+        match action {
+            WindowMenuAction::KeepOnTop => format!(
+                "{{\"id\":1,\"cmd\":\"keep_on_top\",\"element\":[{inst},{elem}],\"on\":{}}}\n",
+                !self.on_top
+            ),
+            WindowMenuAction::Minimize => {
+                format!("{{\"id\":1,\"cmd\":\"minimize\",\"element\":[{inst},{elem}]}}\n")
+            }
+            WindowMenuAction::Maximize => format!(
+                "{{\"id\":1,\"cmd\":\"maximize\",\"element\":[{inst},{elem}],\"maximized\":{}}}\n",
+                !self.maximized
+            ),
+            WindowMenuAction::Fullscreen => format!(
+                "{{\"id\":1,\"cmd\":\"fullscreen\",\"element\":[{inst},{elem}],\"fullscreen\":{}}}\n",
+                !self.fullscreen
+            ),
+            WindowMenuAction::Close => {
+                format!("{{\"id\":1,\"cmd\":\"close\",\"element\":[{inst},{elem}]}}\n")
+            }
+        }
+    }
+
+    /// Parses `INFYNITAE_EDGE_RENDER_WINDOW_MENU` (`"x,y[,on_top|off_top|maximized|fullscreen]"`).
+    pub fn from_render_env(raw: &str) -> Self {
+        let mut wm = Self {
+            element: (1, 1),
+            at: (200.0, 200.0),
+            on_top: true,
+            maximized: false,
+            fullscreen: false,
+        };
+        let parts: Vec<&str> = raw
+            .split([',', '|'])
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect();
+        if parts.len() >= 2 {
+            if let (Ok(x), Ok(y)) = (parts[0].parse::<f64>(), parts[1].parse::<f64>()) {
+                wm.at = (x, y);
+            }
+        }
+        for p in parts {
+            match p {
+                "on_top" | "on-top" => wm.on_top = true,
+                "off_top" | "off-top" | "normal" => wm.on_top = false,
+                "maximized" | "restore" => wm.maximized = true,
+                "fullscreen" => wm.fullscreen = true,
+                _ => {}
+            }
+        }
+        wm
+    }
+}
+
+/// Parses a `"window_menu"` event line from `$XDG_RUNTIME_DIR/infynitae/shell.sock`.
+pub fn parse_window_menu_event(line: &str) -> Option<WindowMenu> {
+    let compact: String = line.chars().filter(|c| !c.is_whitespace()).collect();
+    if !compact.contains("\"event\":\"window_menu\"") {
+        return None;
+    }
+    let pair = |key: &str| -> Option<(&str, &str)> {
+        let after = compact.split_once(&format!("\"{key}\":["))?.1;
+        let inside = after.split_once(']')?.0;
+        inside.split_once(',')
+    };
+    let bool_of = |key: &str| -> bool {
+        compact
+            .split_once(&format!("\"{key}\":"))
+            .is_some_and(|(_, r)| r.starts_with("true"))
+    };
+    let (inst_s, elem_s) = pair("element")?;
+    let (x_s, y_s) = pair("position")?;
+    Some(WindowMenu {
+        element: (inst_s.parse().ok()?, elem_s.parse().ok()?),
+        at: (x_s.parse().ok()?, y_s.parse().ok()?),
+        on_top: bool_of("on_top"),
+        maximized: bool_of("maximized"),
+        fullscreen: bool_of("fullscreen"),
+    })
+}
+
 pub struct Shell {
     pub cfg: Config,
     pub theme: Theme,
@@ -265,6 +390,8 @@ pub struct Shell {
     /// a right click on a free spot: small menu with "Edit panel" at that point (a right click
     /// alone opened edit mode too easily)
     pub edit_menu: Option<(f64, f64)>,
+    /// the compositor's window menu (`xdg_toplevel.show_window_menu` or `BIND_WINDOW_MENU`)
+    pub window_menu: Option<WindowMenu>,
     /// the config file's time when it was last read (None: not looked at yet)
     pub config_mtime: Option<std::time::SystemTime>,
     pub panel_scroll: f64,
@@ -303,6 +430,7 @@ impl Shell {
             config_mtime: file_mtime(config_path),
             transient: None,
             edit_menu: None,
+            window_menu: None,
             query: String::new(),
             selected: None,
             keyboard: false,
@@ -596,6 +724,37 @@ impl Shell {
         ))
     }
 
+    /// Opens the window menu for `menu.element` at `menu.at`, closing any open panel.
+    pub fn open_window_menu(&mut self, menu: WindowMenu) -> bool {
+        if self.ask.ask.on {
+            crate::ask::answer(&mut self.ask, None);
+        }
+        if self.open.is_some() {
+            self.close();
+        }
+        self.window_menu = Some(menu);
+        self.hovered = None;
+        self.pressed = None;
+        self.selected = None;
+        self.keyboard = false;
+        true
+    }
+
+    /// The window menu's card rectangle, kept on the screen.
+    pub fn window_menu_rect(&self, w: f64, h: f64) -> Option<Rect> {
+        let wm = self.window_menu?;
+        let (mw, mh) = (
+            180.0,
+            PAD_TOP + wm.items().len() as f64 * crate::ui::LIST_ROW_H + PAD_BOTTOM,
+        );
+        Some((
+            wm.at.0.min(w - mw - 4.0).max(4.0),
+            wm.at.1.min(h - mh - 4.0).max(4.0),
+            mw,
+            mh,
+        ))
+    }
+
     pub fn enter_edit(&mut self, w: f64, h: f64) -> bool {
         let Some(idx) = self.open else {
             return false;
@@ -872,6 +1031,7 @@ impl Shell {
         if self.open == Some(idx) {
             return if by_hover { false } else { self.close_at(now) };
         }
+        self.window_menu = None;
         if self.editing() {
             self.cancel_edit();
         }
@@ -918,6 +1078,7 @@ impl Shell {
         if was && self.live {
             crate::cards::settings_about::clear_load_state();
         }
+        let had_wm = self.window_menu.take().is_some();
         self.edit_menu = None;
         self.query.clear();
         self.selected = None;
@@ -947,7 +1108,7 @@ impl Shell {
                 scroll,
             });
         }
-        was
+        was || had_wm
     }
 
     /// `words` (a tray app's menu, then its card) in the open panel's place: the same edge, side
@@ -1010,6 +1171,13 @@ impl Shell {
         }
         // the pointer moved: the keyboard's selection hides (the light follows the pointer)
         let hid = std::mem::take(&mut self.keyboard);
+        if self.window_menu.is_some() {
+            self.pointer = Some((x, y));
+            let now = self.hit_at((x, y));
+            let changed = now != self.hovered;
+            self.hovered = now;
+            return changed || hid;
+        }
         let Some(idx) = self.open else {
             let hit_strip = (0..self.panels.len()).find(|&i| {
                 if !self.panels[i].panel.hover {
@@ -1339,6 +1507,35 @@ impl Shell {
             };
             return crate::ask::click(&mut self.ask, w, h, x, y, raw);
         }
+        if let Some(wm) = self.window_menu {
+            let r = self.window_menu_rect(w, h).unwrap();
+            if x < r.0 || x > r.0 + r.2 || y < r.1 || y > r.1 + r.3 {
+                self.window_menu = None;
+                self.hovered = None;
+                self.selected = None;
+                self.keyboard = false;
+                return true;
+            }
+            if button == Button::Left {
+                if let Some((action, _, _)) = self
+                    .hit_at((x, y))
+                    .and_then(|(_, hit)| wm.items().get(hit as usize).copied())
+                {
+                    self.actions.push((
+                        Action::ShellCommand(wm.command_line(action)),
+                        "window/menu".into(),
+                        "windows",
+                        &[],
+                    ));
+                    self.window_menu = None;
+                    self.hovered = None;
+                    self.selected = None;
+                    self.keyboard = false;
+                    return true;
+                }
+            }
+            return false;
+        }
         let Some(idx) = self.open else {
             return false;
         };
@@ -1528,9 +1725,9 @@ impl Shell {
         changed
     }
 
-    /// Something shows: a panel, or the question.
+    /// Something shows: a panel, the window menu, or the question.
     pub fn active(&self) -> bool {
-        self.open.is_some() || self.ask.ask.on
+        self.open.is_some() || self.ask.ask.on || self.window_menu.is_some()
     }
 
     pub fn is_closing(&self) -> bool {
@@ -1542,11 +1739,15 @@ impl Shell {
         self.active() || self.closing.is_some()
     }
 
-    /// What is drawn on a `w x h` screen: the question's card while it asks, else the open
-    /// panel's box (plus the edit bar and Add list while editing), or a closing panel's box.
+    /// What is drawn on a `w x h` screen: the question's card while it asks, the window menu,
+    /// else the open panel's box (plus the edit bar and Add list while editing), or a closing
+    /// panel's box.
     pub fn shown_box(&self, w: f64, h: f64) -> Option<Rect> {
         if self.ask.ask.on {
             return Some(self.ask.ask.geometry(w, h));
+        }
+        if let Some(r) = self.window_menu_rect(w, h) {
+            return Some(r);
         }
         if let Some(idx) = self.open {
             let pbox = self.layout_local(idx, w, h).0;
@@ -1673,6 +1874,66 @@ impl Shell {
                 Key::Super(_) => return false,
             };
             return crate::ask::key(&mut self.ask, sym, ch);
+        }
+        if let Some(wm) = self.window_menu {
+            return match k {
+                Key::Escape => {
+                    self.window_menu = None;
+                    self.hovered = None;
+                    self.selected = None;
+                    self.keyboard = false;
+                    true
+                }
+                Key::Up | Key::Down | Key::Tab | Key::BackTab => {
+                    let len = wm.items().len() as u32;
+                    let at = self.selected.map(|(_, h)| h);
+                    let next = match (at, self.keyboard) {
+                        (Some(i), false) => i,
+                        (None, _) => {
+                            if matches!(k, Key::Up | Key::BackTab) {
+                                len - 1
+                            } else {
+                                0
+                            }
+                        }
+                        (Some(i), true) => {
+                            if matches!(k, Key::Up | Key::BackTab) {
+                                (i + len - 1) % len
+                            } else {
+                                (i + 1) % len
+                            }
+                        }
+                    };
+                    self.keyboard = true;
+                    self.selected = Some((0, next));
+                    true
+                }
+                Key::Enter => {
+                    let idx = self
+                        .selected
+                        .filter(|_| self.keyboard)
+                        .map(|(_, h)| h)
+                        .or_else(|| self.hovered.map(|(_, h)| h));
+                    if let Some((action, _, _)) =
+                        idx.and_then(|hit| wm.items().get(hit as usize).copied())
+                    {
+                        self.actions.push((
+                            Action::ShellCommand(wm.command_line(action)),
+                            "window/menu".into(),
+                            "windows",
+                            &[],
+                        ));
+                        self.window_menu = None;
+                        self.hovered = None;
+                        self.selected = None;
+                        self.keyboard = false;
+                        true
+                    } else {
+                        false
+                    }
+                }
+                _ => false,
+            };
         }
         let Some(idx) = self.open else {
             return false;
@@ -1964,6 +2225,32 @@ impl Shell {
     fn draw_open_or_closing(&self, cr: &cairo::Context, w: f64, h: f64) -> Option<Rect> {
         if self.ask.ask.on {
             return Some(crate::ask::draw(cr, &self.theme, &self.ask.ask, (w, h)));
+        }
+        if let (Some(wm), Some(r)) = (self.window_menu, self.window_menu_rect(w, h)) {
+            let th = &self.theme;
+            draw::card(cr, th, r.0, r.1, r.2, r.3);
+            let body = (
+                r.0 + PAD_X - 8.0,
+                r.1 + PAD_TOP,
+                r.2 - 2.0 * (PAD_X - 8.0),
+                r.3 - PAD_TOP - PAD_BOTTOM,
+            );
+            let cx = self.cx(Size::M, None, false);
+            let sel = self
+                .selected
+                .filter(|(c, _)| self.keyboard && *c == 0)
+                .map(|(_, h)| h);
+            let mut hits = Hits::new(self.pointer, sel);
+            let mut y = body.1;
+            for (i, (_, label, checked)) in wm.items().into_iter().enumerate() {
+                let row_r = (body.0, y, body.2, crate::ui::LIST_ROW_H);
+                crate::cards::tray_menu::draw_menu_row(
+                    cr, &cx, &mut hits, i as u32, row_r, label, true, checked,
+                );
+                y += crate::ui::LIST_ROW_H;
+            }
+            *self.frame.borrow_mut() = vec![(0, r, hits)];
+            return Some(r);
         }
         if let Some(idx) = self.open {
             return Some(self.draw_panel(
@@ -3394,5 +3681,80 @@ mod tests {
         assert!(backup.contains("nosuchapp/card"));
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn window_menu_items_labels_ipc_parsing_and_actions() {
+        let ev = r#"{"event":"window_menu","element":[42,7],"position":[320.5,180.0],"on_top":true,"maximized":false,"fullscreen":false,"generation":3}"#;
+        let wm = parse_window_menu_event(ev).expect("parsed window_menu event");
+        assert_eq!(wm.element, (42, 7));
+        assert_eq!(wm.at, (320.5, 180.0));
+        assert!(wm.on_top && !wm.maximized && !wm.fullscreen);
+        assert_eq!(
+            wm.items(),
+            [
+                (WindowMenuAction::KeepOnTop, "Keep on top", true),
+                (WindowMenuAction::Minimize, "Minimize", false),
+                (WindowMenuAction::Maximize, "Maximize", false),
+                (WindowMenuAction::Fullscreen, "Fullscreen", false),
+                (WindowMenuAction::Close, "Close", false),
+            ]
+        );
+
+        let wm_max = WindowMenu {
+            maximized: true,
+            on_top: false,
+            ..wm
+        };
+        assert_eq!(
+            wm_max.items(),
+            [
+                (WindowMenuAction::KeepOnTop, "Keep on top", false),
+                (WindowMenuAction::Minimize, "Minimize", false),
+                (WindowMenuAction::Maximize, "Restore", false),
+                (WindowMenuAction::Fullscreen, "Fullscreen", false),
+                (WindowMenuAction::Close, "Close", false),
+            ]
+        );
+
+        let mut sh = Shell::new(Config::from_text(""), Vec::new());
+        assert!(sh.open_window_menu(wm));
+        assert!(sh.active());
+        frame(&sh);
+        let dump = crate::boxes::text(&sh, 1920.0, 1080.0);
+        assert!(dump.contains("windowmenu 320 180 180 186\n"));
+        assert!(dump.contains("hit window/menu 0 "));
+        assert!(dump.contains("hit window/menu 4 "));
+
+        // Clicking row 0 ("Keep on top") sends keep_on_top with on:false (toggling off) and closes
+        let (x0, y0) = parse_box_center(&dump, "hit window/menu 0 ");
+        assert!(sh.click(1920.0, 1080.0, x0, y0, Button::Left));
+        assert!(!sh.active());
+        assert_eq!(
+            std::mem::take(&mut sh.actions)[0].0,
+            Action::ShellCommand(
+                "{\"id\":1,\"cmd\":\"keep_on_top\",\"element\":[42,7],\"on\":false}\n".into()
+            )
+        );
+
+        // Keyboard Down + Enter activates item 2, Escape closes
+        sh.open_window_menu(wm_max);
+        frame(&sh);
+        assert!(sh.key(Key::Down));
+        assert!(sh.key(Key::Down));
+        assert!(sh.key(Key::Down));
+        assert!(sh.key(Key::Enter));
+        assert!(!sh.active());
+        assert_eq!(
+            std::mem::take(&mut sh.actions)[0].0,
+            Action::ShellCommand(
+                "{\"id\":1,\"cmd\":\"maximize\",\"element\":[42,7],\"maximized\":false}\n".into()
+            )
+        );
+
+        sh.open_window_menu(wm);
+        frame(&sh);
+        assert!(sh.key(Key::Escape));
+        assert!(!sh.active());
     }
 }

@@ -58,6 +58,8 @@ pub enum Icon {
     ScreenKeys,
     /// a ring with a dot (replay: the recorder keeping the last minutes)
     Record,
+    /// a check mark (a menu item that is on)
+    Check,
 }
 
 pub fn icon(cr: &Context, ic: Icon, x: f64, y: f64, color: Rgba) {
@@ -193,6 +195,12 @@ pub fn icon(cr: &Context, ic: Icon, x: f64, y: f64, color: Rgba) {
             let _ = cr.stroke();
             cr.arc(cx, cy, 2.4, 0.0, 2.0 * PI);
             let _ = cr.fill();
+        }
+        Icon::Check => {
+            cr.move_to(cx - 5.0, cy + 0.5);
+            cr.line_to(cx - 1.5, cy + 4.0);
+            cr.line_to(cx + 5.0, cy - 3.5);
+            let _ = cr.stroke();
         }
     }
 }
@@ -638,7 +646,11 @@ pub fn list_row(
             ic,
             r.0 + r.2 - 10.0 - note_w - ICON,
             r.1 + (r.3 - ICON) / 2.0,
-            th.muted,
+            if active && ic == Icon::Check {
+                th.accent_text
+            } else {
+                th.muted
+            },
         );
         ICON + 6.0
     } else {

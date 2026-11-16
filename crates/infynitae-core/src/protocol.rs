@@ -422,14 +422,14 @@ pub struct ToplevelConfigureState {
 
 impl Core {
     /// The capabilities to advertise: those the policy can grant. Fullscreen is granted to the
-    /// focused element and before a first map (INV-PRES-1); maximize and minimize never are
-    /// (INV-PROTO-1); there is no window menu.
+    /// focused element and before a first map (INV-PRES-1); maximize, minimize and the window menu
+    /// are answered by `Core::client_maximize`, `Core::client_minimize` and `Core::show_window_menu`.
     pub fn toplevel_capabilities(&self) -> ToplevelCapabilities {
         ToplevelCapabilities {
             fullscreen: true,
             maximize: true,
             minimize: true,
-            ..ToplevelCapabilities::default()
+            window_menu: true,
         }
     }
 
@@ -915,6 +915,11 @@ impl Core {
         }
         self.set_maximized(id, None);
         self.stage.set_saved_floating(id, None);
+    }
+
+    /// Whether `id` is maximized on an output.
+    pub fn is_maximized(&self, id: ElementId) -> bool {
+        self.maximized.iter().any(|(e, _)| *e == id)
     }
 
     /// Super+Enter maximized `id` to fill `output`'s usable area (`Some`), or restored it.
@@ -2376,6 +2381,45 @@ impl Core {
         out
     }
 
+    /// A client asked for the compositor's window menu (`xdg_toplevel.show_window_menu`) at
+    /// `location` in `id`'s window geometry, or the user triggered `KeyAction::WindowMenu`.
+    /// Records the mapped window and its output-logical screen position `(x, y)` for the shell.
+    /// Only the focused window may ask: the request answers the user's own click, and a window
+    /// in the background must not open menus over what the user is doing.
+    pub fn show_window_menu(&mut self, id: ElementId, location: LocalPoint) {
+        if self.focus.target() != Some(id) {
+            return;
+        }
+        let Some(anchor) = self.stage.anchor(id) else {
+            return;
+        };
+        if self.stage.mapped(id).is_none() {
+            return;
+        }
+        let q = CanvasPos {
+            x: anchor
+                .x
+                .saturating_add(i64::from(location.x))
+                .saturating_mul(Q16_ONE),
+            y: anchor
+                .y
+                .saturating_add(i64::from(location.y))
+                .saturating_mul(Q16_ONE),
+        };
+        let output = self
+            .pointer_output()
+            .or_else(|| self.clock_output_of(id))
+            .or_else(|| self.outputs.first().map(|o| o.id));
+        let pos = output
+            .and_then(|o| self.view(o))
+            .map(|v| {
+                let p = v.project(q);
+                (p.x, p.y)
+            })
+            .unwrap_or((f64::from(location.x), f64::from(location.y)));
+        self.window_menu = Some((id, pos));
+    }
+
     /// A minimized window comes back where it was, on top.
     pub(crate) fn restore_minimized(&mut self, id: ElementId, out: &mut Vec<Effect>) {
         if self.stage.set_minimized(id, false).is_err() {
@@ -3621,7 +3665,6 @@ mod tests {
     /// trying every request in every lifecycle state, with and without the focus.
     #[test]
     fn advertised_capabilities_are_exactly_what_the_policy_grants() {
-        use ToplevelRequest::*;
         let mut granted = Vec::new();
         for focused in [false, true] {
             for stage in 0..4 {
@@ -3653,14 +3696,17 @@ mod tests {
         assert_eq!(caps.fullscreen, granted.contains(&FS));
         assert!(caps.maximize, "answered by Core::client_maximize, not here");
         assert!(caps.minimize, "answered by Core::client_minimize, not here");
-        assert_eq!(caps.window_menu, granted.contains(&ShowWindowMenu));
+        assert!(
+            caps.window_menu,
+            "answered by Core::show_window_menu, not here"
+        );
         assert_eq!(
             caps,
             ToplevelCapabilities {
                 fullscreen: true,
                 maximize: true,
                 minimize: true,
-                ..ToplevelCapabilities::default()
+                window_menu: true,
             }
         );
     }

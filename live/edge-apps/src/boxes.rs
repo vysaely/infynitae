@@ -37,6 +37,18 @@ pub fn text(shell: &Shell, w: f64, h: f64) -> String {
         let (x, y, aw, ah) = shell.ask.ask.geometry(w, h);
         return format!("ask {x:.0} {y:.0} {aw:.0} {ah:.0}\n");
     }
+    if let Some((x, y, mw, mh)) = shell.window_menu_rect(w, h) {
+        let mut out = format!("windowmenu {x:.0} {y:.0} {mw:.0} {mh:.0}\n");
+        for (_, _, hits) in shell.frame.borrow().iter() {
+            for (id, r) in &hits.list {
+                out += &format!(
+                    "hit window/menu {id} {:.0} {:.0} {:.0} {:.0}\n",
+                    r.0, r.1, r.2, r.3
+                );
+            }
+        }
+        return out;
+    }
     let Some(idx) = shell.open else {
         return "closed\n".into();
     };

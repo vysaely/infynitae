@@ -226,6 +226,8 @@ pub enum Action {
     ShowCards(Vec<String>),
     /// remove this card from the panel line and save
     RemoveCard,
+    /// a JSON request line sent to `$XDG_RUNTIME_DIR/infynitae/shell.sock`
+    ShellCommand(String),
 }
 
 /// The fixture's values (`INFYNITAE_EDGE_RENDER_DATA`: `key=value` lines, `\n` and `\t` escaped),

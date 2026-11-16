@@ -427,8 +427,8 @@ fn the_announced_capabilities_are_what_the_policy_grants() {
     .collect();
     assert_eq!(
         want,
-        vec![2, 3, 4],
-        "maximize, fullscreen and minimize, no window menu"
+        vec![1, 2, 3, 4],
+        "window_menu, maximize, fullscreen and minimize"
     );
     let announced = |t: &T| {
         let mut caps = t.ls.probe.wm_capabilities.clone();

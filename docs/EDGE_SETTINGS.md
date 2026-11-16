@@ -269,8 +269,7 @@ names in `/usr/share/X11/xkb/rules/evdev.lst` is a later step.
 | M Super+Tab moves the view | Switch | `FOCUS_CYCLE_NAVIGATE` | `1` / `0` | save |
 | M Dragging the canvas | Pick | `PAN_MODE` | Pointer moves with it `free`, Pointer stays `grab`, Grip `rts` | save |
 | M Pan out of fullscreen | Switch | `FULLSCREEN_PAN` | | save |
-
-`KEEP_ON_TOP` is left to its key (Super+Shift+K writes it).
+| M Keep on top | Text | `KEEP_ON_TOP` | Titles or apps, with commas | save |
 
 ### `settings/defaults` (`cards/settings_apps.rs`)
 
