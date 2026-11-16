@@ -79,7 +79,9 @@ pub fn parse_volume(out: &str) -> VolumeData {
     let mut d = VolumeData::default();
     let mut default_sink = String::new();
     let mut cur_name = String::new();
+    let mut first_name = String::new();
     let mut first_desc = String::new();
+    let mut matched_default = false;
     for raw in out.lines() {
         let line = raw.trim();
         if line.is_empty() {
@@ -93,13 +95,21 @@ pub fn parse_volume(out: &str) -> VolumeData {
             d.muted = rest.trim().eq_ignore_ascii_case("yes");
         } else if let Some(rest) = line.strip_prefix("Name:") {
             cur_name = rest.trim().to_string();
-        } else if let Some(rest) = line.strip_prefix("Description:") {
-            let desc = rest.trim().to_string();
-            if first_desc.is_empty() {
-                first_desc = desc.clone();
+            if first_name.is_empty() {
+                first_name = cur_name.clone();
             }
             if !default_sink.is_empty() && cur_name == default_sink {
-                d.output = desc;
+                matched_default = true;
+            }
+        } else if let Some(rest) = line.strip_prefix("Description:") {
+            let desc = rest.trim().to_string();
+            if !desc.is_empty() {
+                if first_desc.is_empty() {
+                    first_desc = desc.clone();
+                }
+                if !default_sink.is_empty() && cur_name == default_sink {
+                    d.output = desc;
+                }
             }
         } else if !line.starts_with("Sink #")
             && !line.starts_with("balance")
@@ -110,10 +120,14 @@ pub fn parse_volume(out: &str) -> VolumeData {
         }
     }
     if d.output.is_empty() {
-        d.output = if first_desc.is_empty() {
+        d.output = if matched_default {
+            default_sink
+        } else if !first_desc.is_empty() {
+            first_desc
+        } else if !default_sink.is_empty() {
             default_sink
         } else {
-            first_desc
+            first_name
         };
     }
     d
@@ -445,7 +459,13 @@ impl Card for VolumeCard {
                 } else {
                     self.volume.as_ref().and_then(|v| v.level)
                 };
-                cur.map(|c| (*hit, (c as i32 + i32::from(*dir) * 5).clamp(0, 100) as u8))
+                let Some(c) = cur else {
+                    return false;
+                };
+                if (*dir > 0 && c >= 100) || (*dir < 0 && c == 0) {
+                    return false;
+                }
+                Some((*hit, (c as i32 + i32::from(*dir) * 5).clamp(0, 100) as u8))
             }
             _ => None,
         };
@@ -620,5 +640,258 @@ mod tests {
         assert_eq!(multi.level, Some(75));
         assert!(multi.muted);
         assert_eq!(multi.output, "Second");
+    }
+
+    #[test]
+    fn parse_volume_and_brightness_table_covers_fixtures_no_description_and_150_percent() {
+        let cases: &[(&str, Option<u8>, bool, &str)] = &[
+            (
+                "Volume: front-left: 39321 /  60% / -13.30 dB,   front-right: 39321 /  60% / -13.30 dB\n\
+                 \tbalance 0.00\nMute: no\nalsa_output.pci-0000_0c_00.4.analog-stereo\n\
+                 Sink #57\n\tName: alsa_output.usb-Headset.analog-stereo\n\tDescription: USB Headset\n\
+                 Sink #58\n\tName: alsa_output.pci-0000_0c_00.4.analog-stereo\n\tDescription: Built-in Audio Analog Stereo\n",
+                Some(60),
+                false,
+                "Built-in Audio Analog Stereo",
+            ),
+            (
+                "Volume: front-left: 98304 / 150% / 10.58 dB,   front-right: 98304 / 150% / 10.58 dB\n\
+                 Mute: no\nalsa_output.usb-DAC.analog-stereo\n\
+                 Sink #1\n\tName: alsa_output.usb-DAC.analog-stereo\n\tDescription: External USB DAC\n",
+                Some(150),
+                false,
+                "External USB DAC",
+            ),
+            (
+                "Volume: front-left: 131072 / 200% / 18.06 dB\nMute: yes\nSink #1\n\tName: alsa.raw\n",
+                Some(150),
+                true,
+                "alsa.raw",
+            ),
+            (
+                "Volume: front-left: 26214 /  40% / -23.88 dB\nMute: yes\n\
+                 alsa_output.pci-0000_03_00.1.hdmi-stereo\n\
+                 Sink #62\n\tName: alsa_output.usb-Headset.analog-stereo\n\tDescription: USB Headset\n\
+                 Sink #6698\n\tName: alsa_output.pci-0000_03_00.1.hdmi-stereo\n",
+                Some(40),
+                true,
+                "alsa_output.pci-0000_03_00.1.hdmi-stereo",
+            ),
+            (
+                "Volume: mono: 0 /   0% / -inf dB\nMute: no\n\
+                 Sink #9\n\tName: bluez_output.AA_BB_CC.1\n\tDescription:\n",
+                Some(0),
+                false,
+                "bluez_output.AA_BB_CC.1",
+            ),
+            ("", None, false, ""),
+        ];
+        for (i, (raw, level, muted, output)) in cases.iter().enumerate() {
+            let got = parse_volume(raw);
+            assert_eq!(
+                got,
+                VolumeData {
+                    level: *level,
+                    muted: *muted,
+                    output: (*output).to_string(),
+                },
+                "case {i}"
+            );
+        }
+
+        // fetch_volume_with: sink with no Description falls back to Name, and 150% volume is preserved.
+        let no_desc = fetch_volume_with(|args| {
+            match args {
+            ["pactl", "list", "sinks"] => {
+                "Sink #1\n\tName: s1\n\tDescription: First\n\tMute: no\n\tVolume: front-left: 1 / 50% /\n\
+                 Sink #2\n\tName: alsa_output.pci-0000_00_1f.3\n\tMute: no\n\
+                 \tVolume: front-left: 98304 / 150% / 10.58 dB\n"
+                    .into()
+            }
+            ["pactl", "get-default-sink"] => "alsa_output.pci-0000_00_1f.3\n".into(),
+            _ => String::new(),
+        }
+        });
+        assert_eq!(
+            no_desc,
+            VolumeData {
+                level: Some(150),
+                muted: false,
+                output: "alsa_output.pci-0000_00_1f.3".into(),
+            }
+        );
+
+        let brightness_cases: &[(&str, Option<u8>)] = &[
+            ("amdgpu_bl1,backlight,192,75%,255\n", Some(75)),
+            ("intel_backlight,backlight,0,0%,1200\n", Some(0)),
+            ("intel_backlight,backlight,1500,125%,1200\n", Some(100)),
+            ("", None),
+            ("no_percent_here\n", None),
+        ];
+        for (raw, expected) in brightness_cases {
+            assert_eq!(parse_brightness(raw), *expected, "input={raw:?}");
+        }
+    }
+
+    #[test]
+    fn slider_drag_past_both_ends_and_step_at_ends() {
+        let th = crate::theme::Theme::from_config(&crate::config::Config::from_text(""));
+        let cx = crate::cards::settings::tests::test_cx(&th);
+        let mut c = VolumeCard::default();
+        c.apply(
+            "volume",
+            &VolumeData {
+                level: Some(50),
+                muted: false,
+                output: "Speakers".into(),
+            } as &dyn Any,
+        );
+        c.apply("brightness", &Brightness(Some(50)) as &dyn Any);
+
+        let surface = cairo::ImageSurface::create(cairo::Format::ARgb32, 400, 200).unwrap();
+        let cr = cairo::Context::new(&surface).unwrap();
+        let mut hits = Hits::new(None, None);
+        c.draw(&cr, &cx, (0.0, 0.0, 316.0, c.height(&cx, 316.0)), &mut hits);
+        let vr = hits.list.iter().find(|(id, _)| *id == H_VOLUME).unwrap().1;
+        let br = hits.list.iter().find(|(id, _)| *id == H_BRIGHT).unwrap().1;
+
+        // Drag past left end of volume slider -> clamps to 0%.
+        let mut out = Vec::new();
+        assert!(c.event(
+            &Event::Drag {
+                hit: H_VOLUME,
+                at: (vr.0 - 80.0, vr.1 + 4.0),
+            },
+            &cx,
+            &mut out,
+        ));
+        assert_eq!(c.volume.as_ref().unwrap().level, Some(0));
+        assert_eq!(
+            out,
+            vec![Action::Run(
+                "pactl set-sink-volume @DEFAULT_SINK@ 0% && pactl set-sink-mute @DEFAULT_SINK@ 0"
+                    .into()
+            )]
+        );
+
+        // Step left at 0% -> false and no action (even if muted).
+        c.volume.as_mut().unwrap().muted = true;
+        out.clear();
+        assert!(!c.event(
+            &Event::Step {
+                hit: H_VOLUME,
+                dir: -1
+            },
+            &cx,
+            &mut out
+        ));
+        assert!(out.is_empty());
+
+        // Step right from 0% -> 5% and unmutes.
+        assert!(c.event(
+            &Event::Step {
+                hit: H_VOLUME,
+                dir: 1
+            },
+            &cx,
+            &mut out
+        ));
+        assert_eq!(c.volume.as_ref().unwrap().level, Some(5));
+        assert!(!c.volume.as_ref().unwrap().muted);
+
+        // Drag past right end of volume slider -> clamps to 100%.
+        out.clear();
+        assert!(c.event(
+            &Event::Drag {
+                hit: H_VOLUME,
+                at: (vr.0 + vr.2 + 120.0, vr.1 + 4.0),
+            },
+            &cx,
+            &mut out,
+        ));
+        assert_eq!(c.volume.as_ref().unwrap().level, Some(100));
+        assert_eq!(
+            out,
+            vec![Action::Run(
+                "pactl set-sink-volume @DEFAULT_SINK@ 100% && pactl set-sink-mute @DEFAULT_SINK@ 0"
+                    .into()
+            )]
+        );
+
+        // Step right at 100% -> false and no action; step left -> 95%.
+        out.clear();
+        assert!(!c.event(
+            &Event::Step {
+                hit: H_VOLUME,
+                dir: 1
+            },
+            &cx,
+            &mut out
+        ));
+        assert!(out.is_empty());
+        assert!(c.event(
+            &Event::Step {
+                hit: H_VOLUME,
+                dir: -1
+            },
+            &cx,
+            &mut out
+        ));
+        assert_eq!(c.volume.as_ref().unwrap().level, Some(95));
+
+        // At 150% volume, stepping right does not drop volume to 100%.
+        c.volume.as_mut().unwrap().level = Some(150);
+        out.clear();
+        assert!(!c.event(
+            &Event::Step {
+                hit: H_VOLUME,
+                dir: 1
+            },
+            &cx,
+            &mut out
+        ));
+        assert!(out.is_empty());
+        assert_eq!(c.volume.as_ref().unwrap().level, Some(150));
+
+        // Brightness slider: drag past both ends and Step at both ends.
+        out.clear();
+        assert!(c.event(
+            &Event::Drag {
+                hit: H_BRIGHT,
+                at: (br.0 - 50.0, br.1),
+            },
+            &cx,
+            &mut out,
+        ));
+        assert_eq!(c.brightness, Some(Brightness(Some(0))));
+        out.clear();
+        assert!(!c.event(
+            &Event::Step {
+                hit: H_BRIGHT,
+                dir: -1
+            },
+            &cx,
+            &mut out
+        ));
+        assert!(out.is_empty());
+        assert!(c.event(
+            &Event::Drag {
+                hit: H_BRIGHT,
+                at: (br.0 + br.2 + 50.0, br.1),
+            },
+            &cx,
+            &mut out,
+        ));
+        assert_eq!(c.brightness, Some(Brightness(Some(100))));
+        out.clear();
+        assert!(!c.event(
+            &Event::Step {
+                hit: H_BRIGHT,
+                dir: 1
+            },
+            &cx,
+            &mut out
+        ));
+        assert!(out.is_empty());
     }
 }
