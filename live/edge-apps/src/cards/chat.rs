@@ -505,45 +505,61 @@ impl Card for MessagesCard {
     }
 
     fn event(&mut self, ev: &Event, cx: &Cx, out: &mut Vec<Action>) -> bool {
-        let Event::Press {
-            hit,
-            button: Button::Left,
-            ..
-        } = ev
-        else {
-            return false;
-        };
         let plan = Plan::build(cx);
-        let h = *hit;
-        if !plan.open_apps.is_empty() && h < H_NOTE {
-            let Some(app) = plan.open_apps.get((h - H_OPEN) as usize) else {
-                return false;
-            };
-            out.push(Action::Launch(app.id.clone()));
-            return true;
+        match ev {
+            Event::Press {
+                hit,
+                button: Button::Left,
+                ..
+            } => {
+                let h = *hit;
+                if !plan.open_apps.is_empty() && h < H_NOTE {
+                    let Some(app) = plan.open_apps.get((h - H_OPEN) as usize) else {
+                        return false;
+                    };
+                    out.push(Action::Launch(app.id.clone()));
+                    return true;
+                }
+                if (H_NOTE..H_DISMISS).contains(&h) {
+                    let Some(&id) = plan.note_ids.get((h - H_NOTE) as usize) else {
+                        return false;
+                    };
+                    out.push(Action::Invoke(id, "default".into()));
+                    return true;
+                }
+                if (H_DISMISS..H_WIN).contains(&h) {
+                    let Some(&id) = plan.note_ids.get((h - H_DISMISS) as usize) else {
+                        return false;
+                    };
+                    out.push(Action::Dismiss(id));
+                    return true;
+                }
+                if h >= H_WIN {
+                    let Some(win) = plan.windows.get((h - H_WIN) as usize) else {
+                        return false;
+                    };
+                    out.push(Action::Focus(win.id));
+                    return true;
+                }
+                false
+            }
+            Event::Delete { hit } => {
+                let h = *hit;
+                let idx = if (H_NOTE..H_DISMISS).contains(&h) {
+                    h - H_NOTE
+                } else if (H_DISMISS..H_WIN).contains(&h) {
+                    h - H_DISMISS
+                } else {
+                    return false;
+                } as usize;
+                let Some(&id) = plan.note_ids.get(idx) else {
+                    return false;
+                };
+                out.push(Action::Dismiss(id));
+                true
+            }
+            _ => false,
         }
-        if (H_NOTE..H_DISMISS).contains(&h) {
-            let Some(&id) = plan.note_ids.get((h - H_NOTE) as usize) else {
-                return false;
-            };
-            out.push(Action::Invoke(id, "default".into()));
-            return true;
-        }
-        if (H_DISMISS..H_WIN).contains(&h) {
-            let Some(&id) = plan.note_ids.get((h - H_DISMISS) as usize) else {
-                return false;
-            };
-            out.push(Action::Dismiss(id));
-            return true;
-        }
-        if h >= H_WIN {
-            let Some(win) = plan.windows.get((h - H_WIN) as usize) else {
-                return false;
-            };
-            out.push(Action::Focus(win.id));
-            return true;
-        }
-        false
     }
 }
 

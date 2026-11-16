@@ -400,15 +400,16 @@ impl Card for SimpleCard {
 
     fn event(&mut self, ev: &Event, cx: &Cx, out: &mut Vec<Action>) -> bool {
         let Some(app) = cx.app else { return false };
-        let Event::Press {
-            hit,
-            button: Button::Left,
-            ..
-        } = ev
-        else {
-            return false;
+        let (hit, is_delete) = match ev {
+            Event::Press {
+                hit,
+                button: Button::Left,
+                ..
+            } => (*hit, false),
+            Event::Delete { hit } => (*hit, true),
+            _ => return false,
         };
-        if *hit == H_APP {
+        if !is_delete && hit == H_APP {
             let wins = app_windows(cx, app);
             if let Some(newest) = wins.iter().max_by_key(|w| w.id) {
                 out.push(Action::Focus(newest.id));
@@ -420,21 +421,21 @@ impl Card for SimpleCard {
         if cx.size != Size::M {
             return false;
         }
-        if *hit >= H_WIN_BASE {
-            let off = *hit - H_WIN_BASE;
+        if hit >= H_WIN_BASE {
+            let off = hit - H_WIN_BASE;
             let wins = app_windows(cx, app);
             let Some(w) = wins.get((off / 2) as usize) else {
                 return false;
             };
-            if off % 2 == 1 {
+            if is_delete || off % 2 == 1 {
                 out.push(Action::CloseWindow(w.id));
             } else {
                 out.push(Action::Focus(w.id));
             }
             return true;
         }
-        if *hit >= H_NOTE_BASE {
-            let off = *hit - H_NOTE_BASE;
+        if hit >= H_NOTE_BASE {
+            let off = hit - H_NOTE_BASE;
             let notes: Vec<&Note> = note_groups(cx, app)
                 .into_iter()
                 .flat_map(|g| g.items)
@@ -442,7 +443,7 @@ impl Card for SimpleCard {
             let Some(n) = notes.get((off / 2) as usize) else {
                 return false;
             };
-            if off % 2 == 1 {
+            if is_delete || off % 2 == 1 {
                 out.push(Action::Dismiss(n.id));
             } else {
                 out.push(Action::Invoke(n.id, "default".to_string()));

@@ -225,6 +225,7 @@ pub struct VolumeCard {
     pub brightness: Option<Brightness>,
     /// where the sliders were drawn, for a press or drag that sets a level
     sliders: std::cell::Cell<[Rect; 2]>,
+    scroll_accum: f64,
 }
 
 impl VolumeCard {
@@ -408,19 +409,43 @@ impl Card for VolumeCard {
                 at,
             }
             | Event::Drag { hit, at } => set(*hit, *at),
-            Event::Scroll { hit, dy } => {
+            Event::Scroll { hit, dy, notches } => {
                 let id = hit.unwrap_or(H_VOLUME);
                 let cur = if id == H_BRIGHT {
                     self.brightness.as_ref().and_then(|b| b.0)
                 } else {
                     self.volume.as_ref().and_then(|v| v.level)
                 };
-                cur.map(|c| {
-                    (
-                        id,
-                        (c as i32 + if *dy < 0.0 { 5 } else { -5 }).clamp(0, 100) as u8,
-                    )
-                })
+                let Some(c) = cur else {
+                    return false;
+                };
+                let dir = if *notches != 0.0 { *notches } else { *dy };
+                let can_move = (dir < 0.0 && c < 100) || (dir > 0.0 && c > 0);
+                if !can_move {
+                    self.scroll_accum = 0.0;
+                    return false;
+                }
+                let steps = crate::card::scroll_steps(
+                    &mut self.scroll_accum,
+                    *dy,
+                    *notches,
+                    crate::card::SCROLL_NOTCH_PX,
+                );
+                if steps == 0 {
+                    return true;
+                }
+                Some((id, (c as i32 - steps as i32 * 5).clamp(0, 100) as u8))
+            }
+            Event::Step { hit, dir } => {
+                if (*hit != H_VOLUME && *hit != H_BRIGHT) || *dir == 0 {
+                    return false;
+                }
+                let cur = if *hit == H_BRIGHT {
+                    self.brightness.as_ref().and_then(|b| b.0)
+                } else {
+                    self.volume.as_ref().and_then(|v| v.level)
+                };
+                cur.map(|c| (*hit, (c as i32 + i32::from(*dir) * 5).clamp(0, 100) as u8))
             }
             _ => None,
         };
@@ -534,7 +559,8 @@ mod tests {
             c.event(
                 &Event::Scroll {
                     hit: None,
-                    dy: -1.0
+                    dy: -36.0,
+                    notches: -1.0,
                 },
                 &cx,
                 &mut out

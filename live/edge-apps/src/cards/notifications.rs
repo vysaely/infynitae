@@ -257,32 +257,42 @@ impl Card for ListCard {
     }
 
     fn event(&mut self, ev: &Event, cx: &Cx, out: &mut Vec<Action>) -> bool {
-        let Event::Press {
-            hit,
-            button: Button::Left,
-            ..
-        } = ev
-        else {
-            return false;
-        };
         let n = shown(cx);
-        match *hit {
-            H_CLEAR => {
-                out.extend(cx.notes.iter().map(|note| Action::Dismiss(note.id)));
-                true
-            }
-            h if (H_X..H_X + n as u32).contains(&h) => {
-                out.push(Action::Dismiss(cx.notes[(h - H_X) as usize].id));
-                true
-            }
-            h if (H_NOTE..H_NOTE + n as u32).contains(&h) => {
-                // opened: its default action (if it has one), and it goes unless resident
-                out.push(Action::Invoke(
-                    cx.notes[(h - H_NOTE) as usize].id,
-                    "default".into(),
-                ));
-                true
-            }
+        match ev {
+            Event::Press {
+                hit,
+                button: Button::Left,
+                ..
+            } => match *hit {
+                H_CLEAR => {
+                    out.extend(cx.notes.iter().map(|note| Action::Dismiss(note.id)));
+                    true
+                }
+                h if (H_X..H_X + n as u32).contains(&h) => {
+                    out.push(Action::Dismiss(cx.notes[(h - H_X) as usize].id));
+                    true
+                }
+                h if (H_NOTE..H_NOTE + n as u32).contains(&h) => {
+                    // opened: its default action (if it has one), and it goes unless resident
+                    out.push(Action::Invoke(
+                        cx.notes[(h - H_NOTE) as usize].id,
+                        "default".into(),
+                    ));
+                    true
+                }
+                _ => false,
+            },
+            Event::Delete { hit } => match *hit {
+                h if (H_X..H_X + n as u32).contains(&h) => {
+                    out.push(Action::Dismiss(cx.notes[(h - H_X) as usize].id));
+                    true
+                }
+                h if (H_NOTE..H_NOTE + n as u32).contains(&h) => {
+                    out.push(Action::Dismiss(cx.notes[(h - H_NOTE) as usize].id));
+                    true
+                }
+                _ => false,
+            },
             _ => false,
         }
     }

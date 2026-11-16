@@ -282,16 +282,6 @@ fn draw_row_entry(cr: &Context, cx: &Cx, hits: &mut Hits, e: &EntryRow<'_>) {
     );
 }
 
-fn scroll_delta(dy: f64) -> f64 {
-    if dy == 0.0 {
-        0.0
-    } else if dy.abs() <= 5.0 {
-        dy * ROW_H
-    } else {
-        dy
-    }
-}
-
 fn clamped_scroll(scroll: f64, total_h: f64, cap_h: f64) -> f64 {
     scroll.clamp(0.0, (total_h - cap_h).max(0.0))
 }
@@ -302,7 +292,7 @@ fn apply_scroll(scroll: &mut f64, dy: f64, total_h: f64, cap_h: f64) -> bool {
         return false;
     }
     let prev = clamped_scroll(*scroll, total_h, cap_h);
-    let next = (prev + scroll_delta(dy)).clamp(0.0, max);
+    let next = (prev + dy).clamp(0.0, max);
     *scroll = next;
     (next - prev).abs() > f64::EPSILON
 }
@@ -410,6 +400,7 @@ fn grouped_apps(apps: &[App]) -> Vec<OrderedApp> {
 #[derive(Default)]
 struct AppsListCard {
     scroll: usize,
+    scroll_accum: f64,
     /// what was typed in the panel: the list shows the matches, best first, without categories
     query: String,
 }
@@ -566,24 +557,20 @@ impl Card for AppsListCard {
                 out.push(Action::ClosePanel);
                 true
             }
-            Event::Scroll { dy, .. } => {
+            Event::Scroll { dy, notches, .. } => {
                 let total = if self.query.is_empty() {
                     cx.apps.len()
                 } else {
                     self.matches(cx).len()
                 };
                 let max = total.saturating_sub(Self::max_rows(cx.size));
-                if max == 0 || *dy == 0.0 {
-                    return false;
-                }
-                let prev = self.scroll.min(max);
-                let next = if *dy > 0.0 {
-                    (prev + 1).min(max)
-                } else {
-                    prev.saturating_sub(1)
-                };
-                self.scroll = next;
-                next != prev
+                crate::card::scroll_rows(
+                    &mut self.scroll,
+                    &mut self.scroll_accum,
+                    max,
+                    *dy,
+                    *notches,
+                )
             }
             Event::Press {
                 hit,
@@ -1755,13 +1742,22 @@ mod tests {
         assert!(!card.event(
             &Event::Scroll {
                 hit: None,
-                dy: -1.0
+                dy: -36.0,
+                notches: -1.0,
             },
             &cx_m,
             &mut out
         ));
         for _ in 0..4 {
-            assert!(card.event(&Event::Scroll { hit: None, dy: 1.0 }, &cx_m, &mut out));
+            assert!(card.event(
+                &Event::Scroll {
+                    hit: None,
+                    dy: 36.0,
+                    notches: 1.0,
+                },
+                &cx_m,
+                &mut out
+            ));
         }
         assert_eq!(card.scroll, 4);
         let h_split = card.height(&cx_m, 340.0);
@@ -1771,17 +1767,34 @@ mod tests {
         assert_eq!(hits_split.list.len(), 6);
 
         for _ in 0..20 {
-            card.event(&Event::Scroll { hit: None, dy: 1.0 }, &cx_m, &mut out);
+            card.event(
+                &Event::Scroll {
+                    hit: None,
+                    dy: 36.0,
+                    notches: 1.0,
+                },
+                &cx_m,
+                &mut out,
+            );
         }
         assert_eq!(card.scroll, 12);
-        assert!(!card.event(&Event::Scroll { hit: None, dy: 1.0 }, &cx_m, &mut out));
+        assert!(!card.event(
+            &Event::Scroll {
+                hit: None,
+                dy: 36.0,
+                notches: 1.0,
+            },
+            &cx_m,
+            &mut out
+        ));
 
         // Scroll back to top: first visible app is clickable; hidden app is not.
         for _ in 0..20 {
             card.event(
                 &Event::Scroll {
                     hit: None,
-                    dy: -1.0,
+                    dy: -36.0,
+                    notches: -1.0,
                 },
                 &cx_m,
                 &mut out,
@@ -2110,7 +2123,15 @@ mod tests {
             &cx,
             &mut out
         ));
-        assert!(!card.event(&Event::Scroll { hit: None, dy: 1.0 }, &cx, &mut out));
+        assert!(!card.event(
+            &Event::Scroll {
+                hit: None,
+                dy: 36.0,
+                notches: 1.0,
+            },
+            &cx,
+            &mut out
+        ));
 
         // 8 items clamp at BG_MAX_H and scroll within 0..=(2 * ROW_H).
         let many = TrayData {
@@ -2141,9 +2162,53 @@ mod tests {
             &cx,
             &mut out
         ));
-        assert!(card.event(&Event::Scroll { hit: None, dy: 1.0 }, &cx, &mut out));
-        assert!(card.event(&Event::Scroll { hit: None, dy: 1.0 }, &cx, &mut out));
-        assert!(!card.event(&Event::Scroll { hit: None, dy: 1.0 }, &cx, &mut out));
+        assert!(card.event(
+            &Event::Scroll {
+                hit: None,
+                dy: 2.5,
+                notches: 0.0,
+            },
+            &cx,
+            &mut out
+        ));
+        assert_eq!(card.scroll, 2.5);
+        assert!(card.event(
+            &Event::Scroll {
+                hit: None,
+                dy: 36.0,
+                notches: 1.0,
+            },
+            &cx,
+            &mut out
+        ));
+        assert!(card.event(
+            &Event::Scroll {
+                hit: None,
+                dy: 36.0,
+                notches: 1.0,
+            },
+            &cx,
+            &mut out
+        ));
+        assert!(card.event(
+            &Event::Scroll {
+                hit: None,
+                dy: 36.0,
+                notches: 1.0,
+            },
+            &cx,
+            &mut out
+        ));
+        assert_eq!(card.scroll, 2.0 * ROW_H);
+        assert!(!card.event(
+            &Event::Scroll {
+                hit: None,
+                dy: 36.0,
+                notches: 1.0,
+            },
+            &cx,
+            &mut out
+        ));
     }
 
     #[test]

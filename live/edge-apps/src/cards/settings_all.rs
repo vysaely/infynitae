@@ -765,6 +765,9 @@ impl Card for SettingsAllCard {
                 for (cid, rect) in child_hits.list {
                     let emitted = base + cid;
                     let _ = hits.add(emitted, rect);
+                    if child_hits.draggable.contains(&cid) {
+                        hits.mark_draggable(emitted);
+                    }
                     recorded_hits.push(DrawnHit {
                         emitted,
                         child: i,
@@ -1061,13 +1064,14 @@ impl Card for SettingsAllCard {
                 }
                 false
             }
-            Event::Scroll { hit, dy } => {
+            Event::Scroll { hit, dy, notches } => {
                 if let Some(h) = *hit {
                     if let Some((i, child_id)) = self.resolve_child_hit(h, (0.0, 0.0)) {
                         return self.children[i].event(
                             &Event::Scroll {
                                 hit: Some(child_id),
                                 dy: *dy,
+                                notches: *notches,
                             },
                             &child_cx,
                             out,
@@ -1111,6 +1115,32 @@ impl Card for SettingsAllCard {
                     return false;
                 };
                 self.children[i].event(&Event::Release { hit: child_id }, &child_cx, out)
+            }
+            Event::Cancel { hit } => {
+                let active = self.active_child.take();
+                let Some((i, child_id)) = self.resolve_drag_or_release(*hit, active) else {
+                    return false;
+                };
+                self.children[i].event(&Event::Cancel { hit: child_id }, &child_cx, out)
+            }
+            Event::Step { hit, dir } if *hit >= CHILD_STRIDE => {
+                let Some((i, child_id)) = self.resolve_child_hit(*hit, (0.0, 0.0)) else {
+                    return false;
+                };
+                self.children[i].event(
+                    &Event::Step {
+                        hit: child_id,
+                        dir: *dir,
+                    },
+                    &child_cx,
+                    out,
+                )
+            }
+            Event::Delete { hit } if *hit >= CHILD_STRIDE => {
+                let Some((i, child_id)) = self.resolve_child_hit(*hit, (0.0, 0.0)) else {
+                    return false;
+                };
+                self.children[i].event(&Event::Delete { hit: child_id }, &child_cx, out)
             }
             _ => false,
         }

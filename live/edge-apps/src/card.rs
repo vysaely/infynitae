@@ -124,6 +124,9 @@ pub trait Card {
     }
 }
 
+/// Pixels moved per discrete mouse wheel notch (120 units in Wayland).
+pub const SCROLL_NOTCH_PX: f64 = 36.0;
+
 /// The clickable rectangles of one card in one frame, with the pointer and the keyboard's selection.
 #[derive(Clone, Debug, Default)]
 pub struct Hits {
@@ -132,6 +135,8 @@ pub struct Hits {
     /// the hit the keyboard's selection is on
     pub selected: Option<u32>,
     pub list: Vec<(u32, Rect)>,
+    /// hits that respond to a pointer/touch drag (sliders) instead of panel scrolling
+    pub draggable: Vec<u32>,
 }
 
 fn inside(r: Rect, (x, y): (f64, f64)) -> bool {
@@ -144,6 +149,7 @@ impl Hits {
             pointer,
             selected,
             list: Vec::new(),
+            draggable: Vec::new(),
         }
     }
 
@@ -153,6 +159,18 @@ impl Hits {
     pub fn add(&mut self, id: u32, rect: Rect) -> bool {
         self.list.push((id, rect));
         self.pointer.is_some_and(|p| inside(rect, p))
+    }
+
+    /// Marks `id` as a draggable control (slider) so touch drags move it instead of scrolling.
+    pub fn mark_draggable(&mut self, id: u32) {
+        if !self.draggable.contains(&id) {
+            self.draggable.push(id);
+        }
+    }
+
+    /// True when `id` is a draggable control.
+    pub fn is_draggable(&self, id: u32) -> bool {
+        self.draggable.contains(&id)
     }
 
     /// True when the keyboard's selection is on `id`.
@@ -192,15 +210,88 @@ pub enum Event<'a> {
     Release {
         hit: u32,
     },
+    /// an active touch sequence on `hit` was cancelled by the compositor
+    Cancel {
+        hit: u32,
+    },
     /// None: over the card but on no hit
     Scroll {
         hit: Option<u32>,
+        /// scroll distance in pixels (positive = down)
         dy: f64,
+        /// discrete wheel notches when present, 0.0 for continuous touchpad scrolling
+        notches: f64,
+    },
+    /// Left/Right (-1 / +1) on the keyboard-selected hit (sliders, choice strips)
+    Step {
+        hit: u32,
+        dir: i8,
+    },
+    /// Delete on the keyboard-selected hit, for cards with an item remove action
+    Delete {
+        hit: u32,
     },
     /// what was typed, for a card with a search field (the whole query so far)
     Text(&'a str),
     /// Enter with nothing selected: the card's own default (a search's first result), if it has one
     Enter,
+}
+
+/// Converts discrete wheel notches or continuous pixel deltas into integer step counts.
+pub fn scroll_steps(accum: &mut f64, dy: f64, notches: f64, step_px: f64) -> isize {
+    let delta = if notches != 0.0 {
+        notches * step_px
+    } else {
+        dy
+    };
+    if delta == 0.0 || step_px <= 0.0 {
+        return 0;
+    }
+    if *accum != 0.0 && delta.signum() != accum.signum() {
+        *accum = 0.0;
+    }
+    *accum += delta;
+    let steps = (*accum / step_px).trunc() as isize;
+    *accum -= steps as f64 * step_px;
+    steps
+}
+
+/// Steps a row-indexed scroll offset by wheel notches or accumulated touchpad pixels.
+/// Returns `true` when the card consumed the event (changed rows or absorbed a sub-step swipe
+/// while it still has room to scroll in that direction), `false` at a boundary to hand over.
+pub fn scroll_rows(
+    scroll: &mut usize,
+    accum: &mut f64,
+    max_scroll: usize,
+    dy: f64,
+    notches: f64,
+) -> bool {
+    let cur = (*scroll).min(max_scroll);
+    let dir = if notches != 0.0 { notches } else { dy };
+    if max_scroll == 0 || dir == 0.0 {
+        *accum = 0.0;
+        return false;
+    }
+    let can_scroll = (dir > 0.0 && cur < max_scroll) || (dir < 0.0 && cur > 0);
+    if !can_scroll {
+        *accum = 0.0;
+        return false;
+    }
+    let steps = scroll_steps(accum, dy, notches, SCROLL_NOTCH_PX);
+    if steps == 0 {
+        return true;
+    }
+    let next = if steps > 0 {
+        cur.saturating_add(steps as usize).min(max_scroll)
+    } else {
+        cur.saturating_sub((-steps) as usize)
+    };
+    if next == cur {
+        *accum = 0.0;
+        return false;
+    }
+    *scroll = next;
+    true
 }
 
 /// What a card asks the core to do. Cards never start a process or touch a window themselves.
@@ -436,5 +527,28 @@ mod tests {
             elapsed < Duration::from_secs(7),
             "run_sh took {elapsed:?}, expected ~5 s timeout"
         );
+    }
+
+    #[test]
+    fn scroll_rows_accumulates_touchpad_pixels_and_hands_over_at_bounds() {
+        let mut scroll = 0usize;
+        let mut accum = 0.0;
+        // At top, scrolling up cannot scroll the list and hands over immediately.
+        assert!(!scroll_rows(&mut scroll, &mut accum, 3, -2.5, 0.0));
+        assert_eq!(scroll, 0);
+
+        // Sub-step touchpad swipe down is absorbed without leaking until it reaches one notch.
+        for _ in 0..14 {
+            assert!(scroll_rows(&mut scroll, &mut accum, 3, 2.5, 0.0));
+        }
+        assert_eq!(scroll, 0);
+        // 15th * 2.5 = 37.5 >= 36.0 advances 1 row.
+        assert!(scroll_rows(&mut scroll, &mut accum, 3, 2.5, 0.0));
+        assert_eq!(scroll, 1);
+
+        // Two discrete wheel notches hit the bottom and the next notch hands over.
+        assert!(scroll_rows(&mut scroll, &mut accum, 3, 72.0, 2.0));
+        assert_eq!(scroll, 3);
+        assert!(!scroll_rows(&mut scroll, &mut accum, 3, 36.0, 1.0));
     }
 }

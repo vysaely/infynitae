@@ -329,6 +329,7 @@ fn delete_command(raw_line: &str) -> String {
 struct HistoryCard {
     data: Option<ClipboardData>,
     scroll: usize,
+    scroll_accum: f64,
 }
 
 impl HistoryCard {
@@ -471,49 +472,50 @@ impl Card for HistoryCard {
             return false;
         }
         match ev {
-            Event::Press { hit, button, .. } => {
+            Event::Press {
+                hit,
+                button: Button::Left,
+                ..
+            } => {
                 let Some(idx) = hit.checked_sub(1).map(|i| i as usize) else {
                     return false;
                 };
                 let Some(item) = d.items.get(idx) else {
                     return false;
                 };
-                match button {
-                    Button::Left => {
-                        // Shell breaks out of action processing once ClosePanel runs, so Run must come first.
-                        out.push(Action::Run(copy_command(&item.raw_line)));
-                        out.push(Action::ClosePanel);
-                        true
-                    }
-                    Button::Right | Button::Middle => {
-                        let removed = d.items.remove(idx);
-                        let max_scroll = d.items.len().saturating_sub(Self::visible_limit(cx.size));
-                        self.scroll = self.scroll.min(max_scroll);
-                        out.push(Action::Run(delete_command(&removed.raw_line)));
-                        true
-                    }
-                }
+                // Shell breaks out of action processing once ClosePanel runs, so Run must come first.
+                out.push(Action::Run(copy_command(&item.raw_line)));
+                out.push(Action::ClosePanel);
+                true
             }
-            Event::Scroll { dy, .. } => {
-                let limit = Self::visible_limit(cx.size);
-                let max_scroll = d.items.len().saturating_sub(limit);
-                if max_scroll == 0 {
+            Event::Press {
+                hit,
+                button: Button::Right | Button::Middle,
+                ..
+            }
+            | Event::Delete { hit } => {
+                let Some(idx) = hit.checked_sub(1).map(|i| i as usize) else {
+                    return false;
+                };
+                if idx >= d.items.len() {
                     return false;
                 }
-                let cur = self.scroll.min(max_scroll);
-                let next = if *dy > 0.0 {
-                    (cur + 1).min(max_scroll)
-                } else if *dy < 0.0 {
-                    cur.saturating_sub(1)
-                } else {
-                    cur
-                };
-                if next != self.scroll {
-                    self.scroll = next;
-                    true
-                } else {
-                    false
-                }
+                let removed = d.items.remove(idx);
+                let max_scroll = d.items.len().saturating_sub(Self::visible_limit(cx.size));
+                self.scroll = self.scroll.min(max_scroll);
+                out.push(Action::Run(delete_command(&removed.raw_line)));
+                true
+            }
+            Event::Scroll { dy, notches, .. } => {
+                let limit = Self::visible_limit(cx.size);
+                let max_scroll = d.items.len().saturating_sub(limit);
+                crate::card::scroll_rows(
+                    &mut self.scroll,
+                    &mut self.scroll_accum,
+                    max_scroll,
+                    *dy,
+                    *notches,
+                )
             }
             Event::Text(_) => false,
             _ => false,
@@ -1004,14 +1006,31 @@ pinned:101\tmulti\rline\x07 bell\t1h
         assert!(!card.event(
             &Event::Scroll {
                 hit: None,
-                dy: -1.0
+                dy: -36.0,
+                notches: -1.0,
             },
             &cx_m,
             &mut out
         ));
-        assert!(card.event(&Event::Scroll { hit: None, dy: 1.0 }, &cx_m, &mut out));
+        assert!(card.event(
+            &Event::Scroll {
+                hit: None,
+                dy: 36.0,
+                notches: 1.0,
+            },
+            &cx_m,
+            &mut out
+        ));
         assert_eq!(card.scroll, 1);
-        assert!(card.event(&Event::Scroll { hit: None, dy: 1.0 }, &cx_l, &mut out));
+        assert!(card.event(
+            &Event::Scroll {
+                hit: None,
+                dy: 36.0,
+                notches: 1.0,
+            },
+            &cx_l,
+            &mut out
+        ));
         assert_eq!(card.scroll, 2);
 
         for (cx, expected_rows) in [(&cx_m, MEDIUM_ROWS), (&cx_l, LARGE_ROWS)] {
