@@ -494,3 +494,56 @@ fn three_fingers_spread_on_a_window_resize_it() {
         "the top-left corner stayed"
     );
 }
+
+/// A portrait 800×1280 panel rotated Right Side Up (`Transform::R270`) at 1.5× scale (`180/120`):
+/// the view is 1280×800, and a touch in physical panel coordinates mapped through
+/// `panel_point_to_view` lands at the exact surface-local coordinates on the window.
+#[test]
+fn a_touch_on_a_rotated_panel_maps_through_the_output_transform() {
+    use infynitae_core::output::Transform;
+    let mut out = common::output((800, 1280), 180);
+    out.transform = Transform::R270;
+    let mut r = Rig::new(common::Lockstep::new(Some(out)));
+    r.ls.state.enable_touch();
+    r.ls.pump();
+    let qh = r.ls.qh.clone();
+    let seat: WlSeat = r.ls.probe.seat.clone().expect("a seat");
+    let _touch = seat.get_touch(&qh, ());
+    r.ls.pump();
+    r.map_w();
+
+    let output = r.ls.output();
+    let model = r.ls.state.core().output(output).unwrap().clone();
+    assert_eq!(model.view_size(), (1280, 800));
+
+    // Pick an asymmetric physical point on the 800×1280 panel that maps inside W on the 1280×800
+    // view: for R270, panel (px, py) maps to view (py, 800 - px).
+    let panel_px = (300.0, 600.0);
+    let view_px =
+        infynitae_wayland::convert::panel_point_to_view(panel_px, (800, 1280), model.transform);
+    assert_eq!(view_px, (600.0, 500.0));
+
+    let logical = (view_px.0 / model.scale, view_px.1 / model.scale);
+    let pt = infynitae_core::geom::OutputLogicalPoint {
+        x: logical.0,
+        y: logical.1,
+    };
+    let hit =
+        r.ls.state
+            .core_mut()
+            .hit_test(output, pt)
+            .expect("center of rotated view hits W");
+    let q = infynitae_core::geom::Q16_ONE as f64;
+    let local = (hit.local.x as f64 / q, hit.local.y as f64 / q);
+
+    r.ls.probe.log.clear();
+    down(&mut r, 0, logical);
+    assert!(
+        r.ls.probe
+            .log
+            .contains(&format!("down 0 W {:.1},{:.1}", local.0, local.1)),
+        "{:?}",
+        r.ls.probe.log
+    );
+    up(&mut r, 0);
+}

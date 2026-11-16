@@ -122,6 +122,29 @@ pub fn console_key(key: u32, ctrl: bool, alt: bool) -> Option<ConsoleKey> {
     }
 }
 
+/// Maps a DRM connector `"panel orientation"` enum name to the Core output transform that shows
+/// the image upright. Returns `None` for `"Unknown"` or unrecognised strings. Pure.
+pub fn panel_orientation_transform(orientation: &str) -> Option<Transform> {
+    match orientation.trim().to_ascii_lowercase().as_str() {
+        "normal" => Some(Transform::Normal),
+        "upside down" => Some(Transform::R180),
+        "left side up" => Some(Transform::R90),
+        "right side up" => Some(Transform::R270),
+        _ => None,
+    }
+}
+
+/// Picks the initial transform for a connector: an explicit per-output setting (`OUTPUT_<NAME>_TRANSFORM`)
+/// wins; otherwise the DRM `"panel orientation"` property is used; otherwise `Normal`. Pure.
+pub fn resolve_output_transform(
+    custom: Option<Transform>,
+    panel_orientation: Option<&str>,
+) -> Transform {
+    custom
+        .or_else(|| panel_orientation.and_then(panel_orientation_transform))
+        .unwrap_or(Transform::Normal)
+}
+
 /// `OUTPUT_<NAME>_TRANSFORM`: the rotation's name, as wlr-randr names them (and the degrees alone,
 /// counter-clockwise like wl_output). Pure.
 fn parse_transform(v: &str) -> Option<Transform> {
@@ -713,29 +736,49 @@ fn renderer_lost(renderer: &mut GlesRenderer) -> bool {
         .unwrap_or(false)
 }
 
-/// Reads and parses the EDID of a connector, if present and valid.
-fn read_connector_edid(drm: &impl Device, handle: connector::Handle) -> Option<edid::Edid> {
+/// Reads a single named property from a DRM connector and parses its converted value.
+fn find_connector_property<T>(
+    drm: &impl Device,
+    handle: connector::Handle,
+    prop_name: &[u8],
+    parse: impl FnOnce(property::Value<'_>) -> Option<T>,
+) -> Option<T> {
     let props = drm.get_properties(handle).ok()?;
     let (prop_ids, prop_vals) = props.as_props_and_values();
     for (&prop_id, &val) in prop_ids.iter().zip(prop_vals) {
         let Ok(info) = drm.get_property(prop_id) else {
             continue;
         };
-        if info.name().to_bytes() == b"EDID" {
-            let blob_id = match info.value_type().convert_value(val) {
-                property::Value::Blob(id) => id,
-                _ => continue,
-            };
-            if blob_id == 0 {
-                return None;
-            }
-            let Ok(blob_data) = drm.get_property_blob(blob_id) else {
-                return None;
-            };
-            return edid::parse(&blob_data);
+        if info.name().to_bytes() == prop_name {
+            return parse(info.value_type().convert_value(val));
         }
     }
     None
+}
+
+/// Reads the DRM connector `"panel orientation"` enum property name, if present.
+fn read_connector_panel_orientation(
+    drm: &impl Device,
+    handle: connector::Handle,
+) -> Option<String> {
+    find_connector_property(drm, handle, b"panel orientation", |val| match val {
+        property::Value::Enum(Some(ev)) => ev.name().to_str().ok().map(str::to_owned),
+        _ => None,
+    })
+}
+
+/// Reads and parses the EDID of a connector, if present and valid.
+fn read_connector_edid(drm: &impl Device, handle: connector::Handle) -> Option<edid::Edid> {
+    find_connector_property(drm, handle, b"EDID", |val| {
+        let property::Value::Blob(blob_id) = val else {
+            return None;
+        };
+        if blob_id == 0 {
+            return None;
+        }
+        let blob_data = drm.get_property_blob(blob_id).ok()?;
+        edid::parse(&blob_data)
+    })
 }
 
 /// At the idle timeout: whether logind holds an idle inhibitor (an app over D-Bus, through
@@ -930,12 +973,17 @@ fn connect_screen(
         .or_else(|| f.custom_scales.get(&dbg_lower))
         .copied()
         .unwrap_or(f.scale_120);
-    let transform = f
+    let custom_transform = f
         .custom_transforms
         .get(&n_lower)
         .or_else(|| f.custom_transforms.get(&dbg_lower))
-        .copied()
-        .unwrap_or(Transform::Normal);
+        .copied();
+    let panel_orientation = if custom_transform.is_none() {
+        read_connector_panel_orientation(&*drm, handle)
+    } else {
+        None
+    };
+    let transform = resolve_output_transform(custom_transform, panel_orientation.as_deref());
     let draw_transform = convert::output_transform(transform);
 
     let infos: Vec<ModeInfo> = conn
@@ -4479,6 +4527,58 @@ mod tests {
         assert_eq!(parse_transform("normal"), Some(Transform::Normal));
         assert_eq!(parse_transform("45"), None);
         assert_eq!(parse_transform(""), None);
+    }
+
+    #[test]
+    fn panel_orientation_maps_kernel_values_and_lets_custom_override() {
+        assert_eq!(
+            panel_orientation_transform("Normal"),
+            Some(Transform::Normal)
+        );
+        assert_eq!(
+            panel_orientation_transform("Upside Down"),
+            Some(Transform::R180)
+        );
+        assert_eq!(
+            panel_orientation_transform("Left Side Up"),
+            Some(Transform::R90)
+        );
+        assert_eq!(
+            panel_orientation_transform("Right Side Up"),
+            Some(Transform::R270)
+        );
+        assert_eq!(panel_orientation_transform("Unknown"), None);
+        assert_eq!(panel_orientation_transform(""), None);
+
+        assert_eq!(
+            resolve_output_transform(None, Some("Right Side Up")),
+            Transform::R270
+        );
+        assert_eq!(
+            resolve_output_transform(None, Some("Left Side Up")),
+            Transform::R90
+        );
+        assert_eq!(
+            resolve_output_transform(None, Some("Upside Down")),
+            Transform::R180
+        );
+        assert_eq!(
+            resolve_output_transform(None, Some("Normal")),
+            Transform::Normal
+        );
+        assert_eq!(
+            resolve_output_transform(None, Some("Unknown")),
+            Transform::Normal
+        );
+        assert_eq!(resolve_output_transform(None, None), Transform::Normal);
+        assert_eq!(
+            resolve_output_transform(Some(Transform::Normal), Some("Right Side Up")),
+            Transform::Normal
+        );
+        assert_eq!(
+            resolve_output_transform(Some(Transform::R90), Some("Right Side Up")),
+            Transform::R90
+        );
     }
 
     #[test]
