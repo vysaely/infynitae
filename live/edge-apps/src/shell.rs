@@ -116,8 +116,11 @@ pub struct Shell {
     pub hovered: Option<(usize, u32)>,
     /// the card and hit a button went down on (drags go to it)
     pub pressed: Option<(usize, u32)>,
-    /// each shown card's rectangle and hits in the last frame
+    /// each shown card's rectangle and hits in the last frame, plus the scroll and screen at which
+    /// they were drawn
     pub frame: RefCell<Vec<(usize, Rect, Hits)>>,
+    frame_scroll: std::cell::Cell<f64>,
+    frame_screen: std::cell::Cell<(f64, f64)>,
     /// what the cards asked for: the action, its card ("owner/kind": one command at a time per
     /// card), and the provider and source keys to fetch again after it ran
     pub actions: Vec<(Action, String, &'static str, &'static [&'static str])>,
@@ -189,6 +192,8 @@ impl Shell {
             hovered: None,
             pressed: None,
             frame: RefCell::new(Vec::new()),
+            frame_scroll: std::cell::Cell::new(0.0),
+            frame_screen: std::cell::Cell::new((1920.0, 1080.0)),
             actions: Vec::new(),
             opened_at: None,
             open_ms: f64::INFINITY,
@@ -773,6 +778,7 @@ impl Shell {
         self.opened_at = None;
         self.open_ms = f64::INFINITY;
         self.frame.borrow_mut().clear();
+        self.frame_scroll.set(0.0);
         if let Some(t) = self.transient.take() {
             if t < self.panels.len() {
                 self.panels.remove(t);
@@ -1363,6 +1369,33 @@ impl Shell {
         out
     }
 
+    fn scroll_to_hit(&mut self, idx: usize, r: Rect, is_first: bool) {
+        let (w, h) = self.frame_screen.get();
+        let (pbox, _, content_h) = self.layout_local(idx, w, h);
+        let max_scroll = (content_h - pbox.3).max(0.0);
+        if max_scroll <= 0.0 {
+            self.panel_scroll = 0.0;
+            return;
+        }
+        let cur_scroll = self.panel_scroll.clamp(0.0, max_scroll);
+        let frame_scroll = self.frame_scroll.get();
+        let ry = r.1 + frame_scroll - cur_scroll;
+        let top = pbox.1;
+        let bot = pbox.1 + pbox.3;
+        let mut next = cur_scroll;
+        if ry + r.3 > bot {
+            next = cur_scroll + (ry + r.3 - bot);
+        }
+        let ry_after = r.1 + frame_scroll - next;
+        if ry_after < top {
+            next = cur_scroll + (ry - top);
+        }
+        if is_first && (r.1 + frame_scroll + r.3) <= bot {
+            next = 0.0;
+        }
+        self.panel_scroll = next.clamp(0.0, max_scroll);
+    }
+
     /// A key while a panel is open. True when something must be drawn again.
     pub fn key(&mut self, k: Key) -> bool {
         // the question first: it takes the keyboard while it asks, panel or not
@@ -1466,6 +1499,7 @@ impl Shell {
                 };
                 self.keyboard = true;
                 self.selected = Some((order[next].0, order[next].1));
+                self.scroll_to_hit(idx, order[next].2, next == 0);
                 true
             }
             Key::Enter => {
@@ -1475,10 +1509,11 @@ impl Shell {
                         .into_iter()
                         .find(|(c, h, _)| *c == ci && *h == hit)
                         .map_or((0.0, 0.0, 0.0, 0.0), |(_, _, r)| r);
+                    let dy = self.frame_scroll.get() - self.panel_scroll;
                     let ev = Event::Press {
                         hit,
                         button: Button::Left,
-                        at: (r.0 + r.2 / 2.0, r.1 + r.3 / 2.0),
+                        at: (r.0 + r.2 / 2.0, r.1 + dy + r.3 / 2.0),
                     };
                     let changed = self.card_event(idx, ci, &ev);
                     if self.open == Some(idx) {
@@ -1857,6 +1892,8 @@ impl Shell {
             );
         }
         *self.frame.borrow_mut() = frame;
+        self.frame_scroll.set(scroll);
+        self.frame_screen.set((w, h));
         Some(pbox)
     }
 }
@@ -2688,5 +2725,149 @@ mod tests {
             "card height grows to fit wrapped Missing sentence"
         );
         sh.draw(&cr, 1280.0, 800.0);
+    }
+
+    #[test]
+    fn keyboard_navigation_scrolls_selected_hit_into_panel_box() {
+        let mut sh = shell("SUPER+A top right 380 settings/power settings/session windows/list");
+        sh.apply(
+            "settings",
+            "power",
+            &parse_power("* balanced:\n  power-saver:\n  performance:\n") as &dyn std::any::Any,
+        );
+        sh.windows = (1..=6)
+            .map(|i| Window {
+                id: i,
+                title: format!("Win {i}"),
+                app_id: "kitty".into(),
+                focused: i == 1,
+            })
+            .collect();
+        let idx = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "control")
+            .unwrap();
+        assert!(sh.open_panel(idx, false, Instant::now()));
+        sh.open_ms = f64::INFINITY;
+
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 1280, 400).unwrap();
+        let cr = cairo::Context::new(&surf).unwrap();
+        let pbox = sh.draw(&cr, 1280.0, 400.0).unwrap();
+        let (_, _, content_h) = sh.layout_local(idx, 1280.0, 400.0);
+        assert!(content_h > pbox.3, "precondition: panel is taller than screen");
+
+        // Move Down repeatedly without redrawing in between until past the fold.
+        let order = sh.hit_order();
+        let past_fold = order
+            .iter()
+            .position(|(_, _, r)| r.1 + r.3 > pbox.1 + pbox.3)
+            .expect("at least one hit starts below the fold");
+        for _ in 0..=past_fold {
+            assert!(sh.key(Key::Down));
+        }
+        assert!(
+            sh.panel_scroll > 0.0,
+            "panel_scroll should advance past the fold"
+        );
+        sh.draw(&cr, 1280.0, 400.0);
+        let (ci, hit) = sh.selected.unwrap();
+        let r = sh
+            .hit_order()
+            .into_iter()
+            .find(|(c, h, _)| *c == ci && *h == hit)
+            .unwrap()
+            .2;
+        assert!(
+            r.1 >= pbox.1 && r.1 + r.3 <= pbox.1 + pbox.3,
+            "selected rect {r:?} must lie inside pbox {pbox:?}"
+        );
+    }
+
+    #[test]
+    fn tall_scrolled_panel_with_hidden_and_half_cards_walks_all_hits_in_view() {
+        let apps = vec![
+            App {
+                id: "app1".into(),
+                name: "App One".into(),
+                exec: "true".into(),
+                ..Default::default()
+            },
+            App {
+                id: "app2".into(),
+                name: "App Two".into(),
+                exec: "true".into(),
+                ..Default::default()
+            },
+        ];
+        // Includes a hidden card (notifications/list with no notes), a half-width pair,
+        // and multiple tall cards that overflow a 400 px high screen.
+        let mut sh = Shell::new(
+            Config::from_text(
+                "PANEL_CONTROL=\"SUPER+A top right 380 notifications/list app1/app@half app2/app@half settings/power settings/session windows/list\"\n",
+            ),
+            apps,
+        );
+        sh.apply(
+            "settings",
+            "power",
+            &parse_power("* balanced:\n  power-saver:\n  performance:\n") as &dyn std::any::Any,
+        );
+        sh.windows = (1..=6)
+            .map(|i| Window {
+                id: i,
+                title: format!("Window {i}"),
+                app_id: "firefox".into(),
+                focused: i == 1,
+            })
+            .collect();
+        let idx = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "control")
+            .unwrap();
+        assert!(sh.open_panel(idx, false, Instant::now()));
+        sh.open_ms = f64::INFINITY;
+
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 1280, 400).unwrap();
+        let cr = cairo::Context::new(&surf).unwrap();
+        let pbox = sh.draw(&cr, 1280.0, 400.0).unwrap();
+        let (_, layout_rects) = sh.layout(idx, 1280.0, 400.0);
+        // notifications/list (index 0) is Hidden, app1/app and app2/app share one row (half-width).
+        assert_eq!(layout_rects[0].0, 1);
+        assert_eq!(layout_rects[0].1 .1, layout_rects[1].1 .1);
+
+        let total_hits = sh.hit_order().len();
+        assert!(total_hits >= 10);
+        let mut saw_scrolled = false;
+        for step in 0..total_hits {
+            assert!(sh.key(Key::Down));
+            sh.draw(&cr, 1280.0, 400.0);
+            if sh.panel_scroll > 0.0 {
+                saw_scrolled = true;
+            }
+            let (ci, hit) = sh.selected.unwrap();
+            let r = sh
+                .hit_order()
+                .into_iter()
+                .find(|(c, h, _)| *c == ci && *h == hit)
+                .expect("selected hit present in frame")
+                .2;
+            assert!(
+                r.0 >= pbox.0
+                    && r.0 + r.2 <= pbox.0 + pbox.2
+                    && r.1 >= pbox.1
+                    && r.1 + r.3 <= pbox.1 + pbox.3,
+                "step {step}: selected rect {r:?} not inside pbox {pbox:?}"
+            );
+        }
+        assert!(saw_scrolled, "walking all hits must scroll past the fold");
+
+        // Wrapping past the last hit returns to the first hit and scrolls back to top.
+        assert!(sh.key(Key::Down));
+        sh.draw(&cr, 1280.0, 400.0);
+        assert_eq!(sh.panel_scroll, 0.0);
+        let first = sh.hit_order()[0];
+        assert_eq!(sh.selected, Some((first.0, first.1)));
     }
 }
