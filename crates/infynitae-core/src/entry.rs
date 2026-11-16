@@ -1606,7 +1606,13 @@ impl Core {
             return;
         };
 
-        let mapped = self.stage.mapped_elements();
+        // a minimized window is not shown: the overview does not frame where it was (B13)
+        let mapped: Vec<_> = self
+            .stage
+            .mapped_elements()
+            .into_iter()
+            .filter(|&e| !self.stage.is_minimized(e))
+            .collect();
         if mapped.is_empty() {
             out.push(Effect::ToggleOverview);
             return;
@@ -3253,8 +3259,9 @@ impl Core {
                 // a window picked from the list is the user's choice: a fullscreen window steps
                 // aside for it (owner, 2026-11-02; A-8 still holds for focus nobody asked for)
                 self.show_chosen(id, &mut out);
-                out.extend(self.focus.set_focus(Some(id)));
-                out.extend(self.reconcile_constraints());
+                // and comes to the front: focused while buried, the window over it kept the clicks
+                // where they overlap (AUDIT_PRESENTATION B11)
+                self.raise_and_focus(id, &mut out);
             }
             ShellCommand::AcknowledgeAttention { element } => {
                 let id = self
@@ -7698,6 +7705,277 @@ mod tests {
             c.focus().history().get(1).copied(),
             Some(ws[2]),
             "ws[2] stayed hover-focused for 500ms before ShellCommand::Focus and should be in Super+Tab history"
+        );
+    }
+
+    #[test]
+    #[ignore = "AUDIT_PRESENTATION: overview_toggle unsuppresses before viewport_restore so fullscreen blocks camera restore"]
+    fn audit_presentation_overview_toggle_closing_on_fullscreen_leaves_camera_zoomed_out() {
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        let ws = map_windows(&mut c, a, 2);
+        let mut fx = Vec::new();
+        c.place_by_user(ws[1], crate::geom::CanvasPoint { x: 4000, y: 0 }, &mut fx)
+            .unwrap();
+        c.set_focus(&mut i, Some(ws[0])).unwrap();
+        c.toplevel_request(
+            ws[0],
+            crate::protocol::ToplevelRequest::SetFullscreen { output: Some(a) },
+        )
+        .unwrap();
+        let cam = c.cameras().camera_for_output(a).unwrap();
+        let z0 = c.cameras().zoom(cam).unwrap();
+
+        press_overview(&mut c, &mut i);
+        assert!(c.is_presentation_suppressed(a));
+        assert_eq!(c.cameras().history(cam).map(|h| h.len()), Some(1));
+        assert!(c.cameras().zoom(cam).unwrap() < z0);
+
+        press_overview(&mut c, &mut i);
+        assert!(!c.is_presentation_suppressed(a));
+        assert_eq!(c.presentation(a), Some(ws[0]));
+        assert_eq!(
+            c.cameras().history(cam).map(|h| h.len()),
+            Some(0),
+            "closing overview back to fullscreen must pop the overview camera history"
+        );
+        assert!(
+            (c.cameras().zoom(cam).unwrap() - z0).abs() < 1e-6,
+            "closing overview back to fullscreen must restore camera zoom (not stay zoomed out behind presentation)"
+        );
+    }
+
+    #[test]
+    #[ignore = "AUDIT_PRESENTATION: FocusNext checks only pointer_output and suppresses unrelated fullscreen on A when target lives on B"]
+    fn audit_presentation_focus_next_to_other_output_window_wrongly_suppresses_fullscreen() {
+        let far = PersistedCameras::from_entries(vec![(
+            key("B"),
+            CanvasPos {
+                x: 50_000 * (1 << 16),
+                y: 0,
+            },
+            1.0,
+        )])
+        .unwrap();
+        let (mut c, mut i, _, mut t) = Core::new(far);
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        let (b, _) = c.output_connected(&mut t, desc("B")).unwrap();
+        let ws = map_windows(&mut c, a, 2);
+        let (w1, w2) = (ws[0], ws[1]);
+        let mut fx = Vec::new();
+        c.place_by_user(w2, crate::geom::CanvasPoint { x: 49_800, y: -150 }, &mut fx)
+            .unwrap();
+        c.render_list(b).unwrap();
+        assert_eq!(c.membership().observers(w2), vec![b]);
+        assert_eq!(c.pointer_output(), Some(a));
+
+        c.set_focus(&mut i, Some(w2)).unwrap();
+        c.set_focus(&mut i, Some(w1)).unwrap();
+        c.toplevel_request(
+            w1,
+            crate::protocol::ToplevelRequest::SetFullscreen { output: Some(a) },
+        )
+        .unwrap();
+
+        super_tab(&mut c, &mut i);
+        assert_eq!(c.focus().target(), Some(w2));
+        assert!(
+            !c.is_presentation_suppressed(a),
+            "cycling focus to w2 (already visible on B) must not suppress w1's presentation on A"
+        );
+    }
+
+    #[test]
+    #[ignore = "AUDIT_PRESENTATION: FocusNext checks only pointer_output and fails to unsuppress A when pointer is on B"]
+    fn audit_presentation_focus_next_with_pointer_on_other_output_fails_to_unsuppress() {
+        let far = PersistedCameras::from_entries(vec![(
+            key("B"),
+            CanvasPos {
+                x: 50_000 * (1 << 16),
+                y: 0,
+            },
+            1.0,
+        )])
+        .unwrap();
+        let (mut c, mut i, _, mut t) = Core::new(far);
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        let (b, _) = c.output_connected(&mut t, desc("B")).unwrap();
+        let ws = map_windows(&mut c, a, 2);
+        let (w1, w2) = (ws[0], ws[1]);
+        let mut fx = Vec::new();
+        c.place_by_user(w2, crate::geom::CanvasPoint { x: 49_800, y: -150 }, &mut fx)
+            .unwrap();
+        c.render_list(b).unwrap();
+
+        c.set_focus(&mut i, Some(w2)).unwrap();
+        c.set_focus(&mut i, Some(w1)).unwrap();
+        c.toplevel_request(
+            w1,
+            crate::protocol::ToplevelRequest::SetFullscreen { output: Some(a) },
+        )
+        .unwrap();
+        c.suppress_presentation(a, &mut fx);
+        c.set_focus(&mut i, Some(w2)).unwrap();
+        assert!(c.is_presentation_suppressed(a));
+
+        c.physical_input_vec(
+            &mut i,
+            crate::PhysicalEvent::PointerMotion {
+                delta: (1000.0, 0.0),
+                delta_unaccel: (1000.0, 0.0),
+                time_us: 1000,
+            },
+        )
+        .unwrap();
+        assert_eq!(c.pointer_output(), Some(b));
+
+        super_tab(&mut c, &mut i);
+        assert_eq!(c.focus().target(), Some(w1));
+        assert!(
+            !c.is_presentation_suppressed(a),
+            "returning focus to w1 (presenting on A) must unsuppress A even when the pointer is on B"
+        );
+    }
+
+    #[test]
+    #[ignore = "AUDIT_PRESENTATION: jump_to_window checks only pointer_output so jumping to a window hidden under A while pointer is on B leaves A presenting"]
+    fn audit_presentation_jump_to_window_with_pointer_on_other_output_leaves_presentation_covering_target()
+     {
+        let far = PersistedCameras::from_entries(vec![(
+            key("B"),
+            CanvasPos {
+                x: 50_000 * (1 << 16),
+                y: 0,
+            },
+            1.0,
+        )])
+        .unwrap();
+        let (mut c, mut i, _, mut t) = Core::new(far);
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        let (b, _) = c.output_connected(&mut t, desc("B")).unwrap();
+        let ws = map_windows(&mut c, a, 2);
+        let (w1, w3) = (ws[0], ws[1]);
+        c.set_focus(&mut i, Some(w1)).unwrap();
+        c.toplevel_request(
+            w1,
+            crate::protocol::ToplevelRequest::SetFullscreen { output: Some(a) },
+        )
+        .unwrap();
+        assert!(c.hidden_by_presentation(w3));
+
+        c.physical_input_vec(
+            &mut i,
+            crate::PhysicalEvent::PointerMotion {
+                delta: (1000.0, 0.0),
+                delta_unaccel: (1000.0, 0.0),
+                time_us: 1000,
+            },
+        )
+        .unwrap();
+        assert_eq!(c.pointer_output(), Some(b));
+
+        let mut fx = Vec::new();
+        c.jump_to_window(w3, None, &mut fx);
+        assert_eq!(c.focus().target(), Some(w3));
+        assert!(
+            c.is_presentation_suppressed(a),
+            "jumping to w3 (hidden by A's presentation) must suppress A even when the pointer is on B"
+        );
+    }
+
+    #[test]
+    #[ignore = "AUDIT_PRESENTATION: show_chosen suppresses every presenting output instead of only outputs hiding the target"]
+    fn audit_presentation_show_chosen_over_suppresses_unrelated_second_output() {
+        let far = PersistedCameras::from_entries(vec![(
+            key("B"),
+            CanvasPos {
+                x: 50_000 * (1 << 16),
+                y: 0,
+            },
+            1.0,
+        )])
+        .unwrap();
+        let (mut c, mut i, mut s, mut t) = Core::new(far);
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        let (b, _) = c.output_connected(&mut t, desc("B")).unwrap();
+        let ws = map_windows(&mut c, a, 3);
+        let (w1, w2, w3) = (ws[0], ws[1], ws[2]);
+        let mut fx = Vec::new();
+        c.place_by_user(w2, crate::geom::CanvasPoint { x: 49_800, y: -150 }, &mut fx)
+            .unwrap();
+        c.render_list(b).unwrap();
+        assert_eq!(c.membership().observers(w2), vec![b]);
+
+        c.set_focus(&mut i, Some(w1)).unwrap();
+        c.toplevel_request(
+            w1,
+            crate::protocol::ToplevelRequest::SetFullscreen { output: Some(a) },
+        )
+        .unwrap();
+        c.set_focus(&mut i, Some(w2)).unwrap();
+        c.toplevel_request(
+            w2,
+            crate::protocol::ToplevelRequest::SetFullscreen { output: Some(b) },
+        )
+        .unwrap();
+        assert_eq!(c.presentation(a), Some(w1));
+        assert_eq!(c.presentation(b), Some(w2));
+
+        let r3 = crate::stage::ElementRef {
+            instance: c.stage().instance(),
+            element: w3,
+        };
+        c.shell_command(&mut s, crate::ShellCommand::Focus { element: r3 })
+            .unwrap();
+        assert!(c.is_presentation_suppressed(a));
+        assert!(
+            !c.is_presentation_suppressed(b),
+            "focusing w3 (on A) must not suppress unrelated presentation on B"
+        );
+    }
+
+    #[test]
+    fn audit_presentation_shell_focus_does_not_raise_buried_window() {
+        let (mut c, _, mut s, mut t) = Core::new(PersistedCameras::default());
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        let ws = map_windows(&mut c, a, 2);
+        let (w1, w2) = (ws[0], ws[1]);
+        assert_eq!(c.stage().z_order().last().copied(), Some(w2));
+
+        let r1 = crate::stage::ElementRef {
+            instance: c.stage().instance(),
+            element: w1,
+        };
+        c.shell_command(&mut s, crate::ShellCommand::Focus { element: r1 })
+            .unwrap();
+        assert_eq!(c.focus().target(), Some(w1));
+        assert_eq!(
+            c.stage().z_order().last().copied(),
+            Some(w1),
+            "user-driven ShellCommand::Focus must raise the focused window above overlapping windows"
+        );
+    }
+
+    #[test]
+    fn audit_presentation_overview_toggle_includes_minimized_window() {
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        let ws = map_windows(&mut c, a, 2);
+        let (_w1, w2) = (ws[0], ws[1]);
+        let mut fx = Vec::new();
+        c.place_by_user(w2, crate::geom::CanvasPoint { x: 20_000, y: 0 }, &mut fx)
+            .unwrap();
+        // an app minimizes only itself while focused (client_minimize)
+        c.set_focus(&mut i, Some(w2)).unwrap();
+        c.client_minimize(w2);
+        assert!(c.stage().is_minimized(w2), "the test needs w2 minimized");
+
+        press_overview(&mut c, &mut i);
+        let cam = c.cameras().camera_for_output(a).unwrap();
+        let center_x = c.cameras().center(cam).unwrap().x >> 16;
+        assert!(
+            center_x.abs() < 1000,
+            "overview center x={center_x} must ignore minimized w2 at x=20000"
         );
     }
 

@@ -971,3 +971,33 @@ fn a_fullscreen_window_stepping_aside_keeps_its_place_in_the_stack() {
         "W stays above the window nobody chose: {z:?}"
     );
 }
+
+#[test]
+#[ignore = "AUDIT_PRESENTATION: fitted opaque window drops behind windows from draw without checking input_region holes in hit-testing"]
+fn audit_presentation_fitted_occluded_window_not_drawn_but_still_hit_tested() {
+    let mut t = T::new();
+    let (_o_wl, _id_o) = t.map("O", (640, 480), BLUE);
+    let (w, id_w) = t.map("W", (640, 480), RED);
+    let qh = t.ls.qh.clone();
+    // Empty input region on front window W so pointer hit-test falls through W's pixels.
+    t.ls.probe
+        .input_region(&qh, w, &[(false, (0, 0, 640, 480))]);
+    t.adv();
+
+    let out = t.ls.output();
+    t.ls.state.set_fitted_window(out, Some(id_w));
+    let px = t.frame();
+    assert_eq!(
+        px[(240 * 640 + 320) as usize],
+        RED,
+        "fitted front window W is the only window drawn"
+    );
+
+    let mark = t.ls.probe.ptr.len();
+    t.move_by((1.0, 1.0));
+    let ptr = &t.ls.probe.ptr[mark..];
+    assert!(
+        !ptr.iter().any(|l| l.starts_with("enter O")),
+        "O was culled from rendering behind fitted W, yet hit-testing still routed pointer enter to O: {ptr:?}"
+    );
+}
