@@ -252,6 +252,31 @@ impl FocusModel {
         effects
     }
 
+    /// The window focus moves to `next` underneath a layer that holds the keyboard: the layer
+    /// keeps it, and `next` gets it when the layer lets go (as `target_lost`'s successor). With
+    /// no layer holding it, the keyboard follows at once.
+    pub fn set_target_under_layer(&mut self, next: Option<ElementId>) -> Vec<Effect> {
+        if self.target == next {
+            return Vec::new();
+        }
+        let prev = self.target;
+        self.target = next;
+        if let Some(id) = next {
+            self.attention.retain(|&e| e != id);
+        }
+        let mut effects = Vec::new();
+        if let Some(prev_id) = prev {
+            effects.push(Effect::ToplevelConfigure(prev_id));
+        }
+        if let Some(new_id) = next {
+            effects.push(Effect::ToplevelConfigure(new_id));
+        }
+        if self.layer.is_none() {
+            effects.push(Effect::KeyboardFocus(next));
+        }
+        effects
+    }
+
     /// The layer surface holding the keyboard, if any (L5).
     pub fn layer(&self) -> Option<crate::layer::LayerId> {
         self.layer.map(|(l, _)| l)

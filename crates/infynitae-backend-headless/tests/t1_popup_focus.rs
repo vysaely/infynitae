@@ -1320,3 +1320,42 @@ fn t99j_stale_popup_area() {
         );
     }
 }
+
+#[test]
+#[ignore = "AUDIT_PRESENTATION: LayerKeyboardFocus replaces keyboard focus without dismissing active popup grab"]
+fn audit_presentation_layer_keyboard_focus_does_not_dismiss_active_popup_grab() {
+    use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::Layer;
+    use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::{
+        Anchor, KeyboardInteractivity,
+    };
+
+    let mut h = PopupHarness::new();
+    h.ls.bind_layer_shell();
+    h.open_popup("P", h.w1);
+    assert!(h.ls.state.keyboard_is_grabbed());
+
+    let qh = h.ls.qh.clone();
+    let bar = h.ls.probe.layer_surface(
+        &qh,
+        "bar",
+        Layer::Top,
+        Anchor::Top | Anchor::Left | Anchor::Right,
+        (0, 30),
+        30,
+        KeyboardInteractivity::Exclusive,
+    );
+    h.ls.pump();
+    h.ls.probe.frame_and_draw(&qh, bar);
+    h.advance();
+
+    assert!(
+        !h.ls.state.keyboard_is_grabbed(),
+        "giving keyboard focus to an exclusive layer surface must dismiss the active popup grab"
+    );
+    assert_eq!(
+        h.ls.probe.popup_dones,
+        vec!["P"],
+        "popup P must receive popup_done before bar gets keyboard focus"
+    );
+    assert_eq!(h.ls.probe.kb.active.as_deref(), Some("bar"));
+}

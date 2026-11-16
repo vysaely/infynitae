@@ -7182,4 +7182,132 @@ mod tests {
             "second window placed flush beside with 12px gap based on window geometry"
         );
     }
+
+    #[test]
+    #[ignore = "AUDIT_PRESENTATION: unfocused premap fullscreen client steals output, ends active fullscreen, and clears user suppression"]
+    fn audit_presentation_premap_fullscreen_steals_output_and_clears_suppression() {
+        let (mut c, mut i, mut s, mut t) = Core::new(PersistedCameras::default());
+        let a = out(&mut c, &mut t, "A", (1920, 1080), 120);
+        let w1 = map_win(&mut c, 1, 400, 300);
+        let w2 = map_win(&mut c, 2, 400, 300);
+        focus(&mut c, &mut i, w1);
+        c.toplevel_request(w1, FS).unwrap();
+        assert_eq!(c.presentation(a), Some(w1));
+
+        // User chooses w2 over w1's fullscreen (suppressing A).
+        c.shell_command(
+            &mut s,
+            crate::ShellCommand::Focus {
+                element: crate::stage::ElementRef {
+                    instance: c.stage().instance(),
+                    element: w2,
+                },
+            },
+        )
+        .unwrap();
+        assert!(c.is_presentation_suppressed(a));
+        assert_eq!(c.focus().target(), Some(w2));
+
+        // Background client opens w3 with premap SetFullscreen (AwaitingInitialCommit) without focus.
+        let w3 = c.toplevel_created();
+        let _ = c.toplevel_request(w3, FS);
+        c.toplevel_committed(w3, win(3, 0, 0, false)).unwrap();
+        c.toplevel_committed(w3, win(3, 1920, 1080, true)).unwrap();
+
+        assert_eq!(c.focus().target(), Some(w2), "user focus stayed on w2");
+        assert!(
+            c.presentation(a) != Some(w3),
+            "unfocused premap client must not steal fullscreen output over the user's chosen w2"
+        );
+        assert!(
+            c.is_presentation_suppressed(a),
+            "unfocused client commit must not clear the user's presentation suppression"
+        );
+    }
+
+    #[test]
+    #[ignore = "AUDIT_PRESENTATION: presentation_suppressed leaks on UnsetFullscreen, unmap, destroy, and move to another output"]
+    fn audit_presentation_suppression_leaks_when_fullscreen_ends_without_take_output() {
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let a = out(&mut c, &mut t, "A", (1920, 1080), 120);
+        let b = out(&mut c, &mut t, "B", (1920, 1080), 120);
+        let w1 = map_win(&mut c, 1, 400, 300);
+        let w2 = map_win(&mut c, 2, 400, 300);
+
+        // 1. UnsetFullscreen leaves presentation_suppressed set on A
+        focus(&mut c, &mut i, w1);
+        c.toplevel_request(w1, ToplevelRequest::SetFullscreen { output: Some(a) })
+            .unwrap();
+        let mut fx = Vec::new();
+        c.suppress_presentation(a, &mut fx);
+        assert!(c.is_presentation_suppressed(a));
+        c.toplevel_request(w1, ToplevelRequest::UnsetFullscreen)
+            .unwrap();
+        assert_eq!(c.presentation(a), None);
+        let mut leaked = Vec::new();
+        if c.is_presentation_suppressed(a) {
+            leaked.push("UnsetFullscreen");
+        }
+
+        // 2. Unmap leaves presentation_suppressed set on A
+        c.clear_presentation_suppression(a);
+        focus(&mut c, &mut i, w1);
+        c.toplevel_request(w1, ToplevelRequest::SetFullscreen { output: Some(a) })
+            .unwrap();
+        c.suppress_presentation(a, &mut fx);
+        c.toplevel_committed(w1, win(1, 0, 0, false)).unwrap();
+        assert_eq!(c.presentation(a), None);
+        if c.is_presentation_suppressed(a) {
+            leaked.push("unmap");
+        }
+
+        // 3. Move fullscreen A -> B leaves presentation_suppressed set on A
+        c.clear_presentation_suppression(a);
+        focus(&mut c, &mut i, w2);
+        c.toplevel_request(w2, ToplevelRequest::SetFullscreen { output: Some(a) })
+            .unwrap();
+        c.suppress_presentation(a, &mut fx);
+        c.toplevel_request(w2, ToplevelRequest::SetFullscreen { output: Some(b) })
+            .unwrap();
+        assert_eq!(c.presentation(a), None);
+        if c.is_presentation_suppressed(a) {
+            leaked.push("move A->B");
+        }
+
+        // 4. Destroy leaves presentation_suppressed set on B
+        c.suppress_presentation(b, &mut fx);
+        c.toplevel_destroyed(w2);
+        assert_eq!(c.presentation(b), None);
+        if c.is_presentation_suppressed(b) {
+            leaked.push("toplevel_destroyed");
+        }
+
+        assert!(
+            leaked.is_empty(),
+            "presentation_suppressed leaked after fullscreen ended via: {leaked:?}"
+        );
+    }
+
+    #[test]
+    #[ignore = "AUDIT_PRESENTATION: client map/remap raises buried/unfocused window over focused window without user action"]
+    fn audit_presentation_remap_raises_unfocused_window_over_focused_window() {
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        out(&mut c, &mut t, "A", (1920, 1080), 120);
+        let w1 = map_win(&mut c, 1, 400, 300);
+        let w2 = map_win(&mut c, 2, 400, 300);
+        // Focus stays on w2 while w1 unmaps and remaps behind it without user action.
+        focus(&mut c, &mut i, w2);
+        assert_eq!(c.stage().z_order(), vec![w1, w2]);
+
+        c.toplevel_committed(w1, win(1, 0, 0, false)).unwrap();
+        c.toplevel_committed(w1, win(1, 0, 0, false)).unwrap();
+        c.toplevel_committed(w1, win(1, 400, 300, true)).unwrap();
+
+        assert_eq!(c.focus().target(), Some(w2));
+        assert_eq!(
+            c.stage().z_order().last().copied(),
+            Some(w2),
+            "unfocused w1 remapping without user action raised itself over focused w2"
+        );
+    }
 }

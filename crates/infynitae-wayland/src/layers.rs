@@ -157,6 +157,8 @@ impl WaylandState {
                 if let Some(surface) = self.layer_surface(layer)
                     && !self.is_locked()
                 {
+                    // a popup open in a window would keep the keys from the panel (finding 2)
+                    self.end_keyboard_grabs_for_focus();
                     let serial = smithay::utils::SERIAL_COUNTER.next_serial();
                     let kb = self.keyboard_handle();
                     kb.set_focus(self, Some(surface), serial);
