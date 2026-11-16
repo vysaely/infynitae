@@ -267,3 +267,35 @@ fn stationary_finger_on_lock_surface_receives_cancel_and_frames() {
         r.ls.probe.log
     );
 }
+
+#[test]
+fn finger_down_on_lock_surface_when_output_unplugged_cancels_touch() {
+    let (mut r, _touch) = rig();
+    let _lock = lock(&mut r);
+    r.ls.probe.log.clear();
+    down(&mut r, 1, (50.0, 50.0));
+    assert!(
+        r.ls.probe
+            .log
+            .contains(&"down 1 lock 50.0,50.0".to_string())
+    );
+
+    r.ls.probe.log.clear();
+    let out = r.ls.output();
+    r.ls.disconnect(out);
+    assert!(
+        r.ls.probe.log.contains(&"cancel".to_string()),
+        "unplugging output while finger is down on lock surface must cancel touch: {:?}",
+        r.ls.probe.log
+    );
+
+    // Reconnect and check that the old slot's motion/up does not stick to lock.
+    r.ls.connect(&common::output((1920, 1080), 120));
+    r.ls.probe.log.clear();
+    up(&mut r, 1);
+    assert!(
+        !r.ls.probe.log.contains(&"up 1".to_string()),
+        "cancelled lock slot must not emit up after output unplug: {:?}",
+        r.ls.probe.log
+    );
+}

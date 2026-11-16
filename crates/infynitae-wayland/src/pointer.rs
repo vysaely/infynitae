@@ -739,6 +739,9 @@ impl WaylandState {
     /// still: each one is sent its last location again first (a motion to where it is), so the
     /// cancel reaches every client holding a finger.
     pub fn cancel_touches(&mut self) {
+        if let Some(l) = self.session_lock.as_mut() {
+            l.fingers.clear();
+        }
         let Some(touch) = self.seat.get_touch() else {
             self.touch_last.clear();
             self.lock_touch_last.clear();

@@ -894,7 +894,9 @@ fn rescan_screens(data: &mut LoopData) {
     );
     for id in gone {
         data.screens.retain(|s| s.id != id);
-        data.touch_slots.retain(|(_, _, o)| *o != id);
+        if data.touch_slots.iter().any(|(_, _, o)| *o == id) {
+            data.touch_slots.clear();
+        }
         data.gamma_screens.lock().unwrap().remove(&id);
         match data
             .state

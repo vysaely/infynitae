@@ -1174,3 +1174,87 @@ fn edge_swipe_ignores_parallel_drag_and_open_panel() {
         "removing TOUCH_EDGE_SWIPE must revert to default true"
     );
 }
+
+#[test]
+fn finger_down_when_output_unplugged_cancels_touch() {
+    let (mut r, _touch) = rig();
+    let (p, _) = on_w(&mut r);
+
+    // 1. Finger down on window W when its output unplugs -> W receives cancel, reconnect works.
+    down(&mut r, 0, p);
+    assert!(r.ls.probe.log.iter().any(|l| l.starts_with("down 0 W")));
+    r.ls.probe.log.clear();
+    let out = r.ls.output();
+    r.ls.disconnect(out);
+    assert!(
+        r.ls.probe.log.contains(&"cancel".to_string()),
+        "unplugging output while finger is down on W must cancel touch: {:?}",
+        r.ls.probe.log
+    );
+
+    let out2 = r.ls.connect(&a_1080());
+    r.frame();
+    r.ls.probe.log.clear();
+    r.t += 1000;
+    let t1 = r.t;
+    touch(
+        &mut r,
+        PhysicalEvent::TouchDown {
+            slot: 1,
+            output: out2,
+            p: (960.0, 540.0),
+            time_us: t1,
+        },
+    );
+    touch(&mut r, PhysicalEvent::TouchFrame);
+    r.t += 1000;
+    let t2 = r.t;
+    touch(
+        &mut r,
+        PhysicalEvent::TouchUp {
+            slot: 1,
+            time_us: t2,
+        },
+    );
+    touch(&mut r, PhysicalEvent::TouchFrame);
+    assert!(
+        r.ls.probe.log.iter().any(|l| l.starts_with("down 1 W")),
+        "tap on W after output reconnect must reach W: {:?}",
+        r.ls.probe.log
+    );
+
+    // 2. Finger down on empty canvas when its output unplugs -> cleared, not stuck on reconnect.
+    r.t += 1000;
+    let t3 = r.t;
+    touch(
+        &mut r,
+        PhysicalEvent::TouchDown {
+            slot: 2,
+            output: out2,
+            p: (100.0, 100.0),
+            time_us: t3,
+        },
+    );
+    touch(&mut r, PhysicalEvent::TouchFrame);
+    r.ls.disconnect(out2);
+    let out3 = r.ls.connect(&a_1080());
+    r.frame();
+    r.ls.probe.log.clear();
+    r.t += 1000;
+    let t4 = r.t;
+    touch(
+        &mut r,
+        PhysicalEvent::TouchDown {
+            slot: 3,
+            output: out3,
+            p: (960.0, 540.0),
+            time_us: t4,
+        },
+    );
+    touch(&mut r, PhysicalEvent::TouchFrame);
+    assert!(
+        r.ls.probe.log.iter().any(|l| l.starts_with("down 3 W")),
+        "tap on W after canvas-touch output unplug must reach W (no stale canvas slot): {:?}",
+        r.ls.probe.log
+    );
+}

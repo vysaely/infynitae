@@ -83,7 +83,7 @@ pub(crate) struct SessionLock {
     /// Keys physically down (every key passes `lock_key`).
     phys_down: HashSet<u32>,
     /// Fingers that landed on a lock surface: they stay with it until they lift.
-    fingers: Vec<u32>,
+    pub(crate) fingers: Vec<u32>,
     /// Unlocked: Core's releases and the keyboard's return are still to come.
     just_unlocked: bool,
     /// When the compositor last started the locker because the holder died (M4).
