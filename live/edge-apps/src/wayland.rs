@@ -25,6 +25,10 @@ use smithay_client_toolkit::{
             Connection, Dispatch, QueueHandle,
         },
         protocols::wp::{
+            cursor_shape::v1::client::{
+                wp_cursor_shape_device_v1::{self, WpCursorShapeDeviceV1},
+                wp_cursor_shape_manager_v1::WpCursorShapeManagerV1,
+            },
             fractional_scale::v1::client::{
                 wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1,
                 wp_fractional_scale_v1::{self, WpFractionalScaleV1},
@@ -67,6 +71,7 @@ use std::time::{Duration, Instant};
 // the same files as today's edge: only one edge runs at a time, and every caller finds it so
 const PID_FILE: &str = "infynitae-edge-rs.pid";
 const PANEL_FILE: &str = "infynitae-edge-rs.panel";
+const CONFIG_STAT_INTERVAL: Duration = Duration::from_millis(250);
 
 /// The running edge's pid (this one's or today's: any `infynitae-edge-*`).
 pub fn running_pid() -> Option<i32> {
@@ -740,6 +745,7 @@ struct App {
     shm: Shm,
     viewporter: Option<WpViewporter>,
     fractional_scale_mgr: Option<WpFractionalScaleManagerV1>,
+    cursor_shape_mgr: Option<WpCursorShapeManagerV1>,
     qh: QueueHandle<App>,
     outputs: Vec<OutputSurface>,
     next_output_id: OutputId,
@@ -748,11 +754,19 @@ struct App {
     fullscreen_changed: bool,
     keyboard: Option<wl_keyboard::WlKeyboard>,
     pointer: Option<wl_pointer::WlPointer>,
+    cursor_device: Option<WpCursorShapeDeviceV1>,
     touch: Option<wl_touch::WlTouch>,
     keyboard_output: Option<OutputId>,
     current_pointer_output: Option<OutputId>,
     last_pointer_output: Option<OutputId>,
     last_display_scale: f64,
+    last_config_check: Option<Instant>,
+    #[cfg(test)]
+    clock: Option<std::rc::Rc<std::cell::Cell<Instant>>>,
+    #[cfg(test)]
+    config_path: Option<std::path::PathBuf>,
+    #[cfg(test)]
+    config_stat_calls: std::rc::Rc<std::cell::Cell<usize>>,
     modifiers: Modifiers,
     shell: Shell,
     fetch_tx: Sender<Fetched>,
@@ -946,9 +960,36 @@ impl App {
         }
     }
 
-    /// Reloads config, theme and boards when changed on disk, marking active surfaces dirty.
+    fn now(&self) -> Instant {
+        #[cfg(test)]
+        if let Some(c) = &self.clock {
+            return c.get();
+        }
+        Instant::now()
+    }
+
+    /// Reloads config, theme and boards when changed on disk (statted at most every 250 ms),
+    /// marking active surfaces dirty.
     fn reload_config(&mut self) -> bool {
-        if !self.shell.reload_if_changed() {
+        let now = self.now();
+        if self
+            .last_config_check
+            .is_some_and(|prev| now.saturating_duration_since(prev) < CONFIG_STAT_INTERVAL)
+        {
+            return false;
+        }
+        self.last_config_check = Some(now);
+        #[cfg(test)]
+        self.config_stat_calls
+            .set(self.config_stat_calls.get().saturating_add(1));
+        #[cfg(test)]
+        let changed = match self.config_path.clone() {
+            Some(p) => self.shell.reload_if_changed_at(&p),
+            None => self.shell.reload_if_changed(),
+        };
+        #[cfg(not(test))]
+        let changed = self.shell.reload_if_changed();
+        if !changed {
             return false;
         }
         if self.shell.visible() {
@@ -1323,13 +1364,6 @@ impl CompositorHandler for App {
         _: u32,
     ) {
         let is_output_surface = self.outputs.iter().any(|o| o.layer.wl_surface() == surface);
-        if self.shell.active()
-            || self.popups.as_ref().is_some_and(|p| {
-                p.layer.wl_surface() == surface && !self.shell.notify.popups.is_empty()
-            })
-        {
-            let _ = self.reload_config();
-        }
         if is_output_surface {
             // an animation running (arrival, leaving, a list opening, drag autoscroll): draw again
             let was_visible = self.shell.visible();
@@ -1432,14 +1466,6 @@ impl LayerShellHandler for App {
         configure: LayerSurfaceConfigure,
         _: u32,
     ) {
-        if self.shell.active()
-            || self
-                .popups
-                .as_ref()
-                .is_some_and(|p| &p.layer == layer && !self.shell.notify.popups.is_empty())
-        {
-            let _ = self.reload_config();
-        }
         if let Some(os) = self.outputs.iter_mut().find(|o| &o.layer == layer) {
             os.width = configure.new_size.0.max(1);
             os.height = configure.new_size.1.max(1);
@@ -1471,7 +1497,12 @@ impl SeatHandler for App {
             self.keyboard = self.seat_state.get_keyboard(qh, &seat, None).ok();
         }
         if capability == Capability::Pointer && self.pointer.is_none() {
-            self.pointer = self.seat_state.get_pointer(qh, &seat).ok();
+            if let Ok(ptr) = self.seat_state.get_pointer(qh, &seat) {
+                if let Some(mgr) = &self.cursor_shape_mgr {
+                    self.cursor_device = Some(mgr.get_pointer(&ptr, qh, ()));
+                }
+                self.pointer = Some(ptr);
+            }
         }
         if capability == Capability::Touch && self.touch.is_none() {
             self.touch = self.seat_state.get_touch(qh, &seat).ok();
@@ -1490,6 +1521,9 @@ impl SeatHandler for App {
             }
         }
         if capability == Capability::Pointer {
+            if let Some(dev) = self.cursor_device.take() {
+                dev.destroy();
+            }
             if let Some(p) = self.pointer.take() {
                 p.release();
             }
@@ -1667,6 +1701,11 @@ impl PointerHandler for App {
         let mut changed = false;
         let mut pop_changed = false;
         for event in events {
+            if let PointerEventKind::Enter { serial } = event.kind {
+                if let Some(dev) = &self.cursor_device {
+                    dev.set_shape(serial, wp_cursor_shape_device_v1::Shape::Default);
+                }
+            }
             if let Some(pl) = self
                 .popups
                 .as_mut()
@@ -1894,6 +1933,8 @@ delegate_registry!(App);
 delegate_noop!(App: ignore WpViewporter);
 delegate_noop!(App: ignore WpViewport);
 delegate_noop!(App: ignore WpFractionalScaleManagerV1);
+delegate_noop!(App: ignore WpCursorShapeManagerV1);
+delegate_noop!(App: ignore WpCursorShapeDeviceV1);
 
 impl Dispatch<WpFractionalScaleV1, wl_surface::WlSurface> for App {
     fn event(
@@ -2127,6 +2168,7 @@ fn init_app(
     } else {
         None
     };
+    let cursor_shape_mgr: Option<WpCursorShapeManagerV1> = globals.bind(&qh, 1..=1, ()).ok();
     let app_dirs = shell.app_dirs.clone();
     let apps_mtime = crate::app::dir_mtimes(&app_dirs);
     let output_state = OutputState::new(&globals, &qh);
@@ -2140,6 +2182,7 @@ fn init_app(
         shm,
         viewporter,
         fractional_scale_mgr,
+        cursor_shape_mgr,
         qh: qh.clone(),
         outputs: Vec::new(),
         next_output_id: 1,
@@ -2148,11 +2191,19 @@ fn init_app(
         fullscreen_changed: false,
         keyboard: None,
         pointer: None,
+        cursor_device: None,
         touch: None,
         keyboard_output: None,
         current_pointer_output: None,
         last_pointer_output: None,
         last_display_scale: 1.0,
+        last_config_check: None,
+        #[cfg(test)]
+        clock: None,
+        #[cfg(test)]
+        config_path: None,
+        #[cfg(test)]
+        config_stat_calls: std::rc::Rc::new(std::cell::Cell::new(0)),
         modifiers: Modifiers::default(),
         shell,
         fetch_tx,
@@ -3292,6 +3343,7 @@ mod tests {
         output_globals: HashMap<u32, u32>,
         output_obj_to_global: HashMap<u32, u32>,
         pointer_id: Option<u32>,
+        cursor_shapes: Vec<(u32, u32)>,
         touch_id: Option<u32>,
         toplevel_mgr_id: Option<u32>,
         next_serial: u32,
@@ -3306,6 +3358,14 @@ mod tests {
 
     impl MockWayland {
         fn start(specs: Vec<MockOutputSpec>, offer_fractional: bool) -> (Self, Connection) {
+            Self::start_with(specs, offer_fractional, true)
+        }
+
+        fn start_with(
+            specs: Vec<MockOutputSpec>,
+            offer_fractional: bool,
+            offer_cursor_shape: bool,
+        ) -> (Self, Connection) {
             use std::os::unix::net::UnixStream;
             let (client_sock, server_sock) = UnixStream::pair().unwrap();
             let write_sock = server_sock.try_clone().unwrap();
@@ -3318,7 +3378,13 @@ mod tests {
             let st_thread = Arc::clone(&state);
 
             let join = std::thread::spawn(move || {
-                Self::serve(server_sock, specs, offer_fractional, st_thread);
+                Self::serve(
+                    server_sock,
+                    specs,
+                    offer_fractional,
+                    offer_cursor_shape,
+                    st_thread,
+                );
             });
 
             (
@@ -3439,6 +3505,7 @@ mod tests {
             sock: std::os::unix::net::UnixStream,
             specs: Vec<MockOutputSpec>,
             offer_fractional: bool,
+            offer_cursor_shape: bool,
             state: Arc<std::sync::Mutex<MockServerState>>,
         ) {
             #[derive(Clone, Copy)]
@@ -3462,6 +3529,8 @@ mod tests {
                 Viewport,
                 FracMgr,
                 FracScale,
+                CursorShapeMgr,
+                CursorShapeDevice,
                 ToplevelMgr,
             }
             let mut objs: HashMap<u32, Obj> = HashMap::new();
@@ -3477,6 +3546,9 @@ mod tests {
             if offer_fractional {
                 globals.push((6, "wp_viewporter", 1));
                 globals.push((7, "wp_fractional_scale_manager_v1", 1));
+            }
+            if offer_cursor_shape {
+                globals.push((8, "wp_cursor_shape_manager_v1", 1));
             }
             let out_base = 10u32;
             for idx in 0..specs.len() {
@@ -3558,6 +3630,9 @@ mod tests {
                                 }
                                 "wp_fractional_scale_manager_v1" => {
                                     objs.insert(new_id, Obj::FracMgr);
+                                }
+                                "wp_cursor_shape_manager_v1" => {
+                                    objs.insert(new_id, Obj::CursorShapeMgr);
                                 }
                                 "zwlr_foreign_toplevel_manager_v1" => {
                                     objs.insert(new_id, Obj::ToplevelMgr);
@@ -3692,6 +3767,16 @@ mod tests {
                                 out_bytes.extend(Self::msg(fsid, 0, &b));
                             }
                         }
+                        Some(Obj::CursorShapeMgr) if opcode == 1 => {
+                            let dev_id = Self::read_u32(body, &mut off);
+                            let _ptr_id = Self::read_u32(body, &mut off);
+                            objs.insert(dev_id, Obj::CursorShapeDevice);
+                        }
+                        Some(Obj::CursorShapeDevice) if opcode == 1 => {
+                            let serial = Self::read_u32(body, &mut off);
+                            let shape = Self::read_u32(body, &mut off);
+                            state.lock().unwrap().cursor_shapes.push((serial, shape));
+                        }
                         Some(Obj::Seat) => match opcode {
                             0 => {
                                 let pid = Self::read_u32(body, &mut off);
@@ -3817,6 +3902,19 @@ mod tests {
             self.send_raw(Self::msg(surface_id, 2, &sb));
         }
 
+        fn send_layer_configure(&self, surface_id: u32, width: u32, height: u32) {
+            let mut st = self.state.lock().unwrap();
+            let lid = *st.layers_by_surface.get(&surface_id).unwrap();
+            st.next_serial += 1;
+            let serial = st.next_serial;
+            drop(st);
+            let mut cb = Vec::new();
+            Self::push_u32(&mut cb, serial);
+            Self::push_u32(&mut cb, width);
+            Self::push_u32(&mut cb, height);
+            self.send_raw(Self::msg(lid, 0, &cb));
+        }
+
         fn send_preferred_scale(&self, surface_id: u32, scale_120: u32) {
             let fs_id = self
                 .state
@@ -3855,6 +3953,21 @@ mod tests {
                 Self::push_i32(&mut mb, fy);
                 raw.extend(Self::msg(pid, 2, &mb));
             }
+            raw.extend(Self::msg(pid, 5, &[]));
+            self.send_raw(raw);
+        }
+
+        fn send_pointer_leave(&self, surface_id: u32) {
+            let mut st = self.state.lock().unwrap();
+            let pid = st.pointer_id.unwrap();
+            st.next_serial += 1;
+            let serial = st.next_serial;
+            drop(st);
+            let mut raw = Vec::new();
+            let mut lb = Vec::new();
+            Self::push_u32(&mut lb, serial);
+            Self::push_u32(&mut lb, surface_id);
+            raw.extend(Self::msg(pid, 1, &lb));
             raw.extend(Self::msg(pid, 5, &[]));
             self.send_raw(raw);
         }
@@ -4536,5 +4649,172 @@ mod tests {
         eq.roundtrip(&mut app).unwrap();
         assert!(app.shell.actions.is_empty());
         assert!(!app.queued.lock().unwrap().contains_key("settings/input"));
+    }
+
+    #[test]
+    fn config_stat_throttled_to_250ms_and_never_on_frame_or_configure() {
+        let dir = std::env::temp_dir().join(format!(
+            "infynitae-wayland-config-stat-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg_path = dir.join("config");
+        std::fs::write(
+            &cfg_path,
+            "ACCENT=\"#112233\"\nPANEL_CONTROL=\"SUPER+A top right 380 settings/session\"\n",
+        )
+        .unwrap();
+
+        let (mock, conn) = MockWayland::start(
+            vec![MockOutputSpec {
+                width: 1280,
+                height: 800,
+                scale: 1,
+                fractional_120: 120,
+            }],
+            false,
+        );
+        let sh = Shell::new_at(
+            crate::config::Config::from_text(&std::fs::read_to_string(&cfg_path).unwrap()),
+            Vec::new(),
+            &cfg_path,
+        );
+        let (fetch_tx, _fetch_rx) = channel::channel::<Fetched>();
+        let (mut app, mut eq) = init_app(&conn, sh, fetch_tx).unwrap();
+        eq.roundtrip(&mut app).unwrap();
+
+        let t0 = Instant::now();
+        let clock = std::rc::Rc::new(std::cell::Cell::new(t0));
+        app.clock = Some(std::rc::Rc::clone(&clock));
+        app.config_path = Some(cfg_path.clone());
+        assert_eq!(app.config_stat_calls.get(), 0);
+
+        let target = app.key_target_output();
+        assert!(app.shell.toggle_named_on(target, "control"));
+        app.sync_all();
+        assert_eq!(app.config_stat_calls.get(), 1);
+
+        // Within 250 ms, repeated sync_all, sync_popups, frame and configure calls never stat.
+        let wl_surf = app.outputs[0].layer.wl_surface().clone();
+        let sid = surface_wl_id(&app.outputs[0]);
+        let qh = app.qh.clone();
+        for ms in [0u64, 16, 32, 64, 128, 249] {
+            clock.set(t0 + Duration::from_millis(ms));
+            app.frame(&conn, &qh, &wl_surf, 0);
+            mock.send_layer_configure(sid, 1280, 800);
+            eq.roundtrip(&mut app).unwrap();
+            app.sync_popups();
+            app.sync_all();
+            assert_eq!(
+                app.config_stat_calls.get(),
+                1,
+                "config must not be statted again at +{ms} ms"
+            );
+        }
+
+        // Even after 250 ms, frame and configure callbacks themselves do not stat the config.
+        clock.set(t0 + Duration::from_millis(250));
+        app.frame(&conn, &qh, &wl_surf, 0);
+        mock.send_layer_configure(sid, 1280, 800);
+        eq.roundtrip(&mut app).unwrap();
+        assert_eq!(app.config_stat_calls.get(), 1);
+
+        // At >= 250 ms, sync_all stats once and picks up a disk change.
+        std::fs::write(
+            &cfg_path,
+            "ACCENT=\"#445566\"\nPANEL_CONTROL=\"SUPER+A top right 380 settings/session\"\n",
+        )
+        .unwrap();
+        let future = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
+        std::fs::File::options()
+            .write(true)
+            .open(&cfg_path)
+            .unwrap()
+            .set_modified(future)
+            .unwrap();
+        app.sync_all();
+        assert_eq!(app.config_stat_calls.get(), 2);
+        assert_eq!(app.shell.cfg.accent, [0x44, 0x55, 0x66]);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn headless_pointer_enter_sets_default_cursor_shape_when_offered() {
+        // 1. Compositor offers wp_cursor_shape_manager_v1: pointer enter sets Shape::Default.
+        let (mock, conn) = MockWayland::start_with(
+            vec![MockOutputSpec {
+                width: 1280,
+                height: 800,
+                scale: 1,
+                fractional_120: 120,
+            }],
+            false,
+            true,
+        );
+        let sh = Shell::new(
+            crate::config::Config::from_text(
+                "PANEL_CONTROL=\"SUPER+A top right 380 settings/session\"\n",
+            ),
+            Vec::new(),
+        );
+        let (fetch_tx, _fetch_rx) = channel::channel::<Fetched>();
+        let (mut app, mut eq) = init_app(&conn, sh, fetch_tx).unwrap();
+        eq.roundtrip(&mut app).unwrap();
+        eq.roundtrip(&mut app).unwrap();
+        assert!(app.cursor_device.is_some());
+
+        let sid = surface_wl_id(&app.outputs[0]);
+        mock.send_pointer_move(sid, 100.0, 50.0, true);
+        eq.roundtrip(&mut app).unwrap();
+        eq.roundtrip(&mut app).unwrap();
+        let shapes = mock.state.lock().unwrap().cursor_shapes.clone();
+        assert_eq!(shapes.len(), 1);
+        assert_eq!(
+            shapes[0].1,
+            wp_cursor_shape_device_v1::Shape::Default as u32
+        );
+
+        // Subsequent motion does not re-send set_shape; leaving and entering again sends it with the new serial.
+        mock.send_pointer_move(sid, 120.0, 60.0, false);
+        eq.roundtrip(&mut app).unwrap();
+        eq.roundtrip(&mut app).unwrap();
+        assert_eq!(mock.state.lock().unwrap().cursor_shapes.len(), 1);
+
+        mock.send_pointer_leave(sid);
+        mock.send_pointer_move(sid, 140.0, 70.0, true);
+        eq.roundtrip(&mut app).unwrap();
+        eq.roundtrip(&mut app).unwrap();
+        let shapes = mock.state.lock().unwrap().cursor_shapes.clone();
+        assert_eq!(shapes.len(), 2);
+        assert!(shapes[1].0 > shapes[0].0);
+        assert_eq!(
+            shapes[1].1,
+            wp_cursor_shape_device_v1::Shape::Default as u32
+        );
+
+        // 2. Compositor does not offer wp_cursor_shape_manager_v1: leaves cursor as is without error.
+        let (mock_no, conn_no) = MockWayland::start_with(
+            vec![MockOutputSpec {
+                width: 1280,
+                height: 800,
+                scale: 1,
+                fractional_120: 120,
+            }],
+            false,
+            false,
+        );
+        let sh_no = Shell::new(crate::config::Config::from_text(""), Vec::new());
+        let (fetch_tx_no, _fetch_rx_no) = channel::channel::<Fetched>();
+        let (mut app_no, mut eq_no) = init_app(&conn_no, sh_no, fetch_tx_no).unwrap();
+        eq_no.roundtrip(&mut app_no).unwrap();
+        eq_no.roundtrip(&mut app_no).unwrap();
+        assert!(app_no.cursor_device.is_none());
+        let sid_no = surface_wl_id(&app_no.outputs[0]);
+        mock_no.send_pointer_move(sid_no, 50.0, 20.0, true);
+        eq_no.roundtrip(&mut app_no).unwrap();
+        eq_no.roundtrip(&mut app_no).unwrap();
+        assert!(mock_no.state.lock().unwrap().cursor_shapes.is_empty());
     }
 }
