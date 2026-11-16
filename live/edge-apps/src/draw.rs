@@ -4,6 +4,7 @@
 use crate::theme::{Rgba, Theme};
 use cairo::Context;
 use std::cell::RefCell;
+use std::collections::HashMap;
 
 pub const PAD_X: f64 = 18.0;
 pub const PAD_Y: f64 = 16.0;
@@ -14,8 +15,12 @@ pub const SIZE_SMALL: f64 = 12.0;
 pub const SIZE_BODY: f64 = 13.0;
 pub const SIZE_TITLE: f64 = 15.0;
 
+type FontDescCache = (String, HashMap<(u64, bool), pango::FontDescription>);
+
 thread_local! {
     static CURRENT_FONT: RefCell<String> = RefCell::new(DEFAULT_FONT.to_string());
+    static FONT_DESCS: RefCell<FontDescCache> =
+        RefCell::new((DEFAULT_FONT.to_string(), HashMap::new()));
 }
 
 struct FontGuard(Option<String>);
@@ -105,20 +110,34 @@ pub fn grey_text_edges(cr: &Context) {
     cr.set_font_options(&fo);
 }
 
-fn font_desc(size: f64, bold: bool) -> pango::FontDescription {
-    let mut fd = CURRENT_FONT.with(|f| pango::FontDescription::from_string(&f.borrow()));
-    fd.set_absolute_size(size * pango::SCALE as f64);
-    fd.set_weight(if bold {
-        pango::Weight::Semibold
-    } else {
-        pango::Weight::Normal
-    });
-    fd
+fn with_font_desc<R>(size: f64, bold: bool, f: impl FnOnce(&pango::FontDescription) -> R) -> R {
+    CURRENT_FONT.with(|family_cell| {
+        let family = family_cell.borrow();
+        FONT_DESCS.with(|cache_cell| {
+            let mut cache = cache_cell.borrow_mut();
+            if cache.0 != *family {
+                cache.0.clone_from(&family);
+                cache.1.clear();
+            }
+            let key = (size.to_bits(), bold);
+            let fd = cache.1.entry(key).or_insert_with(|| {
+                let mut fd = pango::FontDescription::from_string(&family);
+                fd.set_absolute_size(size * pango::SCALE as f64);
+                fd.set_weight(if bold {
+                    pango::Weight::Semibold
+                } else {
+                    pango::Weight::Normal
+                });
+                fd
+            });
+            f(fd)
+        })
+    })
 }
 
 fn layout(cr: &Context, t: &Text) -> pango::Layout {
     let l = pangocairo::functions::create_layout(cr);
-    l.set_font_description(Some(&font_desc(t.size, t.bold)));
+    with_font_desc(t.size, t.bold, |fd| l.set_font_description(Some(fd)));
     l.set_text(t.text);
     l
 }
@@ -133,7 +152,7 @@ pub fn wrapped_layout(
     text: &str,
 ) -> pango::Layout {
     let l = pangocairo::functions::create_layout(cr);
-    l.set_font_description(Some(&font_desc(size, bold)));
+    with_font_desc(size, bold, |fd| l.set_font_description(Some(fd)));
     l.set_width((max_w * pango::SCALE as f64) as i32);
     l.set_wrap(pango::WrapMode::WordChar);
     if let Some(lines) = max_lines {
@@ -172,17 +191,23 @@ pub fn text_max(cr: &Context, x: f64, y: f64, max_w: f64, t: &Text) -> f64 {
     l.pixel_size().0 as f64
 }
 
+fn show_aligned(cr: &Context, x: f64, y: f64, t: &Text, align_factor: f64) -> f64 {
+    let l = layout(cr, t);
+    let w = l.pixel_size().0 as f64;
+    set(cr, t.color);
+    cr.move_to((x - w * align_factor).round(), y.round());
+    pangocairo::functions::show_layout(cr, &l);
+    w
+}
+
 /// Text with its right edge at x.
 pub fn text_right(cr: &Context, x: f64, y: f64, t: &Text) -> f64 {
-    let (w, _) = measure(cr, t);
-    text(cr, x - w, y, t);
-    w
+    show_aligned(cr, x, y, t, 1.0)
 }
 
 /// Text centred on cx.
 pub fn text_center(cr: &Context, cx: f64, y: f64, t: &Text) {
-    let (w, _) = measure(cr, t);
-    text(cr, cx - w / 2.0, y, t);
+    show_aligned(cr, cx, y, t, 0.5);
 }
 
 /// A thin bar (3 px): its track and the filled part, `part` 0..1.

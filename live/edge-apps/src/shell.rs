@@ -2533,4 +2533,55 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn control_panel_draw_timing() {
+        let mut sh = Shell::new(Config::from_text(""), Vec::new());
+        let idx = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "control")
+            .unwrap();
+        sh.notes = crate::card::render_notes();
+        sh.open_panel(idx, false, Instant::now());
+        sh.open_ms = f64::INFINITY;
+        sh.opened_at = None;
+        sh.apply(
+            "sound",
+            "volume",
+            &crate::cards::sound::VolumeData {
+                level: Some(55),
+                muted: false,
+                output: "Speaker".into(),
+            },
+        );
+        sh.apply(
+            "settings",
+            "quick",
+            &crate::cards::quick::QuickData {
+                dnd: false,
+                night: true,
+                layout: "English (US)".into(),
+                layouts: 2,
+                osk: Some(false),
+                replay: true,
+            },
+        );
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 1920, 1080).unwrap();
+        let cr = cairo::Context::new(&surf).unwrap();
+        // Warm up Pango/fontconfig once before timing.
+        sh.draw(&cr, 1920.0, 1080.0);
+        let frames = 20;
+        let t0 = Instant::now();
+        for _ in 0..frames {
+            sh.draw(&cr, 1920.0, 1080.0);
+        }
+        let total = t0.elapsed();
+        let per_frame_ms = total.as_secs_f64() * 1000.0 / frames as f64;
+        eprintln!(
+            "control_panel_draw_timing: {frames} frames in {:.2} ms ({per_frame_ms:.3} ms/frame)",
+            total.as_secs_f64() * 1000.0
+        );
+        assert!(per_frame_ms < 250.0, "per_frame_ms={per_frame_ms:.3}");
+    }
 }
