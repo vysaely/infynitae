@@ -1639,6 +1639,11 @@ impl Shell {
         out
     }
 
+    pub fn wants_clock(&self) -> bool {
+        self.open
+            .is_some_and(|idx| self.panels[idx].cards.iter().any(|pc| pc.card.wants_clock()))
+    }
+
     /// New data for `(provider, key)`: every card that lists it. True when one changed.
     pub fn apply(&mut self, provider: &str, key: &str, data: &dyn std::any::Any) -> bool {
         let mut changed = false;

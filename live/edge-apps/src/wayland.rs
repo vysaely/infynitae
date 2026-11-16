@@ -610,6 +610,9 @@ impl App {
     fn sync_all(&mut self) {
         self.reload_config();
         self.run_actions();
+        if self.shell.open.is_some() {
+            self.shell.now = chrono::Local::now().naive_local();
+        }
         let force = self.shell.take_fetch_needed();
         self.fetch_due(force);
         for os in &mut self.outputs {
@@ -1530,12 +1533,24 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
     }
     while !app.exit {
         if app.shell.open.is_some() {
-            app.shell.now = chrono::Local::now().naive_local();
+            let prev = app.shell.now;
+            let now = chrono::Local::now().naive_local();
+            app.shell.now = now;
+            if app.shell.wants_clock() && minute_key(prev) != minute_key(now) {
+                for os in &mut app.outputs {
+                    os.dirty = true;
+                    os.render_if_needed(&app.qh, &app.shell);
+                }
+            }
             app.fetch_due(false);
         }
         // while a panel is open, wake when its shortest periodic source interval is next due;
         // closed (or only once-per-open sources), nothing wakes the edge for data fetches
         let mut timeout = app.fetch_timeout(Instant::now());
+        if app.shell.open.is_some() && app.shell.wants_clock() {
+            let rem = next_minute_timeout(app.shell.now);
+            timeout = Some(timeout.map_or(rem, |t| t.min(rem)));
+        }
         // an asker that went away (its pipe closed, or it exited): checked every 100 ms while it
         // asks. No watcher thread: a thread holding a copy of the pipe kept the asker from
         // seeing the answer's end (it reads to the end of the pipe).
@@ -1570,6 +1585,20 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
         crate::ask::answer(&mut app.shell.ask, None);
     }
     Ok(())
+}
+
+fn minute_key(now: chrono::NaiveDateTime) -> (chrono::NaiveDate, u32, u32) {
+    use chrono::Timelike;
+    (now.date(), now.hour(), now.minute())
+}
+
+/// Duration until just past the next minute boundary so `Local::now()` has ticked over.
+fn next_minute_timeout(now: chrono::NaiveDateTime) -> Duration {
+    use chrono::Timelike;
+    let secs_left = 59u64.saturating_sub(u64::from(now.second()));
+    let nanos_used = u64::from(now.nanosecond() % 1_000_000_000);
+    let nanos_left = 1_000_000_000u64.saturating_sub(nanos_used);
+    Duration::from_secs(secs_left) + Duration::from_nanos(nanos_left) + Duration::from_millis(5)
 }
 
 /// The notification pop-ups' surface (in place of mako): a strip down the right of the first
@@ -2020,5 +2049,49 @@ mod tests {
             vec![("about", "info")]
         );
         assert_eq!(calls.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn clock_timeout_hits_next_full_minute_and_shell_reports_wants_clock() {
+        use chrono::{NaiveDate, Timelike};
+        let d = NaiveDate::from_ymd_opt(2026, 11, 16).unwrap();
+
+        let t0 = d.and_hms_milli_opt(12, 34, 0, 0).unwrap();
+        let d0 = next_minute_timeout(t0);
+        assert_eq!(d0, Duration::from_millis(60_005));
+        assert_eq!((t0 + chrono::Duration::from_std(d0).unwrap()).minute(), 35);
+
+        let t1 = d.and_hms_milli_opt(12, 34, 30, 500).unwrap();
+        let d1 = next_minute_timeout(t1);
+        assert_eq!(d1, Duration::from_millis(29_505));
+        assert_eq!((t1 + chrono::Duration::from_std(d1).unwrap()).minute(), 35);
+
+        let t2 = d.and_hms_milli_opt(12, 34, 59, 900).unwrap();
+        let d2 = next_minute_timeout(t2);
+        assert_eq!(d2, Duration::from_millis(105));
+        assert_eq!((t2 + chrono::Duration::from_std(d2).unwrap()).minute(), 35);
+
+        // Shell reports wants_clock only when an open panel holds a clock or month card.
+        let mut sh = Shell::new(
+            crate::config::Config::from_text(
+                "PANEL_CONTROL=\"SUPER+A top right 380 calendar/clock\"\nPANEL_OTHER=\"SUPER+K top right 380 settings/power\"\n",
+            ),
+            Vec::new(),
+        );
+        assert!(!sh.wants_clock(), "closed panel needs no clock wake");
+        let ctrl = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "control")
+            .unwrap();
+        let other = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "other")
+            .unwrap();
+        assert!(sh.open_panel(ctrl, false, Instant::now()));
+        assert!(sh.wants_clock());
+        assert!(sh.open_panel(other, false, Instant::now()));
+        assert!(!sh.wants_clock());
     }
 }

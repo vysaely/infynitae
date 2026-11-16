@@ -113,6 +113,10 @@ pub trait Card {
     fn show_list(&mut self) {}
     /// Called when the panel containing this card closes.
     fn panel_closed(&mut self) {}
+    /// True when the card reads `cx.now` and should redraw on minute boundaries while open.
+    fn wants_clock(&self) -> bool {
+        false
+    }
 }
 
 /// The clickable rectangles of one card in one frame, with the pointer and the keyboard's selection.
