@@ -228,6 +228,19 @@ fn show_window_menu_and_window_menu_bind_record_element_and_screen_position() {
     let mut r = Rig::x8();
     let id = *r.ls.state.core().stage().mapped_elements().first().unwrap();
     let anchor = r.ls.state.core().stage().anchor(id).unwrap();
+    // the window is focused, as the click on its title bar that asks for the menu makes it
+    let element = infynitae_core::stage::ElementRef::from_raw(
+        r.ls.state.core().stage().instance().get(),
+        id.get().get(),
+    )
+    .unwrap();
+    let fx =
+        r.ls.state
+            .core_mut()
+            .shell_command(&mut r.ls.shell, ShellCommand::Focus { element })
+            .unwrap();
+    r.ls.state.apply(&fx);
+    r.ls.pump();
 
     // Ask via Wayland xdg_toplevel.show_window_menu at (30, 18) in the window's geometry.
     let seat = r.ls.probe.seat.clone().unwrap();
