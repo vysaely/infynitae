@@ -1,5 +1,5 @@
 //! Settings: Windows (docs/EDGE_SETTINGS.md, `settings/windows`): the behaviour keys of "Windows
-//! & canvas" in config/config. KEEP_ON_TOP is left to its key (Super+Shift+K writes it).
+//! & canvas" in config/config.
 
 use super::settings_rows::{After, Control, Setting};
 use crate::provider::{CardKind, Size};
@@ -134,6 +134,15 @@ pub const TABLE: &[Setting] = &[
             ("floaty", "Floaty"),
             ("instant", "Instant"),
         ]),
+        after: After::Save,
+        more: true,
+        needs: &[],
+    },
+    Setting {
+        key: "KEEP_ON_TOP",
+        name: "Keep on top",
+        says: "Titles or apps, with commas",
+        control: Control::Text,
         after: After::Save,
         more: true,
         needs: &[],
@@ -421,6 +430,14 @@ mod tests {
                     .into()
             )]
         );
+
+        // 4. Text (KEEP_ON_TOP, row 10: hit 200)
+        out.clear();
+        assert!(card.event(&press(200), &cx, &mut out));
+        assert!(matches!(
+            out.as_slice(),
+            [Action::Run(cmd)] if cmd.contains("ask --text") && cmd.contains("set KEEP_ON_TOP")
+        ));
     }
 
     #[test]

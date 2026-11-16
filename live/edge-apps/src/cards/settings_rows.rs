@@ -171,7 +171,6 @@ const SLIDE_H: f64 = 22.0;
 #[cfg(test)]
 /// Config keys in `config/config` with no Settings card control today; edited through "In the file".
 pub const FILE_ONLY: &[&str] = &[
-    "KEEP_ON_TOP",
     "CANVAS_COLOR",
     "BORDER_INACTIVE",
     "BORDER_IGNORE_CSD",
