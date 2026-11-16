@@ -207,18 +207,25 @@ fn session_children_do_not_inherit_blocked_signals() {
 /// of waiting for a reply until it is killed (owner, 2026-10-25: Firefox lost its cookies).
 #[test]
 fn a_client_quitting_is_still_answered() {
-    // on SIGTERM: wl_display.sync (object 1, opcode 0, new id 2), then wait for wl_callback.done
+    // first one wl_display.sync (object 1, opcode 0, new id 2) answered, so the compositor has
+    // taken the client in before the test signals it (a connect alone can still sit in the listen
+    // queue: the shutdown then never sees the client, which made this test fail at random); on
+    // SIGTERM another sync (new id 3), then wait for its wl_callback.done
     let client = r#"import os, signal, socket, struct, sys
 s = socket.socket(socket.AF_UNIX)
 s.connect(os.path.join(os.environ['XDG_RUNTIME_DIR'], os.environ['WAYLAND_DISPLAY']))
-def quit(*_):
-    s.sendall(struct.pack('<III', 1, 12 << 16, 2))
+def roundtrip(cb):
+    s.sendall(struct.pack('<III', 1, 12 << 16, cb))
     while True:
         obj, op = struct.unpack('<II', s.recv(8, socket.MSG_WAITALL))
         s.recv((op >> 16) - 8, socket.MSG_WAITALL)
-        if obj == 2:
-            open(sys.argv[1], 'w').write('answered')
-            os._exit(0)
+        if obj == cb:
+            return
+roundtrip(2)
+def quit(*_):
+    roundtrip(3)
+    open(sys.argv[1], 'w').write('answered')
+    os._exit(0)
 signal.signal(signal.SIGTERM, quit)
 open(sys.argv[2], 'w').write(str(os.getpid()) + '\n')
 while True:
