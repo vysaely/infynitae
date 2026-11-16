@@ -1500,7 +1500,12 @@ pub fn save_panel_to(
 }
 
 pub fn save_panel(panel: &Panel, before_line: &str) -> std::io::Result<String> {
-    let cfg = crate::config::config_path();
+    let Some(cfg) = crate::config::config_path() else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "HOME is not set",
+        ));
+    };
     let bak = cfg.with_file_name("panels.backup");
     save_panel_to(&cfg, &bak, panel, before_line)
 }

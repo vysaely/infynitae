@@ -310,13 +310,9 @@ impl Source for KeyCaptureSource {
 }
 
 pub fn capture_file_path() -> PathBuf {
-    let base = std::env::var_os("XDG_RUNTIME_DIR")
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".cache")
-        });
-    base.join("infynitae").join("key-capture")
+    crate::paths::runtime_or_cache_dir()
+        .join("infynitae")
+        .join("key-capture")
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

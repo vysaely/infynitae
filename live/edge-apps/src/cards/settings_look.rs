@@ -152,14 +152,15 @@ pub struct LookSource {
 
 impl LookSource {
     pub fn system() -> LookSource {
-        let home = env_home();
-        let bad_dir = system_bad_colors_dir(&home);
+        let home = crate::paths::home().unwrap_or_default();
+        let bad_dir = crate::paths::runtime_or_cache_dir().join("infynitae/look-bad");
         LookSource { home, bad_dir }
     }
 }
 
 impl Source for LookSource {
     fn fetch(&mut self) -> Data {
+        let opt_home = (!self.home.as_os_str().is_empty()).then_some(self.home.as_path());
         if let Some(raw) = render_value("look") {
             let mut out = LookData::default();
             let mut acc_lines = String::new();
@@ -176,8 +177,7 @@ impl Source for LookSource {
                     acc_lines.push_str(cand);
                     acc_lines.push('\n');
                 } else if let Some(p) = l.strip_prefix("wp_thumb=") {
-                    let expanded = expand_home(p.trim(), &self.home.to_string_lossy());
-                    thumb_path = Some(PathBuf::from(expanded));
+                    thumb_path = Some(crate::paths::expand_home_with(p.trim(), opt_home));
                 } else if let Some(r) = l.strip_prefix("recent=") {
                     if let Some(hex) = normalize_hex(r.trim()) {
                         if !out.recent_accents.contains(&hex)
@@ -213,12 +213,12 @@ impl Source for LookSource {
                 }
             }
         }
-        let wp_bin = self.home.join(".local/bin/infynitae-wallpaper");
-        let wallpaper_bin = wp_bin.is_file();
-        let active_wp = resolve_active_wallpaper(&self.home);
+        let wp_bin = opt_home.map(|h| h.join(".local/bin/infynitae-wallpaper"));
+        let wallpaper_bin = wp_bin.as_ref().is_some_and(|p| p.is_file());
+        let active_wp = opt_home.and_then(resolve_active_wallpaper);
         let mut accent_candidates = Vec::new();
         let mut accent_thumb = None;
-        if let Some(ref wp) = active_wp {
+        if let (Some(ref wp), Some(ref bin)) = (active_wp, wp_bin) {
             if wallpaper_bin {
                 let scale = icons::display_scale();
                 accent_thumb = icons::cached_wallpaper_thumb(
@@ -226,7 +226,7 @@ impl Source for LookSource {
                     icons::scaled_px(PICKER_PREVIEW_SIZE.0, scale),
                     icons::scaled_px(PICKER_PREVIEW_SIZE.1, scale),
                 );
-                if let Ok(out) = Command::new(&wp_bin).arg("--accents").arg(wp).output() {
+                if let Ok(out) = Command::new(bin).arg("--accents").arg(wp).output() {
                     if out.status.success() {
                         accent_candidates =
                             parse_accent_lines(&String::from_utf8_lossy(&out.stdout));
@@ -234,10 +234,12 @@ impl Source for LookSource {
                 }
             }
         }
-        let recent_accents =
-            std::fs::read_to_string(self.home.join(".local/state/infynitae/settings-changes"))
-                .map(|raw| parse_recent_accents(&raw))
-                .unwrap_or_default();
+        let recent_accents = opt_home
+            .and_then(|h| {
+                std::fs::read_to_string(h.join(".local/state/infynitae/settings-changes")).ok()
+            })
+            .map(|raw| parse_recent_accents(&raw))
+            .unwrap_or_default();
         Box::new(LookData {
             wallpaper_bin,
             bad_colors,
@@ -330,6 +332,9 @@ pub fn parse_recent_accents(log_text: &str) -> Vec<String> {
 }
 
 fn resolve_active_wallpaper(home: &Path) -> Option<PathBuf> {
+    if home.as_os_str().is_empty() {
+        return None;
+    }
     let cfg_path = home.join(".config/infynitae/config");
     let raw = std::fs::read_to_string(&cfg_path)
         .ok()
@@ -337,8 +342,7 @@ fn resolve_active_wallpaper(home: &Path) -> Option<PathBuf> {
         .unwrap_or_default();
     let trimmed = raw.trim();
     if !trimmed.is_empty() {
-        let expanded = expand_home(trimmed, &home.to_string_lossy());
-        let p = PathBuf::from(expanded);
+        let p = crate::paths::expand_home_with(trimmed, Some(home));
         return p.is_file().then_some(p);
     }
     let dirs = [
@@ -362,7 +366,7 @@ pub struct WallpapersSource {
 impl WallpapersSource {
     pub fn system() -> WallpapersSource {
         WallpapersSource {
-            home: env_home(),
+            home: crate::paths::home().unwrap_or_default(),
             path: std::env::var("PATH").unwrap_or_default(),
         }
     }
@@ -400,12 +404,17 @@ impl Source for WallpapersSource {
                 thumbs_m,
             });
         }
-        let has_bin = has_wallpaper_bin(&self.home, &self.path);
-        let dirs = [
-            self.home.join("Pictures/Wallpapers"),
-            self.home.join(".local/share/wallpapers"),
-        ];
-        let files = scan_wallpapers(&dirs);
+        let opt_home = (!self.home.as_os_str().is_empty()).then_some(self.home.as_path());
+        let has_bin = has_wallpaper_bin(opt_home, &self.path);
+        let files = if let Some(home) = opt_home {
+            let dirs = [
+                home.join("Pictures/Wallpapers"),
+                home.join(".local/share/wallpapers"),
+            ];
+            scan_wallpapers(&dirs)
+        } else {
+            Vec::new()
+        };
         let (thumbs_s, thumbs_m) = decode_wallpaper_thumbs(&files);
         Box::new(WallpapersData {
             has_bin,
@@ -455,16 +464,18 @@ pub struct FaceSource {
 
 impl FaceSource {
     pub fn system() -> FaceSource {
-        FaceSource { home: env_home() }
+        FaceSource {
+            home: crate::paths::home().unwrap_or_default(),
+        }
     }
 }
 
 impl Source for FaceSource {
     fn fetch(&mut self) -> Data {
+        let opt_home = (!self.home.as_os_str().is_empty()).then_some(self.home.as_path());
         if let Some(raw) = render_value("face") {
             let mut current_path: Option<PathBuf> = None;
             let mut files = Vec::new();
-            let home_s = self.home.to_string_lossy().into_owned();
             for line in raw.lines() {
                 let l = line.trim();
                 if l.is_empty() {
@@ -472,11 +483,13 @@ impl Source for FaceSource {
                 }
                 if let Some(p) = l.strip_prefix("current=") {
                     if !p.is_empty() {
-                        current_path = Some(PathBuf::from(expand_home(p, &home_s)));
+                        current_path = Some(crate::paths::expand_home_with(p, opt_home));
                     }
                     continue;
                 }
-                let expanded = expand_home(l, &home_s);
+                let expanded = crate::paths::expand_home_with(l, opt_home)
+                    .to_string_lossy()
+                    .into_owned();
                 let name = Path::new(&expanded)
                     .file_name()
                     .and_then(|s| s.to_str())
@@ -498,16 +511,16 @@ impl Source for FaceSource {
                 thumbs,
             });
         }
-        let face_path = self.home.join(".face");
+        let Some(home) = opt_home else {
+            return Box::new(FaceData::default());
+        };
+        let face_path = home.join(".face");
         let row_px = icons::scaled_px(FACE_ROW_THUMB, icons::display_scale());
         let current = face_path
             .is_file()
             .then(|| icons::cached_wallpaper_thumb(&face_path, row_px, row_px))
             .flatten();
-        let dirs = [
-            self.home.join("Pictures"),
-            self.home.join("Pictures/Wallpapers"),
-        ];
+        let dirs = [home.join("Pictures"), home.join("Pictures/Wallpapers")];
         let files = scan_wallpapers(&dirs);
         let thumbs = decode_face_thumbs(&files);
         Box::new(FaceData {
@@ -589,7 +602,7 @@ pub struct IconsSource {
 impl IconsSource {
     pub fn system() -> IconsSource {
         IconsSource {
-            dirs: icon_roots(&env_home()),
+            dirs: icon_roots(crate::paths::home().as_deref()),
         }
     }
 }
@@ -615,7 +628,7 @@ pub struct CursorsSource {
 impl CursorsSource {
     pub fn system() -> CursorsSource {
         CursorsSource {
-            dirs: icon_roots(&env_home()),
+            dirs: icon_roots(crate::paths::home().as_deref()),
         }
     }
 }
@@ -633,31 +646,22 @@ impl Source for CursorsSource {
     }
 }
 
-fn env_home() -> PathBuf {
-    PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
+fn icon_roots(home: Option<&Path>) -> Vec<PathBuf> {
+    let mut dirs = vec![PathBuf::from("/usr/share/icons")];
+    if let Some(h) = home.filter(|p| !p.as_os_str().is_empty()) {
+        dirs.push(h.join(".local/share/icons"));
+        dirs.push(h.join(".icons"));
+    }
+    dirs
 }
 
-fn system_bad_colors_dir(home: &Path) -> PathBuf {
-    let base = match std::env::var_os("XDG_RUNTIME_DIR") {
-        Some(v) if !v.is_empty() => PathBuf::from(v),
-        _ => home.join(".cache"),
-    };
-    base.join("infynitae/look-bad")
-}
-
-fn icon_roots(home: &Path) -> Vec<PathBuf> {
-    vec![
-        PathBuf::from("/usr/share/icons"),
-        home.join(".local/share/icons"),
-        home.join(".icons"),
-    ]
-}
-
-fn has_wallpaper_bin(home: &Path, path: &str) -> bool {
-    if home.join(".local/bin/infynitae-wallpaper").is_file()
-        || home.join("infynitae/live/infynitae-wallpaper").is_file()
-    {
-        return true;
+fn has_wallpaper_bin(home: Option<&Path>, path: &str) -> bool {
+    if let Some(h) = home.filter(|p| !p.as_os_str().is_empty()) {
+        if h.join(".local/bin/infynitae-wallpaper").is_file()
+            || h.join("infynitae/live/infynitae-wallpaper").is_file()
+        {
+            return true;
+        }
     }
     path.split(':')
         .filter(|d| !d.is_empty())
@@ -1197,7 +1201,7 @@ pub struct LookCard {
     query: String,
     sliding: Option<(usize, f64)>,
     slide_rects: std::cell::RefCell<HashMap<usize, Rect>>,
-    home: String,
+    home: Option<PathBuf>,
 }
 
 impl LookCard {
@@ -1239,7 +1243,7 @@ impl LookCard {
             query: String::new(),
             sliding: None,
             slide_rects: Default::default(),
-            home: std::env::var("HOME").unwrap_or_default(),
+            home: crate::paths::home(),
         }
     }
 
@@ -1364,7 +1368,9 @@ impl LookCard {
                 .collect(),
             LookControl::Wallpapers => {
                 let mut out = Vec::new();
-                let cur_expanded = expand_home(&cur, &self.home);
+                let cur_expanded = crate::paths::expand_home_with(&cur, self.home.as_deref())
+                    .to_string_lossy()
+                    .into_owned();
                 let mut any_file_matched = false;
                 if let Some(wp) = &self.wallpapers {
                     for (idx, f) in wp.files.iter().enumerate() {
@@ -1409,7 +1415,9 @@ impl LookCard {
                 }
                 let mut any_file_matched = false;
                 if source == "wallpapers" {
-                    let cur_expanded = expand_home(&cur, &self.home);
+                    let cur_expanded = crate::paths::expand_home_with(&cur, self.home.as_deref())
+                        .to_string_lossy()
+                        .into_owned();
                     if let Some(wp) = &self.wallpapers {
                         for f in &wp.files {
                             let active =
@@ -2561,22 +2569,6 @@ fn draw_style_row(
     }
 }
 
-fn expand_home(raw: &str, home: &str) -> String {
-    if home.is_empty() {
-        return raw.to_string();
-    }
-    let h = home.trim_end_matches('/');
-    if raw == "~" {
-        h.to_string()
-    } else if let Some(rest) = raw.strip_prefix("~/") {
-        format!("{h}/{rest}")
-    } else if let Some(rest) = raw.strip_prefix("$HOME/") {
-        format!("{h}/{rest}")
-    } else {
-        raw.to_string()
-    }
-}
-
 fn fmt_number(v: f64) -> String {
     if (v - v.round()).abs() < 1e-9 {
         format!("{}", v.round() as i64)
@@ -2680,7 +2672,9 @@ impl LookCard {
         let (cols, cw, ch) = thumb_cell_size(body.2, cx.size);
         let grid_rows = shown_len.div_ceil(cols);
         let cur = self.value(i);
-        let cur_expanded = expand_home(&cur, &self.home);
+        let cur_expanded = crate::paths::expand_home_with(&cur, self.home.as_deref())
+            .to_string_lossy()
+            .into_owned();
         let thumbs = self.wallpapers.as_ref().map(|w| {
             if cx.size == Size::M {
                 &w.thumbs_m

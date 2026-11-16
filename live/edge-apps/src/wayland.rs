@@ -4,6 +4,7 @@
 //! threads for sources, detached actions, and the `org.freedesktop.Notifications` strip.
 
 use crate::card::{Action, Button, Data, Source, Window};
+use crate::paths::runtime_path;
 use crate::shell::{OutputId, Shell, ARRIVE_LIFT};
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState, Region},
@@ -58,21 +59,12 @@ use smithay_client_toolkit::{
 };
 use std::collections::HashMap;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
-use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 // the same files as today's edge: only one edge runs at a time, and every caller finds it so
 const PID_FILE: &str = "infynitae-edge-rs.pid";
 const PANEL_FILE: &str = "infynitae-edge-rs.panel";
-
-pub fn runtime_path(name: &str) -> PathBuf {
-    let dir = std::env::var("XDG_RUNTIME_DIR")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "/tmp".to_string());
-    PathBuf::from(dir).join(name)
-}
 
 /// The running edge's pid (this one's or today's: any `infynitae-edge-*`).
 pub fn running_pid() -> Option<i32> {
@@ -495,6 +487,9 @@ enum Fetched {
     Source(&'static str, &'static str, Data, Box<dyn Source>),
     /// One-off result from `Action::Run` after a card command finishes.
     Data(&'static str, &'static str, Data),
+    /// Installed apps re-read on a worker thread along with the folder mtimes statted before the
+    /// read started.
+    Apps(Vec<crate::app::App>, Vec<Option<std::time::SystemTime>>),
 }
 
 type SourceId = (&'static str, &'static str);
@@ -660,6 +655,80 @@ fn spawn_worker(id: SourceId, fetch_tx: Sender<Fetched>) -> SourceWorker {
     }
 }
 
+/// Tracks desktop-entry folder modification times so `app::load` runs on a worker thread only
+/// when a panel opens and at least one folder's modification time changed.
+#[derive(Default)]
+struct AppRefresh {
+    dirs: Vec<std::path::PathBuf>,
+    last_mtimes: Vec<Option<std::time::SystemTime>>,
+    last_open: Option<usize>,
+    in_flight: bool,
+}
+
+impl AppRefresh {
+    fn new(dirs: Vec<std::path::PathBuf>, last_mtimes: Vec<Option<std::time::SystemTime>>) -> Self {
+        Self {
+            dirs,
+            last_mtimes,
+            last_open: None,
+            in_flight: false,
+        }
+    }
+
+    fn sync_closed(&mut self) {
+        self.last_open = None;
+    }
+
+    fn check_open(
+        &mut self,
+        open: Option<usize>,
+    ) -> Option<(Vec<std::path::PathBuf>, Vec<Option<std::time::SystemTime>>)> {
+        let Some(idx) = open else {
+            self.last_open = None;
+            return None;
+        };
+        if self.last_open == Some(idx) {
+            return None;
+        }
+        self.last_open = Some(idx);
+        if self.in_flight || self.dirs.is_empty() {
+            return None;
+        }
+        let mtimes = crate::app::dir_mtimes(&self.dirs);
+        if mtimes == self.last_mtimes {
+            return None;
+        }
+        self.in_flight = true;
+        Some((self.dirs.clone(), mtimes))
+    }
+
+    fn mark_done(&mut self, mtimes: Vec<Option<std::time::SystemTime>>, applied: bool) {
+        self.in_flight = false;
+        if applied {
+            self.last_mtimes = mtimes;
+        }
+    }
+}
+
+fn spawn_apps_worker(
+    dirs: Vec<std::path::PathBuf>,
+    mtimes: Vec<Option<std::time::SystemTime>>,
+    fetch_tx: Sender<Fetched>,
+) -> bool {
+    match std::thread::Builder::new()
+        .name("edge-apps-scan".into())
+        .spawn(move || {
+            let apps = crate::app::load(&dirs);
+            let _ = fetch_tx.send(Fetched::Apps(apps, mtimes));
+        }) {
+        Ok(_) => true,
+        Err(e) => {
+            eprintln!("infynitae-edge-apps: spawn apps worker: {e}");
+            false
+        }
+    }
+}
+
 struct App {
     registry_state: RegistryState,
     seat_state: SeatState,
@@ -685,6 +754,7 @@ struct App {
     shell: Shell,
     fetch_tx: Sender<Fetched>,
     fetch: FetchSchedule,
+    app_refresh: AppRefresh,
     /// one long-lived worker thread per active source while its panel is open
     workers: HashMap<SourceId, SourceWorker>,
     /// cards with a command running, and the latest one waiting after it
@@ -922,8 +992,14 @@ impl App {
         let Some(open) = self.shell.open else {
             self.fetch.sync_panel(None, &[]);
             self.workers.clear();
+            self.app_refresh.sync_closed();
             return;
         };
+        if let Some((dirs, mtimes)) = self.app_refresh.check_open(Some(open)) {
+            if !spawn_apps_worker(dirs, mtimes, self.fetch_tx.clone()) {
+                self.app_refresh.in_flight = false;
+            }
+        }
         let force = force || self.shell.take_fetch_needed();
         let sources = self.shell.sources();
         self.workers.retain(|id, _| sources.contains(id));
@@ -1880,7 +1956,8 @@ fn init_app(
     } else {
         None
     };
-
+    let app_dirs = shell.app_dirs.clone();
+    let apps_mtime = crate::app::dir_mtimes(&app_dirs);
     let output_state = OutputState::new(&globals, &qh);
     let existing: Vec<_> = output_state.outputs().collect();
     let mut app = App {
@@ -1908,6 +1985,7 @@ fn init_app(
         shell,
         fetch_tx,
         fetch: FetchSchedule::default(),
+        app_refresh: AppRefresh::new(app_dirs, apps_mtime),
         workers: HashMap::new(),
         queued: Default::default(),
         was_animating: false,
@@ -1925,10 +2003,10 @@ fn init_app(
 
 fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
     let conn = Connection::connect_to_env().map_err(|e| e.to_string())?;
-    let mut shell = Shell::new(
-        crate::config::Config::load(),
-        crate::app::load(&crate::app::dirs()),
-    );
+    let app_dirs = crate::app::dirs();
+    let apps_mtime = crate::app::dir_mtimes(&app_dirs);
+    let mut shell = Shell::new(crate::config::Config::load(), crate::app::load(&app_dirs));
+    shell.set_app_dirs_with_mtimes(app_dirs, apps_mtime);
     shell.live = true;
     let (fetch_tx, fetch_rx) = channel::channel::<Fetched>();
     let (icon_tx, icon_rx) = channel::channel::<()>();
@@ -1965,6 +2043,14 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
                     (prov, key, data)
                 }
                 channel::Event::Msg(Fetched::Data(prov, key, data)) => (prov, key, data),
+                channel::Event::Msg(Fetched::Apps(apps, mtimes)) => {
+                    let deferred = app.shell.edit.active || app.shell.transient.is_some();
+                    app.app_refresh.mark_done(mtimes, !deferred);
+                    if !deferred && app.shell.apply_apps(apps) {
+                        app.sync_all();
+                    }
+                    return;
+                }
                 _ => return,
             };
             let changed = app.shell.apply(prov, key, data.as_ref());
@@ -3929,5 +4015,91 @@ mod tests {
         assert_eq!(app.shell.open_output, Some(out2_id));
         assert!(surface_has_nonzero_pixels(&mut app.outputs[1]));
         assert!(!surface_has_nonzero_pixels(&mut app.outputs[0]));
+    }
+
+    #[test]
+    fn apps_refresh_skips_when_closed_and_reloads_on_worker_when_opened() {
+        let dir = std::env::temp_dir().join(format!(
+            "infynitae-wayland-apps-refresh-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let apps_dir = dir.join("applications");
+        std::fs::create_dir_all(&apps_dir).unwrap();
+
+        let dirs = vec![apps_dir.clone()];
+        let initial_mtimes = crate::app::dir_mtimes(&dirs);
+        let mut sh = Shell::new(
+            crate::config::Config::from_text("PANEL_APPS=\"SUPER+A top right 380 apps/apps\"\n"),
+            crate::app::load(&dirs),
+        );
+        sh.live = true;
+        sh.set_app_dirs_with_mtimes(dirs.clone(), initial_mtimes.clone());
+        let mut refresh = AppRefresh::new(dirs, initial_mtimes);
+
+        // Add a .desktop file while all panels are closed.
+        std::fs::write(
+            apps_dir.join("hello.desktop"),
+            "[Desktop Entry]\nName=Hello\nExec=hello\n",
+        )
+        .unwrap();
+        let t1 = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
+        std::fs::File::open(&apps_dir)
+            .unwrap()
+            .set_modified(t1)
+            .unwrap();
+
+        assert!(
+            refresh.check_open(None).is_none(),
+            "nothing runs while all panels are closed"
+        );
+        assert!(sh.apps.is_empty());
+
+        // Panel opens: detects changed folder mtime and schedules one worker load.
+        let idx = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "apps")
+            .unwrap();
+        assert!(sh.open_panel(idx, false, Instant::now()));
+        let (scan_dirs, scan_mtimes) = refresh.check_open(Some(idx)).expect("should trigger load");
+        assert!(
+            refresh.check_open(Some(idx)).is_none(),
+            "same opening does not stat or reload again"
+        );
+
+        type AppsMsg = (Vec<crate::app::App>, Vec<Option<std::time::SystemTime>>);
+        let (fetch_tx, fetch_rx) = channel::channel::<Fetched>();
+        let mut event_loop: EventLoop<Option<AppsMsg>> = EventLoop::try_new().unwrap();
+        event_loop
+            .handle()
+            .insert_source(fetch_rx, |evt, _, out| {
+                if let channel::Event::Msg(Fetched::Apps(apps, mtimes)) = evt {
+                    *out = Some((apps, mtimes));
+                }
+            })
+            .unwrap();
+
+        assert!(spawn_apps_worker(scan_dirs, scan_mtimes, fetch_tx));
+        let mut received = None;
+        while received.is_none() {
+            event_loop
+                .dispatch(Some(Duration::from_millis(100)), &mut received)
+                .unwrap();
+        }
+        let (apps, done_mtimes) = received.unwrap();
+        refresh.mark_done(done_mtimes, true);
+        assert!(sh.apply_apps(apps));
+        assert_eq!(sh.open, Some(idx));
+        assert_eq!(
+            sh.apps.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(),
+            vec!["hello"]
+        );
+
+        // Closing and reopening with no folder change does not trigger another load.
+        refresh.sync_closed();
+        assert!(refresh.check_open(Some(idx)).is_none());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

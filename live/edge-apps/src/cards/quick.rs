@@ -14,7 +14,7 @@ use cairo::Context;
 use std::any::Any;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 pub const KIND: CardKind = CardKind {
     id: "quick",
@@ -116,13 +116,6 @@ pub fn parse_osk(out: &str) -> Option<bool> {
 
 const RT: &str = "${XDG_RUNTIME_DIR:-/tmp}/infynitae";
 
-fn runtime_root() -> PathBuf {
-    std::env::var_os("XDG_RUNTIME_DIR")
-        .filter(|s| !s.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/tmp"))
-}
-
 fn has_program(path_env: &str, name: &str) -> bool {
     std::env::split_paths(path_env).any(|dir| {
         let p = dir.join(name);
@@ -201,7 +194,7 @@ impl Source for QuickSource {
         }
         let path_env = std::env::var("PATH").unwrap_or_default();
         Box::new(fetch_quick_with(
-            &runtime_root(),
+            &crate::paths::runtime_dir(),
             &path_env,
             Path::new("/proc"),
             |args| run_cmd("dnd", args[0], &args[1..]),

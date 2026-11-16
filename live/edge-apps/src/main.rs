@@ -13,6 +13,7 @@ mod icons;
 mod notify;
 mod notify_server;
 mod panel;
+mod paths;
 mod provider;
 mod shell;
 mod theme;

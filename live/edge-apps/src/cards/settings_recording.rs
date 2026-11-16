@@ -138,9 +138,7 @@ pub struct RecordingSource {
 
 impl RecordingSource {
     pub fn system() -> Self {
-        let home = std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_default();
+        let home = crate::paths::home().unwrap_or_default();
         Self { home }
     }
 }
@@ -503,7 +501,13 @@ impl Card for RecordingCard {
                     if raw.is_empty() {
                         return false;
                     }
-                    out.push(Action::OpenUri(expand_home(raw, &env.home)));
+                    let expanded = crate::paths::expand_home_with(
+                        raw,
+                        Some(env.home.as_path()).filter(|h| !h.as_os_str().is_empty()),
+                    )
+                    .to_string_lossy()
+                    .into_owned();
+                    out.push(Action::OpenUri(expanded));
                     return true;
                 }
 
@@ -584,23 +588,6 @@ fn matches_query(name: &str, key: &str, query: &str) -> bool {
     query
         .split_whitespace()
         .all(|w| hay.contains(&w.to_ascii_lowercase()))
-}
-
-fn expand_home(raw: &str, home: &Path) -> String {
-    let home = home.to_string_lossy();
-    let home = home.trim_end_matches('/');
-    if home.is_empty() {
-        return raw.to_string();
-    }
-    for prefix in ["$HOME", "${HOME}", "~"] {
-        if raw == prefix {
-            return home.to_string();
-        }
-        if let Some(rest) = raw.strip_prefix(prefix).and_then(|s| s.strip_prefix('/')) {
-            return format!("{home}/{rest}");
-        }
-    }
-    raw.to_string()
 }
 
 #[cfg(test)]
