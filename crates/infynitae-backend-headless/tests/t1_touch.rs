@@ -1124,22 +1124,24 @@ fn edge_swipe_ignores_parallel_drag_and_open_panel() {
         r.ls.probe.ptr
     );
 
-    // 2. Touch starting inside an open panel/OSK near the bottom edge stays with that layer surface.
-    r.ls.probe.log.clear();
-    r.ls.probe.ptr.clear();
-    down(&mut r, 0, (500.0, 1068.0));
-    motion(&mut r, 0, (500.0, 1020.0));
-    up(&mut r, 0);
-    assert!(
-        r.ls.probe
-            .log
-            .iter()
-            .any(|l| l.starts_with("down 0 OPEN_BOT"))
-            && r.ls.probe.log.iter().any(|l| l.starts_with("motion 0"))
-            && !r.ls.probe.log.contains(&"cancel".to_string()),
-        "finger on an open bottom layer/OSK must not trigger edge swipe cancel: {:?}",
-        r.ls.probe.log
-    );
+    // 2. Touch starting inside an open panel/OSK near the bottom edge (including within 2px) stays with that layer surface.
+    for start_y in [1068.0, 1078.0] {
+        r.ls.probe.log.clear();
+        r.ls.probe.ptr.clear();
+        down(&mut r, 0, (500.0, start_y));
+        motion(&mut r, 0, (500.0, 1020.0));
+        up(&mut r, 0);
+        assert!(
+            r.ls.probe
+                .log
+                .iter()
+                .any(|l| l.starts_with("down 0 OPEN_BOT"))
+                && r.ls.probe.log.iter().any(|l| l.starts_with("motion 0"))
+                && !r.ls.probe.log.contains(&"cancel".to_string()),
+            "finger at y={start_y} on an open bottom layer/OSK must not trigger edge swipe cancel: {:?}",
+            r.ls.probe.log
+        );
+    }
 
     // 3. TOUCH_EDGE_SWIPE="false" disables edge swipe and removing the line reverts to true.
     let home = infynitae_wayland::cursor::TestTempDir::new("touch-edge-swipe");

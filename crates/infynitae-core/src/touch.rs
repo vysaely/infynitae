@@ -409,8 +409,6 @@ impl EdgeSwipeCandidate {
     const ZONE_PX: f64 = 24.0;
     /// Min inward travel to trigger opening the edge panel (logical px).
     const INWARD_PX: f64 = 28.0;
-    /// Narrow outer strip (`hover_strip` / bezel) within which an existing overlay does not block swiping.
-    const STRIP_PX: f64 = 4.0;
 
     /// Arms a candidate if `p` starts within `ZONE_PX` of an edge of `extent`.
     pub(crate) fn from_edge(
@@ -442,15 +440,6 @@ impl EdgeSwipeCandidate {
             start: p,
             extent,
         })
-    }
-
-    /// True if `p` lies in the outermost `STRIP_PX` border of `extent`.
-    pub(crate) fn within_strip(p: (f64, f64), extent: (f64, f64)) -> bool {
-        let (w, h) = extent;
-        p.0 <= Self::STRIP_PX
-            || p.0 >= w - Self::STRIP_PX
-            || p.1 <= Self::STRIP_PX
-            || p.1 >= h - Self::STRIP_PX
     }
 
     /// Evaluates motion to `p`: returns `Trigger(edge_point)` when the swipe commits inward.

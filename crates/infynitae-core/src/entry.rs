@@ -707,7 +707,7 @@ impl Core {
     /// Arms a screen-edge swipe candidate when the first finger lands near an output edge
     /// (unless it landed inside an open non-strip overlay or panel).
     fn arm_edge_swipe(&mut self, slot: u32, output: output::OutputId, p: (f64, f64)) {
-        if !self.touch_edge_swipe || self.locked() {
+        if !self.touch_edge_swipe || self.locked() || self.input.interaction.active() {
             self.touches.edge_swipe = None;
             return;
         }
@@ -726,10 +726,12 @@ impl Core {
         else {
             return;
         };
-        // An above-canvas layer more than STRIP_PX inside the screen is an open panel or OSK,
-        // not the closed 2px edge hover strip: leave its touches alone.
-        let on_open_overlay = self.layer_hit(output, p, true).is_some()
-            && !crate::touch::EdgeSwipeCandidate::within_strip(p, extent);
+        // An above-canvas layer thicker than a 2px edge hover strip is an open panel or OSK:
+        // leave its touches alone even when the finger lands within 2px of the screen edge.
+        let on_open_overlay = self
+            .layer_hit(output, p, true)
+            .and_then(|h| self.layer(h.layer))
+            .is_some_and(|r| r.geometry.size.w > 8 && r.geometry.size.h > 8);
         if !on_open_overlay {
             self.touches.edge_swipe = Some(candidate);
         }
