@@ -65,6 +65,27 @@ pub enum Effect {
     PointerAxis { axis: Axis, time_ms: u32 },
     /// `wl_pointer.frame`: ends the events of one physical event.
     PointerFrame,
+    /// Client-routed touchpad swipe gesture begin (`zwp_pointer_gesture_swipe_v1`).
+    GestureSwipeBegin { fingers: u32, time_ms: u32 },
+    /// Client-routed touchpad swipe gesture update (`zwp_pointer_gesture_swipe_v1`).
+    GestureSwipeUpdate { delta: (f64, f64), time_ms: u32 },
+    /// Client-routed touchpad swipe gesture end (`zwp_pointer_gesture_swipe_v1`).
+    GestureSwipeEnd { cancelled: bool, time_ms: u32 },
+    /// Client-routed touchpad pinch gesture begin (`zwp_pointer_gesture_pinch_v1`).
+    GesturePinchBegin { fingers: u32, time_ms: u32 },
+    /// Client-routed touchpad pinch gesture update (`zwp_pointer_gesture_pinch_v1`).
+    GesturePinchUpdate {
+        delta: (f64, f64),
+        scale: f64,
+        rotation: f64,
+        time_ms: u32,
+    },
+    /// Client-routed touchpad pinch gesture end (`zwp_pointer_gesture_pinch_v1`).
+    GesturePinchEnd { cancelled: bool, time_ms: u32 },
+    /// Client-routed touchpad hold gesture begin (`zwp_pointer_gesture_hold_v1`).
+    GestureHoldBegin { fingers: u32, time_ms: u32 },
+    /// Client-routed touchpad hold gesture end (`zwp_pointer_gesture_hold_v1`).
+    GestureHoldEnd { cancelled: bool, time_ms: u32 },
     /// The last output is gone (M10 → NoOutput, EE-3): install the zero-output grab with
     /// `Focus::Clear` (one `wl_pointer.leave`, nothing delivered while installed).
     PointerZeroOutputBegin,
@@ -401,14 +422,14 @@ pub struct ToplevelConfigureState {
 
 impl Core {
     /// The capabilities to advertise: those the policy can grant. Fullscreen is granted to the
-    /// focused element and before a first map (INV-PRES-1); maximize and minimize never are
-    /// (INV-PROTO-1); there is no window menu.
+    /// focused element and before a first map (INV-PRES-1); maximize, minimize and the window menu
+    /// are answered by `Core::client_maximize`, `Core::client_minimize` and `Core::show_window_menu`.
     pub fn toplevel_capabilities(&self) -> ToplevelCapabilities {
         ToplevelCapabilities {
             fullscreen: true,
             maximize: true,
             minimize: true,
-            ..ToplevelCapabilities::default()
+            window_menu: true,
         }
     }
 
@@ -606,6 +627,23 @@ impl Core {
             std::mem::swap(&mut self.membership, &mut next);
         }
         self.membership_next = next;
+        for &o in outputs {
+            if self.presentation(o).is_some()
+                && !self.is_presentation_suppressed(o)
+                && self.touches.on_output(o)
+            {
+                let frame_above = self.layer_frame(o).above;
+                let kept_above = self.touches.all_points_on(|tp| {
+                    tp.output == o
+                        && matches!(tp.anchor, crate::touch::Anchor::Layer { .. })
+                        && frame_above.iter().any(|e| e.surface == tp.target.surface)
+                });
+                if !kept_above && self.touches.clear() {
+                    out.push(Effect::TouchCancel);
+                }
+                self.touch_resize_settle(out);
+            }
+        }
         let on_one = matches!(self.pointer, crate::pointer::PointerState::Located { output, .. } if outputs.contains(&output));
         out.extend(self.reconcile_constraints());
         if on_one && !self.input.interaction.active() && !self.locked() {
@@ -894,6 +932,11 @@ impl Core {
         }
         self.set_maximized(id, None);
         self.stage.set_saved_floating(id, None);
+    }
+
+    /// Whether `id` is maximized on an output.
+    pub fn is_maximized(&self, id: ElementId) -> bool {
+        self.maximized.iter().any(|(e, _)| *e == id)
     }
 
     /// Super+Enter maximized `id` to fill `output`'s usable area (`Some`), or restored it.
@@ -1592,8 +1635,16 @@ impl Core {
                 // is resolved at the element's first windowed presentation. A map in protocol
                 // fullscreen is not one and leaves the opportunity for later; a remap of a
                 // placed element keeps its anchor (INV-STAGE-5).
+                let remap = self.stage.default_placed(id);
                 if self.fullscreen_of(id).is_none() {
                     self.place_by_default(id, &tree)?;
+                }
+                // a window shown again (Discord back from the tray, a game restarting its window)
+                // keeps its place unless another window took it meanwhile: then it moves to the
+                // nearest free spot instead of opening over that window (owner, 2026-11-16)
+                if remap && let Some(at) = self.free_place_on_remap(id, &tree) {
+                    self.stage.place(id, at).map_err(stale)?;
+                    self.invalidate_all_frames();
                 }
                 self.stage.set_tree(id, Some(tree)).map_err(stale)?;
                 self.stage.set_state(id, Lifecycle::Mapped).map_err(stale)?;
@@ -1603,6 +1654,7 @@ impl Core {
             }
             (Lifecycle::Mapped, false) => {
                 // null-buffer commit: unmap; identity and anchor kept, snapshot dropped
+                self.cancel_element_touches(id, out);
                 self.input.interaction.orphan_element(id);
                 if self.resize.is_some_and(|r| r.element == id) {
                     self.resize = None;
@@ -1724,6 +1776,8 @@ impl Core {
             slot.frame.entries.retain(|e| e.element != id);
         }
         let before = self.presentations();
+        let mut fx = Vec::new();
+        self.cancel_element_touches(id, &mut fx);
         let existed = self.stage.destroy(id);
         if !existed {
             return Vec::new();
@@ -1731,7 +1785,7 @@ impl Core {
         self.frame_liveness.destroyed(id);
         let live: Vec<ElementId> = self.focusable_elements();
         let had = self.focus.target() == Some(id);
-        let mut fx = self.focus.target_lost(id, &live);
+        fx.extend(self.focus.target_lost(id, &live));
         if had {
             self.strict_successor(id, &mut fx);
         }
@@ -1763,6 +1817,26 @@ impl Core {
         fx.extend(vis);
         fx.extend(self.reconcile_constraints());
         fx
+    }
+
+    /// Cancels touches targeting `id` (unmapped or destroyed while a finger is down).
+    fn cancel_element_touches(&mut self, id: ElementId, out: &mut Vec<Effect>) {
+        if self
+            .touches
+            .window
+            .as_ref()
+            .is_some_and(|g| g.element == id)
+        {
+            self.touches.end_window();
+        }
+        let on_element = self.touches.any_point(|tp| {
+            tp.anchor == crate::touch::Anchor::Canvas
+                && self.stage.element_containing_surface(tp.target.surface) == Some(id)
+        });
+        if on_element && self.touches.clear() {
+            out.push(Effect::TouchCancel);
+        }
+        self.touch_resize_settle(out);
     }
 
     /// M3: the constraint target for a popup of `parent`: the anchor output's viewport,
@@ -1843,9 +1917,9 @@ impl Core {
     /// `None` keeps the anchor of the initial commit: under [`PlacementPolicy::OriginAtCameraCentre`],
     /// without an output, or when out of Canvas bounds.
     ///
-    /// Whatever placed it, a new window never covers another app's window (owner, 2026-11-07:
-    /// "this should cover any app at compositor level"): a spot that would goes to the nearest
-    /// free one. A child may still cover its parent and its own app's windows; a notification
+    /// Whatever placed it, a new window never covers another window (owner, 2026-11-07: "this
+    /// should cover any app at compositor level"; 2026-11-16: "in any scenario"): a spot that
+    /// would goes to the nearest free one. Only a child may cover its own parent; a notification
     /// stacks in its corner; the `center` policy stacks every window in the middle by choice.
     fn first_map_anchor(&self, id: ElementId, tree: &SurfaceTree) -> Option<CanvasPoint> {
         if self.stage.is_above(id) {
@@ -2100,7 +2174,29 @@ impl Core {
         })
     }
 
-    /// A spot for `id` at `size` near `at` that covers no other app's window, when `at` would:
+    /// Where a remapped window goes when its kept anchor (INV-STAGE-5) now covers another window;
+    /// `None` keeps it. Fullscreen, kept-on-top and notification windows and the `center` policy
+    /// are left as they are, as at the first map.
+    fn free_place_on_remap(&self, id: ElementId, tree: &SurfaceTree) -> Option<CanvasPoint> {
+        if self.fullscreen_of(id).is_some()
+            || self.stage.is_above(id)
+            || self.is_notification(id)
+            || self.placement == PlacementPolicy::CentredInView
+        {
+            return None;
+        }
+        let at = self.stage.anchor(id)?;
+        let size = (
+            i64::from(tree.geometry.size.w),
+            i64::from(tree.geometry.size.h),
+        );
+        if size.0 <= 0 || size.1 <= 0 {
+            return None;
+        }
+        self.free_place_for(id, size, at)
+    }
+
+    /// A spot for `id` at `size` near `at` that covers no other window, when `at` would:
     /// the nearest free one, else beside them all; `None` when `at` covers none.
     pub(crate) fn free_place_for(
         &self,
@@ -2122,25 +2218,15 @@ impl Core {
         Some(CanvasPoint { x, y })
     }
 
-    /// The window-geometry rects of the mapped windows of other apps than `id`'s and `parent`'s
-    /// (`window_rects_except`, less `parent` and the windows sharing either's app id; a window
-    /// without an app id is another app's).
+    /// The window-geometry rects a new window must keep off: every mapped window but `id`, its
+    /// `parent` (a dialog opens over its own parent) and windows kept on top (they float over the
+    /// view, not on the Canvas). Windows of the same app count like any other (owner, 2026-11-16:
+    /// "make all windows appear not on top of each other in any scenario"): a second Firefox
+    /// window no longer opens over the first.
     fn other_apps_rects(&self, id: ElementId, parent: ElementId) -> Vec<(i64, i64, i64, i64)> {
-        let app = |e: ElementId| {
-            self.stage
-                .meta(e)
-                .and_then(|m| m.app_id.as_deref())
-                .map(str::to_ascii_lowercase)
-        };
-        let family = [app(id), app(parent)];
         let mut out = Vec::new();
         for elem in self.stage.mapped_elements() {
-            if elem == id || elem == parent {
-                continue;
-            }
-            if let Some(a) = app(elem)
-                && family.iter().any(|f| f.as_deref() == Some(a.as_str()))
-            {
+            if elem == id || elem == parent || self.stage.is_above(elem) {
                 continue;
             }
             if let (Some(a), Some(t)) = (self.stage.anchor(elem), self.stage.tree(elem)) {
@@ -2333,6 +2419,45 @@ impl Core {
         self.membership_pass_element(id, &mut out);
         out.extend(self.visibility_pass());
         out
+    }
+
+    /// A client asked for the compositor's window menu (`xdg_toplevel.show_window_menu`) at
+    /// `location` in `id`'s window geometry, or the user triggered `KeyAction::WindowMenu`.
+    /// Records the mapped window and its output-logical screen position `(x, y)` for the shell.
+    /// Only the focused window may ask: the request answers the user's own click, and a window
+    /// in the background must not open menus over what the user is doing.
+    pub fn show_window_menu(&mut self, id: ElementId, location: LocalPoint) {
+        if self.focus.target() != Some(id) {
+            return;
+        }
+        let Some(anchor) = self.stage.anchor(id) else {
+            return;
+        };
+        if self.stage.mapped(id).is_none() {
+            return;
+        }
+        let q = CanvasPos {
+            x: anchor
+                .x
+                .saturating_add(i64::from(location.x))
+                .saturating_mul(Q16_ONE),
+            y: anchor
+                .y
+                .saturating_add(i64::from(location.y))
+                .saturating_mul(Q16_ONE),
+        };
+        let output = self
+            .pointer_output()
+            .or_else(|| self.clock_output_of(id))
+            .or_else(|| self.outputs.first().map(|o| o.id));
+        let pos = output
+            .and_then(|o| self.view(o))
+            .map(|v| {
+                let p = v.project(q);
+                (p.x, p.y)
+            })
+            .unwrap_or((f64::from(location.x), f64::from(location.y)));
+        self.window_menu = Some((id, pos));
     }
 
     /// A minimized window comes back where it was, on top.
@@ -3580,7 +3705,6 @@ mod tests {
     /// trying every request in every lifecycle state, with and without the focus.
     #[test]
     fn advertised_capabilities_are_exactly_what_the_policy_grants() {
-        use ToplevelRequest::*;
         let mut granted = Vec::new();
         for focused in [false, true] {
             for stage in 0..4 {
@@ -3612,14 +3736,17 @@ mod tests {
         assert_eq!(caps.fullscreen, granted.contains(&FS));
         assert!(caps.maximize, "answered by Core::client_maximize, not here");
         assert!(caps.minimize, "answered by Core::client_minimize, not here");
-        assert_eq!(caps.window_menu, granted.contains(&ShowWindowMenu));
+        assert!(
+            caps.window_menu,
+            "answered by Core::show_window_menu, not here"
+        );
         assert_eq!(
             caps,
             ToplevelCapabilities {
                 fullscreen: true,
                 maximize: true,
                 minimize: true,
-                ..ToplevelCapabilities::default()
+                window_menu: true,
             }
         );
     }

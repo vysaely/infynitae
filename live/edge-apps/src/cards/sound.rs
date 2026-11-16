@@ -2,7 +2,10 @@
 //! the output in use), from the same commands as today's edge (`pactl`, `brightnessctl`;
 //! live/edge-rs/src/modules/volume.rs). A level that cannot be read is not shown as a number.
 
-use crate::card::{run_sh, Action, Button, Card, Cx, Data, Event, Hits, Rect, Source, Status};
+use crate::card::{
+    has_render_data, render_value, run_cmd, run_sh, Action, Button, Card, Cx, Data, Event, Hits,
+    Rect, Source, Status,
+};
 use crate::draw::{self, Text};
 use crate::provider::{CardKind, Claim, Listed, Provider, Size};
 use crate::ui;
@@ -121,14 +124,78 @@ pub fn parse_brightness(out: &str) -> Option<u8> {
     out.lines().find_map(first_percent).map(|p| p.min(100))
 }
 
+struct SinkInfo {
+    name: String,
+    description: String,
+    level: Option<u8>,
+    muted: bool,
+}
+
+fn parse_pactl_list_sinks(out: &str) -> Vec<SinkInfo> {
+    let mut sinks: Vec<SinkInfo> = Vec::new();
+    for raw in out.lines() {
+        let line = raw.trim();
+        if line.starts_with("Sink #") {
+            sinks.push(SinkInfo {
+                name: String::new(),
+                description: String::new(),
+                level: None,
+                muted: false,
+            });
+            continue;
+        }
+        let Some(cur) = sinks.last_mut() else {
+            continue;
+        };
+        if let Some(rest) = line.strip_prefix("Name:") {
+            cur.name = rest.trim().to_string();
+        } else if let Some(rest) = line.strip_prefix("Description:") {
+            cur.description = rest.trim().to_string();
+        } else if let Some(rest) = line.strip_prefix("Mute:") {
+            cur.muted = rest.trim().eq_ignore_ascii_case("yes");
+        } else if line.starts_with("Volume:") && cur.level.is_none() {
+            cur.level = first_percent(line);
+        }
+    }
+    sinks
+}
+
+pub fn fetch_volume_with(mut run: impl FnMut(&[&str]) -> String) -> VolumeData {
+    let sinks_out = run(&["pactl", "list", "sinks"]);
+    let sinks = parse_pactl_list_sinks(&sinks_out);
+    if sinks.is_empty() {
+        return VolumeData::default();
+    }
+    let chosen = if sinks.len() == 1 {
+        &sinks[0]
+    } else {
+        let def = run(&["pactl", "get-default-sink"]);
+        let def = def.trim();
+        sinks
+            .iter()
+            .find(|s| !def.is_empty() && s.name == def)
+            .unwrap_or(&sinks[0])
+    };
+    VolumeData {
+        level: chosen.level,
+        muted: chosen.muted,
+        output: if chosen.description.is_empty() {
+            chosen.name.clone()
+        } else {
+            chosen.description.clone()
+        },
+    }
+}
+
 struct VolumeSource;
 impl Source for VolumeSource {
     fn fetch(&mut self) -> Data {
-        Box::new(parse_volume(&run_sh(
-            "volume",
-            "LC_ALL=C pactl get-sink-volume @DEFAULT_SINK@ 2>/dev/null; LC_ALL=C pactl get-sink-mute @DEFAULT_SINK@ 2>/dev/null; \
-             LC_ALL=C pactl get-default-sink 2>/dev/null; LC_ALL=C pactl list sinks 2>/dev/null | grep -E '^\\s*(Sink #|Name:|Description:)'",
-        )))
+        if has_render_data() {
+            return Box::new(parse_volume(&render_value("volume").unwrap_or_default()));
+        }
+        Box::new(fetch_volume_with(|args| {
+            run_cmd("volume", args[0], &args[1..])
+        }))
     }
 }
 
@@ -158,6 +225,7 @@ pub struct VolumeCard {
     pub brightness: Option<Brightness>,
     /// where the sliders were drawn, for a press or drag that sets a level
     sliders: std::cell::Cell<[Rect; 2]>,
+    scroll_accum: f64,
 }
 
 impl VolumeCard {
@@ -341,19 +409,43 @@ impl Card for VolumeCard {
                 at,
             }
             | Event::Drag { hit, at } => set(*hit, *at),
-            Event::Scroll { hit, dy } => {
+            Event::Scroll { hit, dy, notches } => {
                 let id = hit.unwrap_or(H_VOLUME);
                 let cur = if id == H_BRIGHT {
                     self.brightness.as_ref().and_then(|b| b.0)
                 } else {
                     self.volume.as_ref().and_then(|v| v.level)
                 };
-                cur.map(|c| {
-                    (
-                        id,
-                        (c as i32 + if *dy < 0.0 { 5 } else { -5 }).clamp(0, 100) as u8,
-                    )
-                })
+                let Some(c) = cur else {
+                    return false;
+                };
+                let dir = if *notches != 0.0 { *notches } else { *dy };
+                let can_move = (dir < 0.0 && c < 100) || (dir > 0.0 && c > 0);
+                if !can_move {
+                    self.scroll_accum = 0.0;
+                    return false;
+                }
+                let steps = crate::card::scroll_steps(
+                    &mut self.scroll_accum,
+                    *dy,
+                    *notches,
+                    crate::card::SCROLL_NOTCH_PX,
+                );
+                if steps == 0 {
+                    return true;
+                }
+                Some((id, (c as i32 - steps as i32 * 5).clamp(0, 100) as u8))
+            }
+            Event::Step { hit, dir } => {
+                if (*hit != H_VOLUME && *hit != H_BRIGHT) || *dir == 0 {
+                    return false;
+                }
+                let cur = if *hit == H_BRIGHT {
+                    self.brightness.as_ref().and_then(|b| b.0)
+                } else {
+                    self.volume.as_ref().and_then(|v| v.level)
+                };
+                cur.map(|c| (*hit, (c as i32 + i32::from(*dir) * 5).clamp(0, 100) as u8))
             }
             _ => None,
         };
@@ -467,7 +559,8 @@ mod tests {
             c.event(
                 &Event::Scroll {
                     hit: None,
-                    dy: -1.0
+                    dy: -36.0,
+                    notches: -1.0,
                 },
                 &cx,
                 &mut out
@@ -486,5 +579,46 @@ mod tests {
             &mut out
         ));
         assert!(c.volume.as_ref().unwrap().muted);
+    }
+
+    #[test]
+    fn volume_fetch_minimizes_spawned_commands() {
+        let mut calls: Vec<Vec<String>> = Vec::new();
+        let one = fetch_volume_with(|args| {
+            calls.push(args.iter().map(|s| s.to_string()).collect());
+            "Sink #1\n\tName: alsa.1\n\tDescription: Speakers\n\tMute: no\n\
+             \tVolume: front-left: 32768 /  50% / -18.0 dB\n\tBase Volume: 65536 / 100% / 0.0 dB\n"
+                .into()
+        });
+        assert_eq!(calls, vec![vec!["pactl", "list", "sinks"]]);
+        assert_eq!(one.level, Some(50));
+        assert!(!one.muted);
+        assert_eq!(one.output, "Speakers");
+
+        calls.clear();
+        let multi = fetch_volume_with(|args| {
+            calls.push(args.iter().map(|s| s.to_string()).collect());
+            match args {
+                ["pactl", "list", "sinks"] => {
+                    "Sink #1\n\tName: s1\n\tDescription: First\n\tMute: no\n\
+                     \tVolume: front-left: 1 / 20% /\n\
+                     Sink #2\n\tName: s2\n\tDescription: Second\n\tMute: yes\n\
+                     \tVolume: front-left: 1 / 75% /\n"
+                        .into()
+                }
+                ["pactl", "get-default-sink"] => "s2\n".into(),
+                _ => String::new(),
+            }
+        });
+        assert_eq!(
+            calls,
+            vec![
+                vec!["pactl", "list", "sinks"],
+                vec!["pactl", "get-default-sink"]
+            ]
+        );
+        assert_eq!(multi.level, Some(75));
+        assert!(multi.muted);
+        assert_eq!(multi.output, "Second");
     }
 }

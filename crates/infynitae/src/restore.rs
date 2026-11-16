@@ -607,15 +607,30 @@ pub fn restore(
                 if let Some(app) = apps.get_mut(&key) {
                     app.last = Instant::now();
                 }
-                let covered = rect_of(target).is_some_and(|t| open.iter().any(|o| overlap(&t, o)));
+                // a fullscreen window is shown over its screen, not at a place on the canvas
+                let fullscreen = target
+                    .get("fullscreen")
+                    .is_some_and(|f| *f != Value::Null && *f != Value::Bool(false));
+                let covered = !fullscreen
+                    && rect_of(target).is_some_and(|t| open.iter().any(|o| overlap(&t, o)));
                 if covered {
+                    // where it opened is its place now: later saved windows keep off it too
+                    if let Some(r) = rect_of(e) {
+                        open.push(r);
+                    }
                     log(
                         log_file,
                         &format!(
-                            "Keeping {app_id} (element [{inst}, {elem}]) where it opened: a window open before covers its saved place"
+                            "Keeping {app_id} (element [{inst}, {elem}]) where it opened: another window covers its saved place"
                         ),
                     );
                 } else if let Some(anchor) = target.get("anchor") {
+                    // a place taken back is taken: a later saved window over it (two Firefox
+                    // windows saved two pixels apart) stays where the compositor put it, free of
+                    // the others (owner, 2026-11-16)
+                    if let Some(t) = rect_of(target).filter(|_| !fullscreen) {
+                        open.push(t);
+                    }
                     log(
                         log_file,
                         &format!(
@@ -1024,7 +1039,7 @@ mod tests {
             r#"{"windows":[
               {"app_id":"demo-app","title":"Win 1","anchor":[100.0,200.0],"size":[1920.0,1080.0],
                "maximized":{"anchor":[5.0,6.0],"size":[800.0,600.0]}},
-              {"app_id":"demo-app","title":"Win 2","anchor":[300.0,400.0],"size":[640.0,480.0],
+              {"app_id":"demo-app","title":"Win 2","anchor":[2100.0,400.0],"size":[640.0,480.0],
                "maximized":null},
               {"app_id":"app-without-desktop","title":"Win 3","anchor":[50.0,50.0]}],
               "outputs":[{"id":1,"center":[1200.0,800.0]}]}"#,
@@ -1084,7 +1099,7 @@ mod tests {
         assert_eq!(moves[0].get("element").unwrap().to_json(), "[1,101]");
         assert_eq!(moves[0].get("to").unwrap().to_json(), "[100,200]");
         assert_eq!(moves[1].get("element").unwrap().to_json(), "[1,103]");
-        assert_eq!(moves[1].get("to").unwrap().to_json(), "[300,400]");
+        assert_eq!(moves[1].get("to").unwrap().to_json(), "[2100,400]");
         // each window comes back at its size, the first maximized again (owner, 2026-10-31)
         let resizes: Vec<_> = ipc
             .calls
@@ -1189,6 +1204,68 @@ mod tests {
                 .unwrap()
                 .contains("Keeping term (element [1, 101]) where it opened")
         );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Two windows saved over each other (Firefox, two pixels apart) do not come back stacked:
+    /// the first takes its place, the second stays where the compositor opened it, free.
+    #[test]
+    fn windows_saved_over_each_other_do_not_come_back_stacked() {
+        let d = tmp("stacked");
+        let apps = d.join("apps");
+        std::fs::create_dir_all(&apps).unwrap();
+        desktop(&apps, "browser", "Name=Browser\nExec=browser-bin\n");
+        let file = d.join("session.json");
+        std::fs::write(
+            &file,
+            r#"{"windows":[
+              {"app_id":"browser","anchor":[-7034,-2801],"size":[1900,1050]},
+              {"app_id":"browser","anchor":[-7034,-2803],"size":[1900,1050]}],"outputs":[]}"#,
+        )
+        .unwrap();
+        let windows = std::cell::RefCell::new(Vec::<Value>::new());
+        let next = std::cell::Cell::new(100u64);
+        let mut ipc = Fake {
+            calls: vec![],
+            reply: |r: &Value| {
+                if r.get("cmd").and_then(Value::as_str) == Some("snapshot") {
+                    Value::obj([
+                        ("ok", true.into()),
+                        (
+                            "snapshot",
+                            Value::obj([("elements", Value::Arr(windows.borrow().clone()))]),
+                        ),
+                    ])
+                } else {
+                    Value::obj([("ok", true.into())])
+                }
+            },
+        };
+        restore(
+            &file,
+            std::slice::from_ref(&apps),
+            &mut ipc,
+            &mut |app, _| {
+                // a browser opens both its windows from one launch
+                for _ in 0..2 {
+                    next.set(next.get() + 1);
+                    windows.borrow_mut().push(Value::obj([
+                        ("id", Value::Arr(vec![1u64.into(), next.get().into()])),
+                        ("state", "mapped".into()),
+                        ("app_id", app.into()),
+                    ]));
+                }
+            },
+            &d.join("log"),
+            quick(),
+        );
+        let moves: Vec<String> = ipc
+            .calls
+            .iter()
+            .filter(|c| c.get("cmd").and_then(Value::as_str) == Some("move_element"))
+            .map(|c| c.get("element").unwrap().to_json())
+            .collect();
+        assert_eq!(moves, vec!["[1,101]".to_string()]);
         let _ = std::fs::remove_dir_all(&d);
     }
 

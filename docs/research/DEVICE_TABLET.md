@@ -1,0 +1,32 @@
+# Pens and drawing tablets (DEVICE_TABLET)
+
+Support for `zwp_tablet_manager_v2` (tools, tablets and pad buttons), pointer fallback for clients without `tablet-v2`, tap-to-focus, and libinput tablet routing in the DRM backend.
+
+## What changed
+
+- `crates/infynitae-core/src/lib.rs:156` — Added `PhysicalEvent::TabletTap { output, p, time_us }` to focus and raise the window or on-demand layer surface under a stylus tap.
+- `crates/infynitae-core/src/lib.rs:2238-2332` — Extracted `Core::route_point` from `Core::route_pointer`, added `Core::unproject_point` for active tablet tip grabs across camera/layer coordinates, and added `Core::is_layer_surface`.
+- `crates/infynitae-core/src/entry.rs:277-289`, `crates/infynitae-core/src/entry.rs:2670-2707` — Extracted `Core::tap_focus` from `button_press` (matching `touch_down` focus rules) and handled `PhysicalEvent::TabletTap` through it.
+- `crates/infynitae-core/src/entry.rs:7252-7336` — Added unit tests for `TabletTap` focusing/raising under a panned and zoomed camera and leaving focus alone on empty canvas.
+- `crates/infynitae-wayland/src/lib.rs:58`, `crates/infynitae-wayland/src/lib.rs:344-350`, `crates/infynitae-wayland/src/lib.rs:808-812` — Registered `TabletManagerState` and `TabletState`, and re-exported `TabletAxes`, `TabletEvent`, `TabletPadDescriptor`, and `tablet_tool_button`.
+- `crates/infynitae-wayland/src/handlers.rs:945-949`, `crates/infynitae-wayland/src/handlers.rs:1282-1450` — Implemented `TabletSeatHandler::tablet_tool_image`, updated `SeatHandler::focus_changed` to update tablet pad focus, intercepted `ZwpTabletManagerV2::GetTabletSeat` and `ZwpTabletSeatV2::destroyed` to track bound tablet seats and announce pads, and added `ZwpTabletPadV2` and `ZwpTabletPadGroupV2` dispatch.
+- `crates/infynitae-wayland/src/lock.rs` — Cancelled active tablet focus and grab alongside `clear_touches` and `cancel_touches` in `start_locked` and `SessionLockHandler::lock`.
+- `crates/infynitae-wayland/src/convert.rs` — Rendered the active tablet tool cursor at the pen position while a tool is in proximity on a `tablet-v2` surface.
+- `crates/infynitae-wayland/src/pointer.rs` — Added `TabletEvent` delivery (`proximity_in`, `down`, `up`, `motion`, axes, `button`, `proximity_out`, `frame`) for surfaces whose client bound `zwp_tablet_seat_v2`, pointer motion and `BTN_LEFT` fallback for surfaces without `tablet-v2`, `TabletPadDescriptor` pad announcement/enter/leave/button forwarding, and `tablet_tool_button`.
+- `crates/infynitae-backend-drm/src/lib.rs` — Dispatched raw libinput events via `Generic` + `dispatch_libinput_event` so `TabletPadEvent::Button` is handled alongside Smithay `InputEvent`s; registered/removed tablets and pads on `DeviceAdded`/`DeviceRemoved`; reused `select_input_screen` (the shared `WL_OUTPUT` -> 15 mm physical size -> internal panel -> pointer output -> first screen rule) and `touch_point_to_output_logical` in `tablet_position` (falling back to `virtual_screen` only when no physical screen is connected and `WL_OUTPUT` is unset), and forwarded `TabletTool*` events through `WaylandState::tablet_event`.
+- `crates/infynitae-backend-headless/tests/t1_tablet.rs` — Added 5 end-to-end tests covering `tablet-v2` surface-local coordinates under panned/zoomed camera, no double `wl_pointer` input, tap-to-focus, pointer fallback for non-`tablet-v2` clients, switching between `tablet-v2` and plain clients, `zwp_tablet_pad_v2` button forwarding, and session lock cancellation.
+
+## Found but did not change
+
+1. **Pad `ZwpTabletV2` lookup by protocol ID scan** (`crates/infynitae-wayland/src/pointer.rs:1214-1255`, size **S**): Smithay 0.7.0's `TabletHandle::instances` is private, so `send_pad_enter` scans `client.object_from_protocol_id::<ZwpTabletV2>` over server object IDs up to `max_id.max(0xFF00_1000)`. Fix: if a future Smithay update exposes `TabletHandle` instances (or if a client opens more than 4,096 concurrent server objects before binding), add an accessor on `TabletHandle` or track per-client tablet bindings in the adapter.
+2. **Pad ring, strip and mode-switch events** (`crates/infynitae-backend-drm/src/lib.rs:4160-4180`, size **M**): Only `TabletPadEvent::Button` is forwarded today; touch rings (`TabletPadEvent::Ring`), strips (`TabletPadEvent::Strip`), and hardware mode switches are ignored. Fix: forward `Ring`/`Strip` events through `zwp_tablet_pad_ring_v2`/`zwp_tablet_pad_strip_v2` on `PadEntry`.
+3. **Tablet tool cursor image persistence on `cursor_animation_due`** (`crates/infynitae-wayland/src/cursor.rs:611`, size **S**): `cursor_animation_due` checks `self.core.pointer()` rather than `tablet_cursor`, so an animated named cursor set on a tablet tool does not schedule its next frame by itself if `core.pointer()` is `NoOutput`. Fix: check `tablet.cursor_at.is_some()` alongside `core.pointer()` in `cursor_animation_due`.
+4. **Tablet button mapping on non-`tablet-v2` clients** (`crates/infynitae-wayland/src/pointer.rs:1604-1620`, size **S**): Stylus side buttons (`BTN_STYLUS`, `BTN_STYLUS2`) are delivered only via `zwp_tablet_tool_v2.button` and are not synthesized as `BTN_RIGHT`/`BTN_MIDDLE` on `wl_pointer` when hovering a client without `tablet-v2`. Fix: map `BTN_STYLUS` / `BTN_STYLUS2` to `PointerButton` when no `tablet-v2` focus is active, if desired.
+5. **Pre-existing ignored audit tests** (`crates/infynitae-core/src/entry.rs`, `crates/infynitae-wayland/src/x11_keys.rs`, `crates/infynitae-backend-drm/src/lib.rs`, size **M**): Left untouched (outside task scope).
+
+## Needs real hardware to confirm
+
+- Physical graphics tablet (`DeviceCapability::TabletTool`) and pad (`DeviceCapability::TabletPad`) event delivery in `crates/infynitae-backend-drm/src/lib.rs`, including `dispatch_libinput_event`, libinput pressure/tilt/distance/wheel normalization, and `device.tablet_pad_number_of_buttons()` / `tablet_pad_mode_group()` behaviour.
+- `select_input_screen` matching real screen tablets (e.g. Wacom Cintiq, Huion Kamvas, Lenovo/ThinkPad integrated Wacom HID digitizer) and desk pen tablets against EDID `conn.size()`, `WL_OUTPUT`, and `output_transform` rotation.
+- Real drawing applications (e.g. Krita, GIMP, Inkscape, Xournal++) and non-`tablet-v2` apps (browsers, terminals) under XWayland and native Wayland.
+- Visual cursor placement and `zwp_tablet_tool_v2.set_cursor` / `wp_cursor_shape_device_v1` in a live DRM session, including `HARDWARE_CURSOR` interaction.

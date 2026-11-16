@@ -248,6 +248,25 @@ fn element(core: &Core, instance: u64, id: ElementId) -> Value {
         ("attention", core.focus().attention().contains(&id).into()),
         // minimized by its app's button: hidden until picked from the list (2026-11-07)
         ("minimized", stage.is_minimized(id).into()),
+        // kept on top of normal windows (`Stage` `above`), following camera pans
+        ("on_top", stage.is_above(id).into()),
+    ])
+}
+
+/// Event emitted when a client or shortcut opens the window menu for `id` at output-logical `pos`.
+pub fn window_menu_event(
+    core: &Core,
+    id: infynitae_core::stage::ElementId,
+    pos: (f64, f64),
+) -> Value {
+    let instance = core.stage().instance().get();
+    Value::obj([
+        ("event", "window_menu".into()),
+        ("element", element_ref(instance, id.get().get())),
+        ("position", pair(pos.0, pos.1)),
+        ("on_top", core.stage().is_above(id).into()),
+        ("maximized", core.is_maximized(id).into()),
+        ("fullscreen", core.fullscreen_of(id).is_some().into()),
     ])
 }
 

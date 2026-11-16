@@ -25,7 +25,7 @@ fn is_left_button(button: u32) -> bool {
     button == 1 || button == 0x110
 }
 use crate::draw::{self, Text, PAD_X, PAD_Y};
-use crate::theme::{Rgba, Theme};
+use crate::theme::Theme;
 use cairo::Context;
 use std::ffi::CString;
 use std::io::Read;
@@ -199,8 +199,8 @@ pub fn parse_reply_payload(got: &str) -> Option<Option<String>> {
 
 /// Notifies the edge that this asker is cancelling, writes `ASK_CANCEL_FILE`, and signals the edge.
 pub fn tell_edge_cancel(edge_pid: i32, my_pid: u32, fifo_str: &str) {
-    let cancel_path = crate::wayland::runtime_path(&format!("{ASK_CANCEL_FILE}.{my_pid}"));
-    let target = crate::wayland::runtime_path(ASK_CANCEL_FILE);
+    let cancel_path = crate::paths::runtime_path(&format!("{ASK_CANCEL_FILE}.{my_pid}"));
+    let target = crate::paths::runtime_path(ASK_CANCEL_FILE);
     if std::fs::write(&cancel_path, format!("{fifo_str}\n{my_pid}\n")).is_ok() {
         let _ = std::fs::rename(&cancel_path, &target);
     }
@@ -256,7 +256,7 @@ pub fn run_client<S: AsRef<str>>(args: &[S]) -> u8 {
     }
 
     let my_pid = std::process::id();
-    let fifo_path = crate::wayland::runtime_path(&format!("{ASK_PIPE_PREFIX}{my_pid}"));
+    let fifo_path = crate::paths::runtime_path(&format!("{ASK_PIPE_PREFIX}{my_pid}"));
     let _ = std::fs::remove_file(&fifo_path);
     let Ok(fifo_c) = CString::new(fifo_path.as_os_str().as_bytes()) else {
         return 3;
@@ -308,9 +308,9 @@ pub fn run_client<S: AsRef<str>>(args: &[S]) -> u8 {
         None
     };
 
-    let req_path = crate::wayland::runtime_path(ASK_FILE);
+    let req_path = crate::paths::runtime_path(ASK_FILE);
 
-    let tmp_path = crate::wayland::runtime_path(&format!("{ASK_FILE}-new.{my_pid}"));
+    let tmp_path = crate::paths::runtime_path(&format!("{ASK_FILE}-new.{my_pid}"));
     let fifo_str = fifo_path.to_string_lossy();
     let content = format_request(&fifo_str, &cli, &items);
     if std::fs::write(&tmp_path, content).is_err() {
@@ -938,7 +938,7 @@ pub fn load_from_path_with_prefix(
 
 /// Loads `$XDG_RUNTIME_DIR/infynitae-edge-rs.ask` into `world.ask`.
 pub fn load_from_path(world: &mut World, req_path: &Path) -> bool {
-    let prefix = crate::wayland::runtime_path(ASK_PIPE_PREFIX)
+    let prefix = crate::paths::runtime_path(ASK_PIPE_PREFIX)
         .to_string_lossy()
         .into_owned();
     let uid = unsafe { libc::getuid() };
@@ -1056,6 +1056,13 @@ pub fn draw(cr: &Context, th: &Theme, ask: &AskState, screen: (f64, f64)) -> Rec
     if gw <= 0.0 || gh <= 0.0 {
         return (gx, gy, gw, gh);
     }
+    draw::with_font(&th.font, || {
+        draw_inner(cr, th, ask, (gx, gy, gw, gh));
+    });
+    (gx, gy, gw, gh)
+}
+
+fn draw_inner(cr: &Context, th: &Theme, ask: &AskState, (gx, gy, gw, gh): Rect) {
     draw::card(cr, th, gx, gy, gw, gh);
     draw::text_max(
         cr,
@@ -1074,56 +1081,24 @@ pub fn draw(cr: &Context, th: &Theme, ask: &AskState, screen: (f64, f64)) -> Rec
     if ask.text {
         let fx = gx + PAD_X;
         let fw = (gw - 2.0 * PAD_X).max(20.0);
-        let r = th.small_radius().max(4.0);
-        draw::round_rect(cr, fx.round(), top.round(), fw.round(), FIELD_H.round(), r);
-        draw::set(cr, th.track);
-        let _ = cr.fill();
-        draw::round_rect(
-            cr,
-            fx.round() + 0.5,
-            top.round() + 0.5,
-            fw.round() - 1.0,
-            FIELD_H.round() - 1.0,
-            (r - 0.5).max(0.0),
-        );
-        draw::set(cr, Rgba(th.accent.0, th.accent.1, th.accent.2, 0.65));
-        cr.set_line_width(1.0);
-        let _ = cr.stroke();
-
         let shown = if ask.secret {
             "\u{2022}".repeat(ask.buf.chars().count())
         } else {
             ask.buf.clone()
         };
-        let cy = top + FIELD_H / 2.0;
-        let tx = fx + 12.0;
-        let max_w = (fw - 28.0).max(10.0);
-        let tw = if !shown.is_empty() {
-            draw::text_max(
-                cr,
-                tx,
-                cy - 8.0,
-                max_w,
-                &Text {
-                    size: 13.0,
-                    bold: false,
-                    color: th.text,
-                    text: &shown,
-                },
-            )
-        } else {
-            0.0
-        };
-        let caret_x = (tx
-            + if shown.is_empty() {
-                0.0
-            } else {
-                tw.min(max_w) + 2.0
-            })
-        .round();
-        draw::set(cr, th.accent);
-        cr.rectangle(caret_x, (cy - 7.0).round(), 1.5, 14.0);
-        let _ = cr.fill();
+        crate::ui::text_field(
+            cr,
+            th,
+            (fx, top, fw, FIELD_H),
+            &crate::ui::TextField {
+                value: &shown,
+                placeholder: "",
+                focused: true,
+                show_caret: true,
+                left_pad: 12.0,
+                right_pad: 16.0,
+            },
+        );
 
         draw::text_max(
             cr,
@@ -1151,7 +1126,7 @@ pub fn draw(cr: &Context, th: &Theme, ask: &AskState, screen: (f64, f64)) -> Rec
                     ROW_H - 2.0,
                     r,
                 );
-                draw::set(cr, Rgba(th.accent.0, th.accent.1, th.accent.2, 0.18));
+                draw::set(cr, th.accent.alpha(crate::ui::CHOSEN_ALPHA));
                 let _ = cr.fill();
             }
             draw::text_max(
@@ -1174,8 +1149,6 @@ pub fn draw(cr: &Context, th: &Theme, ask: &AskState, screen: (f64, f64)) -> Rec
             let _ = std::fs::write(boxes_path, format!("ask {gx:.0} {gy:.0} {gw:.0} {gh:.0}\n"));
         }
     }
-
-    (gx, gy, gw, gh)
 }
 
 #[cfg(test)]
@@ -1587,9 +1560,18 @@ mod tests {
         assert_eq!(world.ask.queue.len(), 1);
         assert_eq!(world.ask.title, "Question 1");
 
-        // Asker 1 killed (close rfd1)
+        // Asker 1 killed (close rfd1). Other tests in this process start commands; a child that
+        // is between fork and exec still holds a copy of rfd1 (O_CLOEXEC closes it only at exec),
+        // so the reader can look alive for a moment: allow up to 2 s for the copy to go.
         unsafe { libc::close(rfd1) };
-        assert!(check_asker_gone(&mut world));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while !check_asker_gone(&mut world) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "asker 1 still looks alive after 2 s"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
 
         // Question 2 shows!
         assert!(world.ask.on);

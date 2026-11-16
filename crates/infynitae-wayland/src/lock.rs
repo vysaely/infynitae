@@ -83,7 +83,7 @@ pub(crate) struct SessionLock {
     /// Keys physically down (every key passes `lock_key`).
     phys_down: HashSet<u32>,
     /// Fingers that landed on a lock surface: they stay with it until they lift.
-    fingers: Vec<u32>,
+    pub(crate) fingers: Vec<u32>,
     /// Unlocked: Core's releases and the keyboard's return are still to come.
     just_unlocked: bool,
     /// When the compositor last started the locker because the holder died (M4).
@@ -131,6 +131,10 @@ impl WaylandState {
             // the caller starts a locker now; the compositor starts one again if it doesn't hold
             l.relaunched = Some(std::time::Instant::now());
         }
+        let fx = self.core.clear_touches();
+        self.apply(&fx);
+        self.cancel_touches();
+        self.cancel_tablet();
         let kb = self.keyboard_handle();
         kb.set_focus(self, None, SERIAL_COUNTER.next_serial());
     }
@@ -464,8 +468,11 @@ impl SessionLockHandler for WaylandState {
             g.ungrab(PopupUngrabStrategy::All);
         }
         self.keyboard_unset_grab();
-        // a finger held on a window is given up: nothing reaches a window while locked
+        // a finger or stylus held on a window is given up: nothing reaches a window while locked
+        let fx = self.core.clear_touches();
+        self.apply(&fx);
         self.cancel_touches();
+        self.cancel_tablet();
         let kb = self.keyboard_handle();
         kb.set_focus(self, None, SERIAL_COUNTER.next_serial());
         // Smithay tells a newly focused surface which forwarded keys are down; keys held now

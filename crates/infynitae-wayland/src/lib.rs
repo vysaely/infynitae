@@ -55,6 +55,7 @@ pub mod xwayland;
 
 pub use handlers::ACTIVATION_TOKENS_KEPT;
 pub use keyboard::PreemptionStrategy;
+pub use pointer::{TabletAxes, TabletEvent, TabletPadDescriptor, tablet_tool_button};
 
 use infynitae_core::Core;
 use infynitae_core::stage::ElementId;
@@ -69,6 +70,7 @@ use smithay::wayland::dmabuf::{DmabufFeedbackBuilder, DmabufState};
 use smithay::wayland::fractional_scale::FractionalScaleManagerState;
 use smithay::wayland::output::OutputManagerState;
 use smithay::wayland::pointer_constraints::PointerConstraintsState;
+use smithay::wayland::pointer_gestures::PointerGesturesState;
 use smithay::wayland::presentation::PresentationState;
 use smithay::wayland::relative_pointer::RelativePointerManagerState;
 use smithay::wayland::selection::data_device::DataDeviceState;
@@ -305,6 +307,11 @@ pub struct WaylandState {
     relative_pointer: RelativePointerManagerState,
     #[expect(
         dead_code,
+        reason = "owns the zwp_pointer_gestures_v1 global for the state's lifetime"
+    )]
+    pointer_gestures: PointerGesturesState,
+    #[expect(
+        dead_code,
         reason = "owns the wp_fractional_scale_manager_v1 global for the state's lifetime"
     )]
     fractional_scale_manager: FractionalScaleManagerState,
@@ -339,6 +346,15 @@ pub struct WaylandState {
     tearing: tearing::Tearing,
     /// Each finger's last location sent (`touch`: a cancel needs it).
     touch_last: Vec<(u32, infynitae_core::geom::CanvasPos)>,
+    /// Lock-surface touch slots `(slot, (x, y))` for cancelling stationary fingers on the lock.
+    lock_touch_last: Vec<(u32, (f64, f64))>,
+    /// `zwp_tablet_manager_v2`: pens, drawing tablets and pad buttons (`pointer`).
+    #[expect(
+        dead_code,
+        reason = "owns the zwp_tablet_manager_v2 global for the state's lifetime"
+    )]
+    tablet_manager: smithay::wayland::tablet_manager::TabletManagerState,
+    pub(crate) tablet: pointer::TabletState,
     foreign_toplevels: std::collections::HashMap<
         ElementId,
         smithay::wayland::foreign_toplevel_list::ForeignToplevelHandle,
@@ -781,6 +797,7 @@ impl WaylandState {
             ordered_preemption_strategy: keyboard::PreemptionStrategy::Ordered,
             pointer_constraints: PointerConstraintsState::new::<Self>(display),
             relative_pointer: RelativePointerManagerState::new::<Self>(display),
+            pointer_gestures: PointerGesturesState::new::<Self>(display),
             fractional_scale_manager: FractionalScaleManagerState::new::<Self>(display),
             viewporter: ViewporterState::new::<Self>(display),
             cursor_shape: smithay::wayland::cursor_shape::CursorShapeManagerState::new::<Self>(
@@ -797,6 +814,11 @@ impl WaylandState {
             idle_inhibit: idle_inhibit::IdleInhibit::new(display),
             tearing: tearing::Tearing::new(display),
             touch_last: Vec::new(),
+            lock_touch_last: Vec::new(),
+            tablet_manager: smithay::wayland::tablet_manager::TabletManagerState::new::<Self>(
+                display,
+            ),
+            tablet: pointer::TabletState::default(),
             foreign_toplevels: std::collections::HashMap::new(),
             shortcuts_inhibit: shortcuts_inhibit::ShortcutsInhibitState::new(display),
             wlr_toplevels: wlr_toplevels::WlrToplevelsState::new(display, trust.gate(Cap::Windows)),
@@ -1233,7 +1255,10 @@ impl WaylandState {
                 // without a DIRECT_SCANOUT line: the environment's, as at start (main.rs), else on
                 let mut direct_scanout = std::env::var("DIRECT_SCANOUT")
                     .map_or(true, |v| parse_bool(&v).unwrap_or(true));
+                let mut touchpad_gestures = std::env::var("TOUCHPAD_GESTURES")
+                    .map_or(true, |v| parse_bool(&v).unwrap_or(true));
                 let mut hardware_cursor = true;
+                let mut touch_edge_swipe = true;
                 let mut overlay_planes = false;
                 let mut wine_transparency = true;
                 let mut frame_guard = DEFAULT_FRAME_GUARD;
@@ -1397,6 +1422,9 @@ impl WaylandState {
                                     && parse_bool(val).unwrap_or(true);
                                 self.core.set_fullscreen_pan(enabled);
                             }
+                            "TOUCH_EDGE_SWIPE" => {
+                                touch_edge_swipe = parse_bool(val).unwrap_or(true);
+                            }
                             "KEEP_ON_TOP" => {
                                 self.core
                                     .set_keep_on_top(&val.split(',').collect::<Vec<_>>());
@@ -1489,6 +1517,9 @@ impl WaylandState {
                                 self.input_config.touchpad_natural_scroll =
                                     Some(parse_bool(val).unwrap_or(false));
                             }
+                            "TOUCHPAD_GESTURES" => {
+                                touchpad_gestures = parse_bool(val).unwrap_or(true);
+                            }
                             "XWAYLAND_KEYS" => x11_keys_mode = x11_keys::Mode::parse(val),
                             "ZOOM_SHARPEN" => {
                                 zoom_sharpen_after = !val.eq_ignore_ascii_case("live")
@@ -1578,6 +1609,7 @@ impl WaylandState {
                 self.core.set_key_bindings(bindings);
                 self.core.set_free_cursor_on_super(free_cursor_on_super);
                 self.core.set_zoom_feel(zoom_feel);
+                self.core.set_touchpad_gestures(touchpad_gestures);
                 self.exec_commands = commands;
                 self.set_max_app_scale(max_app_scale);
                 self.x11_keys.mode = x11_keys_mode;
@@ -1592,6 +1624,7 @@ impl WaylandState {
                 self.scaling_filter = scaling_filter;
                 self.direct_scanout = Some(direct_scanout);
                 self.hardware_cursor = hardware_cursor;
+                self.core.set_touch_edge_swipe(touch_edge_swipe);
                 self.overlay_planes = overlay_planes;
                 self.wine_transparency = wine_transparency;
                 self.frame_guard_percent = frame_guard;
@@ -2862,6 +2895,39 @@ mod key_binding_config_tests {
             state.latency_mode,
             super::frame_schedule::LatencyMode::Direct
         );
+    }
+
+    #[test]
+    fn reload_config_updates_and_resets_touchpad_gestures() {
+        use smithay::reexports::wayland_server::Display;
+        let temp = super::cursor::TestTempDir::new("wl_touchpad_gestures");
+        let cfg_dir = temp.path().join(".config/infynitae");
+        std::fs::create_dir_all(&cfg_dir).unwrap();
+        let cfg = cfg_dir.join("config");
+
+        let (core, _, _, _) =
+            infynitae_core::Core::new(infynitae_core::navigation::PersistedCameras::default());
+        let display: Display<super::WaylandState> = Display::new().unwrap();
+        let mut state = super::WaylandState::new(&display.handle(), core);
+        state.set_config_home(temp.path().to_path_buf());
+        assert!(state.core().touchpad_gestures());
+
+        std::fs::write(&cfg, "TOUCHPAD_GESTURES=\"false\"\n").unwrap();
+        state.reload_config();
+        assert!(!state.core().touchpad_gestures());
+
+        // Empty value keeps default true.
+        std::fs::write(&cfg, "TOUCHPAD_GESTURES=\"\"\n").unwrap();
+        state.reload_config();
+        assert!(state.core().touchpad_gestures());
+
+        // Removing the key resets back to default true.
+        std::fs::write(&cfg, "TOUCHPAD_GESTURES=\"false\"\n").unwrap();
+        state.reload_config();
+        assert!(!state.core().touchpad_gestures());
+        std::fs::write(&cfg, "").unwrap();
+        state.reload_config();
+        assert!(state.core().touchpad_gestures());
     }
 }
 

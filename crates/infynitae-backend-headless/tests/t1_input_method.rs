@@ -19,7 +19,9 @@ use smithay::backend::renderer::pixman::PixmanRenderer;
 use smithay::backend::renderer::{Bind, ExportMem, Offscreen};
 use smithay::reexports::pixman::Image;
 use smithay::utils::Rectangle;
+use wayland_client::protocol::wl_seat::WlSeat;
 use wayland_client::protocol::wl_surface::WlSurface;
+use wayland_client::protocol::wl_touch::WlTouch;
 use wayland_client::{Connection, Dispatch, QueueHandle};
 use wayland_protocols::ext::session_lock::v1::client::ext_session_lock_manager_v1::ExtSessionLockManagerV1;
 use wayland_protocols::ext::session_lock::v1::client::ext_session_lock_surface_v1::{
@@ -48,6 +50,7 @@ wayland_client::delegate_noop!(Probe: ignore ZwpVirtualKeyboardManagerV1);
 wayland_client::delegate_noop!(Probe: ignore ZwpVirtualKeyboardV1);
 wayland_client::delegate_noop!(Probe: ignore ZwpInputPopupSurfaceV2);
 wayland_client::delegate_noop!(Probe: ignore WpSinglePixelBufferManagerV1);
+wayland_client::delegate_noop!(Probe: ignore WlTouch);
 
 impl Dispatch<ExtSessionLockSurfaceV1, ()> for Probe {
     fn event(
@@ -465,4 +468,93 @@ fn an_input_method_without_a_grab_leaves_the_keys_to_the_app() {
     r.ls.probe.log.retain(|l| l == "im done");
     commit_text(&mut r, &im, "b");
     assert!(r.ls.probe.log.contains(&"ti commit b".to_string()));
+}
+
+#[test]
+fn osk_shows_for_text_fields_only_in_tablet_mode_and_hides_on_leave() {
+    use infynitae_core::PhysicalEvent;
+
+    let (mut r, _im, _) = setup();
+    r.ls.state.enable_touch();
+    r.ls.pump();
+    let seat: WlSeat = r.ls.probe.seat.clone().expect("seat");
+    let _touch = seat.get_touch(&r.ls.qh, ());
+    r.ls.pump();
+    let _ti = enable_text_input(&mut r);
+
+    let tap_w = |r: &mut Rig, slot: u32| {
+        let out = r.ls.output();
+        r.t += 1000;
+        let t1 = r.t;
+        let port = &mut r.ls.input;
+        r.ls.state
+            .with_effects(|core, fx| {
+                core.physical_input(
+                    port,
+                    PhysicalEvent::TouchDown {
+                        slot,
+                        output: out,
+                        p: (960.0, 540.0),
+                        time_us: t1,
+                    },
+                    fx,
+                )
+            })
+            .unwrap();
+        let port = &mut r.ls.input;
+        r.ls.state
+            .with_effects(|core, fx| core.physical_input(port, PhysicalEvent::TouchFrame, fx))
+            .unwrap();
+        r.t += 1000;
+        let t2 = r.t;
+        let port = &mut r.ls.input;
+        r.ls.state
+            .with_effects(|core, fx| {
+                core.physical_input(port, PhysicalEvent::TouchUp { slot, time_us: t2 }, fx)
+            })
+            .unwrap();
+        let port = &mut r.ls.input;
+        r.ls.state
+            .with_effects(|core, fx| core.physical_input(port, PhysicalEvent::TouchFrame, fx))
+            .unwrap();
+        r.ls.pump();
+    };
+
+    // 1. Convertible with TabletMode switch in laptop mode (off): tap on text field does not show OSK.
+    r.ls.state.set_has_tablet_mode_switch(true);
+    tap_w(&mut r, 0);
+    assert!(
+        !r.ls.state.osk_shown(),
+        "OSK must not show on text-field tap outside tablet mode"
+    );
+
+    // 2. Entering tablet mode: tapping an active text field shows OSK.
+    r.ls.state.tablet_mode_changed(true);
+    tap_w(&mut r, 1);
+    assert!(
+        r.ls.state.osk_shown(),
+        "OSK must show on text-field tap in tablet mode"
+    );
+
+    // 3. Leaving tablet mode: OSK hides immediately even while the text field stays active.
+    r.ls.state.tablet_mode_changed(false);
+    assert!(
+        !r.ls.state.osk_shown(),
+        "OSK must hide when leaving tablet mode"
+    );
+
+    // 4. Subsequent tap outside tablet mode stays hidden.
+    tap_w(&mut r, 2);
+    assert!(
+        !r.ls.state.osk_shown(),
+        "OSK must stay hidden on tap after leaving tablet mode"
+    );
+
+    // 5. Device with no TabletMode switch (e.g. slate tablet): tap still shows OSK.
+    r.ls.state.set_has_tablet_mode_switch(false);
+    tap_w(&mut r, 3);
+    assert!(
+        r.ls.state.osk_shown(),
+        "OSK must show on tap when no TabletMode switch is present"
+    );
 }

@@ -116,10 +116,11 @@ pub struct ConfigSource {
 
 impl ConfigSource {
     pub fn system() -> ConfigSource {
-        let home = std::env::var("HOME").unwrap_or_default();
         ConfigSource {
-            config: crate::config::config_path(),
-            defaults: PathBuf::from(&home).join("infynitae/config/config"),
+            config: crate::config::config_path().unwrap_or_default(),
+            defaults: crate::paths::home()
+                .map(|h| h.join("infynitae/config/config"))
+                .unwrap_or_default(),
             path: std::env::var("PATH").unwrap_or_default(),
         }
     }
@@ -143,6 +144,10 @@ impl Source for ConfigSource {
             default: parse_config(&read(&self.defaults)),
             programs,
         })
+    }
+
+    fn every(&self) -> Option<std::time::Duration> {
+        None
     }
 }
 
@@ -171,7 +176,6 @@ const SLIDE_H: f64 = 22.0;
 #[cfg(test)]
 /// Config keys in `config/config` with no Settings card control today; edited through "In the file".
 pub const FILE_ONLY: &[&str] = &[
-    "KEEP_ON_TOP",
     "CANVAS_COLOR",
     "BORDER_INACTIVE",
     "BORDER_IGNORE_CSD",
@@ -195,6 +199,7 @@ pub const FILE_ONLY: &[&str] = &[
     "ZOOM_SHARPEN",
     "VIRTUAL_SCREEN",
     "OSK",
+    "TOUCH_EDGE_SWIPE",
     "AUTO_ROTATE",
     "OUTPUT_LAYOUT",
     "LAUNCHER",
@@ -204,6 +209,7 @@ pub const FILE_ONLY: &[&str] = &[
     "MENU_PICKER",
     "CONTROL_MENU",
     "TRAY_CARD",
+    "MONITOR_LOG_DIR",
     "NOTIFICATIONS",
     "ENABLE_EDGE",
     "EDGE_IMPL",
@@ -730,6 +736,27 @@ impl Card for TableCard {
                 };
                 self.set(i, fmt_number(v), out);
                 true
+            }
+            Event::Cancel { .. } => self.sliding.take().is_some(),
+            Event::Step { hit, dir } if *hit >= ROW && *dir != 0 => {
+                let i = ((*hit - ROW) / 10) as usize;
+                let part = (*hit - ROW) % 10;
+                let Some(s) = self.table.get(i).copied() else {
+                    return false;
+                };
+                match s.control {
+                    Control::Slide { min, max, step, .. } if part == 1 => {
+                        let cur = self.value(i).parse::<f64>().unwrap_or(min);
+                        let next = snap(cur + f64::from(*dir) * step, min, max, step);
+                        self.set(i, fmt_number(next), out)
+                    }
+                    Control::Step { min, max } if part == 1 || part == 2 => {
+                        let v: i64 = self.value(i).parse().unwrap_or(min);
+                        let n = (v + i64::from(*dir)).clamp(min, max);
+                        self.set(i, n.to_string(), out)
+                    }
+                    _ => false,
+                }
             }
             _ => false,
         }

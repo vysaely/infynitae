@@ -246,11 +246,12 @@ lists; whether night light re-reads the temperature while on. Brightness stays i
 | Acceleration | Switch | `MOUSE_ACCEL_PROFILE` | `adaptive` / `flat` | save |
 | Tap to click | Switch | `TOUCHPAD_TAP` | | save |
 | Scroll follows the fingers | Switch | `TOUCHPAD_NATURAL_SCROLL` | | save |
+| Canvas touchpad gestures | Switch | `TOUCHPAD_GESTURES` | | save |
 | M Super frees a captured pointer | Switch | `SUPER_FREES_CURSOR` | | save |
 | M Switch layouts with | Pick | `XKB_DEFAULT_OPTIONS` | None `""`, Alt+Shift `grp:alt_shift_toggle`, Super+Space `grp:win_space_toggle`, Caps Lock `grp:caps_toggle`; a value with other options shows "Set in the file" and is not changed | restart |
 | M Keys heard by X11 apps | Pick | `XWAYLAND_KEYS` | None `off`, Modifiers, Shortcuts, All | save |
 
-Hidden: the two touchpad rows unless a device in `/proc/bus/input/devices` has "Touchpad" in its
+Hidden: the three touchpad rows unless a device in `/proc/bus/input/devices` has "Touchpad" in its
 name (source `touchpad`, a file read; a touchpad named otherwise is missed: known gap, the file still
 works). "Switch layouts with" with one layout. Layouts is text in this stage: a list of the 100-odd
 names in `/usr/share/X11/xkb/rules/evdev.lst` is a later step.
@@ -268,8 +269,7 @@ names in `/usr/share/X11/xkb/rules/evdev.lst` is a later step.
 | M Super+Tab moves the view | Switch | `FOCUS_CYCLE_NAVIGATE` | `1` / `0` | save |
 | M Dragging the canvas | Pick | `PAN_MODE` | Pointer moves with it `free`, Pointer stays `grab`, Grip `rts` | save |
 | M Pan out of fullscreen | Switch | `FULLSCREEN_PAN` | | save |
-
-`KEEP_ON_TOP` is left to its key (Super+Shift+K writes it).
+| M Keep on top | Text | `KEEP_ON_TOP` | Titles or apps, with commas | save |
 
 ### `settings/defaults` (`cards/settings_apps.rs`)
 
@@ -289,7 +289,8 @@ stays (a command of the owner's). "Automatic" shows what it resolves to only whe
 know; otherwise the word alone. Hidden: a row with no app of its category installed; "Mount USB
 drives" without `udisksctl`. Left to the file: `LAUNCHER`, `MENU_PICKER`, `CLIPBOARD_PICKER`,
 `CONTROL_MENU`, `POLKIT_AGENT`, `NOTIFICATIONS`, `ENABLE_EDGE`, `EDGE_IMPL`, `EDGE_POSITION`,
-`EDGE_CONTROL_SIDE` (a reload of the edge closes the panel; a panel's edge is set by editing it).
+`EDGE_CONTROL_SIDE` (a reload of the edge closes the panel; a panel's edge is set by editing it),
+`MONITOR_LOG_DIR` (empty by default; folder of `lab*.log` files for the System monitor GPU card).
 Open: `BROWSER` is only what command-line programs run (`live/config.sh`); the browser other apps
 open links with is `xdg-settings set default-web-browser`. This row should set both; that is the
 owner's call (section 8).

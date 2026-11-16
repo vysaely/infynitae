@@ -11,7 +11,26 @@ use crate::panel::CardRef;
 use crate::provider::{self, CardKind, Size};
 use crate::theme::Theme;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::time::Instant;
+
+/// Identifies an output surface inside `Shell` without exposing Wayland handles.
+pub type OutputId = u64;
+
+const SCREEN_KEY_TAG: u64 = 1 << 63;
+
+fn screen_key(w: f64, h: f64) -> OutputId {
+    SCREEN_KEY_TAG
+        | ((w.round().clamp(0.0, 65535.0) as u64) << 16)
+        | (h.round().clamp(0.0, 65535.0) as u64)
+}
+
+#[derive(Clone, Default)]
+struct OutputFrame {
+    hits: Vec<(usize, Rect, Hits)>,
+    scroll: f64,
+    screen: (f64, f64),
+}
 
 /// From the screen's edge to a panel.
 pub const MARGIN: f64 = 24.0;
@@ -24,6 +43,12 @@ pub const ARRIVE_MS: f64 = 200.0;
 pub const ARRIVE_STAGGER_MS: f64 = 28.0;
 pub const ARRIVE_LIFT: f64 = 14.0;
 const ARRIVE_CARDS: f64 = 8.0;
+/// Leaving animation: fade and drop when a panel closes.
+pub const LEAVE_MS: f64 = 120.0;
+pub const LEAVE_DROP: f64 = 6.0;
+/// Pointer dwell before opening a hover panel, and grace before closing when left.
+pub const HOVER_OPEN_MS: f64 = 120.0;
+pub const HOVER_CLOSE_MS: f64 = 250.0;
 
 /// A card in a panel: its word, provider, kind, the card itself, the app it comes from.
 pub struct Placed {
@@ -42,35 +67,147 @@ pub struct PanelState {
     pub cards: Vec<Placed>,
 }
 
-/// The cards of `p` that can be made: a word whose app is not installed, or whose provider or kind
-/// does not exist, is left out (docs section 3.3, "App not installed", comes with edit mode).
-pub fn place(p: &Panel, apps: &[App], favorites: &str) -> Vec<Placed> {
-    let mut out = Vec::new();
-    for w in crate::panel::cards_with(p, favorites) {
-        let Some((prov, app)) = provider::resolve(&w.owner, apps) else {
-            continue;
-        };
-        let (Some(kind), Some(card)) = (
+struct ClosingPanel {
+    idx: usize,
+    transient: Option<PanelState>,
+    started: Instant,
+    ms: f64,
+    scroll: f64,
+    output: Option<OutputId>,
+}
+
+pub const NOT_INSTALLED_TEXT: &str = "This app is not installed";
+
+struct NotInstalledProvider;
+
+impl provider::Provider for NotInstalledProvider {
+    fn id(&self) -> &'static str {
+        ""
+    }
+    fn name(&self) -> &'static str {
+        ""
+    }
+    fn claims(&self) -> &'static [provider::Claim] {
+        &[]
+    }
+    fn listed(&self) -> provider::Listed {
+        provider::Listed::Never
+    }
+    fn cards(&self) -> &'static [CardKind] {
+        &[]
+    }
+    fn card(&self, _: &str, _: Option<&str>) -> Option<Box<dyn Card>> {
+        None
+    }
+    fn source(&self, _: &str) -> Option<Box<dyn crate::card::Source>> {
+        None
+    }
+}
+
+static NOT_INSTALLED_PROVIDER: NotInstalledProvider = NotInstalledProvider;
+static NOT_INSTALLED_KIND: CardKind = CardKind {
+    id: "",
+    title: "",
+    about: "",
+    sizes: &[Size::S],
+    default: Size::S,
+    half: false,
+    sources: &[],
+};
+
+struct NotInstalledCard {
+    title: String,
+}
+
+impl Card for NotInstalledCard {
+    fn apply(&mut self, _key: &str, _data: &dyn std::any::Any) -> bool {
+        false
+    }
+    fn status(&self, _cx: &Cx) -> Status {
+        Status::Ready
+    }
+    fn title(&self, _cx: &Cx) -> Option<String> {
+        Some(self.title.clone())
+    }
+    fn height(&self, _cx: &Cx, width: f64) -> f64 {
+        wrapped_text_height((width - 16.0).max(20.0), NOT_INSTALLED_TEXT) + 8.0 + 26.0
+    }
+    fn draw(&self, cr: &cairo::Context, cx: &Cx, body: Rect, hits: &mut Hits) {
+        let max_w = (body.2 - 16.0).max(20.0);
+        let l = missing_layout(cr, max_w, NOT_INSTALLED_TEXT);
+        draw::set(cr, cx.theme.muted);
+        cr.move_to((body.0 + 8.0).round(), body.1.round());
+        pangocairo::functions::show_layout(cr, &l);
+        let text_h = (l.pixel_size().1 as f64).max(20.0);
+        crate::ui::button(
+            cr,
+            cx,
+            hits,
+            0,
+            body.0 + 8.0,
+            body.1 + text_h + 8.0,
+            "Remove",
+        );
+    }
+    fn event(&mut self, ev: &Event, _cx: &Cx, out: &mut Vec<Action>) -> bool {
+        if matches!(
+            ev,
+            Event::Press {
+                hit: 0,
+                button: Button::Left,
+                ..
+            } | Event::Delete { hit: 0 }
+        ) {
+            out.push(Action::RemoveCard);
+            return true;
+        }
+        false
+    }
+}
+
+fn place_one(w: CardRef, apps: &[App]) -> Placed {
+    if let Some((prov, app)) = provider::resolve(&w.owner, apps) {
+        if let (Some(kind), Some(card)) = (
             prov.kind(&w.kind),
             prov.card(&w.kind, w.argument.as_deref()),
-        ) else {
-            continue;
-        };
-        let size = w
-            .size
-            .filter(|s| kind.sizes.contains(s))
-            .unwrap_or(kind.default);
-        out.push(Placed {
-            from: from_name(prov.name(), kind.title, app),
-            app_id: app.map(|a| a.id.clone()),
-            word: w,
-            provider: prov,
-            kind,
-            size,
-            card,
-        });
+        ) {
+            let size = w
+                .size
+                .filter(|s| kind.sizes.contains(s))
+                .unwrap_or(kind.default);
+            return Placed {
+                from: from_name(prov.name(), kind.title, app),
+                app_id: app.map(|a| a.id.clone()),
+                word: w,
+                provider: prov,
+                kind,
+                size,
+                card,
+            };
+        }
     }
-    out
+    let from = provider::by_id(&w.owner).map_or_else(|| w.owner.clone(), |p| p.name().to_string());
+    let title = provider::by_id(&w.owner)
+        .and_then(|p| p.kind(&w.kind))
+        .map_or_else(|| w.kind.clone(), |k| k.title.to_string());
+    Placed {
+        word: w,
+        provider: &NOT_INSTALLED_PROVIDER,
+        kind: &NOT_INSTALLED_KIND,
+        size: Size::S,
+        from,
+        app_id: None,
+        card: Box::new(NotInstalledCard { title }),
+    }
+}
+
+/// The cards of `p`: unknown apps or card kinds stay as a built-in "This app is not installed"
+/// card with Remove (docs/EDGE_APPS.md section 3.3).
+pub fn place(p: &Panel, apps: &[App], favorites: &str) -> Vec<Placed> {
+    crate::panel::cards_with(p, favorites)
+        .into_iter()
+        .map(|w| place_one(w, apps))
+        .collect()
 }
 
 /// The name at the right of a card's header: the app it comes from, else its provider, and nothing
@@ -90,6 +227,13 @@ pub enum Key {
     Escape,
     Up,
     Down,
+    Left,
+    Right,
+    Home,
+    End,
+    PageUp,
+    PageDown,
+    Delete,
     Tab,
     BackTab,
     Enter,
@@ -98,6 +242,152 @@ pub enum Key {
     Char(char),
     /// Super with a letter: a panel's key
     Super(char),
+}
+
+const TOUCH_DRAG_PX: f64 = 8.0;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TouchMode {
+    Pending,
+    DragHit,
+    Scroll,
+    Moved,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct TouchState {
+    id: i32,
+    output: OutputId,
+    w: f64,
+    h: f64,
+    start: (f64, f64),
+    last: (f64, f64),
+    mode: TouchMode,
+}
+
+/// One of the five items in the compositor's window menu (`xdg_toplevel.show_window_menu`
+/// or `BIND_WINDOW_MENU`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WindowMenuAction {
+    KeepOnTop,
+    Minimize,
+    Maximize,
+    Fullscreen,
+    Close,
+}
+
+/// The window menu shown at `at` for `element` (`[instance, element]`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WindowMenu {
+    pub element: (u64, u64),
+    pub at: (f64, f64),
+    pub on_top: bool,
+    pub maximized: bool,
+    pub fullscreen: bool,
+}
+
+impl WindowMenu {
+    /// The menu's items in order: `(action, label, checked)`.
+    pub fn items(&self) -> [(WindowMenuAction, &'static str, bool); 5] {
+        [
+            (WindowMenuAction::KeepOnTop, "Keep on top", self.on_top),
+            (WindowMenuAction::Minimize, "Minimize", false),
+            (
+                WindowMenuAction::Maximize,
+                if self.maximized {
+                    "Restore"
+                } else {
+                    "Maximize"
+                },
+                false,
+            ),
+            (WindowMenuAction::Fullscreen, "Fullscreen", false),
+            (WindowMenuAction::Close, "Close", false),
+        ]
+    }
+
+    /// The shell IPC command line for `action` on `self.element`.
+    pub fn command_line(&self, action: WindowMenuAction) -> String {
+        let (inst, elem) = self.element;
+        match action {
+            WindowMenuAction::KeepOnTop => format!(
+                "{{\"id\":1,\"cmd\":\"keep_on_top\",\"element\":[{inst},{elem}],\"on\":{}}}\n",
+                !self.on_top
+            ),
+            WindowMenuAction::Minimize => {
+                format!("{{\"id\":1,\"cmd\":\"minimize\",\"element\":[{inst},{elem}]}}\n")
+            }
+            WindowMenuAction::Maximize => format!(
+                "{{\"id\":1,\"cmd\":\"maximize\",\"element\":[{inst},{elem}],\"maximized\":{}}}\n",
+                !self.maximized
+            ),
+            WindowMenuAction::Fullscreen => format!(
+                "{{\"id\":1,\"cmd\":\"fullscreen\",\"element\":[{inst},{elem}],\"fullscreen\":{}}}\n",
+                !self.fullscreen
+            ),
+            WindowMenuAction::Close => {
+                format!("{{\"id\":1,\"cmd\":\"close\",\"element\":[{inst},{elem}]}}\n")
+            }
+        }
+    }
+
+    /// Parses `INFYNITAE_EDGE_RENDER_WINDOW_MENU` (`"x,y[,on_top|off_top|maximized|fullscreen]"`).
+    pub fn from_render_env(raw: &str) -> Self {
+        let mut wm = Self {
+            element: (1, 1),
+            at: (200.0, 200.0),
+            on_top: true,
+            maximized: false,
+            fullscreen: false,
+        };
+        let parts: Vec<&str> = raw
+            .split([',', '|'])
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect();
+        if parts.len() >= 2 {
+            if let (Ok(x), Ok(y)) = (parts[0].parse::<f64>(), parts[1].parse::<f64>()) {
+                wm.at = (x, y);
+            }
+        }
+        for p in parts {
+            match p {
+                "on_top" | "on-top" => wm.on_top = true,
+                "off_top" | "off-top" | "normal" => wm.on_top = false,
+                "maximized" | "restore" => wm.maximized = true,
+                "fullscreen" => wm.fullscreen = true,
+                _ => {}
+            }
+        }
+        wm
+    }
+}
+
+/// Parses a `"window_menu"` event line from `$XDG_RUNTIME_DIR/infynitae/shell.sock`.
+pub fn parse_window_menu_event(line: &str) -> Option<WindowMenu> {
+    let compact: String = line.chars().filter(|c| !c.is_whitespace()).collect();
+    if !compact.contains("\"event\":\"window_menu\"") {
+        return None;
+    }
+    let pair = |key: &str| -> Option<(&str, &str)> {
+        let after = compact.split_once(&format!("\"{key}\":["))?.1;
+        let inside = after.split_once(']')?.0;
+        inside.split_once(',')
+    };
+    let bool_of = |key: &str| -> bool {
+        compact
+            .split_once(&format!("\"{key}\":"))
+            .is_some_and(|(_, r)| r.starts_with("true"))
+    };
+    let (inst_s, elem_s) = pair("element")?;
+    let (x_s, y_s) = pair("position")?;
+    Some(WindowMenu {
+        element: (inst_s.parse().ok()?, elem_s.parse().ok()?),
+        at: (x_s.parse().ok()?, y_s.parse().ok()?),
+        on_top: bool_of("on_top"),
+        maximized: bool_of("maximized"),
+        fullscreen: bool_of("fullscreen"),
+    })
 }
 
 pub struct Shell {
@@ -110,14 +400,25 @@ pub struct Shell {
     pub notify: crate::notify::Notify,
     pub panels: Vec<PanelState>,
     pub open: Option<usize>,
+    pub open_output: Option<OutputId>,
+    ask_output: Option<OutputId>,
     pub opened_by_hover: bool,
-    /// the pointer, in surface pixels, and the card and hit under it in the last frame
+    pub clicked_inside: bool,
+    hover_open: Option<(OutputId, usize, Instant)>,
+    hover_close: Option<Instant>,
+    /// the pointer on the active output (or from `--render`), and per-output pointers
     pub pointer: Option<(f64, f64)>,
-    pub hovered: Option<(usize, u32)>,
-    /// the card and hit a button went down on (drags go to it)
-    pub pressed: Option<(usize, u32)>,
-    /// each shown card's rectangle and hits in the last frame
+    pointers: HashMap<OutputId, (f64, f64)>,
+    hovered: HashMap<OutputId, (usize, u32)>,
+    /// the output, card and hit a button went down on (drags go to it)
+    pressed: Option<(OutputId, usize, u32)>,
+    touch: Option<TouchState>,
+    /// each shown card's rectangle and hits in the last frame, plus per-output frames
     pub frame: RefCell<Vec<(usize, Rect, Hits)>>,
+    frame_scroll: std::cell::Cell<f64>,
+    frame_screen: std::cell::Cell<(f64, f64)>,
+    frames: RefCell<HashMap<OutputId, OutputFrame>>,
+    last_output: Option<OutputId>,
     /// what the cards asked for: the action, its card ("owner/kind": one command at a time per
     /// card), and the provider and source keys to fetch again after it ran
     pub actions: Vec<(Action, String, &'static str, &'static [&'static str])>,
@@ -131,6 +432,7 @@ pub struct Shell {
     pub keyboard: bool,
     pub opened_at: Option<Instant>,
     pub open_ms: f64,
+    closing: Option<ClosingPanel>,
     pub last_tick: Option<Instant>,
     pub last_screen: (f64, f64),
     pub now: chrono::NaiveDateTime,
@@ -141,8 +443,13 @@ pub struct Shell {
     /// a right click on a free spot: small menu with "Edit panel" at that point (a right click
     /// alone opened edit mode too easily)
     pub edit_menu: Option<(f64, f64)>,
+    /// the compositor's window menu (`xdg_toplevel.show_window_menu` or `BIND_WINDOW_MENU`)
+    pub window_menu: Option<WindowMenu>,
     /// the config file's time when it was last read (None: not looked at yet)
     pub config_mtime: Option<std::time::SystemTime>,
+    /// desktop-entry folders and their modification times when `apps` was last read
+    pub app_dirs: Vec<std::path::PathBuf>,
+    pub apps_mtime: Vec<Option<std::time::SystemTime>>,
     pub panel_scroll: f64,
     pub live: bool,
     pub save_paths: Option<(std::path::PathBuf, std::path::PathBuf)>,
@@ -155,10 +462,22 @@ fn file_mtime(path: &std::path::Path) -> Option<std::time::SystemTime> {
 
 impl Shell {
     pub fn new(cfg: Config, apps: Vec<App>) -> Shell {
-        Self::new_at(cfg, apps, &crate::config::config_path())
+        let path = crate::config::config_path();
+        let mut sh = Self::new_with_config_path(cfg, apps, path.as_deref());
+        sh.set_app_dirs(crate::app::dirs());
+        sh
     }
 
+    #[cfg(test)]
     pub fn new_at(cfg: Config, apps: Vec<App>, config_path: &std::path::Path) -> Shell {
+        Self::new_with_config_path(cfg, apps, Some(config_path))
+    }
+
+    fn new_with_config_path(
+        cfg: Config,
+        apps: Vec<App>,
+        config_path: Option<&std::path::Path>,
+    ) -> Shell {
         let theme = Theme::from_config(&cfg);
         let panels = cfg
             .panels
@@ -176,22 +495,37 @@ impl Shell {
             notes: Vec::new(),
             notify: Default::default(),
             ask: Default::default(),
-            config_mtime: file_mtime(config_path),
+            config_mtime: config_path.and_then(file_mtime),
+            app_dirs: Vec::new(),
+            apps_mtime: Vec::new(),
             transient: None,
             edit_menu: None,
+            window_menu: None,
             query: String::new(),
             selected: None,
             keyboard: false,
             panels,
             open: None,
+            open_output: None,
+            ask_output: None,
             opened_by_hover: false,
+            clicked_inside: false,
+            hover_open: None,
+            hover_close: None,
             pointer: None,
-            hovered: None,
+            pointers: HashMap::new(),
+            hovered: HashMap::new(),
             pressed: None,
+            touch: None,
             frame: RefCell::new(Vec::new()),
+            frame_scroll: std::cell::Cell::new(0.0),
+            frame_screen: std::cell::Cell::new((1920.0, 1080.0)),
+            frames: RefCell::new(HashMap::new()),
+            last_output: None,
             actions: Vec::new(),
             opened_at: None,
             open_ms: f64::INFINITY,
+            closing: None,
             last_tick: None,
             last_screen: (1920.0, 1080.0),
             now: chrono::Local::now().naive_local(),
@@ -225,12 +559,6 @@ impl Shell {
         }
     }
 
-    fn width_of(&self, idx: usize, w: f64) -> f64 {
-        let p = &self.panels[idx].panel;
-        let pw = if p.width > 0 { p.width as f64 } else { 380.0 };
-        pw.min(w - 2.0 * MARGIN)
-    }
-
     /// A card's whole height (its box: header, body, padding) at `width`; 0 when it hides, or a
     /// placeholder's height while editing.
     fn card_h(&self, pc: &Placed, width: f64, list_above: bool) -> f64 {
@@ -242,6 +570,7 @@ impl Shell {
             Status::Ready => {
                 PAD_TOP + head + pc.card.height(&cx, width - 2.0 * (PAD_X - 8.0)) + PAD_BOTTOM
             }
+            Status::Missing(why) => PAD_TOP + HEAD_H + missing_height(width, &why) + PAD_BOTTOM,
             _ => PAD_TOP + HEAD_H + 20.0 + PAD_BOTTOM,
         }
     }
@@ -249,9 +578,24 @@ impl Shell {
     /// Panel `idx` on a screen of `w x h`: its box on screen, panel-local card rectangles (without
     /// `panel_scroll`), and total content height.
     pub fn layout_local(&self, idx: usize, w: f64, h: f64) -> (Rect, Vec<(usize, Rect)>, f64) {
+        draw::with_font(&self.theme.font, || {
+            self.layout_panel_local(&self.panels[idx], w, h)
+        })
+    }
+
+    fn layout_panel_local(
+        &self,
+        ps: &PanelState,
+        w: f64,
+        h: f64,
+    ) -> (Rect, Vec<(usize, Rect)>, f64) {
         let editing = self.editing();
-        let ps = &self.panels[idx];
-        let pw = self.width_of(idx, w);
+        let pw = if ps.panel.width > 0 {
+            ps.panel.width as f64
+        } else {
+            380.0
+        }
+        .min((w - 2.0 * MARGIN).max(0.0));
         let above = ps.panel.side == Side::Bottom;
         let mut rows: Vec<Vec<(usize, f64)>> = Vec::new();
         let mut i = 0;
@@ -291,7 +635,7 @@ impl Shell {
                 + heights.iter().sum::<f64>()
                 + (GAP + strip) * rows.len().saturating_sub(1) as f64
         };
-        let ph = content_h.min(h - 2.0 * MARGIN);
+        let ph = content_h.min((h - 2.0 * MARGIN).max(0.0));
         let p = &ps.panel;
         let (along_w, size) = if p.side.horizontal() {
             (w, pw)
@@ -343,7 +687,6 @@ impl Shell {
         };
         crate::panel::cards(&ps.panel)
             .into_iter()
-            .filter(|c| crate::edit::resolve_kind(c, &self.apps).is_some())
             .map(|mut c| {
                 c.place = None;
                 c
@@ -425,26 +768,9 @@ impl Shell {
                     .unwrap_or(pc.kind.default);
                 pc.word = w;
                 next_cards.push(pc);
-            } else if let Some((prov, app)) = provider::resolve(&w.owner, apps) {
-                if let (Some(kind), Some(card)) = (
-                    prov.kind(&w.kind),
-                    prov.card(&w.kind, w.argument.as_deref()),
-                ) {
-                    let size = w
-                        .size
-                        .filter(|s| kind.sizes.contains(s))
-                        .unwrap_or(kind.default);
-                    next_cards.push(Placed {
-                        from: from_name(prov.name(), kind.title, app),
-                        app_id: app.map(|a| a.id.clone()),
-                        word: w,
-                        provider: prov,
-                        kind,
-                        size,
-                        card,
-                    });
-                    added_fresh = true;
-                }
+            } else {
+                next_cards.push(place_one(w, apps));
+                added_fresh = true;
             }
         }
         self.panels[idx].cards = next_cards;
@@ -474,7 +800,44 @@ impl Shell {
         ))
     }
 
+    /// Opens the window menu for `menu.element` at `menu.at`, closing any open panel.
+    pub fn open_window_menu(&mut self, menu: WindowMenu) -> bool {
+        if self.ask.ask.on {
+            crate::ask::answer(&mut self.ask, None);
+        }
+        if self.open.is_some() {
+            self.close();
+        }
+        self.window_menu = Some(menu);
+        self.hovered.clear();
+        self.pressed = None;
+        self.touch = None;
+        self.selected = None;
+        self.keyboard = false;
+        true
+    }
+
+    /// The window menu's card rectangle, kept on the screen.
+    pub fn window_menu_rect(&self, w: f64, h: f64) -> Option<Rect> {
+        let wm = self.window_menu?;
+        let (mw, mh) = (
+            180.0,
+            PAD_TOP + wm.items().len() as f64 * crate::ui::LIST_ROW_H + PAD_BOTTOM,
+        );
+        Some((
+            wm.at.0.min(w - mw - 4.0).max(4.0),
+            wm.at.1.min(h - mh - 4.0).max(4.0),
+            mw,
+            mh,
+        ))
+    }
+
     pub fn enter_edit(&mut self, w: f64, h: f64) -> bool {
+        let out = self.open_output.unwrap_or_else(|| screen_key(w, h));
+        self.enter_edit_on(out, w, h)
+    }
+
+    fn enter_edit_on(&mut self, output: OutputId, w: f64, h: f64) -> bool {
         let Some(idx) = self.open else {
             return false;
         };
@@ -486,8 +849,12 @@ impl Shell {
             return false;
         }
         self.opened_by_hover = false;
-        self.hovered = None;
+        self.clicked_inside = false;
+        self.hover_open = None;
+        self.hover_close = None;
+        self.hovered.clear();
         self.pressed = None;
+        self.touch = None;
         self.keyboard = false;
         self.selected = None;
         self.opened_at = None;
@@ -510,7 +877,7 @@ impl Shell {
             ..Default::default()
         };
         self.refresh_edit_rects(w, h);
-        self.update_edit_hover(w, h);
+        self.update_edit_hover_on(output, w, h);
         true
     }
 
@@ -530,13 +897,7 @@ impl Shell {
         true
     }
 
-    pub fn finish_edit(&mut self) -> bool {
-        if !self.editing() {
-            return false;
-        }
-        let idx = self.edit.panel_idx;
-        let before_line = std::mem::take(&mut self.edit.before_line);
-        let cards = self.edit_cards(idx);
+    fn save_and_rebuild_panel(&mut self, idx: usize, cards: Vec<CardRef>, before_line: String) {
         let p = &mut self.panels[idx].panel;
         p.placed = false;
         p.height = 0;
@@ -544,9 +905,6 @@ impl Shell {
         p.words = cards.iter().map(CardRef::word).collect();
         let panel_clone = p.clone();
         let panel_name = panel_clone.name.clone();
-
-        self.edit = Default::default();
-        self.panel_scroll = 0.0;
 
         let new_cfg = if let Some((cfg_path, bak_path)) = self.save_paths.clone() {
             if let Err(e) =
@@ -585,6 +943,35 @@ impl Shell {
             .iter()
             .position(|ps| ps.panel.name == panel_name);
         self.fetch_needed = true;
+    }
+
+    fn remove_placed_card(&mut self, idx: usize, ci: usize) -> bool {
+        let Some(ps) = self.panels.get(idx) else {
+            return false;
+        };
+        let before_line = crate::panel::line(&ps.panel);
+        let mut cards = self.edit_cards(idx);
+        if !crate::edit::remove_card(&mut cards, ci, &self.apps) {
+            return false;
+        }
+        self.selected = None;
+        self.hovered.clear();
+        self.pressed = None;
+        self.touch = None;
+        self.save_and_rebuild_panel(idx, cards, before_line);
+        true
+    }
+
+    pub fn finish_edit(&mut self) -> bool {
+        if !self.editing() {
+            return false;
+        }
+        let idx = self.edit.panel_idx;
+        let before_line = std::mem::take(&mut self.edit.before_line);
+        let cards = self.edit_cards(idx);
+        self.edit = Default::default();
+        self.panel_scroll = 0.0;
+        self.save_and_rebuild_panel(idx, cards, before_line);
         true
     }
 
@@ -592,7 +979,10 @@ impl Shell {
     /// again and rebuild the panels, the open one staying open. Never while a panel is edited
     /// (Done saves that one). True when it reloaded.
     pub fn reload_if_changed(&mut self) -> bool {
-        self.reload_if_changed_at(&crate::config::config_path())
+        let Some(path) = crate::config::config_path() else {
+            return false;
+        };
+        self.reload_if_changed_at(&path)
     }
 
     pub fn reload_if_changed_at(&mut self, path: &std::path::Path) -> bool {
@@ -608,6 +998,7 @@ impl Shell {
             return false;
         }
         let cfg = Config::from_text(&std::fs::read_to_string(path).unwrap_or_default());
+        crate::icons::clear_icon_cache();
         if cfg.panels == self.cfg.panels && cfg.favorites == self.cfg.favorites {
             // the same panels and cards: keep them (an open list, the accent picker stay as they
             // are while a setting is written); the colours and the cards' data follow
@@ -623,9 +1014,58 @@ impl Shell {
         true
     }
 
+    pub fn set_app_dirs(&mut self, dirs: Vec<std::path::PathBuf>) {
+        let mtimes = crate::app::dir_mtimes(&dirs);
+        self.set_app_dirs_with_mtimes(dirs, mtimes);
+    }
+
+    pub fn set_app_dirs_with_mtimes(
+        &mut self,
+        dirs: Vec<std::path::PathBuf>,
+        mtimes: Vec<Option<std::time::SystemTime>>,
+    ) {
+        self.app_dirs = dirs;
+        self.apps_mtime = mtimes;
+    }
+
+    /// Replaces `self.apps` and rebuilds panels when the app list changed, keeping any open
+    /// non-transient panel open. Returns true when panels were rebuilt.
+    pub fn apply_apps(&mut self, apps: Vec<App>) -> bool {
+        if apps == self.apps || self.edit.active || self.transient.is_some() {
+            return false;
+        }
+        let open_name = self
+            .open
+            .and_then(|i| self.panels.get(i))
+            .map(|ps| ps.panel.name.clone());
+        self.rebuild_panels(self.cfg.clone(), Some(apps));
+        self.open = open_name.and_then(|n| self.panels.iter().position(|ps| ps.panel.name == n));
+        self.fetch_needed = true;
+        true
+    }
+
+    /// Stats `self.app_dirs` and reloads `self.apps` synchronously when any folder's modification
+    /// time changed. Used outside the Wayland loop (`!self.live`).
+    pub fn refresh_apps_if_changed(&mut self) -> bool {
+        if self.edit.active || self.app_dirs.is_empty() {
+            return false;
+        }
+        let mtimes = crate::app::dir_mtimes(&self.app_dirs);
+        if mtimes == self.apps_mtime {
+            return false;
+        }
+        self.apps_mtime = mtimes;
+        let apps = crate::app::load(&self.app_dirs);
+        self.apply_apps(apps)
+    }
+
     pub fn rebuild_panels(&mut self, cfg: Config, apps: Option<Vec<App>>) {
         self.transient = None;
+        self.closing = None;
         if let Some(a) = apps {
+            if a != self.apps {
+                crate::icons::clear_icon_cache();
+            }
             self.apps = a;
         }
         self.theme = Theme::from_config(&cfg);
@@ -650,6 +1090,27 @@ impl Shell {
         });
     }
 
+    fn pointer_for(&self, output: OutputId) -> Option<(f64, f64)> {
+        self.pointers
+            .get(&output)
+            .copied()
+            .or_else(|| self.pointers.is_empty().then_some(self.pointer).flatten())
+    }
+
+    fn active_output_or_last(&self) -> OutputId {
+        self.open_output
+            .or(self.last_output)
+            .unwrap_or_else(|| screen_key(self.last_screen.0, self.last_screen.1))
+    }
+
+    fn screen_for(&self, output: OutputId) -> (f64, f64) {
+        self.frames
+            .borrow()
+            .get(&output)
+            .map(|f| f.screen)
+            .unwrap_or(self.last_screen)
+    }
+
     fn edit_change<F>(&mut self, idx: usize, f: F) -> bool
     where
         F: FnOnce(&mut Vec<CardRef>, &mut i32, &mut bool, &[App]) -> bool,
@@ -668,11 +1129,12 @@ impl Shell {
         }
         self.edit.push_undo(snap);
         self.apply_panel_state(idx, cards, width, hover);
-        let (w, h) = self.last_screen;
+        let out = self.active_output_or_last();
+        let (w, h) = self.screen_for(out);
         let (pbox, _, content_h) = self.layout_local(idx, w, h);
         self.panel_scroll = self.panel_scroll.clamp(0.0, (content_h - pbox.3).max(0.0));
         self.refresh_edit_rects(w, h);
-        self.update_edit_hover(w, h);
+        self.update_edit_hover_on(out, w, h);
         true
     }
 
@@ -690,12 +1152,12 @@ impl Shell {
         }
     }
 
-    fn update_edit_hover(&mut self, w: f64, h: f64) {
+    fn update_edit_hover_on(&mut self, output: OutputId, w: f64, h: f64) {
         let Some(idx) = self.open.filter(|_| self.editing()) else {
             self.edit.hover_card = None;
             return;
         };
-        let Some((x, y)) = self.pointer else {
+        let Some((x, y)) = self.pointer_for(output) else {
             return;
         };
         let (pbox, local_rects, content_h) = self.layout_local(idx, w, h);
@@ -711,6 +1173,16 @@ impl Shell {
     }
 
     pub fn open_panel(&mut self, idx: usize, by_hover: bool, now: Instant) -> bool {
+        self.open_panel_on(None, idx, by_hover, now)
+    }
+
+    pub fn open_panel_on(
+        &mut self,
+        output: Option<OutputId>,
+        idx: usize,
+        by_hover: bool,
+        now: Instant,
+    ) -> bool {
         // what changed in the file shows from this opening on (a reload keeps the order of panels)
         self.reload_if_changed();
         if idx >= self.panels.len() || (by_hover && self.ask.ask.on) {
@@ -719,37 +1191,57 @@ impl Shell {
         // a panel asked for by its key: the question is put aside (cancelled), as in the old edge
         if self.ask.ask.on {
             crate::ask::answer(&mut self.ask, None);
+            self.ask_output = None;
         }
         if self.open == Some(idx) {
-            return if by_hover { false } else { self.close() };
+            return if by_hover { false } else { self.close_at(now) };
         }
+        if !self.live {
+            self.refresh_apps_if_changed();
+        }
+        self.window_menu = None;
         if self.editing() {
             self.cancel_edit();
         }
         self.open = Some(idx);
+        self.open_output = output;
+        if let Some(o) = output {
+            self.last_output = Some(o);
+        }
+        self.closing = None;
         self.panel_scroll = 0.0;
         self.reset_keys(idx);
         self.opened_by_hover = by_hover;
+        self.clicked_inside = false;
+        self.hover_open = None;
+        self.hover_close = None;
         self.opened_at = Some(now);
         self.open_ms = 0.0;
-        self.hovered = None;
+        self.hovered.clear();
         self.pressed = None;
+        self.touch = None;
         true
     }
 
-    pub fn toggle_named(&mut self, name: &str) -> bool {
+    pub fn toggle_named_on(&mut self, output: Option<OutputId>, name: &str) -> bool {
         match self.panels.iter().position(|p| p.panel.name == name) {
-            Some(i) => self.open_panel(i, false, Instant::now()),
+            Some(i) => self.open_panel_on(output, i, false, Instant::now()),
             None => false,
         }
     }
 
     pub fn close(&mut self) -> bool {
+        self.close_at(Instant::now())
+    }
+
+    pub fn close_at(&mut self, now: Instant) -> bool {
         if self.editing() {
             self.cancel_edit();
         }
         let open = self.open.take();
+        let output = self.open_output.take();
         let was = open.is_some();
+        let scroll = self.panel_scroll;
         if let Some(idx) = open {
             if let Some(panel) = self.panels.get_mut(idx) {
                 for pc in &mut panel.cards {
@@ -760,24 +1252,45 @@ impl Shell {
         if was && self.live {
             crate::cards::settings_about::clear_load_state();
         }
+        let had_wm = self.window_menu.take().is_some();
         self.edit_menu = None;
         self.query.clear();
         self.selected = None;
         self.keyboard = false;
         self.opened_by_hover = false;
-        self.hovered = None;
+        self.clicked_inside = false;
+        self.hover_open = None;
+        self.hover_close = None;
+        self.hovered.clear();
         self.pressed = None;
+        self.touch = None;
+        if let Some(o) = output {
+            self.pointers.remove(&o);
+        } else {
+            self.pointers.clear();
+        }
         self.pointer = None;
         self.panel_scroll = 0.0;
         self.opened_at = None;
         self.open_ms = f64::INFINITY;
         self.frame.borrow_mut().clear();
-        if let Some(t) = self.transient.take() {
-            if t < self.panels.len() {
-                self.panels.remove(t);
-            }
+        self.frames.borrow_mut().clear();
+        self.frame_scroll.set(0.0);
+        let transient = self
+            .transient
+            .take()
+            .and_then(|t| (t < self.panels.len()).then(|| self.panels.remove(t)));
+        if let Some(idx) = open {
+            self.closing = (!self.ask.ask.on).then_some(ClosingPanel {
+                idx,
+                transient,
+                started: now,
+                ms: 0.0,
+                scroll,
+                output,
+            });
         }
-        was
+        was || had_wm
     }
 
     /// `words` (a tray app's menu, then its card) in the open panel's place: the same edge, side
@@ -791,6 +1304,7 @@ impl Shell {
         if words.is_empty() {
             return;
         }
+        let output = self.open_output;
         let mut p = self.panels[idx].panel.clone();
         p.name = "tray".into();
         p.key = None;
@@ -799,17 +1313,27 @@ impl Shell {
         p.words = words;
         let cards = place(&p, &self.apps, &self.cfg.favorites);
         self.close();
+        self.closing = None;
         self.panels.push(PanelState { panel: p, cards });
         let t = self.panels.len() - 1;
         self.transient = Some(t);
         self.open = Some(t);
+        self.open_output = output;
         self.opened_at = Some(Instant::now());
         self.open_ms = 0.0;
         self.fetch_needed = true;
     }
 
-    /// The card and hit under `p` in the last frame.
-    fn hit_at(&self, p: (f64, f64)) -> Option<(usize, u32)> {
+    /// The card and hit under `p` in the last frame drawn on `output`.
+    fn hit_at_on(&self, output: OutputId, p: (f64, f64)) -> Option<(usize, u32)> {
+        let frames = self.frames.borrow();
+        if let Some(f) = frames.get(&output) {
+            return f
+                .hits
+                .iter()
+                .rev()
+                .find_map(|(i, _, hits)| hits.top_at(p).map(|h| (*i, h)));
+        }
         self.frame
             .borrow()
             .iter()
@@ -817,7 +1341,15 @@ impl Shell {
             .find_map(|(i, _, hits)| hits.top_at(p).map(|h| (*i, h)))
     }
 
-    fn card_at(&self, p: (f64, f64)) -> Option<usize> {
+    fn card_at_on(&self, output: OutputId, p: (f64, f64)) -> Option<usize> {
+        let frames = self.frames.borrow();
+        if let Some(f) = frames.get(&output) {
+            return f
+                .hits
+                .iter()
+                .find(|(_, r, _)| p.0 >= r.0 && p.0 < r.0 + r.2 && p.1 >= r.1 && p.1 < r.1 + r.3)
+                .map(|(i, _, _)| *i);
+        }
         self.frame
             .borrow()
             .iter()
@@ -825,27 +1357,122 @@ impl Shell {
             .map(|(i, _, _)| *i)
     }
 
-    /// The pointer moved: a hover panel opens from its strip and closes when left; the light follows
-    /// the hit under it; a held button drags. True when something must be drawn again.
+    fn hit_is_draggable_on(&self, output: OutputId, ci: usize, hit: u32) -> bool {
+        let frames = self.frames.borrow();
+        if let Some(f) = frames.get(&output) {
+            return f
+                .hits
+                .iter()
+                .rev()
+                .find(|(c, _, _)| *c == ci)
+                .is_some_and(|(_, _, hits)| hits.is_draggable(hit));
+        }
+        self.frame
+            .borrow()
+            .iter()
+            .rev()
+            .find(|(c, _, _)| *c == ci)
+            .is_some_and(|(_, _, hits)| hits.is_draggable(hit))
+    }
+
+    fn open_screen(&self) -> (f64, f64) {
+        let frames = self.frames.borrow();
+        if let Some(f) = self.open_output.and_then(|id| frames.get(&id)) {
+            f.screen
+        } else if let Some(id) = self.open_output {
+            self.screen_for(id)
+        } else {
+            self.frame_screen.get()
+        }
+    }
+
+    /// The pointer moved: a hover panel opens from its strip after a short dwell and closes after
+    /// a grace time when left; the light follows the hit under it; a held button drags. True when
+    /// something must be drawn again.
+    #[cfg(test)]
     pub fn pointer_motion(&mut self, w: f64, h: f64, x: f64, y: f64) -> bool {
-        self.last_screen = (w, h);
+        self.pointer_motion_at(w, h, x, y, Instant::now())
+    }
+
+    #[cfg(test)]
+    pub fn pointer_motion_at(&mut self, w: f64, h: f64, x: f64, y: f64, now: Instant) -> bool {
+        self.pointer_motion_on(screen_key(w, h), w, h, x, y, now)
+    }
+
+    pub fn pointer_motion_on(
+        &mut self,
+        output: OutputId,
+        w: f64,
+        h: f64,
+        x: f64,
+        y: f64,
+        now: Instant,
+    ) -> bool {
+        if self
+            .touch
+            .is_some_and(|t| t.mode == TouchMode::DragHit && t.output == output)
+        {
+            return false;
+        }
         if self.ask.ask.on {
+            if self.ask_output.is_some_and(|id| id != output) {
+                return false;
+            }
+            self.last_output = Some(output);
+            self.last_screen = (w, h);
             return crate::ask::hover(&mut self.ask, w, h, x, y);
         }
-        // the pointer moved: the keyboard's selection hides (the light follows the pointer)
-        let hid = std::mem::take(&mut self.keyboard);
+        if self.window_menu.is_some() {
+            // the pointer moved: the keyboard's selection hides (the light follows the pointer)
+            let hid = std::mem::take(&mut self.keyboard);
+            self.pointer = Some((x, y));
+            self.last_output = Some(output);
+            let now = self.hit_at_on(output, (x, y));
+            let changed = now != self.hovered.get(&output).copied();
+            match now {
+                Some(h) => self.hovered.insert(output, h),
+                None => self.hovered.remove(&output),
+            };
+            return changed || hid;
+        }
         let Some(idx) = self.open else {
-            for i in 0..self.panels.len() {
-                if self.panels[i].panel.hover {
-                    let s = self.hover_strip(i, w, h);
-                    if x >= s.0 && x <= s.0 + s.2 && y >= s.1 && y <= s.1 + s.3 {
-                        return self.open_panel(i, true, Instant::now());
-                    }
+            self.last_output = Some(output);
+            self.last_screen = (w, h);
+            self.pointers.insert(output, (x, y));
+            self.keyboard = false;
+            let hit_strip = (0..self.panels.len()).find(|&i| {
+                if !self.panels[i].panel.hover {
+                    return false;
                 }
+                let s = self.hover_strip(i, w, h);
+                x >= s.0 && x <= s.0 + s.2 && y >= s.1 && y <= s.1 + s.3
+            });
+            if let Some(i) = hit_strip {
+                match self.hover_open {
+                    Some((prev_out, prev_i, t0)) if prev_out == output && prev_i == i => {
+                        if now.saturating_duration_since(t0).as_secs_f64() * 1000.0 >= HOVER_OPEN_MS
+                        {
+                            self.hover_open = None;
+                            return self.open_panel_on(Some(output), i, true, now);
+                        }
+                    }
+                    _ => self.hover_open = Some((output, i, now)),
+                }
+            } else if self.hover_open.is_some_and(|(o, _, _)| o == output) {
+                self.hover_open = None;
             }
             return false;
         };
+        if self.open_output.is_some_and(|id| id != output) {
+            self.pointers.insert(output, (x, y));
+            return false;
+        }
+        self.last_output = Some(output);
+        self.last_screen = (w, h);
+        // the pointer moved: the keyboard's selection hides (the light follows the pointer)
+        let hid = std::mem::take(&mut self.keyboard);
         if self.editing() {
+            self.pointers.insert(output, (x, y));
             self.pointer = Some((x, y));
             if let Some(mut d) = self.edit.drag {
                 if !d.moved && (y - d.start_y).abs() >= 6.0 {
@@ -869,7 +1496,7 @@ impl Shell {
                 return false;
             }
             let prev = self.edit.hover_card;
-            self.update_edit_hover(w, h);
+            self.update_edit_hover_on(output, w, h);
             let (bar, add) = self.edit_rects(idx, w, h);
             let over_bar = crate::edit::inside(bar, x, y)
                 || (self.edit.adding && crate::edit::inside(add, x, y));
@@ -878,36 +1505,121 @@ impl Shell {
         if self.opened_by_hover {
             let b = self.hover_box(idx, w, h);
             if x < b.0 || x > b.0 + b.2 || y < b.1 || y > b.1 + b.3 {
-                return self.close();
+                self.hover_close.get_or_insert(now);
+                self.pointers.remove(&output);
+                self.pointer = None;
+                let lit = self.hovered.remove(&output).is_some();
+                return lit || hid;
+            }
+            self.hover_close = None;
+        }
+        self.pointers.insert(output, (x, y));
+        self.pointer = Some((x, y));
+        if let Some((po, ci, hit)) = self.pressed {
+            if po == output {
+                return self.card_event(idx, ci, &Event::Drag { hit, at: (x, y) });
             }
         }
-        self.pointer = Some((x, y));
-        if let Some((ci, hit)) = self.pressed {
-            return self.card_event(idx, ci, &Event::Drag { hit, at: (x, y) });
+        let hit_now = self.hit_at_on(output, (x, y));
+        let changed = hit_now != self.hovered.get(&output).copied();
+        match hit_now {
+            Some(h) => {
+                self.hovered.insert(output, h);
+            }
+            None => {
+                self.hovered.remove(&output);
+            }
         }
-        let now = self.hit_at((x, y));
-        let changed = now != self.hovered;
-        self.hovered = now;
         changed || hid
     }
 
-    pub fn pointer_leave(&mut self) -> bool {
-        if self.ask.ask.on {
+    #[cfg(test)]
+    pub fn pointer_leave_at(&mut self, now: Instant) -> bool {
+        let out = self.active_output_or_last();
+        self.pointer_leave_on(out, now)
+    }
+
+    pub fn pointer_leave_on(&mut self, output: OutputId, now: Instant) -> bool {
+        if self.ask.ask.on || self.touch.is_some_and(|t| t.output == output) {
+            return false;
+        }
+        self.pointers.remove(&output);
+        if self.hover_open.is_some_and(|(o, _, _)| o == output) {
+            self.hover_open = None;
+        }
+        if self.open_output.is_some_and(|id| id != output) {
             return false;
         }
         self.pointer = None;
         if self.editing() {
             return self.edit.hover_card.take().is_some();
         }
-        let lit = self.hovered.take().is_some();
+        let lit = self.hovered.remove(&output).is_some();
         if self.opened_by_hover && self.open.is_some() {
-            return self.close();
+            self.hover_close.get_or_insert(now);
+            return lit;
         }
         lit
     }
 
-    fn edit_press(&mut self, idx: usize, w: f64, h: f64, x: f64, y: f64, button: Button) -> bool {
+    /// Advances hover dwell / close grace timers; returns true if a panel opened or closed.
+    pub fn hover_tick(&mut self, now: Instant) -> bool {
+        if self.ask.ask.on || self.editing() {
+            self.hover_open = None;
+            self.hover_close = None;
+            return false;
+        }
+        if self.open.is_none() {
+            if let Some((out, i, t0)) = self.hover_open {
+                if now.saturating_duration_since(t0).as_secs_f64() * 1000.0 >= HOVER_OPEN_MS {
+                    self.hover_open = None;
+                    return self.open_panel_on(Some(out), i, true, now);
+                }
+            }
+            return false;
+        }
+        if self.opened_by_hover {
+            if let Some(t0) = self.hover_close {
+                if now.saturating_duration_since(t0).as_secs_f64() * 1000.0 >= HOVER_CLOSE_MS {
+                    self.hover_close = None;
+                    return self.close_at(now);
+                }
+            }
+        }
+        false
+    }
+
+    pub fn hover_timeout(&self, now: Instant) -> Option<std::time::Duration> {
+        if self.ask.ask.on || self.editing() {
+            return None;
+        }
+        if self.open.is_none() {
+            self.hover_open.map(|(_, _, t0)| {
+                std::time::Duration::from_secs_f64(HOVER_OPEN_MS / 1000.0)
+                    .saturating_sub(now.saturating_duration_since(t0))
+            })
+        } else if self.opened_by_hover {
+            self.hover_close.map(|t0| {
+                std::time::Duration::from_secs_f64(HOVER_CLOSE_MS / 1000.0)
+                    .saturating_sub(now.saturating_duration_since(t0))
+            })
+        } else {
+            None
+        }
+    }
+
+    fn edit_press(
+        &mut self,
+        output: OutputId,
+        idx: usize,
+        screen: (f64, f64),
+        at: (f64, f64),
+        button: Button,
+    ) -> bool {
+        let ((w, h), (x, y)) = (screen, at);
+        self.last_output = Some(output);
         self.last_screen = (w, h);
+        self.pointers.insert(output, (x, y));
         self.pointer = Some((x, y));
         let (bar, add) = self.edit_rects(idx, w, h);
         self.edit.bar_rect = bar;
@@ -931,7 +1643,7 @@ impl Shell {
                         };
                         self.apply_panel_state(idx, snap.cards, snap.width, snap.hover);
                         self.refresh_edit_rects(w, h);
-                        self.update_edit_hover(w, h);
+                        self.update_edit_hover_on(output, w, h);
                         return true;
                     }
                     crate::edit::BarButton::Reset => {
@@ -953,7 +1665,7 @@ impl Shell {
                         self.apply_panel_state(idx, def_cards, def_w, def_hover);
                         self.panel_scroll = 0.0;
                         self.refresh_edit_rects(w, h);
-                        self.update_edit_hover(w, h);
+                        self.update_edit_hover_on(output, w, h);
                         return true;
                     }
                     crate::edit::BarButton::Add => {
@@ -1085,7 +1797,40 @@ impl Shell {
 
     /// A button went down: on a hit, the card's Press; an unused right click starts editing; outside
     /// an open panel, it closes.
+    #[cfg(test)]
     pub fn click(&mut self, w: f64, h: f64, x: f64, y: f64, button: Button) -> bool {
+        self.click_on(screen_key(w, h), w, h, x, y, button)
+    }
+
+    pub fn click_on(
+        &mut self,
+        output: OutputId,
+        w: f64,
+        h: f64,
+        x: f64,
+        y: f64,
+        button: Button,
+    ) -> bool {
+        if self.visible_output().is_some_and(|id| id != output) {
+            return false;
+        }
+        if self.touch.is_some() {
+            let _ = self.touch_cancel();
+        }
+        self.click_inner(output, w, h, x, y, button)
+    }
+
+    fn click_inner(
+        &mut self,
+        output: OutputId,
+        w: f64,
+        h: f64,
+        x: f64,
+        y: f64,
+        button: Button,
+    ) -> bool {
+        self.last_output = Some(output);
+        self.last_screen = (w, h);
         if self.ask.ask.on {
             let raw = match button {
                 Button::Left => 0x110,
@@ -1093,6 +1838,35 @@ impl Shell {
                 Button::Middle => 0x112,
             };
             return crate::ask::click(&mut self.ask, w, h, x, y, raw);
+        }
+        if let Some(wm) = self.window_menu {
+            let r = self.window_menu_rect(w, h).unwrap();
+            if x < r.0 || x > r.0 + r.2 || y < r.1 || y > r.1 + r.3 {
+                self.window_menu = None;
+                self.hovered.clear();
+                self.selected = None;
+                self.keyboard = false;
+                return true;
+            }
+            if button == Button::Left {
+                if let Some((action, _, _)) = self
+                    .hit_at_on(output, (x, y))
+                    .and_then(|(_, hit)| wm.items().get(hit as usize).copied())
+                {
+                    self.actions.push((
+                        Action::ShellCommand(wm.command_line(action)),
+                        "window/menu".into(),
+                        "windows",
+                        &[],
+                    ));
+                    self.window_menu = None;
+                    self.hovered.clear();
+                    self.selected = None;
+                    self.keyboard = false;
+                    return true;
+                }
+            }
+            return false;
         }
         let Some(idx) = self.open else {
             return false;
@@ -1103,25 +1877,27 @@ impl Shell {
             if button == Button::Left
                 && item.is_some_and(|r| x >= r.0 && x <= r.0 + r.2 && y >= r.1 && y <= r.1 + r.3)
             {
-                return self.enter_edit(w, h);
+                return self.enter_edit_on(output, w, h);
             }
             return true;
         }
         if self.editing() {
-            return self.edit_press(idx, w, h, x, y, button);
+            return self.edit_press(output, idx, (w, h), (x, y), button);
         }
         let ((ox, oy, pw, ph), _) = self.layout(idx, w, h);
         if x < ox || x > ox + pw || y < oy || y > oy + ph {
             return self.close();
         }
-        let Some((ci, hit)) = self.hit_at((x, y)) else {
+        self.hover_close = None;
+        let promoted = self.opened_by_hover && !std::mem::replace(&mut self.clicked_inside, true);
+        let Some((ci, hit)) = self.hit_at_on(output, (x, y)) else {
             if button == Button::Right {
-                return self.offer_edit(idx, x, y);
+                return self.offer_edit(idx, x, y) || promoted;
             }
-            return false;
+            return promoted;
         };
         if button == Button::Left {
-            self.pressed = Some((ci, hit));
+            self.pressed = Some((output, ci, hit));
         }
         let used = self.card_event(
             idx,
@@ -1133,12 +1909,34 @@ impl Shell {
             },
         );
         if !used && button == Button::Right && self.open == Some(idx) {
-            return self.offer_edit(idx, x, y);
+            return self.offer_edit(idx, x, y) || promoted;
         }
-        used
+        used || promoted
     }
 
+    #[cfg(test)]
     pub fn release(&mut self) -> bool {
+        let out = self
+            .pressed
+            .map(|(o, _, _)| o)
+            .unwrap_or_else(|| self.active_output_or_last());
+        self.release_on(out)
+    }
+
+    pub fn release_on(&mut self, output: OutputId) -> bool {
+        if self.visible_output().is_some_and(|id| id != output) {
+            return false;
+        }
+        if self
+            .touch
+            .is_some_and(|t| t.mode == TouchMode::DragHit && t.output == output)
+        {
+            return false;
+        }
+        self.release_inner(output)
+    }
+
+    fn release_inner(&mut self, output: OutputId) -> bool {
         let Some(idx) = self.open else {
             return false;
         };
@@ -1154,25 +1952,32 @@ impl Shell {
                     false
                 };
                 if !changed {
-                    let (w, h) = self.last_screen;
-                    self.update_edit_hover(w, h);
+                    let (w, h) = self.screen_for(output);
+                    self.update_edit_hover_on(output, w, h);
                 }
                 return true;
             }
             return false;
         }
-        let Some((ci, hit)) = self.pressed.take() else {
+        let Some((po, ci, hit)) = self.pressed else {
             return false;
         };
+        if po != output {
+            return false;
+        }
+        self.pressed = None;
         self.card_event(idx, ci, &Event::Release { hit })
     }
 
-    pub fn scroll(&mut self, x: f64, y: f64, dy: f64) -> bool {
-        let Some(idx) = self.open else {
-            return false;
-        };
-        let (w, h) = self.last_screen;
-        let step = if dy.abs() <= 3.0 { dy * 36.0 } else { dy * 3.0 };
+    fn scroll_panel(
+        &mut self,
+        output: OutputId,
+        idx: usize,
+        screen: (f64, f64),
+        at: (f64, f64),
+        step: f64,
+    ) -> bool {
+        let ((w, h), (x, y)) = (screen, at);
         if self.editing() {
             let (pbox, _, content_h) = self.layout_local(idx, w, h);
             let (bar, add) = self.edit_rects(idx, w, h);
@@ -1198,20 +2003,11 @@ impl Shell {
                 let next = (self.panel_scroll + step).clamp(0.0, max);
                 if (next - self.panel_scroll).abs() > 0.01 {
                     self.panel_scroll = next;
-                    self.update_edit_hover(w, h);
+                    self.update_edit_hover_on(output, w, h);
                     return true;
                 }
             }
             return false;
-        }
-        if let Some(ci) = self.card_at((x, y)) {
-            let hit = self
-                .hit_at((x, y))
-                .filter(|(c, _)| *c == ci)
-                .map(|(_, h)| h);
-            if self.card_event(idx, ci, &Event::Scroll { hit, dy }) {
-                return true;
-            }
         }
         let (pbox, _, content_h) = self.layout_local(idx, w, h);
         if crate::edit::inside(pbox, x, y) {
@@ -1225,35 +2021,388 @@ impl Shell {
         false
     }
 
+    /// Scrolls by `dy` pixels (1:1 touchpad movement) at `(x, y)` on `output`.
+    pub fn scroll_on(&mut self, output: OutputId, w: f64, h: f64, x: f64, y: f64, dy: f64) -> bool {
+        self.scroll_axis_on(output, (w, h), (x, y), dy, 0.0)
+    }
+
+    /// Scrolls by `notches` discrete wheel steps at `(x, y)` on `output` (one notch = 36 px).
+    pub fn scroll_notches_on(
+        &mut self,
+        output: OutputId,
+        w: f64,
+        h: f64,
+        x: f64,
+        y: f64,
+        notches: f64,
+    ) -> bool {
+        self.scroll_axis_on(
+            output,
+            (w, h),
+            (x, y),
+            notches * crate::card::SCROLL_NOTCH_PX,
+            notches,
+        )
+    }
+
+    /// Scrolls by `dy` pixels, also telling notch-based cards when `notches` came from discrete steps.
+    pub fn scroll_axis_on(
+        &mut self,
+        output: OutputId,
+        screen: (f64, f64),
+        at: (f64, f64),
+        dy: f64,
+        notches: f64,
+    ) -> bool {
+        if self.visible_output().is_some_and(|id| id != output) {
+            return false;
+        }
+        let Some(idx) = self.open else {
+            return false;
+        };
+        if !self.editing() {
+            if let Some(ci) = self.card_at_on(output, at) {
+                let hit = self
+                    .hit_at_on(output, at)
+                    .filter(|(c, _)| *c == ci)
+                    .map(|(_, h)| h);
+                if self.card_event(idx, ci, &Event::Scroll { hit, dy, notches }) {
+                    return true;
+                }
+            }
+        }
+        self.scroll_panel(output, idx, screen, at, dy)
+    }
+
+    #[cfg(test)]
+    pub fn scroll(&mut self, x: f64, y: f64, dy: f64) -> bool {
+        let (w, h) = self.open_screen();
+        let out = self
+            .open_output
+            .or(self.last_output)
+            .unwrap_or_else(|| screen_key(w, h));
+        self.scroll_on(out, w, h, x, y, dy)
+    }
+
+    #[cfg(test)]
+    pub fn scroll_notches(&mut self, x: f64, y: f64, notches: f64) -> bool {
+        let (w, h) = self.open_screen();
+        let out = self
+            .open_output
+            .or(self.last_output)
+            .unwrap_or_else(|| screen_key(w, h));
+        self.scroll_notches_on(out, w, h, x, y, notches)
+    }
+
+    #[cfg(test)]
+    pub fn touch_down(&mut self, w: f64, h: f64, id: i32, x: f64, y: f64) -> bool {
+        let out = self.open_output.unwrap_or_else(|| screen_key(w, h));
+        self.touch_down_on(out, w, h, id, x, y)
+    }
+
+    /// Touch finger down on `output` of size `w x h` at `(x, y)`.
+    pub fn touch_down_on(
+        &mut self,
+        output: OutputId,
+        w: f64,
+        h: f64,
+        id: i32,
+        x: f64,
+        y: f64,
+    ) -> bool {
+        if self.touch.is_some() {
+            return false;
+        }
+        if self.visible_output().is_some_and(|oid| oid != output) {
+            return false;
+        }
+        if let Some((po, _, _)) = self.pressed {
+            let _ = self.release_inner(po);
+        }
+        if self.edit.drag.is_some() {
+            self.edit.drag = None;
+            self.edit.drop_at = None;
+        }
+        if self.ask.ask.on {
+            self.last_output = Some(output);
+            self.last_screen = (w, h);
+            self.touch = Some(TouchState {
+                id,
+                output,
+                w,
+                h,
+                start: (x, y),
+                last: (x, y),
+                mode: TouchMode::Pending,
+            });
+            return crate::ask::hover(&mut self.ask, w, h, x, y);
+        }
+        if self.window_menu.is_some() {
+            self.last_output = Some(output);
+            self.last_screen = (w, h);
+            self.touch = Some(TouchState {
+                id,
+                output,
+                w,
+                h,
+                start: (x, y),
+                last: (x, y),
+                mode: TouchMode::Pending,
+            });
+            let hid = std::mem::take(&mut self.keyboard);
+            let hovered_now = self.hit_at_on(output, (x, y));
+            let changed = hovered_now != self.hovered.get(&output).copied();
+            match hovered_now {
+                Some(h) => {
+                    self.hovered.insert(output, h);
+                }
+                None => {
+                    self.hovered.remove(&output);
+                }
+            }
+            return changed || hid;
+        }
+        let Some(idx) = self.open else {
+            return false;
+        };
+        self.last_output = Some(output);
+        self.last_screen = (w, h);
+        let hid = std::mem::take(&mut self.keyboard);
+        if !self.editing() && self.edit_menu.is_none() {
+            let ((ox, oy, pw, ph), _) = self.layout(idx, w, h);
+            if x >= ox && x <= ox + pw && y >= oy && y <= oy + ph {
+                if let Some((ci, hit)) = self.hit_at_on(output, (x, y)) {
+                    if self.hit_is_draggable_on(output, ci, hit) {
+                        self.touch = Some(TouchState {
+                            id,
+                            output,
+                            w,
+                            h,
+                            start: (x, y),
+                            last: (x, y),
+                            mode: TouchMode::DragHit,
+                        });
+                        self.pointers.insert(output, (x, y));
+                        self.pointer = Some((x, y));
+                        let changed = self.click_inner(output, w, h, x, y, Button::Left);
+                        return changed || hid;
+                    }
+                }
+            }
+        }
+        self.touch = Some(TouchState {
+            id,
+            output,
+            w,
+            h,
+            start: (x, y),
+            last: (x, y),
+            mode: TouchMode::Pending,
+        });
+        let hovered_now = if !self.editing() && self.edit_menu.is_none() {
+            self.hit_at_on(output, (x, y))
+        } else {
+            None
+        };
+        let changed = hovered_now != self.hovered.get(&output).copied();
+        match hovered_now {
+            Some(h) => {
+                self.hovered.insert(output, h);
+            }
+            None => {
+                self.hovered.remove(&output);
+            }
+        }
+        changed || hid
+    }
+
+    /// Touch finger moved to `(x, y)`: drags sliders or vertically scrolls the panel.
+    pub fn touch_motion(&mut self, id: i32, x: f64, y: f64) -> bool {
+        let Some(mut t) = self.touch.filter(|t| t.id == id) else {
+            return false;
+        };
+        if self.ask.ask.on {
+            t.last = (x, y);
+            self.touch = Some(t);
+            return crate::ask::hover(&mut self.ask, t.w, t.h, x, y);
+        }
+        if self.window_menu.is_some() {
+            if t.mode == TouchMode::Pending {
+                let dx = x - t.start.0;
+                let dy = y - t.start.1;
+                if dx * dx + dy * dy < TOUCH_DRAG_PX * TOUCH_DRAG_PX {
+                    t.last = (x, y);
+                    self.touch = Some(t);
+                    return false;
+                }
+                t.mode = TouchMode::Moved;
+                t.last = (x, y);
+                self.touch = Some(t);
+                self.pointers.remove(&t.output);
+                self.pointer = None;
+                return self.hovered.remove(&t.output).is_some();
+            }
+            t.last = (x, y);
+            self.touch = Some(t);
+            return false;
+        }
+        let Some(idx) = self.open else {
+            self.touch = None;
+            return false;
+        };
+        match t.mode {
+            TouchMode::DragHit => {
+                t.last = (x, y);
+                self.touch = Some(t);
+                self.pointers.insert(t.output, (x, y));
+                self.pointer = Some((x, y));
+                if let Some((po, ci, hit)) = self.pressed {
+                    if po == t.output {
+                        return self.card_event(idx, ci, &Event::Drag { hit, at: (x, y) });
+                    }
+                }
+                false
+            }
+            TouchMode::Pending => {
+                let dx = x - t.start.0;
+                let dy = y - t.start.1;
+                if dx * dx + dy * dy < TOUCH_DRAG_PX * TOUCH_DRAG_PX {
+                    t.last = (x, y);
+                    self.touch = Some(t);
+                    return false;
+                }
+                if dy.abs() >= dx.abs() {
+                    t.mode = TouchMode::Scroll;
+                    let step = t.last.1 - y;
+                    t.last = (x, y);
+                    self.touch = Some(t);
+                    self.pointers.remove(&t.output);
+                    self.pointer = None;
+                    let lit = self.hovered.remove(&t.output).is_some();
+                    return self.scroll_panel(t.output, idx, (t.w, t.h), t.start, step) || lit;
+                }
+                t.mode = TouchMode::Moved;
+                t.last = (x, y);
+                self.touch = Some(t);
+                self.pointers.remove(&t.output);
+                self.pointer = None;
+                self.hovered.remove(&t.output).is_some()
+            }
+            TouchMode::Scroll => {
+                let step = t.last.1 - y;
+                t.last = (x, y);
+                self.touch = Some(t);
+                self.scroll_panel(t.output, idx, (t.w, t.h), t.start, step)
+            }
+            TouchMode::Moved => {
+                t.last = (x, y);
+                self.touch = Some(t);
+                false
+            }
+        }
+    }
+
+    /// Touch finger lifted: taps when it did not drag, or releases an active slider drag.
+    pub fn touch_up(&mut self, id: i32) -> bool {
+        let Some(t) = self.touch.take() else {
+            return false;
+        };
+        if t.id != id {
+            self.touch = Some(t);
+            return false;
+        }
+        match t.mode {
+            TouchMode::DragHit => {
+                let mut changed = self.release_inner(t.output);
+                changed |= self.pointers.remove(&t.output).is_some();
+                changed |= self.pointer.take().is_some();
+                changed |= self.hovered.remove(&t.output).is_some();
+                changed
+            }
+            TouchMode::Pending => {
+                let mut changed = if self.ask.ask.on {
+                    crate::ask::hover(&mut self.ask, t.w, t.h, t.start.0, t.start.1)
+                } else {
+                    false
+                };
+                self.pointers.insert(t.output, t.start);
+                self.pointer = Some(t.start);
+                changed |= self.click_inner(t.output, t.w, t.h, t.start.0, t.start.1, Button::Left);
+                changed |= self.release_inner(t.output);
+                self.pointers.remove(&t.output);
+                self.pointer = None;
+                changed |= self.hovered.remove(&t.output).is_some();
+                changed |= self.edit.hover_card.take().is_some();
+                changed
+            }
+            TouchMode::Scroll | TouchMode::Moved => {
+                self.pointers.remove(&t.output);
+                self.pointer = None;
+                self.hovered.remove(&t.output).is_some()
+            }
+        }
+    }
+
+    /// Compositor cancelled the active touch sequence: drops pressed/drag state without committing.
+    pub fn touch_cancel(&mut self) -> bool {
+        let Some(t) = self.touch.take() else {
+            return false;
+        };
+        let mut changed = false;
+        if t.mode == TouchMode::DragHit {
+            if let (Some(idx), Some((po, ci, hit))) = (self.open, self.pressed.take()) {
+                if po == t.output {
+                    changed |= self.card_event(idx, ci, &Event::Cancel { hit });
+                }
+            } else {
+                self.pressed = None;
+            }
+        }
+        self.pointers.remove(&t.output);
+        self.pointer = None;
+        changed |= t.mode == TouchMode::DragHit;
+        changed |= self.hovered.remove(&t.output).is_some();
+        changed |= self.edit.hover_card.take().is_some();
+        changed
+    }
+
+    /// Cancels an active touch sequence if it belongs to `output` (e.g. output removed).
+    pub fn touch_cancel_on(&mut self, output: OutputId) -> bool {
+        if self.touch.is_some_and(|t| t.output == output) {
+            self.touch_cancel()
+        } else {
+            false
+        }
+    }
+
     /// Hands `ev` to card `ci` of panel `idx`; its actions are queued with what to fetch after.
     fn card_event(&mut self, idx: usize, ci: usize, ev: &Event) -> bool {
         let editing = self.editing();
         let above = self.panels[idx].panel.side == Side::Bottom;
-        let (size, app_id) = {
-            let pc = &self.panels[idx].cards[ci];
-            (pc.size, pc.app_id.clone())
-        };
-        let theme = self.theme.clone();
-        let cx = Cx {
-            theme: &theme,
-            now: self.now,
-            size,
-            app: app_id
-                .as_deref()
-                .and_then(|id| self.apps.iter().find(|a| a.id == id)),
-            apps: &self.apps,
-            windows: &self.windows,
-            notes: &self.notes,
-            list_above: above,
-            editing,
-        };
-        let mut out = Vec::new();
         let pc = &mut self.panels[idx].cards[ci];
-        let changed = pc.card.event(ev, &cx, &mut out);
+        let mut out = Vec::new();
+        let changed = {
+            let cx = Cx {
+                theme: &self.theme,
+                now: self.now,
+                size: pc.size,
+                app: pc
+                    .app_id
+                    .as_deref()
+                    .and_then(|id| self.apps.iter().find(|a| a.id == id)),
+                apps: &self.apps,
+                windows: &self.windows,
+                notes: &self.notes,
+                list_above: above,
+                editing,
+            };
+            pc.card.event(ev, &cx, &mut out)
+        };
         let (prov, keys) = (pc.provider.id(), pc.kind.sources);
         let card = format!("{}/{}", pc.word.owner, pc.word.kind);
         let mut requery = None;
         let mut show = None;
+        let mut remove = false;
         for a in out {
             match a {
                 Action::ShowCards(w) => show = Some(w),
@@ -1261,9 +2410,13 @@ impl Shell {
                     self.close();
                     return true;
                 }
+                Action::RemoveCard => remove = true,
                 Action::SetQuery(q) => requery = Some(q),
                 a => self.actions.push((a, card.clone(), prov, keys)),
             }
+        }
+        if remove {
+            return self.remove_placed_card(idx, ci);
         }
         if let Some(w) = show {
             self.show_cards(idx, w);
@@ -1278,41 +2431,94 @@ impl Shell {
         changed
     }
 
-    /// Something shows: a panel, or the question.
+    /// Something shows: a panel, the window menu, or the question.
     pub fn active(&self) -> bool {
-        self.open.is_some() || self.ask.ask.on
+        self.open.is_some() || self.ask.ask.on || self.window_menu.is_some()
     }
 
-    /// What is drawn on a `w x h` screen: the question's card while it asks, else the open
-    /// panel's box (plus the edit bar and Add list while editing).
+    pub fn is_closing(&self) -> bool {
+        self.closing.is_some()
+    }
+
+    /// Something must be drawn on screen (open, asking, or fading out after close).
+    pub fn visible(&self) -> bool {
+        self.active() || self.closing.is_some()
+    }
+
+    pub fn set_ask_output(&mut self, output: Option<OutputId>) {
+        self.ask_output = output;
+    }
+
+    pub fn visible_output(&self) -> Option<OutputId> {
+        if self.ask.ask.on {
+            self.ask_output
+        } else if self.open.is_some() {
+            self.open_output
+        } else {
+            self.closing.as_ref().and_then(|c| c.output)
+        }
+    }
+
+    pub fn visible_on(&self, output: OutputId) -> bool {
+        self.visible() && self.visible_output().is_none_or(|id| id == output)
+    }
+
+    pub fn frame_hits(&self, output: Option<OutputId>) -> Vec<(usize, Rect, Hits)> {
+        if let Some(id) = output {
+            if let Some(f) = self.frames.borrow().get(&id) {
+                return f.hits.clone();
+            }
+        }
+        self.frame.borrow().clone()
+    }
+
+    /// What is drawn on a `w x h` screen: the question's card while it asks, the window menu,
+    /// else the open panel's box (plus the edit bar and Add list while editing), or a closing
+    /// panel's box.
     pub fn shown_box(&self, w: f64, h: f64) -> Option<Rect> {
         if self.ask.ask.on {
             return Some(self.ask.ask.geometry(w, h));
         }
-        let idx = self.open?;
-        let pbox = self.layout_local(idx, w, h).0;
-        if !self.editing() {
-            return Some(pbox);
+        if let Some(r) = self.window_menu_rect(w, h) {
+            return Some(r);
         }
-        let (bar, add) = self.edit_rects(idx, w, h);
-        let mut out = union_rect(pbox, bar);
-        if self.edit.adding {
-            out = union_rect(out, add);
+        if let Some(idx) = self.open {
+            let pbox = self.layout_local(idx, w, h).0;
+            if !self.editing() {
+                return Some(pbox);
+            }
+            let (bar, add) = self.edit_rects(idx, w, h);
+            let mut out = union_rect(pbox, bar);
+            if self.edit.adding {
+                out = union_rect(out, add);
+            }
+            return Some(out);
         }
-        Some(out)
+        let c = self.closing.as_ref()?;
+        let ps = c.transient.as_ref().or_else(|| self.panels.get(c.idx))?;
+        Some(self.layout_panel_local(ps, w, h).0)
     }
 
     /// A request in the ask file (SIGRTMIN+3), or a cancel: loaded, queued after one already
     /// asking. True when what shows changed. A question closes the open panel.
     pub fn ask_load(&mut self) -> bool {
-        let cancel = crate::wayland::runtime_path(crate::ask::ASK_CANCEL_FILE);
+        let cancel = crate::paths::runtime_path(crate::ask::ASK_CANCEL_FILE);
         let mut changed = crate::ask::handle_cancel_from_path(&mut self.ask, &cancel);
-        let req = crate::wayland::runtime_path(crate::ask::ASK_FILE);
+        let req = crate::paths::runtime_path(crate::ask::ASK_FILE);
         changed |= crate::ask::load_from_path(&mut self.ask, &req);
         changed |= crate::ask::check_asker_gone(&mut self.ask);
-        if self.ask.ask.on && self.open.is_some() {
-            self.close();
-            changed = true;
+        if self.ask.ask.on {
+            if self.open.is_some() {
+                let prev_out = self.open_output;
+                self.close();
+                if self.ask_output.is_none() {
+                    self.ask_output = prev_out;
+                }
+                changed = true;
+            }
+            self.closing = None;
+        } else {
+            self.ask_output = None;
         }
         changed
     }
@@ -1354,7 +2560,17 @@ impl Shell {
     /// added them), once each.
     fn hit_order(&self) -> Vec<(usize, u32, Rect)> {
         let mut out: Vec<(usize, u32, Rect)> = Vec::new();
-        for (ci, _, hits) in self.frame.borrow().iter() {
+        let frames = self.frames.borrow();
+        let list: &Vec<(usize, Rect, Hits)> = if let Some(id) = self.open_output {
+            if let Some(f) = frames.get(&id) {
+                &f.hits
+            } else {
+                &self.frame.borrow()
+            }
+        } else {
+            &self.frame.borrow()
+        };
+        for (ci, _, hits) in list.iter() {
             for (id, r) in &hits.list {
                 if !out.iter().any(|(c, i, _)| c == ci && i == id) {
                     out.push((*ci, *id, *r));
@@ -1362,6 +2578,39 @@ impl Shell {
             }
         }
         out
+    }
+
+    fn scroll_to_hit(&mut self, idx: usize, r: Rect, is_first: bool) {
+        let ((w, h), frame_scroll) = {
+            let frames = self.frames.borrow();
+            if let Some(f) = self.open_output.and_then(|id| frames.get(&id)) {
+                (f.screen, f.scroll)
+            } else {
+                (self.frame_screen.get(), self.frame_scroll.get())
+            }
+        };
+        let (pbox, _, content_h) = self.layout_local(idx, w, h);
+        let max_scroll = (content_h - pbox.3).max(0.0);
+        if max_scroll <= 0.0 {
+            self.panel_scroll = 0.0;
+            return;
+        }
+        let cur_scroll = self.panel_scroll.clamp(0.0, max_scroll);
+        let ry = r.1 + frame_scroll - cur_scroll;
+        let top = pbox.1;
+        let bot = pbox.1 + pbox.3;
+        let mut next = cur_scroll;
+        if ry + r.3 > bot {
+            next = cur_scroll + (ry + r.3 - bot);
+        }
+        let ry_after = r.1 + frame_scroll - next;
+        if ry_after < top {
+            next = cur_scroll + (ry - top);
+        }
+        if is_first && (r.1 + frame_scroll + r.3) <= bot {
+            next = 0.0;
+        }
+        self.panel_scroll = next.clamp(0.0, max_scroll);
     }
 
     /// A key while a panel is open. True when something must be drawn again.
@@ -1373,13 +2622,85 @@ impl Shell {
                 Key::Enter => (0xff0d, None),
                 Key::Up => (0xff52, None),
                 Key::Down => (0xff54, None),
+                Key::Left => (0xff51, None),
+                Key::Right => (0xff53, None),
+                Key::Home => (0xff50, None),
+                Key::End => (0xff57, None),
                 Key::Tab => (0xff09, None),
                 Key::BackTab => (0xfe20, None),
                 Key::Backspace => (0xff08, None),
                 Key::Char(c) => (0, Some(c)),
-                Key::Super(_) => return false,
+                Key::PageUp | Key::PageDown | Key::Delete | Key::Super(_) => return false,
             };
             return crate::ask::key(&mut self.ask, sym, ch);
+        }
+        if let Some(wm) = self.window_menu {
+            return match k {
+                Key::Escape => {
+                    self.window_menu = None;
+                    self.hovered.clear();
+                    self.selected = None;
+                    self.keyboard = false;
+                    true
+                }
+                Key::Up | Key::Down | Key::Tab | Key::BackTab | Key::Home | Key::End => {
+                    let len = wm.items().len() as u32;
+                    let at = self.selected.map(|(_, h)| h);
+                    let next = match k {
+                        Key::Home => 0,
+                        Key::End => len - 1,
+                        _ => match (at, self.keyboard) {
+                            (Some(i), false) => i,
+                            (None, _) => {
+                                if matches!(k, Key::Up | Key::BackTab) {
+                                    len - 1
+                                } else {
+                                    0
+                                }
+                            }
+                            (Some(i), true) => {
+                                if matches!(k, Key::Up | Key::BackTab) {
+                                    (i + len - 1) % len
+                                } else {
+                                    (i + 1) % len
+                                }
+                            }
+                        },
+                    };
+                    self.keyboard = true;
+                    self.selected = Some((0, next));
+                    true
+                }
+                Key::Enter => {
+                    let idx = self
+                        .selected
+                        .filter(|_| self.keyboard)
+                        .map(|(_, h)| h)
+                        .or_else(|| {
+                            self.last_output
+                                .and_then(|o| self.hovered.get(&o))
+                                .map(|&(_, h)| h)
+                        });
+                    if let Some((action, _, _)) =
+                        idx.and_then(|hit| wm.items().get(hit as usize).copied())
+                    {
+                        self.actions.push((
+                            Action::ShellCommand(wm.command_line(action)),
+                            "window/menu".into(),
+                            "windows",
+                            &[],
+                        ));
+                        self.window_menu = None;
+                        self.hovered.clear();
+                        self.selected = None;
+                        self.keyboard = false;
+                        true
+                    } else {
+                        false
+                    }
+                }
+                _ => false,
+            };
         }
         let Some(idx) = self.open else {
             return false;
@@ -1396,8 +2717,34 @@ impl Shell {
                         self.finish_edit()
                     }
                 }
+                Key::PageUp | Key::PageDown | Key::Home | Key::End => {
+                    let out = self.active_output_or_last();
+                    let (w, h) = self.open_screen();
+                    let (pbox, _, content_h) = self.layout_local(idx, w, h);
+                    let max = (content_h - pbox.3).max(0.0);
+                    let next = match k {
+                        Key::Home => 0.0,
+                        Key::End => max,
+                        Key::PageUp => {
+                            let page = (pbox.3 - crate::ui::ROW_H).max(crate::ui::ROW_H);
+                            (self.panel_scroll - page).clamp(0.0, max)
+                        }
+                        _ => {
+                            let page = (pbox.3 - crate::ui::ROW_H).max(crate::ui::ROW_H);
+                            (self.panel_scroll + page).clamp(0.0, max)
+                        }
+                    };
+                    if (next - self.panel_scroll).abs() > 0.01 {
+                        self.panel_scroll = next;
+                        self.update_edit_hover_on(out, w, h);
+                        true
+                    } else {
+                        false
+                    }
+                }
                 Key::Super(c) => {
                     let c = c.to_ascii_lowercase();
+                    let out = self.open_output;
                     self.finish_edit();
                     if self
                         .open
@@ -1407,7 +2754,7 @@ impl Shell {
                     } else if let Some(other) =
                         self.panels.iter().position(|p| p.panel.key == Some(c))
                     {
-                        self.open_panel(other, false, Instant::now())
+                        self.open_panel_on(out, other, false, Instant::now())
                     } else {
                         true
                     }
@@ -1434,12 +2781,12 @@ impl Shell {
                     self.close()
                 } else if let Some(other) = self.panels.iter().position(|p| p.panel.key == Some(c))
                 {
-                    self.open_panel(other, false, Instant::now())
+                    self.open_panel_on(self.open_output, other, false, Instant::now())
                 } else {
                     false
                 }
             }
-            Key::Up | Key::Down | Key::Tab | Key::BackTab => {
+            Key::Up | Key::Down | Key::Tab | Key::BackTab | Key::Home | Key::End => {
                 let order = self.hit_order();
                 if order.is_empty() {
                     return false;
@@ -1448,26 +2795,61 @@ impl Shell {
                     .selected
                     .and_then(|(c, h)| order.iter().position(|(oc, oh, _)| *oc == c && *oh == h));
                 // the first arrow while the selection is hidden shows it where it is
-                let next = match (at, self.keyboard) {
-                    (Some(i), false) => i,
-                    (None, _) => {
-                        if matches!(k, Key::Up | Key::BackTab) {
-                            order.len() - 1
-                        } else {
-                            0
+                let next = match k {
+                    Key::Home => 0,
+                    Key::End => order.len() - 1,
+                    _ => match (at, self.keyboard) {
+                        (Some(i), false) => i,
+                        (None, _) => {
+                            if matches!(k, Key::Up | Key::BackTab) {
+                                order.len() - 1
+                            } else {
+                                0
+                            }
                         }
-                    }
-                    (Some(i), true) => {
-                        if matches!(k, Key::Up | Key::BackTab) {
-                            (i + order.len() - 1) % order.len()
-                        } else {
-                            (i + 1) % order.len()
+                        (Some(i), true) => {
+                            if matches!(k, Key::Up | Key::BackTab) {
+                                (i + order.len() - 1) % order.len()
+                            } else {
+                                (i + 1) % order.len()
+                            }
                         }
-                    }
+                    },
                 };
                 self.keyboard = true;
                 self.selected = Some((order[next].0, order[next].1));
+                self.scroll_to_hit(idx, order[next].2, next == 0);
                 true
+            }
+            Key::Left | Key::Right => {
+                let (true, Some((ci, hit))) = (self.keyboard, self.selected) else {
+                    return false;
+                };
+                let dir = if k == Key::Left { -1 } else { 1 };
+                self.card_event(idx, ci, &Event::Step { hit, dir })
+            }
+            Key::PageUp | Key::PageDown => {
+                let (w, h) = self.open_screen();
+                let (pbox, _, content_h) = self.layout_local(idx, w, h);
+                let max = (content_h - pbox.3).max(0.0);
+                if max <= 0.0 {
+                    return false;
+                }
+                let page = (pbox.3 - crate::ui::ROW_H).max(crate::ui::ROW_H);
+                let delta = if k == Key::PageDown { page } else { -page };
+                let next = (self.panel_scroll + delta).clamp(0.0, max);
+                if (next - self.panel_scroll).abs() > 0.01 {
+                    self.panel_scroll = next;
+                    true
+                } else {
+                    false
+                }
+            }
+            Key::Delete => {
+                let (true, Some((ci, hit))) = (self.keyboard, self.selected) else {
+                    return false;
+                };
+                self.card_event(idx, ci, &Event::Delete { hit })
             }
             Key::Enter => {
                 if let (true, Some((ci, hit))) = (self.keyboard, self.selected) {
@@ -1476,10 +2858,15 @@ impl Shell {
                         .into_iter()
                         .find(|(c, h, _)| *c == ci && *h == hit)
                         .map_or((0.0, 0.0, 0.0, 0.0), |(_, _, r)| r);
+                    let frame_scroll = self
+                        .open_output
+                        .and_then(|id| self.frames.borrow().get(&id).map(|f| f.scroll))
+                        .unwrap_or_else(|| self.frame_scroll.get());
+                    let dy = frame_scroll - self.panel_scroll;
                     let ev = Event::Press {
                         hit,
                         button: Button::Left,
-                        at: (r.0 + r.2 / 2.0, r.1 + r.3 / 2.0),
+                        at: (r.0 + r.2 / 2.0, r.1 + dy + r.3 / 2.0),
                     };
                     let changed = self.card_event(idx, ci, &ev);
                     if self.open == Some(idx) {
@@ -1535,26 +2922,37 @@ impl Shell {
             }
             running = true;
         }
+        if let Some(c) = &mut self.closing {
+            let ms = now.duration_since(c.started).as_secs_f64() * 1000.0;
+            if ms < LEAVE_MS {
+                c.ms = ms;
+                running = true;
+            } else {
+                self.closing = None;
+            }
+        }
         if let Some(idx) = self.open {
             for pc in &mut self.panels[idx].cards {
                 running |= pc.card.tick(dt);
             }
         }
-        running |= self.drag_autoscroll(self.last_screen.0, self.last_screen.1, dt);
+        let out = self.active_output_or_last();
+        let (w, h) = self.screen_for(out);
+        running |= self.drag_autoscroll(out, w, h, dt);
         if !running {
             self.last_tick = None;
         }
         running
     }
 
-    fn drag_autoscroll(&mut self, w: f64, h: f64, dt_ms: f64) -> bool {
+    fn drag_autoscroll(&mut self, output: OutputId, w: f64, h: f64, dt_ms: f64) -> bool {
         let Some(idx) = self.open else {
             return false;
         };
         if !self.editing() || !self.edit.drag.is_some_and(|d| d.moved) {
             return false;
         }
-        let Some((x, y)) = self.pointer else {
+        let Some((x, y)) = self.pointer_for(output) else {
             return false;
         };
         let (pbox, local_rects, content_h) = self.layout_local(idx, w, h);
@@ -1605,6 +3003,15 @@ impl Shell {
         out
     }
 
+    pub fn wants_clock(&self) -> bool {
+        self.open.is_some_and(|idx| {
+            self.panels[idx]
+                .cards
+                .iter()
+                .any(|pc| pc.card.wants_clock())
+        })
+    }
+
     /// New data for `(provider, key)`: every card that lists it. True when one changed.
     pub fn apply(&mut self, provider: &str, key: &str, data: &dyn std::any::Any) -> bool {
         let mut changed = false;
@@ -1619,16 +3026,17 @@ impl Shell {
     }
 
     pub fn wants_frame(&self) -> bool {
-        if self.opened_at.is_some() {
+        if self.opened_at.is_some() || self.closing.is_some() {
             return true;
         }
         let Some(idx) = self.open else {
             return false;
         };
         if self.editing() && self.edit.drag.is_some_and(|d| d.moved) {
-            if let Some((x, y)) = self.pointer {
-                let (pbox, _, content_h) =
-                    self.layout_local(idx, self.last_screen.0, self.last_screen.1);
+            let out = self.active_output_or_last();
+            if let Some((x, y)) = self.pointer_for(out) {
+                let (w, h) = self.screen_for(out);
+                let (pbox, _, content_h) = self.layout_local(idx, w, h);
                 if content_h > pbox.3
                     && x >= pbox.0
                     && x <= pbox.0 + pbox.2
@@ -1641,28 +3049,108 @@ impl Shell {
         false
     }
 
-    /// Draws the open panel on a screen of `w x h`: each card's box, header and body, rising in as
-    /// the panel opens; keeps each card's hits for the pointer. Returns the panel's box.
+    /// Draws the open (or closing) panel on a screen of `w x h`: each card's box, header and body,
+    /// rising in as the panel opens or fading out as it closes; keeps each card's hits for the
+    /// pointer while open. Returns the panel's box.
     pub fn draw(&self, cr: &cairo::Context, w: f64, h: f64) -> Option<Rect> {
+        self.draw_on(screen_key(w, h), cr, w, h)
+    }
+
+    pub fn draw_on(&self, output: OutputId, cr: &cairo::Context, w: f64, h: f64) -> Option<Rect> {
+        if !self.visible_on(output) {
+            return None;
+        }
+        draw::with_font(&self.theme.font, || {
+            self.draw_open_or_closing(output, cr, w, h)
+        })
+    }
+
+    fn draw_open_or_closing(
+        &self,
+        output: OutputId,
+        cr: &cairo::Context,
+        w: f64,
+        h: f64,
+    ) -> Option<Rect> {
         if self.ask.ask.on {
             return Some(crate::ask::draw(cr, &self.theme, &self.ask.ask, (w, h)));
         }
-        let idx = self.open?;
-        let editing = self.editing();
-        let (pbox, local_rects, content_h) = self.layout_local(idx, w, h);
+        if let (Some(wm), Some(r)) = (self.window_menu, self.window_menu_rect(w, h)) {
+            let th = &self.theme;
+            draw::card(cr, th, r.0, r.1, r.2, r.3);
+            let body = (
+                r.0 + PAD_X - 8.0,
+                r.1 + PAD_TOP,
+                r.2 - 2.0 * (PAD_X - 8.0),
+                r.3 - PAD_TOP - PAD_BOTTOM,
+            );
+            let cx = self.cx(Size::M, None, false);
+            let sel = self
+                .selected
+                .filter(|(c, _)| self.keyboard && *c == 0)
+                .map(|(_, h)| h);
+            let mut hits = Hits::new(self.pointer, sel);
+            let mut y = body.1;
+            for (i, (_, label, checked)) in wm.items().into_iter().enumerate() {
+                let row_r = (body.0, y, body.2, crate::ui::LIST_ROW_H);
+                crate::cards::tray_menu::draw_menu_row(
+                    cr, &cx, &mut hits, i as u32, row_r, label, true, checked,
+                );
+                y += crate::ui::LIST_ROW_H;
+            }
+            *self.frame.borrow_mut() = vec![(0, r, hits)];
+            return Some(r);
+        }
+        if let Some(idx) = self.open {
+            return Some(self.draw_panel(
+                output,
+                cr,
+                w,
+                h,
+                &self.panels[idx],
+                idx,
+                self.panel_scroll,
+                None,
+            ));
+        }
+        if let Some(c) = &self.closing {
+            let ps = c.transient.as_ref().or_else(|| self.panels.get(c.idx))?;
+            let cp = (1.0 - crate::ui::ease((c.ms / LEAVE_MS).clamp(0.0, 1.0))).clamp(0.0, 1.0);
+            return Some(self.draw_panel(output, cr, w, h, ps, c.idx, c.scroll, Some(cp)));
+        }
+        None
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_panel(
+        &self,
+        output: OutputId,
+        cr: &cairo::Context,
+        w: f64,
+        h: f64,
+        ps: &PanelState,
+        idx: usize,
+        scroll_pos: f64,
+        closing_p: Option<f64>,
+    ) -> Rect {
+        let pointer = self.pointer_for(output);
+        let interactive = closing_p.is_none();
+        let editing = interactive && self.editing();
+        let (pbox, local_rects, content_h) = self.layout_panel_local(ps, w, h);
         let max_scroll = (content_h - pbox.3).max(0.0);
-        let scroll = self.panel_scroll.clamp(0.0, max_scroll);
+        let scroll = scroll_pos.clamp(0.0, max_scroll);
         let rects: Vec<(usize, Rect)> = local_rects
             .iter()
             .map(|&(ci, r)| (ci, (pbox.0 + r.0, pbox.1 + r.1 - scroll, r.2, r.3)))
             .collect();
-        let ps = &self.panels[idx];
         let above = ps.panel.side == Side::Bottom;
         let th = &self.theme;
         let mut frame = Vec::new();
         let bottom = rects.iter().map(|(_, r)| r.1 + r.3).fold(0.0, f64::max);
         cr.save().ok();
-        let clip_lift = if self.open_ms.is_finite() {
+        let clip_lift = if closing_p.is_some() {
+            LEAVE_DROP
+        } else if self.open_ms.is_finite() {
             ARRIVE_LIFT
         } else {
             0.0
@@ -1673,23 +3161,34 @@ impl Shell {
             let pc = &ps.cards[*ci];
             let cx = self.cx(pc.size, pc.app_id.as_deref(), above);
             let status = pc.card.status(&cx);
-            let sel = if editing {
+            let sel = if !interactive || editing {
                 None
             } else {
                 self.selected
                     .filter(|(c, _)| self.keyboard && c == ci)
                     .map(|(_, h)| h)
             };
-            let mut hits = Hits::new(if editing { None } else { self.pointer }, sel);
+            let mut hits = Hits::new(
+                if !interactive || editing {
+                    None
+                } else {
+                    pointer
+                },
+                sel,
+            );
             // the bottom card arrives first (about one card per 90 px up)
             let k = ((bottom - (r.1 + r.3)) / 90.0).clamp(0.0, ARRIVE_CARDS);
-            let p = if self.open_ms.is_finite() {
+            let p = if let Some(cp) = closing_p {
+                cp
+            } else if self.open_ms.is_finite() {
                 crate::ui::ease((self.open_ms - k * ARRIVE_STAGGER_MS) / ARRIVE_MS)
             } else {
                 1.0
             };
             if p <= 0.0 {
-                frame.push((*ci, *r, hits));
+                if interactive {
+                    frame.push((*ci, *r, hits));
+                }
                 continue;
             }
             if editing && status == Status::Hidden {
@@ -1746,8 +3245,13 @@ impl Shell {
             );
             let lifted = p < 1.0;
             if lifted {
+                let drop_y = if closing_p.is_some() {
+                    LEAVE_DROP
+                } else {
+                    ARRIVE_LIFT
+                };
                 cr.push_group();
-                cr.translate(0.0, (1.0 - p) * ARRIVE_LIFT);
+                cr.translate(0.0, (1.0 - p) * drop_y);
             }
             draw::card(cr, th, r.0, r.1, r.2, r.3);
             if headed {
@@ -1755,29 +3259,7 @@ impl Shell {
                     .card
                     .title(&cx)
                     .unwrap_or_else(|| pc.kind.title.to_string());
-                let from_w = draw::text_right(
-                    cr,
-                    r.0 + r.2 - PAD_X,
-                    r.1 + PAD_TOP + 3.0,
-                    &Text {
-                        size: 12.0,
-                        bold: false,
-                        color: th.muted,
-                        text: &pc.from,
-                    },
-                );
-                draw::text_max(
-                    cr,
-                    r.0 + PAD_X,
-                    r.1 + PAD_TOP,
-                    (r.2 - 2.0 * PAD_X - from_w - 12.0).max(40.0),
-                    &Text {
-                        size: 15.0,
-                        bold: true,
-                        color: th.text,
-                        text: &title,
-                    },
-                );
+                draw_header(cr, th, *r, &title, &pc.from);
             }
             match status {
                 Status::Ready => {
@@ -1801,18 +3283,10 @@ impl Shell {
                     );
                 }
                 Status::Missing(why) => {
-                    draw::text_max(
-                        cr,
-                        body.0 + 8.0,
-                        body.1,
-                        body.2 - 16.0,
-                        &Text {
-                            size: 12.0,
-                            bold: false,
-                            color: th.muted,
-                            text: &why,
-                        },
-                    );
+                    let l = missing_layout(cr, body.2 - 16.0, &why);
+                    draw::set(cr, th.muted);
+                    cr.move_to((body.0 + 8.0).round(), body.1.round());
+                    pangocairo::functions::show_layout(cr, &l);
                 }
                 Status::Hidden => {}
             }
@@ -1820,15 +3294,13 @@ impl Shell {
                 let _ = cr.pop_group_to_source();
                 let _ = cr.paint_with_alpha(p);
             }
-            frame.push((*ci, *r, hits));
+            if interactive {
+                frame.push((*ci, *r, hits));
+            }
         }
         if max_scroll > 0.0 {
-            let thumb_h = ((pbox.3 / content_h) * pbox.3).clamp(24.0, pbox.3);
-            let track = (pbox.3 - thumb_h).max(1.0);
-            let thumb_y = pbox.1 + (scroll / max_scroll) * track;
-            draw::round_rect(cr, pbox.0 + pbox.2 - 4.0, thumb_y, 3.0, thumb_h, 1.5);
-            draw::set(cr, th.muted.alpha(0.35));
-            let _ = cr.fill();
+            let sb_cx = self.cx(Size::M, None, above);
+            crate::ui::scrollbar(cr, &sb_cx, pbox, content_h, scroll);
         }
         cr.restore().ok();
         if editing {
@@ -1847,49 +3319,133 @@ impl Shell {
                 (pbox.0, pbox.1),
                 (pbox.2, pbox.3),
                 scroll,
-                self.pointer,
+                pointer,
                 &overlay_state,
             );
         }
-        if let Some(r) = self.edit_menu_rect(w, h) {
-            let th = &self.theme;
-            crate::draw::round_rect(cr, r.0, r.1, r.2, r.3, th.small_radius());
-            crate::draw::set(cr, th.card.alpha(1.0));
-            let _ = cr.fill_preserve();
-            crate::draw::set(cr, th.edge);
-            cr.set_line_width(1.0);
-            let _ = cr.stroke();
-            let lit = self.pointer.is_some_and(|(px, py)| {
-                px >= r.0 && px <= r.0 + r.2 && py >= r.1 && py <= r.1 + r.3
-            });
-            if lit {
-                crate::draw::round_rect(
+        if interactive {
+            if let Some(r) = self.edit_menu_rect(w, h) {
+                let th = &self.theme;
+                crate::draw::round_rect(cr, r.0, r.1, r.2, r.3, th.small_radius());
+                crate::draw::set(cr, th.card.alpha(1.0));
+                let _ = cr.fill_preserve();
+                crate::draw::set(cr, th.edge);
+                cr.set_line_width(1.0);
+                let _ = cr.stroke();
+                let lit = pointer.is_some_and(|(px, py)| {
+                    px >= r.0 && px <= r.0 + r.2 && py >= r.1 && py <= r.1 + r.3
+                });
+                if lit {
+                    crate::draw::round_rect(
+                        cr,
+                        r.0 + 3.0,
+                        r.1 + 3.0,
+                        r.2 - 6.0,
+                        r.3 - 6.0,
+                        th.small_radius(),
+                    );
+                    crate::draw::set(cr, th.text.alpha(0.08));
+                    let _ = cr.fill();
+                }
+                crate::draw::text_max(
                     cr,
-                    r.0 + 3.0,
-                    r.1 + 3.0,
-                    r.2 - 6.0,
-                    r.3 - 6.0,
-                    th.small_radius(),
+                    r.0 + 12.0,
+                    r.1 + (r.3 - 17.0) / 2.0,
+                    r.2 - 24.0,
+                    &crate::draw::Text {
+                        size: 13.0,
+                        bold: false,
+                        color: th.text,
+                        text: "Edit panel",
+                    },
                 );
-                crate::draw::set(cr, th.text.alpha(0.08));
-                let _ = cr.fill();
             }
-            crate::draw::text_max(
-                cr,
-                r.0 + 12.0,
-                r.1 + (r.3 - 17.0) / 2.0,
-                r.2 - 24.0,
-                &crate::draw::Text {
-                    size: 13.0,
-                    bold: false,
-                    color: th.text,
-                    text: "Edit panel",
+            self.frames.borrow_mut().insert(
+                output,
+                OutputFrame {
+                    hits: frame.clone(),
+                    scroll,
+                    screen: (w, h),
                 },
             );
+            *self.frame.borrow_mut() = frame;
+            self.frame_scroll.set(scroll);
+            self.frame_screen.set((w, h));
         }
-        *self.frame.borrow_mut() = frame;
-        Some(pbox)
+        pbox
     }
+}
+
+fn header_title_max_w(card_w: f64, from_w: f64) -> (f64, f64) {
+    let head_w = (card_w - 2.0 * PAD_X).max(40.0);
+    // Keep at least half of the header for the title when the app name is long.
+    let max_from = ((head_w - 12.0) * 0.45).max(0.0);
+    let capped_from = from_w.min(max_from);
+    let title_w = if capped_from > 0.0 {
+        (head_w - capped_from - 12.0).max(40.0)
+    } else {
+        head_w
+    };
+    (capped_from, title_w)
+}
+
+fn draw_header(cr: &cairo::Context, th: &Theme, r: Rect, title: &str, from: &str) {
+    let from_w = if from.is_empty() {
+        0.0
+    } else {
+        let from_t = Text {
+            size: 12.0,
+            bold: false,
+            color: th.muted,
+            text: from,
+        };
+        let full_w = draw::measure(cr, &from_t).0;
+        let (capped, _) = header_title_max_w(r.2, full_w);
+        if full_w <= capped {
+            draw::text_right(cr, r.0 + r.2 - PAD_X, r.1 + PAD_TOP + 3.0, &from_t)
+        } else {
+            draw::text_max(
+                cr,
+                r.0 + r.2 - PAD_X - capped,
+                r.1 + PAD_TOP + 3.0,
+                capped,
+                &from_t,
+            );
+            capped
+        }
+    };
+    let (_, title_w) = header_title_max_w(r.2, from_w);
+    draw::text_max(
+        cr,
+        r.0 + PAD_X,
+        r.1 + PAD_TOP,
+        title_w,
+        &Text {
+            size: 15.0,
+            bold: true,
+            color: th.text,
+            text: title,
+        },
+    );
+}
+
+fn missing_layout(cr: &cairo::Context, max_w: f64, why: &str) -> pango::Layout {
+    draw::wrapped_layout(cr, draw::SIZE_SMALL, false, max_w.max(20.0), Some(2), why)
+}
+
+fn wrapped_text_height(max_w: f64, text: &str) -> f64 {
+    let Ok(surf) = cairo::ImageSurface::create(cairo::Format::ARgb32, 1, 1) else {
+        return 20.0;
+    };
+    let Ok(cr) = cairo::Context::new(&surf) else {
+        return 20.0;
+    };
+    let l = missing_layout(&cr, max_w, text);
+    (l.pixel_size().1 as f64).max(20.0)
+}
+
+fn missing_height(card_width: f64, why: &str) -> f64 {
+    wrapped_text_height(card_width - 2.0 * PAD_X, why)
 }
 
 fn union_rect(a: Rect, b: Rect) -> Rect {
@@ -2142,13 +3698,85 @@ mod tests {
             .position(|p| p.panel.name == "control")
             .unwrap();
         let s = sh.hover_strip(idx, 1920.0, 1080.0);
-        assert!(sh.pointer_motion(1920.0, 1080.0, s.0 + 10.0, s.1 + 1.0));
+        let t0 = Instant::now();
+        assert!(!sh.pointer_motion_at(1920.0, 1080.0, s.0 + 10.0, s.1 + 1.0, t0));
+        assert!(sh.open.is_none());
+        let t1 = t0 + std::time::Duration::from_millis(HOVER_OPEN_MS as u64);
+        assert!(sh.hover_tick(t1));
         assert_eq!(sh.open, Some(idx));
         assert!(sh.opened_by_hover);
+        assert!(!sh.pointer_motion_at(1920.0, 1080.0, 100.0, 100.0, t1));
+        assert_eq!(sh.open, Some(idx));
         assert!(
-            sh.pointer_motion(1920.0, 1080.0, 100.0, 100.0),
-            "left: closed"
+            sh.hover_tick(t1 + std::time::Duration::from_millis(HOVER_CLOSE_MS as u64)),
+            "left past grace: closed"
         );
+        assert!(sh.open.is_none());
+    }
+
+    #[test]
+    fn hover_dwell_ignores_fast_pass_and_grace_cancels_on_reentry() {
+        let mut sh = shell("SUPER+A bottom right 380 hover settings/power");
+        let idx = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "control")
+            .unwrap();
+        let s = sh.hover_strip(idx, 1920.0, 1080.0);
+        let t0 = Instant::now();
+
+        // Fast pass through the 2 px strip (leaves within 40 ms) does not open.
+        assert!(!sh.pointer_motion_at(1920.0, 1080.0, s.0 + 10.0, s.1 + 1.0, t0));
+        assert!(sh.hover_timeout(t0).is_some());
+        assert!(!sh.hover_tick(t0 + std::time::Duration::from_millis(40)));
+        assert!(!sh.pointer_motion_at(
+            1920.0,
+            1080.0,
+            s.0 + 10.0,
+            s.1 - 20.0,
+            t0 + std::time::Duration::from_millis(50)
+        ));
+        assert!(sh
+            .hover_timeout(t0 + std::time::Duration::from_millis(50))
+            .is_none());
+        assert!(!sh.hover_tick(t0 + std::time::Duration::from_millis(300)));
+        assert!(sh.open.is_none());
+
+        // Leaving via pointer_leave_at while dwelling also cancels opening.
+        let t_enter = t0 + std::time::Duration::from_millis(400);
+        sh.pointer_motion_at(1920.0, 1080.0, s.0 + 10.0, s.1 + 1.0, t_enter);
+        sh.pointer_leave_at(t_enter + std::time::Duration::from_millis(30));
+        assert!(!sh.hover_tick(t_enter + std::time::Duration::from_millis(200)));
+        assert!(sh.open.is_none());
+
+        // Resting in the strip for HOVER_OPEN_MS opens it.
+        let t_dwell = t_enter + std::time::Duration::from_millis(300);
+        sh.pointer_motion_at(1920.0, 1080.0, s.0 + 10.0, s.1 + 1.0, t_dwell);
+        assert!(!sh.hover_tick(t_dwell + std::time::Duration::from_millis(119)));
+        assert!(sh.hover_tick(t_dwell + std::time::Duration::from_millis(120)));
+        assert_eq!(sh.open, Some(idx));
+
+        // Leave the hover box, then return within HOVER_CLOSE_MS: stays open.
+        let t_out = t_dwell + std::time::Duration::from_millis(200);
+        let b = sh.hover_box(idx, 1920.0, 1080.0);
+        sh.pointer_motion_at(1920.0, 1080.0, 50.0, 50.0, t_out);
+        assert!(!sh.hover_tick(t_out + std::time::Duration::from_millis(200)));
+        assert_eq!(sh.open, Some(idx));
+        sh.pointer_motion_at(
+            1920.0,
+            1080.0,
+            b.0 + 10.0,
+            b.1 + 10.0,
+            t_out + std::time::Duration::from_millis(210),
+        );
+        assert!(!sh.hover_tick(t_out + std::time::Duration::from_millis(500)));
+        assert_eq!(sh.open, Some(idx));
+
+        // Leave again (via pointer_leave_at) and stay out past HOVER_CLOSE_MS: closes.
+        let t_leave = t_out + std::time::Duration::from_millis(600);
+        sh.pointer_leave_at(t_leave);
+        assert!(!sh.hover_tick(t_leave + std::time::Duration::from_millis(249)));
+        assert!(sh.hover_tick(t_leave + std::time::Duration::from_millis(250)));
         assert!(sh.open.is_none());
     }
 
@@ -2170,6 +3798,43 @@ mod tests {
         );
         assert!(!sh.tick(t0 + std::time::Duration::from_millis(1016)));
         assert_eq!(sh.sources(), vec![("settings", "power")]);
+    }
+
+    #[test]
+    fn close_runs_leaving_animation_for_leave_ms_then_stops() {
+        let mut sh = shell("SUPER+A top right settings/session");
+        let idx = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "control")
+            .unwrap();
+        let t0 = Instant::now();
+        assert!(sh.open_panel(idx, false, t0));
+        sh.open_ms = f64::INFINITY;
+        sh.opened_at = None;
+
+        let t_close = t0 + std::time::Duration::from_millis(500);
+        assert!(sh.close_at(t_close));
+        assert!(sh.open.is_none(), "logically closed at once");
+        assert!(!sh.active(), "input/keyboard cleared at once");
+        assert!(sh.is_closing());
+        assert!(sh.visible());
+        assert!(sh.wants_frame());
+
+        assert!(sh.tick(t_close));
+        assert!(sh.tick(t_close + std::time::Duration::from_millis(60)));
+        assert!(sh.shown_box(1280.0, 800.0).is_some());
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 1280, 800).unwrap();
+        let cr = cairo::Context::new(&surf).unwrap();
+        assert!(sh.draw(&cr, 1280.0, 800.0).is_some());
+
+        assert!(
+            !sh.tick(t_close + std::time::Duration::from_millis(LEAVE_MS as u64)),
+            "stops after LEAVE_MS"
+        );
+        assert!(!sh.is_closing());
+        assert!(!sh.visible());
+        assert!(sh.shown_box(1280.0, 800.0).is_none());
     }
 
     fn parse_box_center(dump: &str, prefix: &str) -> (f64, f64) {
@@ -2221,7 +3886,9 @@ mod tests {
             .position(|p| p.panel.name == "control")
             .unwrap();
         let strip = sh.hover_strip(idx, 1920.0, 1080.0);
-        assert!(sh.pointer_motion(1920.0, 1080.0, strip.0 + 10.0, strip.1 + 1.0));
+        let t0 = Instant::now();
+        assert!(!sh.pointer_motion_at(1920.0, 1080.0, strip.0 + 10.0, strip.1 + 1.0, t0));
+        assert!(sh.hover_tick(t0 + std::time::Duration::from_millis(HOVER_OPEN_MS as u64)));
         assert!(sh.opened_by_hover);
         sh.open_ms = f64::INFINITY;
         let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 1920, 1080).unwrap();
@@ -2503,7 +4170,9 @@ mod tests {
             Vec::new(),
             &cfg_path,
         );
+        let gen0 = crate::icons::global_icon_generation();
         assert!(!sh.reload_if_changed_at(&cfg_path));
+        assert_eq!(crate::icons::global_icon_generation(), gen0);
         std::fs::write(&cfg_path, "ACCENT=\"#445566\"\n").unwrap();
         let future = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
         std::fs::File::options()
@@ -2514,6 +4183,21 @@ mod tests {
             .unwrap();
         assert!(sh.reload_if_changed_at(&cfg_path));
         assert_eq!(sh.cfg.accent, [0x44, 0x55, 0x66]);
+        let gen1 = crate::icons::global_icon_generation();
+        assert!(gen1 > gen0, "config reload should clear icon cache");
+
+        sh.rebuild_panels(
+            sh.cfg.clone(),
+            Some(vec![App {
+                id: "new-app".into(),
+                name: "New App".into(),
+                ..Default::default()
+            }]),
+        );
+        assert!(
+            crate::icons::global_icon_generation() > gen1,
+            "app list change should clear icon cache"
+        );
 
         // 2. Config does not exist at start, then is created after start.
         let new_cfg_path = dir.join("config-new");
@@ -2524,5 +4208,1156 @@ mod tests {
         assert_eq!(sh_missing.cfg.accent, [0x77, 0x88, 0x99]);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn long_app_name_on_half_card_leaves_at_least_half_header_for_title() {
+        let half_w = (380.0 - GAP) / 2.0;
+        let head_w = half_w - 2.0 * PAD_X;
+        let long_name = "Very Long Application Name Forty Charact";
+        assert_eq!(long_name.chars().count(), 40);
+
+        let apps = vec![
+            App {
+                id: "longapp".into(),
+                name: long_name.into(),
+                exec: "true".into(),
+                ..Default::default()
+            },
+            App {
+                id: "secondapp".into(),
+                name: "Second".into(),
+                exec: "true".into(),
+                ..Default::default()
+            },
+        ];
+        let mut sh = Shell::new(
+            Config::from_text(
+                "PANEL_CONTROL=\"SUPER+A top right 380 longapp/app@half secondapp/app@half\"\n",
+            ),
+            apps,
+        );
+        let idx = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "control")
+            .unwrap();
+        assert!(sh.open_panel(idx, false, Instant::now()));
+        sh.open_ms = f64::INFINITY;
+
+        let (_, rects) = sh.layout(idx, 1280.0, 800.0);
+        assert_eq!(rects.len(), 2);
+        let r0 = rects[0].1;
+        assert!((r0.2 - half_w).abs() < 0.01);
+
+        let mut surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 1280, 800).unwrap();
+        {
+            let cr = cairo::Context::new(&surf).unwrap();
+            draw::grey_text_edges(&cr);
+            let full_from_w = draw::measure(
+                &cr,
+                &Text {
+                    size: 12.0,
+                    bold: false,
+                    color: sh.theme.muted,
+                    text: long_name,
+                },
+            )
+            .0;
+            let (capped_from, title_w) = header_title_max_w(half_w, full_from_w);
+            assert!(capped_from <= head_w * 0.45);
+            assert!(
+                title_w >= head_w * 0.5,
+                "title width {title_w} must be at least half of header {head_w}"
+            );
+            sh.draw(&cr, 1280.0, 800.0);
+        }
+        surf.flush();
+        // Verify no header text spills left of the card's left edge.
+        let stride = surf.stride() as usize;
+        let data = surf.data().unwrap();
+        let out_x = (r0.0 - 4.0).max(0.0) as usize;
+        let y_start = (r0.1 + PAD_TOP) as usize;
+        let y_end = (r0.1 + PAD_TOP + HEAD_H) as usize;
+        for y in y_start..y_end {
+            let px = &data[y * stride + out_x * 4..y * stride + out_x * 4 + 4];
+            assert_eq!(px, &[0, 0, 0, 0], "header overflowed left of card at y={y}");
+        }
+    }
+
+    #[test]
+    fn missing_reason_wraps_and_fits_at_half_width() {
+        let longest = "Memory information is not available";
+        let half_w = (380.0 - GAP) / 2.0;
+        let body_text_w = half_w - 2.0 * PAD_X;
+        let mh = missing_height(half_w, longest);
+        assert!(
+            mh > 20.0,
+            "wrapped missing text height ({mh}) should exceed single-line 20 px"
+        );
+
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 400, 200).unwrap();
+        let cr = cairo::Context::new(&surf).unwrap();
+        let l = missing_layout(&cr, body_text_w, longest);
+        assert_eq!(l.line_count(), 2);
+        assert!(
+            !l.is_ellipsized(),
+            "longest Missing string should fit in 2 lines without ellipsis at half width"
+        );
+
+        // Verify via Shell layout + draw with monitor/memory in Missing state at half width.
+        let mut sh = shell("SUPER+A top right 380 monitor/memory@half calendar/clock@half");
+        let idx = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "control")
+            .unwrap();
+        // Send empty MemoryData so monitor/memory enters Status::Missing(longest).
+        sh.apply(
+            "monitor",
+            "memory",
+            &crate::cards::monitor::MemoryData::default() as &dyn std::any::Any,
+        );
+        assert!(sh.open_panel(idx, false, Instant::now()));
+        sh.open_ms = f64::INFINITY;
+        let (_, rects) = sh.layout(idx, 1280.0, 800.0);
+        assert_eq!(
+            rects[0].1 .3,
+            PAD_TOP + HEAD_H + mh + PAD_BOTTOM,
+            "card height grows to fit wrapped Missing sentence"
+        );
+        sh.draw(&cr, 1280.0, 800.0);
+    }
+
+    #[test]
+    fn keyboard_navigation_scrolls_selected_hit_into_panel_box() {
+        let mut sh = shell("SUPER+A top right 380 settings/power settings/session windows/list");
+        sh.apply(
+            "settings",
+            "power",
+            &parse_power("* balanced:\n  power-saver:\n  performance:\n") as &dyn std::any::Any,
+        );
+        sh.windows = (1..=6)
+            .map(|i| Window {
+                id: i,
+                title: format!("Win {i}"),
+                app_id: "kitty".into(),
+                focused: i == 1,
+            })
+            .collect();
+        let idx = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "control")
+            .unwrap();
+        assert!(sh.open_panel(idx, false, Instant::now()));
+        sh.open_ms = f64::INFINITY;
+
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 1280, 400).unwrap();
+        let cr = cairo::Context::new(&surf).unwrap();
+        let pbox = sh.draw(&cr, 1280.0, 400.0).unwrap();
+        let (_, _, content_h) = sh.layout_local(idx, 1280.0, 400.0);
+        assert!(
+            content_h > pbox.3,
+            "precondition: panel is taller than screen"
+        );
+
+        // Move Down repeatedly without redrawing in between until past the fold.
+        let order = sh.hit_order();
+        let past_fold = order
+            .iter()
+            .position(|(_, _, r)| r.1 + r.3 > pbox.1 + pbox.3)
+            .expect("at least one hit starts below the fold");
+        for _ in 0..=past_fold {
+            assert!(sh.key(Key::Down));
+        }
+        assert!(
+            sh.panel_scroll > 0.0,
+            "panel_scroll should advance past the fold"
+        );
+        sh.draw(&cr, 1280.0, 400.0);
+        let (ci, hit) = sh.selected.unwrap();
+        let r = sh
+            .hit_order()
+            .into_iter()
+            .find(|(c, h, _)| *c == ci && *h == hit)
+            .unwrap()
+            .2;
+        assert!(
+            r.1 >= pbox.1 && r.1 + r.3 <= pbox.1 + pbox.3,
+            "selected rect {r:?} must lie inside pbox {pbox:?}"
+        );
+    }
+
+    #[test]
+    fn tall_scrolled_panel_with_hidden_and_half_cards_walks_all_hits_in_view() {
+        let apps = vec![
+            App {
+                id: "app1".into(),
+                name: "App One".into(),
+                exec: "true".into(),
+                ..Default::default()
+            },
+            App {
+                id: "app2".into(),
+                name: "App Two".into(),
+                exec: "true".into(),
+                ..Default::default()
+            },
+        ];
+        // Includes a hidden card (notifications/list with no notes), a half-width pair,
+        // and multiple tall cards that overflow a 400 px high screen.
+        let mut sh = Shell::new(
+            Config::from_text(
+                "PANEL_CONTROL=\"SUPER+A top right 380 notifications/list app1/app@half app2/app@half settings/power settings/session windows/list\"\n",
+            ),
+            apps,
+        );
+        sh.apply(
+            "settings",
+            "power",
+            &parse_power("* balanced:\n  power-saver:\n  performance:\n") as &dyn std::any::Any,
+        );
+        sh.windows = (1..=6)
+            .map(|i| Window {
+                id: i,
+                title: format!("Window {i}"),
+                app_id: "firefox".into(),
+                focused: i == 1,
+            })
+            .collect();
+        let idx = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "control")
+            .unwrap();
+        assert!(sh.open_panel(idx, false, Instant::now()));
+        sh.open_ms = f64::INFINITY;
+
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 1280, 400).unwrap();
+        let cr = cairo::Context::new(&surf).unwrap();
+        let pbox = sh.draw(&cr, 1280.0, 400.0).unwrap();
+        let (_, layout_rects) = sh.layout(idx, 1280.0, 400.0);
+        // notifications/list (index 0) is Hidden, app1/app and app2/app share one row (half-width).
+        assert_eq!(layout_rects[0].0, 1);
+        assert_eq!(layout_rects[0].1 .1, layout_rects[1].1 .1);
+
+        let total_hits = sh.hit_order().len();
+        assert!(total_hits >= 10);
+        let mut saw_scrolled = false;
+        for step in 0..total_hits {
+            assert!(sh.key(Key::Down));
+            sh.draw(&cr, 1280.0, 400.0);
+            if sh.panel_scroll > 0.0 {
+                saw_scrolled = true;
+            }
+            let (ci, hit) = sh.selected.unwrap();
+            let r = sh
+                .hit_order()
+                .into_iter()
+                .find(|(c, h, _)| *c == ci && *h == hit)
+                .expect("selected hit present in frame")
+                .2;
+            assert!(
+                r.0 >= pbox.0
+                    && r.0 + r.2 <= pbox.0 + pbox.2
+                    && r.1 >= pbox.1
+                    && r.1 + r.3 <= pbox.1 + pbox.3,
+                "step {step}: selected rect {r:?} not inside pbox {pbox:?}"
+            );
+        }
+        assert!(saw_scrolled, "walking all hits must scroll past the fold");
+
+        // Wrapping past the last hit returns to the first hit and scrolls back to top.
+        assert!(sh.key(Key::Down));
+        sh.draw(&cr, 1280.0, 400.0);
+        assert_eq!(sh.panel_scroll, 0.0);
+        let first = sh.hit_order()[0];
+        assert_eq!(sh.selected, Some((first.0, first.1)));
+    }
+
+    #[test]
+    fn missing_app_shows_not_installed_card_and_remove_updates_panel_line() {
+        let dir = std::env::temp_dir().join(format!(
+            "infynitae-shell-not-installed-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg_path = dir.join("config");
+        let bak_path = dir.join("panels.backup");
+        std::fs::write(
+            &cfg_path,
+            "PANEL_X=\"SUPER+X top right 380 nosuchapp/card settings/bogus settings/session\"\n",
+        )
+        .unwrap();
+
+        let mut sh = Shell::new(
+            Config::from_text(&std::fs::read_to_string(&cfg_path).unwrap()),
+            Vec::new(),
+        );
+        sh.save_paths = Some((cfg_path.clone(), bak_path.clone()));
+        let idx = sh.panels.iter().position(|p| p.panel.name == "x").unwrap();
+        assert_eq!(sh.panels[idx].cards.len(), 3);
+        assert_eq!(sh.panels[idx].cards[0].from, "nosuchapp");
+        assert_eq!(sh.panels[idx].cards[1].from, "Settings");
+        let cx = sh.cx(Size::S, None, false);
+        assert_eq!(sh.panels[idx].cards[0].card.status(&cx), Status::Ready);
+        assert_eq!(
+            sh.panels[idx].cards[0].card.title(&cx).as_deref(),
+            Some("card")
+        );
+        assert_eq!(NOT_INSTALLED_TEXT, "This app is not installed");
+
+        assert!(sh.open_panel(idx, false, Instant::now()));
+        sh.open_ms = f64::INFINITY;
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 1280, 800).unwrap();
+        let cr = cairo::Context::new(&surf).unwrap();
+        sh.draw(&cr, 1280.0, 800.0);
+
+        let remove_r = {
+            let f = sh.frame.borrow();
+            assert_eq!(f[0].2.list.len(), 1, "not-installed card has Remove button");
+            f[0].2.list[0].1
+        };
+        assert!(sh.click(
+            1280.0,
+            800.0,
+            remove_r.0 + 4.0,
+            remove_r.1 + 4.0,
+            Button::Left
+        ));
+        let idx = sh.panels.iter().position(|p| p.panel.name == "x").unwrap();
+        assert_eq!(sh.open, Some(idx));
+        assert_eq!(sh.panels[idx].cards.len(), 2);
+        assert_eq!(sh.panels[idx].cards[0].word.kind, "bogus");
+        assert_eq!(sh.panels[idx].cards[1].word.kind, "session");
+
+        let saved = std::fs::read_to_string(&cfg_path).unwrap();
+        assert!(!saved.contains("nosuchapp/card"));
+        assert!(saved.contains("settings/bogus"));
+        assert!(saved.contains("settings/session"));
+        let backup = std::fs::read_to_string(&bak_path).unwrap();
+        assert!(backup.contains("nosuchapp/card"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn window_menu_items_labels_ipc_parsing_and_actions() {
+        let ev = r#"{"event":"window_menu","element":[42,7],"position":[320.5,180.0],"on_top":true,"maximized":false,"fullscreen":false,"generation":3}"#;
+        let wm = parse_window_menu_event(ev).expect("parsed window_menu event");
+        assert_eq!(wm.element, (42, 7));
+        assert_eq!(wm.at, (320.5, 180.0));
+        assert!(wm.on_top && !wm.maximized && !wm.fullscreen);
+        assert_eq!(
+            wm.items(),
+            [
+                (WindowMenuAction::KeepOnTop, "Keep on top", true),
+                (WindowMenuAction::Minimize, "Minimize", false),
+                (WindowMenuAction::Maximize, "Maximize", false),
+                (WindowMenuAction::Fullscreen, "Fullscreen", false),
+                (WindowMenuAction::Close, "Close", false),
+            ]
+        );
+
+        let wm_max = WindowMenu {
+            maximized: true,
+            on_top: false,
+            ..wm
+        };
+        assert_eq!(
+            wm_max.items(),
+            [
+                (WindowMenuAction::KeepOnTop, "Keep on top", false),
+                (WindowMenuAction::Minimize, "Minimize", false),
+                (WindowMenuAction::Maximize, "Restore", false),
+                (WindowMenuAction::Fullscreen, "Fullscreen", false),
+                (WindowMenuAction::Close, "Close", false),
+            ]
+        );
+
+        let mut sh = Shell::new(Config::from_text(""), Vec::new());
+        assert!(sh.open_window_menu(wm));
+        assert!(sh.active());
+        frame(&sh);
+        let dump = crate::boxes::text(&sh, 1920.0, 1080.0);
+        assert!(dump.contains("windowmenu 320 180 180 186\n"));
+        assert!(dump.contains("hit window/menu 0 "));
+        assert!(dump.contains("hit window/menu 4 "));
+
+        // Clicking row 0 ("Keep on top") sends keep_on_top with on:false (toggling off) and closes
+        let (x0, y0) = parse_box_center(&dump, "hit window/menu 0 ");
+        assert!(sh.click(1920.0, 1080.0, x0, y0, Button::Left));
+        assert!(!sh.active());
+        assert_eq!(
+            std::mem::take(&mut sh.actions)[0].0,
+            Action::ShellCommand(
+                "{\"id\":1,\"cmd\":\"keep_on_top\",\"element\":[42,7],\"on\":false}\n".into()
+            )
+        );
+
+        // Keyboard Down + Enter activates item 2, Escape closes
+        sh.open_window_menu(wm_max);
+        frame(&sh);
+        assert!(sh.key(Key::Down));
+        assert!(sh.key(Key::Down));
+        assert!(sh.key(Key::Down));
+        assert!(sh.key(Key::Enter));
+        assert!(!sh.active());
+        assert_eq!(
+            std::mem::take(&mut sh.actions)[0].0,
+            Action::ShellCommand(
+                "{\"id\":1,\"cmd\":\"maximize\",\"element\":[42,7],\"maximized\":false}\n".into()
+            )
+        );
+
+        sh.open_window_menu(wm);
+        frame(&sh);
+        assert!(sh.key(Key::Escape));
+        assert!(!sh.active());
+    }
+
+    #[test]
+    fn two_screen_sizes_keep_separate_frames_pointers_and_clicks() {
+        let mut sh = shell("SUPER+A top right 380 settings/power");
+        sh.apply(
+            "settings",
+            "power",
+            &parse_power("* balanced:\n  power-saver:\n  performance:\n") as &dyn std::any::Any,
+        );
+        let idx = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "control")
+            .unwrap();
+        assert!(sh.open_panel(idx, false, Instant::now()));
+        sh.open_ms = f64::INFINITY;
+
+        // Draw first on 1920x1080, then on 1280x800 (different right-aligned x coordinates).
+        let surf1 = cairo::ImageSurface::create(cairo::Format::ARgb32, 1920, 1080).unwrap();
+        let cr1 = cairo::Context::new(&surf1).unwrap();
+        sh.draw(&cr1, 1920.0, 1080.0);
+        let hit_1920 = sh.frame.borrow()[0].2.list[2].1;
+        assert!(hit_1920.0 > 1500.0);
+
+        let surf2 = cairo::ImageSurface::create(cairo::Format::ARgb32, 1280, 800).unwrap();
+        let cr2 = cairo::Context::new(&surf2).unwrap();
+        sh.draw(&cr2, 1280.0, 800.0);
+        let hit_1280 = sh.frame.borrow()[0].2.list[2].1;
+        assert!(hit_1280.0 < 1280.0);
+
+        // Pointer motion on 1920x1080 must not highlight 1280x800.
+        assert!(sh.pointer_motion(1920.0, 1080.0, hit_1920.0 + 4.0, hit_1920.1 + 4.0));
+        assert!(sh.pointer_for(screen_key(1920.0, 1080.0)).is_some());
+        assert_eq!(sh.pointer_for(screen_key(1280.0, 800.0)), None);
+
+        // Clicking with 1920x1080 coordinates hits the card drawn at 1920x1080, not closed by 1280x800's box.
+        assert!(sh.click(
+            1920.0,
+            1080.0,
+            hit_1920.0 + 4.0,
+            hit_1920.1 + 4.0,
+            Button::Left
+        ));
+        assert_eq!(sh.open, Some(idx));
+        assert!(
+            sh.actions
+                .iter()
+                .any(|(a, _, _, _)| matches!(a, Action::Run(cmd) if cmd.contains("performance"))),
+            "expected performance action, got {:?}",
+            sh.actions.iter().map(|(a, _, _, _)| a).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn small_screen_clamps_panel_width_height_and_scrolls() {
+        let mut sh = shell(
+            "SUPER+A top right 380 settings/power settings/session settings/power settings/session",
+        );
+        sh.apply(
+            "settings",
+            "power",
+            &parse_power("* balanced:\n  power-saver:\n  performance:\n") as &dyn std::any::Any,
+        );
+        let idx = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "control")
+            .unwrap();
+        assert!(sh.open_panel(idx, false, Instant::now()));
+        sh.open_ms = f64::INFINITY;
+
+        // Screen narrower and shorter than the 380 px panel.
+        let (pbox, _, content_h) = sh.layout_local(idx, 320.0, 240.0);
+        assert_eq!(pbox, (24.0, 24.0, 272.0, 192.0));
+        assert!(content_h > pbox.3);
+
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 320, 240).unwrap();
+        let cr = cairo::Context::new(&surf).unwrap();
+        assert_eq!(sh.draw(&cr, 320.0, 240.0), Some(pbox));
+
+        // Scrolling inside the clamped panel moves content into view and clicks hit accurately.
+        sh.pointer_motion(320.0, 240.0, pbox.0 + 20.0, pbox.1 + 20.0);
+        assert!(sh.scroll(pbox.0 + 20.0, pbox.1 + 20.0, 1.0));
+        assert!(sh.panel_scroll > 0.0);
+        sh.draw(&cr, 320.0, 240.0);
+        let hit_after = sh.frame.borrow()[0].2.list[0].1;
+        assert!(sh.click(
+            320.0,
+            240.0,
+            hit_after.0 + 4.0,
+            hit_after.1 + 4.0,
+            Button::Left
+        ));
+        assert!(!sh.actions.is_empty());
+
+        // Even an extreme screen smaller than 2*MARGIN stays non-negative without panicking.
+        let (tiny_box, _, _) = sh.layout_local(idx, 32.0, 32.0);
+        assert!(tiny_box.2 >= 0.0 && tiny_box.3 >= 0.0);
+    }
+
+    #[test]
+    fn new_app_in_desktop_folder_appears_when_panel_opens() {
+        let dir = std::env::temp_dir().join(format!(
+            "infynitae-shell-apps-refresh-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let apps_dir = dir.join("applications");
+        std::fs::create_dir_all(&apps_dir).unwrap();
+        let cfg =
+            Config::from_text("PANEL_APPS=\"SUPER+A top right 380 apps/apps discord/messages\"\n");
+        let mut sh = Shell::new(cfg, crate::app::load(std::slice::from_ref(&apps_dir)));
+        sh.set_app_dirs(vec![apps_dir.clone()]);
+        assert!(sh.apps.is_empty());
+        let idx = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "apps")
+            .unwrap();
+        assert_eq!(sh.panels[idx].cards[1].provider.id(), "");
+        assert_eq!(sh.panels[idx].cards[1].app_id, None);
+
+        // Add a new .desktop file while all panels are closed.
+        std::fs::write(
+            apps_dir.join("discord.desktop"),
+            "[Desktop Entry]\nName=Discord\nExec=discord\n",
+        )
+        .unwrap();
+        let t1 = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
+        std::fs::File::open(&apps_dir)
+            .unwrap()
+            .set_modified(t1)
+            .unwrap();
+        assert!(
+            sh.apps.is_empty(),
+            "apps stay unchanged while panels are closed"
+        );
+
+        assert!(sh.open_panel(idx, false, Instant::now()));
+        assert_eq!(
+            sh.apps.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(),
+            vec!["discord"]
+        );
+        assert_eq!(sh.panels[idx].cards[1].provider.id(), "chat");
+        assert_eq!(sh.panels[idx].cards[1].app_id.as_deref(), Some("discord"));
+
+        // Removing the .desktop file updates sh.apps and card ownership on the next open too.
+        assert!(sh.close_at(Instant::now()));
+        std::fs::remove_file(apps_dir.join("discord.desktop")).unwrap();
+        let t2 = t1 + std::time::Duration::from_secs(5);
+        std::fs::File::open(&apps_dir)
+            .unwrap()
+            .set_modified(t2)
+            .unwrap();
+        assert!(sh.open_panel(idx, false, Instant::now()));
+        assert!(sh.apps.is_empty());
+        assert_eq!(sh.panels[idx].cards[1].provider.id(), "");
+        assert_eq!(sh.panels[idx].cards[1].app_id, None);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn scroll_moves_touchpad_pixels_one_to_one_and_wheel_notch_by_36px() {
+        // B3: pixel values move 1:1 and discrete wheel notches move 36 px.
+        let mut sh = Shell::new(
+            Config::from_text(
+                "PANEL_CONTROL=\"SUPER+A top right 380 settings/power settings/session settings/sound settings/network settings/bluetooth\"\n",
+            ),
+            Vec::new(),
+        );
+        sh.apply(
+            "settings",
+            "power",
+            &parse_power("* balanced:\n  power-saver:\n  performance:\n") as &dyn std::any::Any,
+        );
+        let idx = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "control")
+            .unwrap();
+        assert!(sh.open_panel(idx, false, Instant::now()));
+        sh.open_ms = f64::INFINITY;
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 1280, 300).unwrap();
+        let cr = cairo::Context::new(&surf).unwrap();
+        let pbox = sh.draw(&cr, 1280.0, 300.0).unwrap();
+        let (_, _, content_h) = sh.layout_local(idx, 1280.0, 300.0);
+        assert!(content_h > pbox.3 + 80.0);
+
+        let sx = pbox.0 + 10.0;
+        let sy = pbox.1 + 10.0;
+        assert!(sh.scroll(sx, sy, 2.5));
+        assert!((sh.panel_scroll - 2.5).abs() < 1e-6);
+        assert!(sh.scroll_notches(sx, sy, 1.0));
+        assert!((sh.panel_scroll - 38.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn scroll_handles_touchpad_sizes_and_card_to_panel_handover() {
+        // F3: touchpad-sized pixel values (0.5, 2.5, 3.5, 15), 1 notch (36 px),
+        // and handover from a scrollable card's own scroll to panel_scroll.
+        let mut sh = Shell::new(
+            Config::from_text(
+                "PANEL_CONTROL=\"SUPER+A top right 380 settings/power windows/list settings/session\"\n",
+            ),
+            Vec::new(),
+        );
+        sh.apply(
+            "settings",
+            "power",
+            &parse_power("* balanced:\n  power-saver:\n  performance:\n") as &dyn std::any::Any,
+        );
+        sh.windows = (1..=10)
+            .map(|i| Window {
+                id: i,
+                title: format!("Win {i}"),
+                app_id: "kitty".into(),
+                focused: i == 1,
+            })
+            .collect();
+        let idx = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "control")
+            .unwrap();
+        assert!(sh.open_panel(idx, false, Instant::now()));
+        sh.open_ms = f64::INFINITY;
+
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 1280, 340).unwrap();
+        let cr = cairo::Context::new(&surf).unwrap();
+        let pbox = sh.draw(&cr, 1280.0, 340.0).unwrap();
+        let (_, _, content_h) = sh.layout_local(idx, 1280.0, 340.0);
+        assert!(content_h > pbox.3 + 80.0);
+
+        // Over settings/power (non-scrolling card): pixel amounts apply 1:1.
+        let power_pt = {
+            let f = sh.frame.borrow();
+            let r = f[0].1;
+            (r.0 + 10.0, r.1 + 10.0)
+        };
+        for dy in [0.5, 2.5, 3.5, 15.0] {
+            let before = sh.panel_scroll;
+            assert!(sh.scroll(power_pt.0, power_pt.1, dy));
+            assert!(
+                (sh.panel_scroll - (before + dy)).abs() < 1e-6,
+                "scroll({dy}) moved {} instead of {dy}",
+                sh.panel_scroll - before
+            );
+        }
+        assert!((sh.panel_scroll - 21.5).abs() < 1e-6);
+        assert!(sh.scroll_notches(power_pt.0, power_pt.1, 1.0));
+        assert!((sh.panel_scroll - 57.5).abs() < 1e-6);
+
+        // Reset panel scroll and test card -> panel handover on windows/list (10 windows, 6 visible -> max_scroll = 4).
+        sh.panel_scroll = 0.0;
+        sh.draw(&cr, 1280.0, 340.0);
+        let win_pt = {
+            let f = sh.frame.borrow();
+            let r = f[1].1;
+            (r.0 + 10.0, r.1 + 40.0)
+        };
+        for _ in 0..4 {
+            assert!(sh.scroll_notches(win_pt.0, win_pt.1, 1.0));
+            assert_eq!(sh.panel_scroll, 0.0, "card consumes notches until bottom");
+        }
+        // At card's bottom, next notch hands over to panel_scroll.
+        assert!(sh.scroll_notches(win_pt.0, win_pt.1, 1.0));
+        assert!((sh.panel_scroll - 36.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn left_and_right_step_selected_volume_slider_and_choice_strip() {
+        // B6: Left/Right step selected slider and choice strip.
+        use crate::cards::sound::{Brightness, VolumeData};
+        let mut sh = shell("SUPER+A top right 380 sound/volume settings/power");
+        sh.apply(
+            "sound",
+            "volume",
+            &VolumeData {
+                level: Some(50),
+                muted: false,
+                output: "Speakers".into(),
+            } as &dyn std::any::Any,
+        );
+        sh.apply(
+            "sound",
+            "brightness",
+            &Brightness(None) as &dyn std::any::Any,
+        );
+        sh.apply(
+            "settings",
+            "power",
+            &parse_power("* balanced:\n  power-saver:\n  performance:\n") as &dyn std::any::Any,
+        );
+        let idx = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "control")
+            .unwrap();
+        assert!(sh.open_panel(idx, false, Instant::now()));
+        sh.open_ms = f64::INFINITY;
+
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 1280, 800).unwrap();
+        let cr = cairo::Context::new(&surf).unwrap();
+        sh.draw(&cr, 1280.0, 800.0);
+
+        // Card 0 hits: 0 = mute, 1 = volume slider.
+        let order = sh.hit_order();
+        assert!(order.iter().any(|(c, h, _)| *c == 0 && *h == 1));
+        assert!(sh.key(Key::Down)); // hit 0 (mute)
+        assert!(sh.key(Key::Down)); // hit 1 (volume slider)
+        assert_eq!(sh.selected, Some((0, 1)));
+
+        assert!(sh.key(Key::Right));
+        assert!(sh
+            .actions
+            .iter()
+            .any(|(a, ..)| matches!(a, Action::Run(cmd) if cmd.contains("55%"))));
+        sh.actions.clear();
+
+        assert!(sh.key(Key::Left));
+        assert!(sh
+            .actions
+            .iter()
+            .any(|(a, ..)| matches!(a, Action::Run(cmd) if cmd.contains("50%"))));
+        sh.actions.clear();
+
+        // Move to card 1 (power mode choice strip): step Right from balanced -> performance.
+        assert!(sh.key(Key::Down));
+        assert_eq!(sh.selected.unwrap().0, 1);
+        assert!(sh.key(Key::Right));
+        assert!(sh
+            .actions
+            .iter()
+            .any(|(a, ..)| matches!(a, Action::Run(cmd) if cmd.contains("performance"))));
+    }
+
+    #[test]
+    fn home_end_and_page_keys_navigate_and_scroll_panel() {
+        // B6: Home/End pick first/last hit; PageUp/PageDown scroll by height minus one row.
+        let mut sh = Shell::new(
+            Config::from_text(
+                "PANEL_CONTROL=\"SUPER+A top right 380 settings/power settings/session windows/list\"\n",
+            ),
+            Vec::new(),
+        );
+        sh.apply(
+            "settings",
+            "power",
+            &parse_power("* balanced:\n  power-saver:\n  performance:\n") as &dyn std::any::Any,
+        );
+        sh.windows = (1..=6)
+            .map(|i| Window {
+                id: i,
+                title: format!("Win {i}"),
+                app_id: "kitty".into(),
+                focused: i == 1,
+            })
+            .collect();
+        let idx = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "control")
+            .unwrap();
+        assert!(sh.open_panel(idx, false, Instant::now()));
+        sh.open_ms = f64::INFINITY;
+
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 1280, 360).unwrap();
+        let cr = cairo::Context::new(&surf).unwrap();
+        let pbox = sh.draw(&cr, 1280.0, 360.0).unwrap();
+        let (_, _, content_h) = sh.layout_local(idx, 1280.0, 360.0);
+        let max_scroll = (content_h - pbox.3).max(0.0);
+        assert!(max_scroll > 50.0);
+
+        let order = sh.hit_order();
+        assert!(sh.key(Key::End));
+        assert!(sh.keyboard);
+        let last = order.last().unwrap();
+        assert_eq!(sh.selected, Some((last.0, last.1)));
+        assert!(sh.panel_scroll > 0.0);
+
+        assert!(sh.key(Key::Home));
+        assert_eq!(sh.selected, Some((order[0].0, order[0].1)));
+        assert_eq!(sh.panel_scroll, 0.0);
+
+        let expected_page = (pbox.3 - crate::ui::ROW_H)
+            .max(crate::ui::ROW_H)
+            .min(max_scroll);
+        assert!(sh.key(Key::PageDown));
+        assert!((sh.panel_scroll - expected_page).abs() < 1e-6);
+        assert!(sh.key(Key::PageUp));
+        assert_eq!(sh.panel_scroll, 0.0);
+    }
+
+    #[test]
+    fn window_menu_home_end_and_touch_tap() {
+        let ev = r#"{"event":"window_menu","element":[42,7],"position":[320.5,180.0],"on_top":true,"maximized":false,"fullscreen":false,"generation":3}"#;
+        let wm = parse_window_menu_event(ev).expect("parsed window_menu event");
+        let mut sh = Shell::new(Config::from_text(""), Vec::new());
+        assert!(sh.open_window_menu(wm));
+        frame(&sh);
+
+        assert!(sh.key(Key::End));
+        assert!(sh.keyboard);
+        assert_eq!(sh.selected, Some((0, 4)));
+        assert!(sh.key(Key::Home));
+        assert_eq!(sh.selected, Some((0, 0)));
+
+        let dump = crate::boxes::text(&sh, 1920.0, 1080.0);
+        let (x4, y4) = parse_box_center(&dump, "hit window/menu 4 ");
+        assert!(sh.touch_down_on(1, 1920.0, 1080.0, 0, x4, y4));
+        assert!(sh.touch_up(0));
+        assert!(!sh.active());
+        assert_eq!(
+            std::mem::take(&mut sh.actions)[0].0,
+            Action::ShellCommand("{\"id\":1,\"cmd\":\"close\",\"element\":[42,7]}\n".into())
+        );
+    }
+
+    #[test]
+    fn delete_only_acts_where_card_has_remove_action() {
+        // B6: Delete runs remove/dismiss/close where supported and does nothing otherwise.
+        let apps = vec![App {
+            id: "kitty".into(),
+            name: "Kitty".into(),
+            exec: "kitty".into(),
+            ..Default::default()
+        }];
+        let mut sh = Shell::new(
+            Config::from_text(
+                "PANEL_CONTROL=\"SUPER+A top right 380 windows/list notifications/list apps/list\"\n",
+            ),
+            apps,
+        );
+        let mut win_cfg = crate::cards::settings_rows::ConfigData::default();
+        win_cfg
+            .now
+            .insert("PLACE_DEV".into(), "10,20,1.0 Dev".into());
+        sh.apply("windows", "config", &win_cfg as &dyn std::any::Any);
+        sh.windows = vec![Window {
+            id: 42,
+            title: "Term".into(),
+            app_id: "kitty".into(),
+            focused: true,
+        }];
+        sh.notes = vec![crate::card::Note {
+            id: 7,
+            app: "Mail".into(),
+            summary: "New mail".into(),
+            body: String::new(),
+            actions: Vec::new(),
+            urgency: 1,
+            time: "12:00".into(),
+        }];
+        let idx = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "control")
+            .unwrap();
+        assert!(sh.open_panel(idx, false, Instant::now()));
+        sh.open_ms = f64::INFINITY;
+
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 1280, 800).unwrap();
+        let cr = cairo::Context::new(&surf).unwrap();
+        sh.draw(&cr, 1280.0, 800.0);
+
+        // Card 0: windows/list -> hit 1 = Window 42, hit 2 = Close button, hit 3 = Place "Dev".
+        assert!(sh.key(Key::Down));
+        assert_eq!(sh.selected.unwrap().0, 0);
+        assert!(sh.key(Key::Delete));
+        assert_eq!(
+            sh.actions.iter().map(|(a, ..)| a).collect::<Vec<_>>(),
+            vec![&Action::CloseWindow(42)]
+        );
+        sh.actions.clear();
+
+        // Advance to Place row (hit 3) on card 0: Delete must do nothing.
+        while sh.selected.is_some_and(|(c, h)| c == 0 && h < 3) {
+            assert!(sh.key(Key::Down));
+        }
+        assert_eq!(sh.selected, Some((0, 3)));
+        assert!(!sh.key(Key::Delete));
+        assert!(sh.actions.is_empty());
+
+        // Advance to Card 1 (notifications/list): Delete dismisses note 7.
+        while sh.selected.is_some_and(|(c, _)| c < 1) {
+            assert!(sh.key(Key::Down));
+        }
+        assert_eq!(sh.selected.unwrap().0, 1);
+        assert!(sh.key(Key::Delete));
+        assert_eq!(
+            sh.actions.iter().map(|(a, ..)| a).collect::<Vec<_>>(),
+            vec![&Action::Dismiss(7)]
+        );
+        sh.actions.clear();
+
+        // Advance to Card 2 (apps/list): Delete must do nothing.
+        while sh.selected.is_some_and(|(c, _)| c < 2) {
+            assert!(sh.key(Key::Down));
+        }
+        assert_eq!(sh.selected.unwrap().0, 2);
+        assert!(!sh.key(Key::Delete));
+        assert!(sh.actions.is_empty());
+    }
+
+    #[test]
+    fn touch_tap_toggles_switch_and_clears_hover_without_sticking() {
+        // B4: touch down/up on a switch taps it and leaves no pointer/hover stuck.
+        use crate::cards::settings_rows::ConfigData;
+        let mut sh = shell("SUPER+A top right 380 settings/games");
+        let mut data = ConfigData::default();
+        data.programs.insert("gamemoded".into());
+        data.default.insert("GAME_MODE".into(), "false".into());
+        sh.apply("settings", "config", &data as &dyn std::any::Any);
+        let idx = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "control")
+            .unwrap();
+        assert!(sh.open_panel(idx, false, Instant::now()));
+        sh.open_ms = f64::INFINITY;
+
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 1280, 800).unwrap();
+        let cr = cairo::Context::new(&surf).unwrap();
+        sh.draw(&cr, 1280.0, 800.0);
+
+        let switch_r = {
+            let f = sh.frame.borrow();
+            f[0].2
+                .list
+                .iter()
+                .find(|(id, _)| *id == 101)
+                .expect("GAME_MODE switch hit")
+                .1
+        };
+        let sx = switch_r.0 + switch_r.2 / 2.0;
+        let sy = switch_r.1 + switch_r.3 / 2.0;
+
+        assert!(sh.touch_down(1280.0, 800.0, 0, sx, sy));
+        // Switch has not toggled on down yet (could become a vertical scroll drag).
+        assert!(sh.actions.is_empty());
+        assert!(sh.touch_up(0));
+        assert!(
+            sh.actions
+                .iter()
+                .any(|(a, ..)| matches!(a, Action::Run(cmd) if cmd.contains("GAME_MODE") && cmd.contains("true"))),
+            "tap on switch must queue toggle command: {:?}",
+            sh.actions
+        );
+        assert_eq!(sh.pointer, None);
+        assert!(sh.hovered.is_empty());
+        assert_eq!(sh.pressed, None);
+    }
+
+    #[test]
+    fn touch_vertical_drag_on_non_draggable_scrolls_panel_without_tapping() {
+        // B4: vertical touch drag starting on a switch/button scrolls the panel and does not click.
+        use crate::cards::settings_rows::ConfigData;
+        let mut sh = Shell::new(
+            Config::from_text(
+                "PANEL_CONTROL=\"SUPER+A top right 380 settings/games settings/power settings/session\"\n",
+            ),
+            Vec::new(),
+        );
+        let mut data = ConfigData::default();
+        data.programs.insert("gamemoded".into());
+        data.default.insert("GAME_MODE".into(), "false".into());
+        sh.apply("settings", "config", &data as &dyn std::any::Any);
+        sh.apply(
+            "settings",
+            "power",
+            &parse_power("* balanced:\n  power-saver:\n  performance:\n") as &dyn std::any::Any,
+        );
+        let idx = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "control")
+            .unwrap();
+        assert!(sh.open_panel(idx, false, Instant::now()));
+        sh.open_ms = f64::INFINITY;
+
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 1280, 320).unwrap();
+        let cr = cairo::Context::new(&surf).unwrap();
+        sh.draw(&cr, 1280.0, 320.0);
+
+        let switch_r = sh.frame.borrow()[0]
+            .2
+            .list
+            .iter()
+            .find(|(id, _)| *id == 101)
+            .unwrap()
+            .1;
+        let sx = switch_r.0 + switch_r.2 / 2.0;
+        let sy = switch_r.1 + switch_r.3 / 2.0;
+
+        assert!(sh.touch_down(1280.0, 320.0, 0, sx, sy));
+        assert!(sh.touch_motion(0, sx, sy - 40.0));
+        assert!((sh.panel_scroll - 40.0).abs() < 1e-6);
+        let _ = sh.touch_up(0);
+        assert!(
+            sh.actions.is_empty(),
+            "vertical scroll drag must not activate switch"
+        );
+    }
+
+    #[test]
+    fn touch_drag_on_slider_moves_it_and_cancel_clears_state() {
+        // B4: touch drag on a slider moves it; touch_cancel drops pressed/drag state without sticking.
+        use crate::cards::settings_rows::ConfigData;
+        use crate::cards::sound::{Brightness, VolumeData};
+        let mut sh = shell("SUPER+A top right 380 sound/volume settings/input");
+        sh.apply(
+            "sound",
+            "volume",
+            &VolumeData {
+                level: Some(20),
+                muted: false,
+                output: "Speakers".into(),
+            } as &dyn std::any::Any,
+        );
+        sh.apply(
+            "sound",
+            "brightness",
+            &Brightness(None) as &dyn std::any::Any,
+        );
+        let mut data = ConfigData::default();
+        data.default
+            .insert("KEYBOARD_REPEAT_DELAY".into(), "400".into());
+        sh.apply("settings", "config", &data as &dyn std::any::Any);
+        let idx = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "control")
+            .unwrap();
+        assert!(sh.open_panel(idx, false, Instant::now()));
+        sh.open_ms = f64::INFINITY;
+
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 1280, 800).unwrap();
+        let cr = cairo::Context::new(&surf).unwrap();
+        sh.draw(&cr, 1280.0, 800.0);
+
+        // 1) Drag volume slider to 75% via touch.
+        let vol_r = sh.frame.borrow()[0]
+            .2
+            .list
+            .iter()
+            .find(|(id, _)| *id == 1)
+            .unwrap()
+            .1;
+        let sy = vol_r.1 + vol_r.3 / 2.0;
+        assert!(sh.touch_down(1280.0, 800.0, 1, vol_r.0 + vol_r.2 * 0.25, sy));
+        assert!(sh.touch_motion(1, vol_r.0 + vol_r.2 * 0.75, sy));
+        assert!(sh.touch_up(1));
+        assert!(sh
+            .actions
+            .iter()
+            .any(|(a, ..)| matches!(a, Action::Run(cmd) if cmd.contains("75%"))));
+        assert_eq!(sh.pressed, None);
+        assert_eq!(sh.pointer, None);
+        sh.actions.clear();
+
+        // 2) Start touch drag on settings/input slider (commits only on release), then touch_cancel.
+        let input_slider_r = sh.frame.borrow()[1]
+            .2
+            .list
+            .iter()
+            .find(|(id, _)| sh.frame.borrow()[1].2.is_draggable(*id))
+            .expect("input slider marked draggable")
+            .1;
+        let iy = input_slider_r.1 + input_slider_r.3 / 2.0;
+        assert!(sh.touch_down(
+            1280.0,
+            800.0,
+            2,
+            input_slider_r.0 + input_slider_r.2 * 0.2,
+            iy
+        ));
+        assert!(sh.touch_motion(2, input_slider_r.0 + input_slider_r.2 * 0.9, iy));
+        assert!(sh.pressed.is_some());
+        assert!(sh.touch_cancel());
+        assert_eq!(sh.pressed, None);
+        assert_eq!(sh.pointer, None);
+        assert!(sh.hovered.is_empty());
+        assert!(
+            sh.actions.is_empty(),
+            "cancelled slider drag must not commit: {:?}",
+            sh.actions
+        );
+        // Subsequent pointer motion only hovers and must not drag or commit the cancelled slider.
+        assert!(sh.pointer_motion(1280.0, 800.0, input_slider_r.0 + 10.0, iy));
+        assert_eq!(sh.pressed, None);
+        assert!(!sh.release());
+        assert!(sh.actions.is_empty());
+    }
+
+    #[test]
+    fn multi_output_scroll_and_touch_only_act_on_visible_output() {
+        let mut sh = Shell::new(
+            Config::from_text(
+                "PANEL_CONTROL=\"SUPER+A top right 380 settings/power settings/session settings/sound settings/network\"\n",
+            ),
+            Vec::new(),
+        );
+        sh.apply(
+            "settings",
+            "power",
+            &parse_power("* balanced:\n  power-saver:\n  performance:\n") as &dyn std::any::Any,
+        );
+        let idx = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "control")
+            .unwrap();
+        let out1: OutputId = 1;
+        let out2: OutputId = 2;
+        assert!(sh.open_panel_on(Some(out2), idx, false, Instant::now()));
+        sh.open_ms = f64::INFINITY;
+
+        let surf2 = cairo::ImageSurface::create(cairo::Format::ARgb32, 1280, 300).unwrap();
+        let cr2 = cairo::Context::new(&surf2).unwrap();
+        let pbox2 = sh.draw_on(out2, &cr2, 1280.0, 300.0).unwrap();
+
+        // Scroll and touch on out1 (not showing the panel) do nothing.
+        assert!(!sh.scroll_on(out1, 1920.0, 1080.0, 100.0, 100.0, 10.0));
+        assert!(!sh.scroll_notches_on(out1, 1920.0, 1080.0, 100.0, 100.0, 1.0));
+        assert!(!sh.touch_down_on(out1, 1920.0, 1080.0, 0, 100.0, 100.0));
+        assert_eq!(sh.panel_scroll, 0.0);
+        assert_eq!(sh.open, Some(idx));
+
+        // Scroll on out2 moves panel_scroll on out2.
+        assert!(sh.scroll_on(out2, 1280.0, 300.0, pbox2.0 + 10.0, pbox2.1 + 10.0, 5.0));
+        assert!((sh.panel_scroll - 5.0).abs() < 1e-6);
+
+        // Touch tap on performance button on out2 activates it.
+        sh.draw_on(out2, &cr2, 1280.0, 300.0);
+        let perf_r = sh.frame_hits(Some(out2))[0].2.list[2].1;
+        assert!(sh.touch_down_on(out2, 1280.0, 300.0, 0, perf_r.0 + 4.0, perf_r.1 + 4.0));
+        assert!(sh.touch_up(0));
+        assert!(sh
+            .actions
+            .iter()
+            .any(|(a, ..)| matches!(a, Action::Run(cmd) if cmd.contains("performance"))));
     }
 }

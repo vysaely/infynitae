@@ -13,6 +13,7 @@ use crate::input::bindings;
 use crate::input::interaction::Interaction;
 use crate::input::keys::{self, KeyAction, KeyCapture};
 use crate::input::ownership::Owner;
+use crate::input::{GestureKind, TouchpadGesture};
 use crate::output::{self, OutputDescriptor, OutputId, OutputModel};
 use crate::pointer::{self, PointerState};
 use crate::protocol::Effect;
@@ -219,6 +220,7 @@ impl Core {
                 }
                 self.input.clock.accepted(time_us);
                 self.closed_windows.clear();
+                self.arm_edge_swipe(slot, output, p);
                 self.touch_down(slot, output, p, ms(time_us), out);
                 self.touch_resize_settle(out);
                 self.physical_input_activity = true;
@@ -229,6 +231,10 @@ impl Core {
                     return Err(EntryError::InvalidEvent);
                 }
                 self.input.clock.accepted(time_us);
+                if self.step_edge_swipe(slot, p, out) {
+                    self.physical_input_activity = true;
+                    return Ok(());
+                }
                 if self.touches.on_window(slot) {
                     self.window_gesture_step(slot, p, out);
                     self.physical_input_activity = true;
@@ -245,6 +251,9 @@ impl Core {
             }
             PhysicalEvent::TouchUp { slot, time_us } => {
                 self.input.clock.accepted(time_us);
+                if self.touches.edge_swipe.is_some_and(|e| e.slot == slot) {
+                    self.touches.edge_swipe = None;
+                }
                 let crate::touch::Lift {
                     on_surface,
                     double_tap,
@@ -274,8 +283,91 @@ impl Core {
                 self.touch_resize_settle(out);
                 Ok(())
             }
+            PhysicalEvent::TabletTap { output, p, time_us } => {
+                if !(p.0.is_finite() && p.1.is_finite()) {
+                    return Err(EntryError::InvalidEvent);
+                }
+                self.input.clock.accepted(time_us);
+                self.closed_windows.clear();
+                if self.output(output).is_some() && !self.input.interaction.active() {
+                    self.tap_focus(output, p, out);
+                    out.extend(self.reconcile_constraints());
+                }
+                self.physical_input_activity = true;
+                Ok(())
+            }
             PhysicalEvent::JumpToWindow { element } => {
                 self.jump_to_window(element, Some(authority::Authorized::mint()), out);
+                Ok(())
+            }
+            PhysicalEvent::GestureSwipeBegin { fingers, time_us } => {
+                self.input.clock.accepted(time_us);
+                self.physical_input_activity = true;
+                let proof = self.touchpad_gestures.then(authority::Authorized::mint);
+                self.gesture_swipe_begin(fingers, ms(time_us), proof, out);
+                Ok(())
+            }
+            PhysicalEvent::GestureSwipeUpdate { delta, time_us } => {
+                if !(delta.0.is_finite() && delta.1.is_finite()) {
+                    return Err(EntryError::InvalidEvent);
+                }
+                self.input.clock.accepted(time_us);
+                self.physical_input_activity = true;
+                let proof = matches!(
+                    self.input.gesture,
+                    Some(TouchpadGesture::Pan | TouchpadGesture::FourFingerSwipe { .. })
+                )
+                .then(authority::Authorized::mint);
+                self.gesture_swipe_update(delta, ms(time_us), proof, out);
+                Ok(())
+            }
+            PhysicalEvent::GestureSwipeEnd { cancelled, time_us } => {
+                self.input.clock.accepted(time_us);
+                self.physical_input_activity = true;
+                self.gesture_swipe_end(cancelled, ms(time_us), out);
+                Ok(())
+            }
+            PhysicalEvent::GesturePinchBegin { fingers, time_us } => {
+                self.input.clock.accepted(time_us);
+                self.physical_input_activity = true;
+                self.gesture_pinch_begin(fingers, ms(time_us), out);
+                Ok(())
+            }
+            PhysicalEvent::GesturePinchUpdate {
+                delta,
+                scale,
+                rotation,
+                time_us,
+            } => {
+                let finite = [delta.0, delta.1, scale, rotation]
+                    .iter()
+                    .all(|v| v.is_finite());
+                if !finite {
+                    return Err(EntryError::InvalidEvent);
+                }
+                self.input.clock.accepted(time_us);
+                self.physical_input_activity = true;
+                let proof = matches!(self.input.gesture, Some(TouchpadGesture::Pinch { .. }))
+                    .then(authority::Authorized::mint);
+                self.gesture_pinch_update(delta, scale, rotation, ms(time_us), proof, out);
+                Ok(())
+            }
+            PhysicalEvent::GesturePinchEnd { cancelled, time_us } => {
+                self.input.clock.accepted(time_us);
+                self.physical_input_activity = true;
+                self.gesture_pinch_end(cancelled, ms(time_us), out);
+                Ok(())
+            }
+            PhysicalEvent::GestureHoldBegin { fingers, time_us } => {
+                self.input.clock.accepted(time_us);
+                self.physical_input_activity = true;
+                self.gesture_hold_begin(fingers, ms(time_us), out);
+                Ok(())
+            }
+            PhysicalEvent::GestureHoldEnd { cancelled, time_us } => {
+                self.input.clock.accepted(time_us);
+                self.physical_input_activity = true;
+                self.gesture_hold_end(cancelled, ms(time_us), out);
                 Ok(())
             }
         }
@@ -609,9 +701,86 @@ impl Core {
     }
 
     /// A window gesture that was resizing ended: the last configure, without `resizing`.
-    fn touch_resize_settle(&mut self, out: &mut Vec<Effect>) {
+    pub(crate) fn touch_resize_settle(&mut self, out: &mut Vec<Effect>) {
         if self.touches.take_resize_done() && self.resize.is_some_and(|r| !r.released) {
             self.end_resize(out);
+        }
+    }
+
+    /// Cancels any active touches in Core (when the touchscreen disconnects or the session locks).
+    pub fn clear_touches(&mut self) -> Vec<Effect> {
+        let mut out = Vec::new();
+        if self.touches.clear() {
+            out.push(Effect::TouchCancel);
+        }
+        self.touch_resize_settle(&mut out);
+        out
+    }
+
+    /// Arms a screen-edge swipe candidate when the first finger lands near an output edge
+    /// (unless it landed inside an open non-strip overlay or panel).
+    fn arm_edge_swipe(&mut self, slot: u32, output: output::OutputId, p: (f64, f64)) {
+        if !self.touch_edge_swipe || self.locked() || self.input.interaction.active() {
+            self.touches.edge_swipe = None;
+            return;
+        }
+        let no_other_fingers = !self.touches.any_point(|_| true)
+            && self.touches.canvas.is_none()
+            && self.touches.window.is_none();
+        if !no_other_fingers {
+            self.touches.edge_swipe = None;
+            return;
+        }
+        let Some(o) = self.output(output) else {
+            return;
+        };
+        let extent = o.logical_extent();
+        let Some(candidate) = crate::touch::EdgeSwipeCandidate::from_edge(slot, output, p, extent)
+        else {
+            return;
+        };
+        // An above-canvas layer thicker than a 2px edge hover strip is an open panel or OSK:
+        // leave its touches alone even when the finger lands within 2px of the screen edge.
+        let on_open_overlay = self
+            .layer_hit(output, p, true)
+            .and_then(|h| self.layer(h.layer))
+            .is_some_and(|r| r.geometry.size.w > 8 && r.geometry.size.h > 8);
+        if !on_open_overlay {
+            self.touches.edge_swipe = Some(candidate);
+        }
+    }
+
+    /// Advances an armed edge-swipe candidate; returns `true` when it opens an edge panel.
+    fn step_edge_swipe(&mut self, slot: u32, p: (f64, f64), out: &mut Vec<Effect>) -> bool {
+        let Some(cand) = self.touches.edge_swipe else {
+            return false;
+        };
+        if cand.slot != slot {
+            return false;
+        }
+        match cand.step(p) {
+            crate::touch::EdgeSwipeStep::Pending => false,
+            crate::touch::EdgeSwipeStep::Cancel => {
+                self.touches.edge_swipe = None;
+                false
+            }
+            crate::touch::EdgeSwipeStep::Trigger(edge_pt) => {
+                self.touches.edge_swipe = None;
+                // Only hijack into pointer-at-edge if an above-canvas strip exists on that edge.
+                if self.layer_hit(cand.output, edge_pt, true).is_none() {
+                    return false;
+                }
+                if self.touches.clear() {
+                    out.push(Effect::TouchCancel);
+                }
+                self.touch_resize_settle(out);
+                self.pointer = pointer::PointerState::Located {
+                    output: cand.output,
+                    p: edge_pt,
+                };
+                self.true_position_into(out);
+                true
+            }
         }
     }
 
@@ -822,6 +991,17 @@ impl Core {
                     if self.stage.is_above(id) == on {
                         out.push(Effect::KeptOnTop { element: id, on });
                     }
+                }
+                return;
+            }
+            KeyAction::WindowMenu => {
+                if let Some(id) = self.hovered_window() {
+                    self.raise_and_focus(id, out);
+                    if let PointerState::Located { p, .. } = self.pointer {
+                        self.window_menu = Some((id, p));
+                    }
+                } else if let Some(id) = self.focus.target() {
+                    self.show_window_menu(id, crate::geom::LocalPoint { x: 0, y: 0 });
                 }
                 return;
             }
@@ -1942,6 +2122,9 @@ impl Core {
     ) {
         match self.input.interaction {
             Interaction::CameraPan { output, camera, .. } => {
+                if matches!(self.input.gesture, Some(TouchpadGesture::Pan)) {
+                    return;
+                }
                 let _panned = self.pan_step(proof, output, camera, delta, out);
                 // NEGATIVE CONTROL (INV-INPUT-3 bypass switch, TST-05): pan motion also reaches
                 // the client. The x8 tests must fail under it.
@@ -2284,6 +2467,26 @@ impl Core {
         axis: crate::input::Axis,
         out: &mut Vec<Effect>,
     ) {
+        // Scroll amount: negative is scroll up (away from user, zoom in)
+        // positive is scroll down (towards user, zoom out)
+        let delta = if axis.v120.1 != 0 {
+            axis.v120.1 as f64 / 120.0
+        } else if axis.amount.1.abs() > 0.001 {
+            axis.amount.1 / 15.0
+        } else {
+            0.0
+        };
+        if delta == 0.0 {
+            return;
+        }
+
+        // Each full scroll detent changes zoom by ~15%
+        let factor = 1.15_f64.powf(-delta);
+        self.zoom_by_factor(proof, factor, out);
+    }
+
+    /// Zooms the pointer output's camera by `factor` around the pointer position.
+    fn zoom_by_factor(&mut self, proof: authority::Authorized, factor: f64, out: &mut Vec<Effect>) {
         let PointerState::Located { output, p } = self.pointer else {
             return;
         };
@@ -2324,21 +2527,9 @@ impl Core {
             return;
         };
 
-        // Scroll amount: negative is scroll up (away from user, zoom in)
-        // positive is scroll down (towards user, zoom out)
-        let delta = if axis.v120.1 != 0 {
-            axis.v120.1 as f64 / 120.0
-        } else if axis.amount.1.abs() > 0.001 {
-            axis.amount.1 / 15.0
-        } else {
-            0.0
-        };
-        if delta == 0.0 {
+        if !factor.is_finite() || factor <= 0.0 {
             return;
         }
-
-        // Each full scroll detent changes zoom by ~15%
-        let factor = 1.15_f64.powf(-delta);
         if self.zoom_feel != crate::navigation::ZoomFeel::Instant {
             if self
                 .cameras
@@ -2466,7 +2657,20 @@ impl Core {
             self.input.ownership.press(button, Owner::Compositor);
             return;
         }
-        let camera = self.cameras.camera_for_output(output);
+        if !self.input.ownership.client_owns_any()
+            && self.layer_hit(output, p, true).is_none()
+            && let Some((_, action)) = self
+                .key_bindings
+                .chords
+                .iter()
+                .find(|(c, _)| c.key == button && c.mods == mods)
+        {
+            self.input.ownership.press(button, Owner::Compositor);
+            if let Some(action) = *action {
+                self.apply_key_action(action, proof, out);
+            }
+            return;
+        }
         // G-OB24 is met (C12.F14.5): a pan at any zoom keeps the output's lattice reference
         let acquire = bindings::is_pan_binding(button, mods)
             // INV-INPUT-2: never while the client owns a button
@@ -2616,57 +2820,24 @@ impl Core {
             self.input.ownership.press(button, Owner::Compositor);
             return;
         }
-        if let (true, Some(camera), Some(start)) =
-            (acquire, camera, camera.and_then(|c| self.cameras.center(c)))
-        {
-            let mut start = start;
-            if self.fullscreen_pan
-                && let Some(pres) = self.presentation(output)
-                && !self.is_presentation_suppressed(output)
-                && let Some((anchor, tree, _)) = self.stage.mapped(pres)
-            {
-                let extent = self
-                    .output(output)
-                    .map(|m| m.logical_extent())
-                    .unwrap_or((1920.0, 1080.0));
-                let margin_x = ((extent.0 - f64::from(tree.geometry.size.w)) / 2.0).max(0.0);
-                let margin_y = ((extent.1 - f64::from(tree.geometry.size.h)) / 2.0).max(0.0);
-                let pres_center = crate::geom::CanvasPos {
-                    x: crate::geom::q16(anchor.x as f64 - margin_x + extent.0 / 2.0),
-                    y: crate::geom::q16(anchor.y as f64 - margin_y + extent.1 / 2.0),
-                };
-                if let Some(p) = proof {
-                    self.cameras
-                        .set_zoom_and_center(p, camera, 1.0, pres_center);
-                }
-                start = pres_center;
-            }
-            // M6 Idle → Panning: the press is consumed; KeepFocus (no event).
-            // OB-4: Dismiss active popup grabs before the camera change.
-            self.input.interaction = Interaction::CameraPan {
-                output,
-                camera,
-                initiator: button,
-                start,
-                sum: (0.0, 0.0),
-            };
-            if self.fullscreen_pan
-                && self.presentation(output).is_some()
-                && !self.is_presentation_suppressed(output)
-            {
-                self.suppress_presentation(output, out);
-            }
+        if acquire && self.begin_camera_pan(output, button, proof, out) {
             self.input.ownership.press(button, Owner::Compositor);
-            if let Some(target) = self.focus.target() {
-                out.push(Effect::DismissPopupGrab(target));
-            }
             return;
         }
         self.input.ownership.press(button, Owner::Client);
-        // Click-to-focus (INV-INPUT-8, M11): an explicit user action.
-        // If the click hits an element, that element gains ActiveElementFocus. A click on a layer
-        // surface above the Canvas reaches it instead, and focuses it when it is on-demand
-        // interactive (L3, L5); below the Canvas it is reached only where no element is.
+        self.tap_focus(output, p, out);
+        out.push(Effect::PointerButton {
+            button,
+            pressed: true,
+            time_ms,
+        });
+        out.push(Effect::PointerFrame);
+    }
+
+    /// Click- and tap-to-focus (INV-INPUT-8, M11): a window under `(output, p)` is raised and
+    /// focused; an on-demand layer surface above the Canvas (or below it where no window is)
+    /// takes the keyboard (L3, L5).
+    fn tap_focus(&mut self, output: OutputId, p: (f64, f64), out: &mut Vec<Effect>) {
         let pt = crate::geom::OutputLogicalPoint { x: p.0, y: p.1 };
         let on_layer = self.layer_hit(output, p, true);
         let element = if on_layer.is_none() {
@@ -2691,12 +2862,235 @@ impl Core {
         {
             out.extend(self.focus.layer_take(h.layer, false));
         }
-        out.push(Effect::PointerButton {
-            button,
-            pressed: true,
-            time_ms,
-        });
-        out.push(Effect::PointerFrame);
+    }
+
+    /// Starts a `CameraPan` interaction on `output` with `initiator` (`0` for touchpad swipe).
+    fn begin_camera_pan(
+        &mut self,
+        output: OutputId,
+        initiator: u32,
+        proof: Option<authority::Authorized>,
+        out: &mut Vec<Effect>,
+    ) -> bool {
+        let Some(camera) = self.cameras.camera_for_output(output) else {
+            return false;
+        };
+        let Some(mut start) = self.cameras.center(camera) else {
+            return false;
+        };
+        if self.fullscreen_pan
+            && let Some(pres) = self.presentation(output)
+            && !self.is_presentation_suppressed(output)
+            && let Some((anchor, tree, _)) = self.stage.mapped(pres)
+        {
+            let extent = self
+                .output(output)
+                .map(|m| m.logical_extent())
+                .unwrap_or((1920.0, 1080.0));
+            let margin_x = ((extent.0 - f64::from(tree.geometry.size.w)) / 2.0).max(0.0);
+            let margin_y = ((extent.1 - f64::from(tree.geometry.size.h)) / 2.0).max(0.0);
+            let pres_center = crate::geom::CanvasPos {
+                x: crate::geom::q16(anchor.x as f64 - margin_x + extent.0 / 2.0),
+                y: crate::geom::q16(anchor.y as f64 - margin_y + extent.1 / 2.0),
+            };
+            if let Some(p) = proof {
+                self.cameras
+                    .set_zoom_and_center(p, camera, 1.0, pres_center);
+            }
+            start = pres_center;
+        }
+        // M6 Idle → Panning: the press is consumed; KeepFocus (no event).
+        // OB-4: Dismiss active popup grabs before the camera change.
+        self.input.interaction = Interaction::CameraPan {
+            output,
+            camera,
+            initiator,
+            start,
+            sum: (0.0, 0.0),
+        };
+        if self.fullscreen_pan
+            && self.presentation(output).is_some()
+            && !self.is_presentation_suppressed(output)
+        {
+            self.suppress_presentation(output, out);
+        }
+        if let Some(target) = self.focus.target() {
+            out.push(Effect::DismissPopupGrab(target));
+        }
+        true
+    }
+
+    fn gesture_swipe_begin(
+        &mut self,
+        fingers: u32,
+        time_ms: u32,
+        proof: Option<authority::Authorized>,
+        out: &mut Vec<Effect>,
+    ) {
+        if self.input.gesture.is_some() || self.input.interaction.active() {
+            return;
+        }
+        let PointerState::Located { output, .. } = self.pointer else {
+            return;
+        };
+        let can_compositor = self.touchpad_gestures && !self.input.ownership.client_owns_any();
+        if can_compositor && fingers == 3 {
+            let presenting =
+                self.presentation(output).is_some() && !self.is_presentation_suppressed(output);
+            if !(presenting && !self.fullscreen_pan) && self.begin_camera_pan(output, 0, proof, out)
+            {
+                self.input.gesture = Some(TouchpadGesture::Pan);
+            }
+            return;
+        }
+        if can_compositor && fingers == 4 {
+            self.input.gesture = Some(TouchpadGesture::FourFingerSwipe {
+                dx: 0.0,
+                dy: 0.0,
+                triggered: false,
+            });
+            return;
+        }
+        self.input.gesture = Some(TouchpadGesture::Client(GestureKind::Swipe));
+        out.push(Effect::GestureSwipeBegin { fingers, time_ms });
+    }
+
+    fn gesture_swipe_update(
+        &mut self,
+        delta: (f64, f64),
+        time_ms: u32,
+        proof: Option<authority::Authorized>,
+        out: &mut Vec<Effect>,
+    ) {
+        /// Logical swipe distance (upward) needed to trigger the overview on a 4-finger swipe.
+        const SWIPE_OVERVIEW_THRESHOLD: f64 = 32.0;
+        match self.input.gesture {
+            Some(TouchpadGesture::Pan) => {
+                if let Interaction::CameraPan { output, camera, .. } = self.input.interaction {
+                    let _ = self.pan_step(proof, output, camera, delta, out);
+                }
+            }
+            Some(TouchpadGesture::FourFingerSwipe {
+                mut dx,
+                mut dy,
+                mut triggered,
+            }) => {
+                dx += delta.0;
+                dy += delta.1;
+                if !triggered
+                    && -dy >= SWIPE_OVERVIEW_THRESHOLD
+                    && -dy > dx.abs()
+                    && let Some(p) = proof
+                {
+                    triggered = true;
+                    self.overview_toggle(p, out);
+                }
+                self.input.gesture = Some(TouchpadGesture::FourFingerSwipe { dx, dy, triggered });
+            }
+            Some(TouchpadGesture::Client(GestureKind::Swipe)) => {
+                out.push(Effect::GestureSwipeUpdate { delta, time_ms });
+            }
+            _ => {}
+        }
+    }
+
+    fn gesture_swipe_end(&mut self, cancelled: bool, time_ms: u32, out: &mut Vec<Effect>) {
+        match self.input.gesture {
+            Some(TouchpadGesture::Pan) => {
+                self.input.gesture = None;
+                out.extend(self.end_interaction());
+            }
+            Some(TouchpadGesture::FourFingerSwipe { .. }) => {
+                self.input.gesture = None;
+            }
+            Some(TouchpadGesture::Client(GestureKind::Swipe)) => {
+                self.input.gesture = None;
+                out.push(Effect::GestureSwipeEnd { cancelled, time_ms });
+            }
+            _ => {}
+        }
+    }
+
+    fn gesture_pinch_begin(&mut self, fingers: u32, time_ms: u32, out: &mut Vec<Effect>) {
+        if self.input.gesture.is_some()
+            || self.input.interaction.active()
+            || self.pointer == PointerState::NoOutput
+        {
+            return;
+        }
+        if self.touchpad_gestures && fingers == 4 && !self.input.ownership.client_owns_any() {
+            self.input.gesture = Some(TouchpadGesture::Pinch { prev_scale: 1.0 });
+            return;
+        }
+        self.input.gesture = Some(TouchpadGesture::Client(GestureKind::Pinch));
+        out.push(Effect::GesturePinchBegin { fingers, time_ms });
+    }
+
+    fn gesture_pinch_update(
+        &mut self,
+        delta: (f64, f64),
+        scale: f64,
+        rotation: f64,
+        time_ms: u32,
+        proof: Option<authority::Authorized>,
+        out: &mut Vec<Effect>,
+    ) {
+        match self.input.gesture {
+            Some(TouchpadGesture::Pinch { prev_scale }) => {
+                if scale > 0.0 && prev_scale > 0.0 {
+                    let factor = scale / prev_scale;
+                    self.input.gesture = Some(TouchpadGesture::Pinch { prev_scale: scale });
+                    if (factor - 1.0).abs() > 1e-9
+                        && let Some(p) = proof
+                    {
+                        self.zoom_by_factor(p, factor, out);
+                    }
+                }
+            }
+            Some(TouchpadGesture::Client(GestureKind::Pinch)) => {
+                out.push(Effect::GesturePinchUpdate {
+                    delta,
+                    scale,
+                    rotation,
+                    time_ms,
+                });
+            }
+            _ => {}
+        }
+    }
+
+    fn gesture_pinch_end(&mut self, cancelled: bool, time_ms: u32, out: &mut Vec<Effect>) {
+        match self.input.gesture {
+            Some(TouchpadGesture::Pinch { .. }) => {
+                self.input.gesture = None;
+            }
+            Some(TouchpadGesture::Client(GestureKind::Pinch)) => {
+                self.input.gesture = None;
+                out.push(Effect::GesturePinchEnd { cancelled, time_ms });
+            }
+            _ => {}
+        }
+    }
+
+    fn gesture_hold_begin(&mut self, fingers: u32, time_ms: u32, out: &mut Vec<Effect>) {
+        if self.input.gesture.is_some()
+            || self.input.interaction.active()
+            || self.pointer == PointerState::NoOutput
+        {
+            return;
+        }
+        self.input.gesture = Some(TouchpadGesture::Client(GestureKind::Hold));
+        out.push(Effect::GestureHoldBegin { fingers, time_ms });
+    }
+
+    fn gesture_hold_end(&mut self, cancelled: bool, time_ms: u32, out: &mut Vec<Effect>) {
+        if matches!(
+            self.input.gesture,
+            Some(TouchpadGesture::Client(GestureKind::Hold))
+        ) {
+            self.input.gesture = None;
+            out.push(Effect::GestureHoldEnd { cancelled, time_ms });
+        }
     }
 
     /// The end of a compositor interaction, by its initiator's release or by a cancel (M22):
@@ -2713,6 +3107,9 @@ impl Core {
         );
         self.input.cluster_drag.clear();
         self.input.interaction = Interaction::Idle;
+        if matches!(self.input.gesture, Some(TouchpadGesture::Pan)) {
+            self.input.gesture = None;
+        }
         let mut fx = Vec::new();
         if resized {
             self.end_resize(&mut fx);
@@ -2732,7 +3129,9 @@ impl Core {
         match self.input.ownership.release(button) {
             None => {}
             Some(Owner::Compositor) => {
-                if self.input.interaction.initiator() == Some(button) {
+                if !matches!(self.input.gesture, Some(TouchpadGesture::Pan))
+                    && self.input.interaction.initiator() == Some(button)
+                {
                     out.extend(self.end_interaction());
                 } else if let Interaction::ElementMove { pan, .. } = &mut self.input.interaction
                     && pan.is_some_and(|p| p.button == button)
@@ -2981,6 +3380,60 @@ impl Core {
                     out.extend(self.leave_fullscreen(id, None));
                 }
             }
+            ShellCommand::KeepOnTop { element, on } => {
+                let id = self.shell_mapped(element)?;
+                let on = on.unwrap_or_else(|| !self.stage.is_above(id));
+                self.set_on_top(id, on);
+                if self.stage.is_above(id) == on {
+                    out.push(Effect::KeptOnTop { element: id, on });
+                }
+            }
+            ShellCommand::MinimizeElement { element } => {
+                let id = self.shell_mapped(element)?;
+                if self.fullscreen_of(id).is_some() {
+                    return Err(ShellError::Presenting);
+                }
+                if self.input.interaction.active() {
+                    return Err(ShellError::Busy);
+                }
+                if self.stage.set_minimized(id, true).is_ok() {
+                    let live: Vec<_> = self
+                        .focusable_elements()
+                        .into_iter()
+                        .filter(|&e| e != id)
+                        .collect();
+                    out.extend(self.focus.target_lost(id, &live));
+                    self.strict_successor(id, &mut out);
+                    self.invalidate_all_frames();
+                    self.membership_pass_element(id, &mut out);
+                    out.extend(self.visibility_pass());
+                }
+            }
+            ShellCommand::MaximizeElement { element, maximized } => {
+                let id = self.shell_mapped(element)?;
+                if self.fullscreen_of(id).is_some() {
+                    return Err(ShellError::Presenting);
+                }
+                if self.input.interaction.active() {
+                    return Err(ShellError::Busy);
+                }
+                let output = self
+                    .pointer_output()
+                    .or_else(|| self.outputs.first().map(|o| o.id))
+                    .ok_or(ShellError::UnknownOutput)?;
+                let is_on = self.is_maximized(id);
+                let want = maximized.unwrap_or(!is_on);
+                if want != is_on {
+                    self.maximize_toggle(None, output, id, true, &mut out);
+                }
+            }
+            ShellCommand::CloseElement { element } => {
+                let id = self
+                    .stage
+                    .resolve(element)
+                    .map_err(|_| ShellError::StaleElement)?;
+                out.push(Effect::CloseRequest(id));
+            }
         }
         Ok(out)
     }
@@ -3179,8 +3632,13 @@ impl Core {
         // F-LATTICE-1: a new k_O or view_O sets the reference again; otherwise it is kept
         self.update_lattice(output);
         self.invalidate_frame(output);
+        let touch_cancelled = self.touches.on_output(output) && self.touches.clear();
         self.pointer = pointer::reconfigured(self.pointer, &model);
         let mut fx = vec![Effect::OutputChanged(output)];
+        if touch_cancelled {
+            fx.push(Effect::TouchCancel);
+        }
+        self.touch_resize_settle(&mut fx);
         // its layer surfaces are arranged in the new extent and told the new scale (L1)
         fx.extend(self.layers_output_reconfigured(output));
         fx.extend(self.fullscreen_output_reconfigured(output));
@@ -3220,8 +3678,13 @@ impl Core {
         let model = slot.clone();
         self.update_lattice(output);
         self.invalidate_frame(output);
+        let touch_cancelled = self.touches.on_output(output) && self.touches.clear();
         self.pointer = pointer::reconfigured(self.pointer, &model);
         let mut fx = vec![Effect::OutputChanged(output)];
+        if touch_cancelled {
+            fx.push(Effect::TouchCancel);
+        }
+        self.touch_resize_settle(&mut fx);
         fx.extend(self.layers_output_reconfigured(output));
         fx.extend(self.fullscreen_output_reconfigured(output));
         fx.extend(self.visibility_pass());
@@ -3289,6 +3752,7 @@ impl Core {
         if touch_cancelled {
             fx.push(Effect::TouchCancel);
         }
+        self.touch_resize_settle(&mut fx);
         fx.extend(self.visibility_pass());
         fx.extend(restored);
         fx.extend(pointer_fx);
@@ -7509,5 +7973,87 @@ mod tests {
             center_x.abs() < 1000,
             "overview center x={center_x} must ignore minimized w2 at x=20000"
         );
+    }
+
+    #[test]
+    fn tablet_tap_focuses_and_raises_window_and_route_point_follows_camera() {
+        use crate::{NavigateTo, PhysicalEvent, ShellCommand, ShellStream};
+        let (mut c, mut i, mut s, mut t) = Core::new(PersistedCameras::default());
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        let ws = map_windows(&mut c, a, 2);
+        let mut fx = Vec::new();
+        c.place_by_user(ws[0], crate::geom::CanvasPoint { x: 100, y: 200 }, &mut fx)
+            .unwrap();
+        c.place_by_user(ws[1], crate::geom::CanvasPoint { x: 600, y: 200 }, &mut fx)
+            .unwrap();
+        c.set_focus(&mut i, Some(ws[1])).unwrap();
+        assert_eq!(c.focus().target(), Some(ws[1]));
+
+        // Pan camera to (300, 350) at zoom 2.0: output (960, 540) maps to canvas (300, 350),
+        // which is inside ws[0] at local (200, 150).
+        c.shell_command(
+            &mut s,
+            ShellCommand::Navigate {
+                output: a,
+                to: NavigateTo::Canvas(300.0, 350.0),
+                zoom: Some(2.0),
+                stream: ShellStream::Atomic,
+            },
+        )
+        .unwrap();
+
+        // Output logical point (990, 560) is (+30, +20) from view centre -> (+15, +10) canvas ->
+        // canvas (315, 360), local (215, 160) on ws[0].
+        let (target, loc) = c.route_point(a, (990.0, 560.0)).expect("routed");
+        let target = target.expect("hit ws[0]");
+        assert_eq!(target.origin, crate::geom::CanvasPoint { x: 100, y: 200 });
+        assert_eq!(
+            (
+                (loc.x - target.origin.x * crate::geom::Q16_ONE) / crate::geom::Q16_ONE,
+                (loc.y - target.origin.y * crate::geom::Q16_ONE) / crate::geom::Q16_ONE,
+            ),
+            (215, 160)
+        );
+
+        let tap_fx = c
+            .physical_input_vec(
+                &mut i,
+                PhysicalEvent::TabletTap {
+                    output: a,
+                    p: (990.0, 560.0),
+                    time_us: 1_000,
+                },
+            )
+            .unwrap();
+        assert_eq!(c.focus().target(), Some(ws[0]));
+        assert_eq!(c.stage().top_mapped(), Some(ws[0]));
+        assert!(tap_fx.contains(&Effect::KeyboardFocus(Some(ws[0]))));
+    }
+
+    #[test]
+    fn tablet_tap_on_empty_canvas_keeps_focus() {
+        use crate::PhysicalEvent;
+        let (mut c, mut i, _s, mut t) = Core::new(PersistedCameras::default());
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        let ws = map_windows(&mut c, a, 1);
+        let mut fx = Vec::new();
+        c.place_by_user(ws[0], crate::geom::CanvasPoint { x: 0, y: 0 }, &mut fx)
+            .unwrap();
+        c.set_focus(&mut i, Some(ws[0])).unwrap();
+        assert_eq!(c.focus().target(), Some(ws[0]));
+
+        // Outside the 400x300 window on empty canvas: does not change focus.
+        let tap_fx = c
+            .physical_input_vec(
+                &mut i,
+                PhysicalEvent::TabletTap {
+                    output: a,
+                    p: (1500.0, 900.0),
+                    time_us: 1_000,
+                },
+            )
+            .unwrap();
+        assert_eq!(c.focus().target(), Some(ws[0]));
+        assert!(!tap_fx.iter().any(|e| matches!(e, Effect::KeyboardFocus(_))));
     }
 }

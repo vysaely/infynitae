@@ -131,8 +131,7 @@ pub enum Quiet {
 
 /// Do not disturb or a game, from the files the switches and launch.sh keep.
 pub fn quiet_now() -> Quiet {
-    let rt = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".into());
-    let dir = std::path::Path::new(&rt).join("infynitae");
+    let dir = crate::paths::runtime_path("infynitae");
     if dir.join("game-quiet").exists() {
         Quiet::Game
     } else if dir.join("do-not-disturb").exists() {
@@ -145,8 +144,8 @@ pub fn quiet_now() -> Quiet {
 /// Text from a sender on one line: whitespace runs as one space, control characters gone, at most
 /// 255 bytes, the home folder as `~` (copied from the old edge's clipboard module).
 pub fn sanitize_inline_text(src: &str) -> String {
-    let home = std::env::var("HOME").ok().filter(|h| h.len() > 1);
-    sanitize_inline_text_with_home(src, home.as_deref())
+    let home = crate::paths::home();
+    sanitize_inline_text_with_home(src, home.as_deref().and_then(|p| p.to_str()))
 }
 
 pub fn sanitize_inline_text_with_home(src: &str, home: Option<&str>) -> String {
@@ -479,26 +478,28 @@ pub fn draw(
     pointer: Option<(f64, f64)>,
     now: Instant,
 ) {
-    let inside = |r: Rect| {
-        pointer.is_some_and(|p| p.0 >= r.0 && p.0 < r.0 + r.2 && p.1 >= r.1 && p.1 < r.1 + r.3)
-    };
-    for ((_, r), pop) in layout(n, w).into_iter().zip(&n.popups) {
-        let age = now.saturating_duration_since(pop.born).as_secs_f64() * 1000.0;
-        let t = crate::ui::ease(age / ARRIVE_MS);
-        if t <= 0.0 {
-            continue;
+    draw::with_font(&th.font, || {
+        let inside = |r: Rect| {
+            pointer.is_some_and(|p| p.0 >= r.0 && p.0 < r.0 + r.2 && p.1 >= r.1 && p.1 < r.1 + r.3)
+        };
+        for ((_, r), pop) in layout(n, w).into_iter().zip(&n.popups) {
+            let age = now.saturating_duration_since(pop.born).as_secs_f64() * 1000.0;
+            let t = crate::ui::ease(age / ARRIVE_MS);
+            if t <= 0.0 {
+                continue;
+            }
+            let lifted = t < 1.0;
+            if lifted {
+                cr.push_group();
+                cr.translate((1.0 - t) * 24.0, 0.0);
+            }
+            draw_one(cr, th, &pop.note, r, inside(r), &inside);
+            if lifted {
+                let _ = cr.pop_group_to_source();
+                let _ = cr.paint_with_alpha(t);
+            }
         }
-        let lifted = t < 1.0;
-        if lifted {
-            cr.push_group();
-            cr.translate((1.0 - t) * 24.0, 0.0);
-        }
-        draw_one(cr, th, &pop.note, r, inside(r), &inside);
-        if lifted {
-            let _ = cr.pop_group_to_source();
-            let _ = cr.paint_with_alpha(t);
-        }
-    }
+    });
 }
 
 fn draw_one(
@@ -619,15 +620,7 @@ fn draw_one(
 
 /// The body in up to `lines` lines, wrapped, the last cut with an ellipsis.
 fn draw_body(cr: &Context, x: f64, y: f64, w: f64, lines: usize, body: &str, th: &Theme) {
-    let l = pangocairo::functions::create_layout(cr);
-    let mut fd = pango::FontDescription::from_string(draw::FONT);
-    fd.set_absolute_size(12.0 * pango::SCALE as f64);
-    l.set_font_description(Some(&fd));
-    l.set_width((w * pango::SCALE as f64) as i32);
-    l.set_wrap(pango::WrapMode::WordChar);
-    l.set_ellipsize(pango::EllipsizeMode::End);
-    l.set_height(-(lines as i32));
-    l.set_text(body);
+    let l = draw::wrapped_layout(cr, 12.0, false, w, Some(lines), body);
     draw::set(cr, th.muted);
     cr.move_to(x.round(), y.round());
     pangocairo::functions::show_layout(cr, &l);

@@ -18,7 +18,7 @@ edges on other hardware.
   (gnome-keyring, or infynitae-keyring once switched via `infynitae-keyring`'s `tools/switch.sh`), USB automount (infynitae-automount on udisks2: encrypted drives ask for their passphrase, a notification opens or ejects a drive, `infynitae-automount eject` makes every drive safe to pull; right click a drive's folder in PCManFM-Qt, "Format drive...", to erase it as exFAT, FAT32 or ext4, `infynitae-format-drive` from a terminal), the control menu (Super+A: Wi-Fi, Bluetooth, volume
   for all sound or one app, sound output, power mode), global shortcuts for
   apps, layer shell for bars, X11 apps through xwayland-satellite (can be disabled with `XWAYLAND=false`), VRR and direct scanout for
-  games, idle screen-off and auto-lock. Config defaults match documented settings: `FOCUS_FOLLOWS_MOUSE` is strict, `PAN_MODE` is free, `SQUARE_CORNERS` and `TOUCHPAD_TAP` are true.
+  games, idle screen-off and auto-lock. Config defaults match documented settings: `FOCUS_FOLLOWS_MOUSE` is strict, `PAN_MODE` is free, `SQUARE_CORNERS`, `TOUCHPAD_TAP`, and `TOUCHPAD_GESTURES` are true.
 - **Screen sharing:** a screen or a single window, through the portal or screencopy (screencopy hides the cursor by default). The
   portal asks before an app's first share (this time, always, or deny; `SCREENSHARE_ASK`, defaults to `app`). A
   private window (`PRIVACY_APPS`, which accepts spaces or commas, `PRIVACY_TITLES` separated by commas, Super+Shift+P) is never shared, and nothing
@@ -68,6 +68,12 @@ These pass the test suite but have not run on a real screen or device yet:
     invoking a notification action keeps older unread notifications; the memory card protects the
     compositor and session processes; touch-and-hold emits a right click; the control panel
     spells everything out.
+  - **Window menu and Keep on top (2026-11-16):** `xdg_toplevel.show_window_menu` (right click on a
+    client title bar) and the configurable `BIND_WINDOW_MENU` binding open a menu in the edge
+    with Keep on top (check mark when on), Minimize, Maximize or Restore, Fullscreen and Close;
+    `KEEP_ON_TOP` is editable on the Windows settings card. Tested in `infynitae-core`,
+    `infynitae-ipc`, `infynitae-backend-headless` and `infynitae-edge-apps`; not yet tried in the
+    live desktop session on real hardware.
   - **Shorter shortcut dispatch** (24 ms of shell setup a press down to 8 ms), the wallpaper no longer
     keeps its decoded image (about 70 MB with a large wallpaper); edge system and memory modules
     read GPU telemetry, temperatures, and memory directly from `/proc` and `/sys` without subshells.
@@ -77,14 +83,38 @@ These pass the test suite but have not run on a real screen or device yet:
 - **Monitor hotplug:** a screen plugged in, unplugged or woken is found about 1.5 s after the
   last change, and the session can start with no screen and wait for one. A sleeping screen is
   never removed while asleep.
-- **Rotation, mode and VRR changes** from display tools or `OUTPUT_<NAME>_*` (`OUTPUT_<NAME>_TRANSFORM`, `OUTPUT_<NAME>_MODE`, `OUTPUT_<NAME>_SCALE`, `OUTPUT_<NAME>_RATE`; checked by `config-check`). `OUTPUT_ORDER` accepts spaces or commas and overrides `OUTPUT_LAYOUT` with a warning. Captures
-  and touch turn with the screen. VRR as tools see it is whether a screen may use it (on, or
+- **Rotation, mode and VRR changes** from display tools or `OUTPUT_<NAME>_*` (`OUTPUT_<NAME>_TRANSFORM`, `OUTPUT_<NAME>_MODE`, `OUTPUT_<NAME>_SCALE`, `OUTPUT_<NAME>_RATE`; checked by `config-check`). When `OUTPUT_<NAME>_TRANSFORM` is unset, `backend-drm` reads the connector's DRM `"panel orientation"` property (for sideways handheld and tablet panels such as 800x1280). `OUTPUT_ORDER` accepts spaces or commas and overrides `OUTPUT_LAYOUT` with a warning. Captures
+  and touch turn with the screen (unit-tested for `panel orientation` mapping and tested in the headless suite for touch on a rotated 800x1280 output; reading the DRM property from a real panel is not yet tested on hardware). VRR as tools see it is whether a screen may use it (on, or
   auto while fullscreen); turning it off from a tool lasts until the screen reconnects.
 - **Auto-rotate** on convertibles (`AUTO_ROTATE`, needs iio-sensor-proxy): the laptop's own
   screen turns with the device.
 - **Touchscreens** as real touch (`wl_touch`): apps get each finger, so scrolling, pinching and
-  gestures work inside them. A tap focuses the window under it. A finger on empty canvas drags
-  the canvas; two fingers pinch-zoom it around their midpoint.
+  gestures work inside them. Each touch device maps to its matching output (by `WL_OUTPUT`,
+  physical size in mm, internal panel, pointer output, or first screen), tracks active slots
+  per output, and turns with the output's rotation and scale. A tap focuses the window under
+  it. A finger on empty canvas drags the canvas; two fingers pinch-zoom it around their
+  midpoint; three fingers on a window move or resize it. Swiping in from a screen edge opens
+  that side's edge panel (`TOUCH_EDGE_SWIPE`, on by default). Active touches cancel cleanly when
+  a window unmaps or closes, an exclusive panel opens or closes, fullscreen starts, the output
+  rotates or unplugs, a touchscreen disconnects, the session locks or pauses, or `TouchCancel`
+  arrives; `TouchFrame` events are delivered. Tested in `infynitae-backend-drm` unit tests and
+  headless Wayland client tests (`t1_touch`, `t1_lock_touch`, `audit_input_lifecycle`); not yet
+  tested on real touchscreen hardware.
+- **Touchpad gestures** (`zwp_pointer_gestures_v1`, `TOUCHPAD_GESTURES`, true by default):
+  three-finger swipe pans the canvas 1:1 with the fingers, four-finger pinch zooms around the
+  cursor, and four-finger swipe up toggles the overview; two-finger gestures, holds, and all
+  gestures when `TOUCHPAD_GESTURES=false` go to the hovered app. Tested in core unit tests and
+  headless Wayland client tests (`t1_touchpad_gestures`); not yet tested on real touchpad hardware.
+- **Pens and drawing tablets** (`zwp_tablet_manager_v2`): drawing apps that bind tablet-v2
+  receive proximity, tip, motion, pressure, tilt, distance, rotation, slider, wheel, stylus
+  buttons and pad buttons in surface-local coordinates through the output's camera, and a tap
+  focuses and raises the window under the pen. Apps without tablet-v2 receive pointer motion and
+  left clicks instead, with no double input to tablet-v2 apps. Tablets match their screen using
+  the same rule as touchscreens (`WL_OUTPUT`, physical size in mm within 15 mm, internal panel,
+  pointer output, or first screen, falling back to the virtual screen when no physical screen is
+  connected). Tested in unit tests (`infynitae-core`, `infynitae-backend-drm`) and with real
+  Wayland probe clients in `t1_tablet` (with panned and zoomed camera, pad buttons and session
+  lock); not yet tested on real tablet hardware or in a live DRM session.
 - **Virtual screen** (`VIRTUAL_SCREEN`, on by default): with no screen connected (a monitor off
   that reports itself unplugged, or none at all), a virtual 1920x1080 screen stands in, so remote
   desktop still has a screen; it goes once a real one is connected. A monitor that is off but
@@ -96,14 +126,16 @@ These pass the test suite but have not run on a real screen or device yet:
   marked) and can save it as the default in `mimeapps.list`, which GTK, KDE and `xdg-open` share;
   `xdg-open` says so when no app opens a type. KDE apps (Dolphin) get the menu file their "Open
   With" needs. File managers' "Open Terminal Here" runs `TERMINAL` (`xdg-terminal-exec`).
-- **Tablet mode** (convertibles; `OSK`, `--no-osk`): folded, an on-screen keyboard
-  (squeekboard) runs and shows for text fields; opened, it is stopped, so the keyboard types
-  into apps directly (running, it is an input method, and on a ThinkPad a terminal then took
-  text only from it). In a terminal its backspace does nothing (it deletes text the terminal
-  does not report). The lock screen has its own key grid
-  at the first tap, and while locked a finger reaches only the lock surface, so the password
-  never leaves the lock screen. Tested off-screen and in the test suite; not yet on a
-  touchscreen.
+- **Tablet mode** (convertibles; `OSK`, `--no-osk`): squeekboard runs hidden from the session's
+  start. When the device has a `TabletMode` switch, `OSK="auto"` shows squeekboard on text-field
+  taps only in tablet mode and hides it when leaving tablet mode; on devices without a
+  `TabletMode` switch, text-field taps show it (`OSK="always"` adds mouse clicks; `OSK="off"`
+  is manual only). Running, it is an input method, and on a ThinkPad a terminal then took text
+  only from it; in a terminal its backspace does nothing (it deletes text the terminal does not
+  report). The lock screen has its own key grid at the first tap, and while locked a finger
+  reaches only the lock surface, so the password never leaves the lock screen. Tested in the
+  headless test suite (`t1_input_method`, `t1_lock_touch`); not yet tested on real convertible
+  or touchscreen hardware.
 - **Out of GPU memory, windows stay open:** when the GPU resets or refuses the compositor's work
   (seen with a model training on it), the compositor makes a new renderer instead of being
   aborted by Mesa; the screens freeze until memory frees up. Tested: context loss handling on this
@@ -150,8 +182,8 @@ These pass the test suite but have not run on a real screen or device yet:
 - **Password store unlocked at login:** gnome-keyring (or infynitae-keyring once enabled with `infynitae-keyring`'s `tools/switch.sh`) starts before the start lock screen, and
   the lock screen's password opens it (`pam_gnome_keyring`), so apps no longer ask for a second
   password. Not yet tested on hardware.
-- **Laptop lid:** closing it with another screen connected moves everything to that screen
-  until the lid opens. With no other screen, logind suspends as usual.
+- **Laptop lid and handheld power key:** closing the lid with another screen connected moves everything to that screen
+  until the lid opens. With no other screen, logind suspends as usual. On convertibles and touchscreen handhelds with a battery, the installer adds `50-infynitae-power-key.conf` so a short power-button press suspends and a long press shuts down (tested in `tools/test-install-lib`, not yet on handheld hardware).
 - **Night light, screen power,** the capture dot, single-window sharing.
 - **Recent display and lock fixes:** the lock confirmed only once it is on screen, idle
   screen-off staying off, per-screen scale for touch and tablets, region screencopy over dmabuf.
@@ -168,7 +200,7 @@ These pass the test suite but have not run on a real screen or device yet:
 
 ## Missing
 
-- **Pens and drawing tablets,** HDR, accessibility and screen readers.
+- HDR, accessibility and screen readers.
 - **Output management:** tools cannot yet turn a screen off through it (wlopm can).
 - **Hardware:** a second GPU, NVIDIA's explicit sync.
 - **Packaging** for anything other than Arch Linux. The install assumes one user and

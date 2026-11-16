@@ -7,67 +7,46 @@ use crate::card::Cx;
 use crate::draw::{self, Text};
 use cairo::Context;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::{c_char, c_double, c_int, c_void, CString};
 use std::fs::File;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::UNIX_EPOCH;
 
-/// The icon theme the user chose for GTK apps (`gtk-icon-theme-name` in settings.ini), read once.
+/// The icon theme the user chose for GTK apps (`gtk-icon-theme-name` in settings.ini).
 fn user_icon_theme() -> Option<String> {
-    static THEME: OnceLock<Option<String>> = OnceLock::new();
-    THEME
-        .get_or_init(|| {
-            let cfg = std::env::var("XDG_CONFIG_HOME")
-                .ok()
-                .filter(|s| !s.is_empty())
-                .map(PathBuf::from)
-                .or_else(|| {
-                    std::env::var("HOME")
-                        .ok()
-                        .map(|h| PathBuf::from(h).join(".config"))
-                })?;
-            for f in ["gtk-4.0/settings.ini", "gtk-3.0/settings.ini"] {
-                let Ok(text) = std::fs::read_to_string(cfg.join(f)) else {
-                    continue;
-                };
-                for l in text.lines() {
-                    if let Some((k, v)) = l.split_once('=') {
-                        if k.trim() == "gtk-icon-theme-name" {
-                            let v = v.trim().trim_matches('"').trim();
-                            if !v.is_empty() && !v.contains('/') && v != ".." {
-                                return Some(v.to_string());
-                            }
-                        }
+    let cfg = std::env::var_os("XDG_CONFIG_HOME")
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| crate::paths::home().map(|h| h.join(".config")))?;
+    for f in ["gtk-4.0/settings.ini", "gtk-3.0/settings.ini"] {
+        let Ok(text) = std::fs::read_to_string(cfg.join(f)) else {
+            continue;
+        };
+        for l in text.lines() {
+            if let Some((k, v)) = l.split_once('=') {
+                if k.trim() == "gtk-icon-theme-name" {
+                    let v = v.trim().trim_matches('"').trim();
+                    if !v.is_empty() && !v.contains('/') && v != ".." {
+                        return Some(v.to_string());
                     }
                 }
             }
-            None
-        })
-        .clone()
+        }
+    }
+    None
 }
 
-/// Resolves an icon name or path from a `.desktop` file to a PNG or SVG file on disk.
-pub fn resolve_icon_path(icon: &str) -> Option<PathBuf> {
-    let icon = icon.trim();
-    if icon.is_empty() {
-        return None;
-    }
-    let direct = Path::new(icon);
-    if direct.is_absolute() {
-        return direct.is_file().then(|| direct.to_path_buf());
-    }
-
+fn icon_base_dirs() -> Vec<PathBuf> {
     let mut base_dirs: Vec<PathBuf> = Vec::new();
     if let Some(dh) = std::env::var("XDG_DATA_HOME")
         .ok()
         .filter(|s| !s.is_empty())
     {
         base_dirs.push(PathBuf::from(dh).join("icons"));
-    } else if let Some(h) = std::env::var("HOME").ok().filter(|s| !s.is_empty()) {
-        let hp = PathBuf::from(h);
+    } else if let Some(hp) = crate::paths::home() {
         base_dirs.push(hp.join(".local/share/icons"));
         base_dirs.push(hp.join(".icons"));
         base_dirs.push(hp.join(".local/share/flatpak/exports/share/icons"));
@@ -80,62 +59,166 @@ pub fn resolve_icon_path(icon: &str) -> Option<PathBuf> {
         base_dirs.push(PathBuf::from(part).join("icons"));
     }
     base_dirs.push(PathBuf::from("/var/lib/flatpak/exports/share/icons"));
+    base_dirs
+}
 
-    let mut themes: Vec<String> = user_icon_theme().into_iter().collect();
-    for t in ["hicolor", "Adwaita", "Papirus", "breeze", "gnome"] {
-        if !themes.iter().any(|x| x == t) {
-            themes.push(t.to_string());
-        }
-    }
-    let subdirs = [
-        "scalable/apps",
-        "48x48/apps",
-        "64x64/apps",
-        "32x32/apps",
-        "128x128/apps",
-        "256x256/apps",
-        "24x24/apps",
-        "apps/48",
-        "apps/64",
-        "apps/scalable",
-        "symbolic/apps",
-        "scalable/devices",
-        "scalable/status",
-        "scalable/places",
-        "scalable/categories",
-    ];
-    let exts = ["svg", "png"];
-
-    let stem = icon
-        .strip_suffix(".png")
-        .or_else(|| icon.strip_suffix(".svg"))
-        .unwrap_or(icon);
-
-    for base in &base_dirs {
-        for theme in &themes {
-            let theme_dir = base.join(theme);
-            if !theme_dir.is_dir() {
+/// Reads `Inherits=` from `<base>/<theme>/index.theme` in `[Icon Theme]`.
+fn theme_inherits(base_dirs: &[PathBuf], theme: &str) -> Vec<String> {
+    for base in base_dirs {
+        let index = base.join(theme).join("index.theme");
+        let Ok(text) = std::fs::read_to_string(&index) else {
+            continue;
+        };
+        let mut in_section = false;
+        for raw in text.lines() {
+            let line = raw.trim();
+            if line.starts_with('[') {
+                in_section = line == "[Icon Theme]";
                 continue;
             }
-            for sub in &subdirs {
-                for ext in &exts {
-                    let candidate = theme_dir.join(sub).join(format!("{stem}.{ext}"));
-                    if candidate.is_file() {
-                        return Some(candidate);
+            if !in_section {
+                continue;
+            }
+            if let Some((k, v)) = line.split_once('=') {
+                if k.trim() == "Inherits" {
+                    return v
+                        .split(',')
+                        .map(str::trim)
+                        .filter(|p| !p.is_empty() && !p.contains('/') && *p != "..")
+                        .map(str::to_string)
+                        .collect();
+                }
+            }
+        }
+        return Vec::new();
+    }
+    Vec::new()
+}
+
+/// Expands `user_theme` via `index.theme` `Inherits=` (BFS) before falling back to hicolor and
+/// common desktop themes.
+fn theme_chain(base_dirs: &[PathBuf], user_theme: Option<&str>) -> Vec<String> {
+    let mut themes = Vec::new();
+    let mut seen = HashSet::new();
+    let mut queue = VecDeque::new();
+    if let Some(t) = user_theme.map(str::trim).filter(|s| !s.is_empty()) {
+        queue.push_back(t.to_string());
+    }
+    while let Some(theme) = queue.pop_front() {
+        if !seen.insert(theme.clone()) {
+            continue;
+        }
+        for parent in theme_inherits(base_dirs, &theme) {
+            if !seen.contains(&parent) {
+                queue.push_back(parent);
+            }
+        }
+        themes.push(theme);
+    }
+    for fallback in ["hicolor", "Adwaita", "Papirus", "breeze", "gnome"] {
+        if seen.insert(fallback.to_string()) {
+            themes.push(fallback.to_string());
+        }
+    }
+    themes
+}
+
+const ICON_SUBDIRS: &[&str] = &[
+    "scalable/apps",
+    "48x48/apps",
+    "64x64/apps",
+    "32x32/apps",
+    "128x128/apps",
+    "256x256/apps",
+    "24x24/apps",
+    "apps/48",
+    "apps/64",
+    "apps/scalable",
+    "symbolic/apps",
+    "scalable/devices",
+    "scalable/status",
+    "scalable/places",
+    "scalable/categories",
+];
+const ICON_EXTS: &[&str] = &["svg", "png"];
+
+/// Pre-resolved icon base directories and theme inheritance order.
+#[derive(Clone, Debug)]
+pub struct IconSearch {
+    base_dirs: Vec<PathBuf>,
+    themes: Vec<String>,
+    pixmaps: Option<PathBuf>,
+}
+
+impl IconSearch {
+    pub fn system() -> Self {
+        let base_dirs = icon_base_dirs();
+        let user_theme = user_icon_theme();
+        let themes = theme_chain(&base_dirs, user_theme.as_deref());
+        Self {
+            base_dirs,
+            themes,
+            pixmaps: Some(PathBuf::from("/usr/share/pixmaps")),
+        }
+    }
+
+    #[cfg(test)]
+    pub fn with_dirs(base_dirs: Vec<PathBuf>, user_theme: Option<&str>) -> Self {
+        let themes = theme_chain(&base_dirs, user_theme);
+        Self {
+            base_dirs,
+            themes,
+            pixmaps: None,
+        }
+    }
+
+    pub fn resolve(&self, icon: &str) -> Option<PathBuf> {
+        let icon = icon.trim();
+        if icon.is_empty() {
+            return None;
+        }
+        let direct = Path::new(icon);
+        if direct.is_absolute() {
+            return direct.is_file().then(|| direct.to_path_buf());
+        }
+        let stem = icon
+            .strip_suffix(".png")
+            .or_else(|| icon.strip_suffix(".svg"))
+            .unwrap_or(icon);
+
+        for theme in &self.themes {
+            for base in &self.base_dirs {
+                let theme_dir = base.join(theme);
+                if !theme_dir.is_dir() {
+                    continue;
+                }
+                for sub in ICON_SUBDIRS {
+                    for ext in ICON_EXTS {
+                        let candidate = theme_dir.join(sub).join(format!("{stem}.{ext}"));
+                        if candidate.is_file() {
+                            return Some(candidate);
+                        }
                     }
                 }
             }
         }
-    }
 
-    let pixmaps = Path::new("/usr/share/pixmaps");
-    for ext in &exts {
-        let candidate = pixmaps.join(format!("{stem}.{ext}"));
-        if candidate.is_file() {
-            return Some(candidate);
+        if let Some(pixmaps) = &self.pixmaps {
+            for ext in ICON_EXTS {
+                let candidate = pixmaps.join(format!("{stem}.{ext}"));
+                if candidate.is_file() {
+                    return Some(candidate);
+                }
+            }
         }
+        None
     }
-    None
+}
+
+/// Resolves an icon name or path from a `.desktop` file to a PNG or SVG file on disk.
+#[cfg(test)]
+pub fn resolve_icon_path(icon: &str) -> Option<PathBuf> {
+    IconSearch::system().resolve(icon)
 }
 
 #[repr(C)]
@@ -552,16 +635,53 @@ pub fn image_surface_from_decoded(img: &DecodedImage) -> Option<cairo::ImageSurf
     Some(surf)
 }
 
-/// Loads an image file scaled to at most `size` x `size` through `gdk-pixbuf` into an ARGB32
-/// Cairo surface.
-pub fn load_pixbuf_surface(path: &Path, size: i32) -> Option<cairo::ImageSurface> {
-    let fns = pixbuf_fns()?;
-    let img = decode_pixbuf_image(fns, path, size, size, false)?;
-    image_surface_from_decoded(&img)
+thread_local! {
+    static DECODED_SURFACES: RefCell<HashMap<usize, (Arc<DecodedImage>, cairo::ImageSurface)>> =
+        RefCell::new(HashMap::new());
 }
 
-/// Loads a PNG, SVG, or `gdk-pixbuf`-supported image file into a `size x size` `cairo::ImageSurface`.
-pub fn load_icon_surface(path: &Path, size: i32) -> Option<cairo::ImageSurface> {
+/// Converts and caches a `DecodedImage` as a Cairo `ImageSurface` on the draw thread, keyed by
+/// the `Arc` allocation pointer so identical decoded bitmaps are copied at most once.
+pub fn surface_for_decoded(img: &Arc<DecodedImage>) -> Option<cairo::ImageSurface> {
+    let key = Arc::as_ptr(img) as usize;
+    DECODED_SURFACES.with(|cache| {
+        let mut map = cache.borrow_mut();
+        if let Some((held, surf)) = map.get(&key) {
+            if Arc::ptr_eq(held, img) {
+                return Some(surf.clone());
+            }
+        }
+        let surf = image_surface_from_decoded(img)?;
+        if map.len() >= 256 {
+            map.clear();
+        }
+        map.insert(key, (Arc::clone(img), surf.clone()));
+        Some(surf)
+    })
+}
+
+fn decoded_from_surface(surf: &mut cairo::ImageSurface) -> Option<DecodedImage> {
+    let width = surf.width();
+    let height = surf.height();
+    let stride = surf.stride();
+    if width <= 0 || height <= 0 || stride < width * 4 {
+        return None;
+    }
+    surf.flush();
+    let data = surf.data().ok()?.to_vec();
+    Some(DecodedImage {
+        width,
+        height,
+        stride,
+        data,
+    })
+}
+
+/// Decodes a PNG, SVG, or `gdk-pixbuf`-supported image file into a `DecodedImage`.
+pub fn load_icon_decoded(path: &Path, size: i32) -> Option<DecodedImage> {
+    if size <= 0 {
+        return None;
+    }
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
@@ -569,23 +689,22 @@ pub fn load_icon_surface(path: &Path, size: i32) -> Option<cairo::ImageSurface> 
         .to_ascii_lowercase();
     if ext == "png" {
         let mut f = File::open(path).ok()?;
-        let src = cairo::ImageSurface::create_from_png(&mut f).ok()?;
+        let mut src = cairo::ImageSurface::create_from_png(&mut f).ok()?;
         let sw = src.width();
         let sh = src.height();
         if sw <= 0 || sh <= 0 {
             return None;
         }
         if sw == size && sh == size {
-            return Some(src);
+            return decoded_from_surface(&mut src);
         }
-        let dst = cairo::ImageSurface::create(cairo::Format::ARgb32, size, size).ok()?;
+        let mut dst = cairo::ImageSurface::create(cairo::Format::ARgb32, size, size).ok()?;
         let cr = cairo::Context::new(&dst).ok()?;
         cr.scale(size as f64 / sw as f64, size as f64 / sh as f64);
         let _ = cr.set_source_surface(&src, 0.0, 0.0);
         let _ = cr.paint();
         drop(cr);
-        dst.flush();
-        return Some(dst);
+        return decoded_from_surface(&mut dst);
     }
     if ext == "svg" {
         let fns = rsvg_fns()?;
@@ -601,8 +720,15 @@ pub fn load_icon_surface(path: &Path, size: i32) -> Option<cairo::ImageSurface> 
             if handle.is_null() {
                 return None;
             }
-            let dst = cairo::ImageSurface::create(cairo::Format::ARgb32, size, size).ok()?;
-            let cr = cairo::Context::new(&dst).ok()?;
+            let Some(mut dst) = cairo::ImageSurface::create(cairo::Format::ARgb32, size, size).ok()
+            else {
+                (fns.g_object_unref)(handle);
+                return None;
+            };
+            let Some(cr) = cairo::Context::new(&dst).ok() else {
+                (fns.g_object_unref)(handle);
+                return None;
+            };
             let viewport = RsvgRectangle {
                 x: 0.0,
                 y: 0.0,
@@ -621,44 +747,300 @@ pub fn load_icon_surface(path: &Path, size: i32) -> Option<cairo::ImageSurface> 
             if ok == 0 {
                 return None;
             }
-            dst.flush();
-            return Some(dst);
+            return decoded_from_surface(&mut dst);
         }
     }
     // anything else (JPEG covers, an embedded cover written without an extension): gdk-pixbuf
-    load_pixbuf_surface(path, size)
+    decode_pixbuf_image(pixbuf_fns()?, path, size, size, false)
 }
 
-thread_local! {
-    static ICON_CACHE: RefCell<HashMap<(String, i32), Option<cairo::ImageSurface>>> =
-        RefCell::new(HashMap::new());
+/// Loads a PNG, SVG, or `gdk-pixbuf`-supported image file into a `size x size` `cairo::ImageSurface`.
+#[cfg(test)]
+pub fn load_icon_surface(path: &Path, size: i32) -> Option<cairo::ImageSurface> {
+    load_icon_decoded(path, size).and_then(|d| image_surface_from_decoded(&d))
 }
 
-fn cached_icon_surface(icon: &str, size: i32) -> Option<cairo::ImageSurface> {
-    if icon.is_empty() || size <= 0 {
-        return None;
-    }
-    let key = (icon.to_string(), size);
-    ICON_CACHE.with(|cache| {
-        if let Some(found) = cache.borrow().get(&key) {
-            return found.clone();
+enum CacheSlot {
+    Pending,
+    Ready(Option<Arc<DecodedImage>>),
+}
+
+#[derive(Default)]
+struct IconState {
+    generation: u64,
+    entries: HashMap<String, Vec<(i32, CacheSlot)>>,
+    queue: VecDeque<(u64, String, i32)>,
+    active: usize,
+    search: Option<IconSearch>,
+}
+
+type SearchFn = Box<dyn Fn() -> IconSearch + Send + Sync>;
+type WakeFn = Box<dyn Fn() + Send + Sync>;
+
+struct IconCacheInner {
+    state: Mutex<IconState>,
+    work_cv: Condvar,
+    idle_cv: Condvar,
+    make_search: SearchFn,
+    waker: Mutex<Option<WakeFn>>,
+    lookups: AtomicUsize,
+}
+
+/// Asynchronous app-icon cache: `draw_app_icon` returns immediately (drawing the letter tile on
+/// misses) while a single background worker resolves theme paths and decodes bitmaps.
+pub struct IconCache {
+    inner: Arc<IconCacheInner>,
+    worker_started: AtomicBool,
+}
+
+impl IconCache {
+    pub fn new(make_search: impl Fn() -> IconSearch + Send + Sync + 'static) -> Self {
+        Self {
+            inner: Arc::new(IconCacheInner {
+                state: Mutex::new(IconState::default()),
+                work_cv: Condvar::new(),
+                idle_cv: Condvar::new(),
+                make_search: Box::new(make_search),
+                waker: Mutex::new(None),
+                lookups: AtomicUsize::new(0),
+            }),
+            worker_started: AtomicBool::new(false),
         }
-        let loaded = resolve_icon_path(icon).and_then(|p| load_icon_surface(&p, size));
-        cache.borrow_mut().insert(key, loaded.clone());
-        loaded
-    })
+    }
+
+    pub fn system() -> Self {
+        Self::new(IconSearch::system)
+    }
+
+    pub fn set_wakeup(&self, waker: impl Fn() + Send + Sync + 'static) {
+        if let Ok(mut guard) = self.inner.waker.lock() {
+            *guard = Some(Box::new(waker));
+        }
+    }
+
+    fn ensure_worker(&self) {
+        if self.worker_started.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let inner = Arc::clone(&self.inner);
+        let spawn = std::thread::Builder::new()
+            .name("edge-icons".into())
+            .spawn(move || loop {
+                let (gen, icon, size, search_opt) = {
+                    let mut st = inner.state.lock().unwrap_or_else(|p| p.into_inner());
+                    while st.queue.is_empty() {
+                        st = inner.work_cv.wait(st).unwrap_or_else(|p| p.into_inner());
+                    }
+                    let (gen, icon, size) = st.queue.pop_front().unwrap();
+                    st.active += 1;
+                    let search_opt = st.search.clone();
+                    (gen, icon, size, search_opt)
+                };
+                let search = match search_opt {
+                    Some(s) => s,
+                    None => {
+                        let built = (inner.make_search)();
+                        let mut st = inner.state.lock().unwrap_or_else(|p| p.into_inner());
+                        if st.generation == gen && st.search.is_none() {
+                            st.search = Some(built.clone());
+                        }
+                        built
+                    }
+                };
+                inner.lookups.fetch_add(1, Ordering::Relaxed);
+                let decoded = search
+                    .resolve(&icon)
+                    .and_then(|p| load_icon_decoded(&p, size))
+                    .map(Arc::new);
+                let should_wake = {
+                    let mut st = inner.state.lock().unwrap_or_else(|p| p.into_inner());
+                    st.active -= 1;
+                    let keep = st.generation == gen;
+                    if keep {
+                        let list = st.entries.entry(icon).or_default();
+                        if let Some((_, slot)) = list.iter_mut().find(|(s, _)| *s == size) {
+                            *slot = CacheSlot::Ready(decoded.clone());
+                        } else {
+                            list.push((size, CacheSlot::Ready(decoded.clone())));
+                        }
+                    }
+                    if st.queue.is_empty() && st.active == 0 {
+                        inner.idle_cv.notify_all();
+                    }
+                    keep && decoded.is_some()
+                };
+                if should_wake {
+                    if let Ok(guard) = inner.waker.lock() {
+                        if let Some(w) = guard.as_ref() {
+                            w();
+                        }
+                    }
+                }
+            });
+        if spawn.is_err() {
+            self.worker_started.store(false, Ordering::Release);
+        }
+    }
+
+    pub fn get_or_queue(&self, icon: &str, size: i32) -> Option<Arc<DecodedImage>> {
+        if icon.is_empty() || size <= 0 {
+            return None;
+        }
+        {
+            let mut st = self.inner.state.lock().unwrap_or_else(|p| p.into_inner());
+            if let Some(list) = st.entries.get(icon) {
+                if let Some((_, slot)) = list.iter().find(|(s, _)| *s == size) {
+                    return match slot {
+                        CacheSlot::Ready(img) => img.clone(),
+                        CacheSlot::Pending => None,
+                    };
+                }
+            }
+            let gen = st.generation;
+            st.entries
+                .entry(icon.to_string())
+                .or_default()
+                .push((size, CacheSlot::Pending));
+            st.queue.push_back((gen, icon.to_string(), size));
+        }
+        self.ensure_worker();
+        self.inner.work_cv.notify_one();
+        None
+    }
+
+    pub fn clear(&self) {
+        let mut st = self.inner.state.lock().unwrap_or_else(|p| p.into_inner());
+        st.generation = st.generation.wrapping_add(1);
+        st.entries.clear();
+        st.queue.clear();
+        st.search = None;
+        if st.active == 0 {
+            self.inner.idle_cv.notify_all();
+        }
+    }
+
+    pub fn wait_idle(&self) {
+        let mut st = self.inner.state.lock().unwrap_or_else(|p| p.into_inner());
+        while !st.queue.is_empty() || st.active > 0 {
+            st = self
+                .inner
+                .idle_cv
+                .wait(st)
+                .unwrap_or_else(|p| p.into_inner());
+        }
+    }
+
+    #[cfg(test)]
+    pub fn lookup_count(&self) -> usize {
+        self.inner.lookups.load(Ordering::Relaxed)
+    }
+
+    #[cfg(test)]
+    pub fn generation(&self) -> u64 {
+        self.inner
+            .state
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .generation
+    }
 }
 
-/// An app's icon at `(x, y)`, `size` px square; without one, a tile in the theme's track colour
-/// with the name's first letter.
+static GLOBAL_ICON_CACHE: OnceLock<IconCache> = OnceLock::new();
+static DISPLAY_SCALE_BITS: AtomicU32 = AtomicU32::new(1.0f32.to_bits());
+
+fn global_icon_cache() -> &'static IconCache {
+    GLOBAL_ICON_CACHE.get_or_init(IconCache::system)
+}
+
+/// Records the active output scale used when off-UI sources decode covers and thumbnails.
+pub fn set_display_scale(scale: f64) {
+    let s = if scale.is_finite() && scale > 0.0 {
+        scale as f32
+    } else {
+        1.0
+    };
+    DISPLAY_SCALE_BITS.store(s.to_bits(), Ordering::Relaxed);
+}
+
+/// Active output scale for cover and thumbnail decoding (1.0 until set).
+pub fn display_scale() -> f64 {
+    let s = f64::from(f32::from_bits(DISPLAY_SCALE_BITS.load(Ordering::Relaxed)));
+    if s.is_finite() && s > 0.0 {
+        s
+    } else {
+        1.0
+    }
+}
+
+/// Logical size converted to rounded device pixels at `scale` (at least 1).
+pub fn scaled_px(logical: i32, scale: f64) -> i32 {
+    let s = if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    };
+    ((f64::from(logical) * s).round().max(1.0)) as i32
+}
+
+/// Clears the shared app-icon cache so theme, desktop-entry, or icon file changes are picked up.
+pub fn clear_icon_cache() {
+    global_icon_cache().clear();
+}
+
+#[cfg(test)]
+pub fn global_icon_generation() -> u64 {
+    global_icon_cache().generation()
+}
+
+/// Registers a callback invoked on the worker thread whenever an icon finishes decoding.
+pub fn set_icon_wakeup(waker: impl Fn() + Send + Sync + 'static) {
+    global_icon_cache().set_wakeup(waker);
+}
+
+/// Waits for any queued background icon lookups/decodes to finish (used by `--render`).
+pub fn wait_icon_idle() {
+    if let Some(cache) = GLOBAL_ICON_CACHE.get() {
+        cache.wait_idle();
+    }
+}
+
+/// An app's icon at `(x, y)`, `size` px square; without one (or while loading), a tile in the
+/// theme's track colour with the name's first letter.
 #[allow(clippy::too_many_arguments)]
-pub fn draw_app_icon(cr: &Context, cx: &Cx, icon: &str, name: &str, x: f64, y: f64, size: f64) {
-    if let Some(surface) = cached_icon_surface(icon, size.round() as i32) {
-        let _ = cr.save();
-        let _ = cr.set_source_surface(&surface, x.round(), y.round());
-        let _ = cr.paint();
-        let _ = cr.restore();
-        return;
+pub fn draw_app_icon_with(
+    cache: &IconCache,
+    cr: &Context,
+    cx: &Cx,
+    icon: &str,
+    name: &str,
+    x: f64,
+    y: f64,
+    size: f64,
+) {
+    let (dx, dy) = cr
+        .user_to_device_distance(size, size)
+        .unwrap_or((size, size));
+    let px_size = dx.abs().max(dy.abs()).round().max(1.0) as i32;
+    if let Some(img) = cache.get_or_queue(icon, px_size) {
+        if let Some(surface) = surface_for_decoded(&img) {
+            let _ = cr.save();
+            let sw = surface.width() as f64;
+            let sh = surface.height() as f64;
+            if (sw - size).abs() > 0.25 || (sh - size).abs() > 0.25 {
+                let (dev_x, dev_y) = cr.user_to_device(x, y);
+                let (ux, uy) = cr
+                    .device_to_user(dev_x.round(), dev_y.round())
+                    .unwrap_or((x, y));
+                cr.translate(ux, uy);
+                cr.scale(size / sw, size / sh);
+                let _ = cr.set_source_surface(&surface, 0.0, 0.0);
+            } else {
+                let _ = cr.set_source_surface(&surface, x.round(), y.round());
+            }
+            let _ = cr.paint();
+            let _ = cr.restore();
+            return;
+        }
     }
     let th = cx.theme;
     draw::round_rect(cr, x, y, size, size, th.small_radius().min(size * 0.25));
@@ -679,6 +1061,13 @@ pub fn draw_app_icon(cr: &Context, cx: &Cx, icon: &str, name: &str, x: f64, y: f
     };
     let (_, lh) = draw::measure(cr, &t);
     draw::text_center(cr, x + size / 2.0, y + (size - lh) / 2.0, &t);
+}
+
+/// An app's icon at `(x, y)`, `size` px square; without one, a tile in the theme's track colour
+/// with the name's first letter.
+#[allow(clippy::too_many_arguments)]
+pub fn draw_app_icon(cr: &Context, cx: &Cx, icon: &str, name: &str, x: f64, y: f64, size: f64) {
+    draw_app_icon_with(global_icon_cache(), cr, cx, icon, name, x, y, size);
 }
 
 #[cfg(test)]
@@ -826,6 +1215,213 @@ mod tests {
         assert!(no_pb
             .get_or_decode_with(&p1, 192, 108, |_, _, _| None)
             .is_none());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn icon_search_follows_index_theme_inherits_and_handles_cycles() {
+        let dir = std::env::temp_dir().join(format!("edge-apps-inherits-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let child = dir.join("child");
+        let parent = dir.join("parent");
+        let grand = dir.join("grand");
+        std::fs::create_dir_all(child.join("48x48/apps")).unwrap();
+        std::fs::create_dir_all(parent.join("48x48/apps")).unwrap();
+        std::fs::create_dir_all(grand.join("48x48/apps")).unwrap();
+
+        std::fs::write(
+            child.join("index.theme"),
+            "[Icon Theme]\nName=Child\nInherits=parent,grand\n",
+        )
+        .unwrap();
+        // Cycle back to child should terminate cleanly.
+        std::fs::write(
+            parent.join("index.theme"),
+            "[Icon Theme]\nName=Parent\nInherits=child,grand\n",
+        )
+        .unwrap();
+        std::fs::write(grand.join("index.theme"), "[Icon Theme]\nName=Grand\n").unwrap();
+
+        let p_parent = parent.join("48x48/apps/inherited-app.png");
+        let p_grand = grand.join("48x48/apps/grand-app.png");
+        write_solid_png(&p_parent, 48, 48, 10, 200, 30);
+        write_solid_png(&p_grand, 48, 48, 30, 40, 220);
+
+        let search = IconSearch::with_dirs(vec![dir.clone()], Some("child"));
+        assert_eq!(search.resolve("inherited-app"), Some(p_parent));
+        assert_eq!(search.resolve("grand-app"), Some(p_grand));
+        assert_eq!(search.resolve("nonexistent-app"), None);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn icon_cache_decodes_on_worker_reloads_changed_files_and_retries_failed_lookups() {
+        let dir =
+            std::env::temp_dir().join(format!("edge-apps-icon-reload-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let apps_dir = dir.join("custom/48x48/apps");
+        std::fs::create_dir_all(&apps_dir).unwrap();
+        let icon_path = apps_dir.join("reload-app.png");
+        write_solid_png(&icon_path, 48, 48, 220, 20, 20);
+
+        let base = dir.clone();
+        let cache =
+            IconCache::new(move || IconSearch::with_dirs(vec![base.clone()], Some("custom")));
+        let woke = Arc::new(AtomicUsize::new(0));
+        let woke_cb = Arc::clone(&woke);
+        cache.set_wakeup(move || {
+            woke_cb.fetch_add(1, Ordering::Relaxed);
+        });
+
+        let th = crate::theme::Theme::from_config(&crate::config::Config::from_text(""));
+        let cx = Cx {
+            theme: &th,
+            now: chrono::NaiveDateTime::default(),
+            size: crate::provider::Size::M,
+            app: None,
+            apps: &[],
+            windows: &[],
+            notes: &[],
+            list_above: false,
+            editing: false,
+        };
+
+        let sample_center = |icon: &str| -> [u8; 4] {
+            let mut surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 48, 48).unwrap();
+            {
+                let cr = Context::new(&surf).unwrap();
+                draw_app_icon_with(&cache, &cr, &cx, icon, "App", 8.0, 8.0, 28.0);
+            }
+            surf.flush();
+            let stride = surf.stride() as usize;
+            let data = surf.data().unwrap();
+            let off = 22 * stride + 22 * 4;
+            [data[off], data[off + 1], data[off + 2], data[off + 3]]
+        };
+
+        // First draw queues worker and draws fallback immediately.
+        let _ = sample_center("reload-app");
+        let _ = sample_center("later-app");
+        cache.wait_idle();
+        assert_eq!(cache.lookup_count(), 2);
+        assert_eq!(woke.load(Ordering::Relaxed), 1);
+
+        // Second draw paints the red icon pixels; missing icon stays remembered without re-lookup.
+        let red_px = sample_center("reload-app");
+        assert!(
+            red_px[2] > 180 && red_px[1] < 40,
+            "expected red: {red_px:?}"
+        );
+        let _ = sample_center("later-app");
+        cache.wait_idle();
+        assert_eq!(cache.lookup_count(), 2);
+
+        // Update icon file on disk, add the previously missing icon, and signal a reload.
+        write_solid_png(&icon_path, 48, 48, 20, 220, 40);
+        write_solid_png(&apps_dir.join("later-app.png"), 48, 48, 30, 60, 230);
+        cache.clear();
+
+        let _ = sample_center("reload-app");
+        let _ = sample_center("later-app");
+        cache.wait_idle();
+        assert_eq!(cache.lookup_count(), 4);
+
+        let green_px = sample_center("reload-app");
+        assert!(
+            green_px[1] > 180 && green_px[2] < 40,
+            "expected green after reload: {green_px:?}"
+        );
+        let blue_px = sample_center("later-app");
+        assert!(
+            blue_px[0] > 180 && blue_px[2] < 60,
+            "expected blue for retried icon after reload: {blue_px:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn app_icon_caches_and_draws_at_device_pixel_size_when_scaled() {
+        let dir = std::env::temp_dir().join(format!("edge-apps-icon-scale-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let apps_dir = dir.join("custom/256x256/apps");
+        std::fs::create_dir_all(&apps_dir).unwrap();
+        let icon_path = apps_dir.join("scaled-app.png");
+        // Left half red, right half blue at 128x128 so scaling down to 64px keeps crisp halves.
+        let mut src = cairo::ImageSurface::create(cairo::Format::ARgb32, 128, 128).unwrap();
+        {
+            let stride = src.stride() as usize;
+            let mut data = src.data().unwrap();
+            for y in 0..128usize {
+                for x in 0..128usize {
+                    let off = y * stride + x * 4;
+                    let bgra = if x < 64 {
+                        [0, 0, 240, 255]
+                    } else {
+                        [240, 0, 0, 255]
+                    };
+                    data[off..off + 4].copy_from_slice(&bgra);
+                }
+            }
+        }
+        src.mark_dirty();
+        src.write_to_png(&mut File::create(&icon_path).unwrap())
+            .unwrap();
+
+        let base = dir.clone();
+        let cache =
+            IconCache::new(move || IconSearch::with_dirs(vec![base.clone()], Some("custom")));
+        let th = crate::theme::Theme::from_config(&crate::config::Config::from_text(""));
+        let cx = Cx {
+            theme: &th,
+            now: chrono::NaiveDateTime::default(),
+            size: crate::provider::Size::M,
+            app: None,
+            apps: &[],
+            windows: &[],
+            notes: &[],
+            list_above: false,
+            editing: false,
+        };
+
+        // 1x draw queues and caches 32x32.
+        let surf_1x = cairo::ImageSurface::create(cairo::Format::ARgb32, 48, 48).unwrap();
+        {
+            let cr = Context::new(&surf_1x).unwrap();
+            draw_app_icon_with(&cache, &cr, &cx, "scaled-app", "App", 8.0, 8.0, 32.0);
+        }
+        cache.wait_idle();
+        assert_eq!(cache.lookup_count(), 1);
+        let img_1x = cache.get_or_queue("scaled-app", 32).unwrap();
+        assert_eq!((img_1x.width, img_1x.height), (32, 32));
+
+        // 2x scaled draw queues and caches 64x64 independently and paints the full 64x64 device box.
+        let mut surf_2x = cairo::ImageSurface::create(cairo::Format::ARgb32, 96, 96).unwrap();
+        {
+            let cr = Context::new(&surf_2x).unwrap();
+            cr.scale(2.0, 2.0);
+            draw_app_icon_with(&cache, &cr, &cx, "scaled-app", "App", 8.0, 8.0, 32.0);
+        }
+        cache.wait_idle();
+        assert_eq!(cache.lookup_count(), 2);
+        let img_2x = cache.get_or_queue("scaled-app", 64).unwrap();
+        assert_eq!((img_2x.width, img_2x.height), (64, 64));
+
+        {
+            let cr = Context::new(&surf_2x).unwrap();
+            cr.scale(2.0, 2.0);
+            draw_app_icon_with(&cache, &cr, &cx, "scaled-app", "App", 8.0, 8.0, 32.0);
+        }
+        surf_2x.flush();
+        let stride = surf_2x.stride() as usize;
+        let data = surf_2x.data().unwrap();
+        // Device pixels (16..48) are red (left half of 64x64), (48..80) are blue (right half).
+        let left_off = 48 * stride + 30 * 4;
+        let right_off = 48 * stride + 66 * 4;
+        assert!(data[left_off + 2] > 200 && data[left_off] < 30);
+        assert!(data[right_off] > 200 && data[right_off + 2] < 30);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

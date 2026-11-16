@@ -152,14 +152,15 @@ pub struct LookSource {
 
 impl LookSource {
     pub fn system() -> LookSource {
-        let home = env_home();
-        let bad_dir = system_bad_colors_dir(&home);
+        let home = crate::paths::home().unwrap_or_default();
+        let bad_dir = crate::paths::runtime_or_cache_dir().join("infynitae/look-bad");
         LookSource { home, bad_dir }
     }
 }
 
 impl Source for LookSource {
     fn fetch(&mut self) -> Data {
+        let opt_home = (!self.home.as_os_str().is_empty()).then_some(self.home.as_path());
         if let Some(raw) = render_value("look") {
             let mut out = LookData::default();
             let mut acc_lines = String::new();
@@ -176,8 +177,7 @@ impl Source for LookSource {
                     acc_lines.push_str(cand);
                     acc_lines.push('\n');
                 } else if let Some(p) = l.strip_prefix("wp_thumb=") {
-                    let expanded = expand_home(p.trim(), &self.home.to_string_lossy());
-                    thumb_path = Some(PathBuf::from(expanded));
+                    thumb_path = Some(crate::paths::expand_home_with(p.trim(), opt_home));
                 } else if let Some(r) = l.strip_prefix("recent=") {
                     if let Some(hex) = normalize_hex(r.trim()) {
                         if !out.recent_accents.contains(&hex)
@@ -194,8 +194,12 @@ impl Source for LookSource {
                 out.accent_candidates = parse_accent_lines(&acc_lines);
             }
             if let Some(p) = thumb_path {
-                out.accent_thumb =
-                    icons::cached_wallpaper_thumb(&p, PICKER_PREVIEW_SIZE.0, PICKER_PREVIEW_SIZE.1);
+                let scale = icons::display_scale();
+                out.accent_thumb = icons::cached_wallpaper_thumb(
+                    &p,
+                    icons::scaled_px(PICKER_PREVIEW_SIZE.0, scale),
+                    icons::scaled_px(PICKER_PREVIEW_SIZE.1, scale),
+                );
             }
             return Box::new(out);
         }
@@ -209,16 +213,20 @@ impl Source for LookSource {
                 }
             }
         }
-        let wp_bin = self.home.join(".local/bin/infynitae-wallpaper");
-        let wallpaper_bin = wp_bin.is_file();
-        let active_wp = resolve_active_wallpaper(&self.home);
+        let wp_bin = opt_home.map(|h| h.join(".local/bin/infynitae-wallpaper"));
+        let wallpaper_bin = wp_bin.as_ref().is_some_and(|p| p.is_file());
+        let active_wp = opt_home.and_then(resolve_active_wallpaper);
         let mut accent_candidates = Vec::new();
         let mut accent_thumb = None;
-        if let Some(ref wp) = active_wp {
+        if let (Some(ref wp), Some(ref bin)) = (active_wp, wp_bin) {
             if wallpaper_bin {
-                accent_thumb =
-                    icons::cached_wallpaper_thumb(wp, PICKER_PREVIEW_SIZE.0, PICKER_PREVIEW_SIZE.1);
-                if let Ok(out) = Command::new(&wp_bin).arg("--accents").arg(wp).output() {
+                let scale = icons::display_scale();
+                accent_thumb = icons::cached_wallpaper_thumb(
+                    wp,
+                    icons::scaled_px(PICKER_PREVIEW_SIZE.0, scale),
+                    icons::scaled_px(PICKER_PREVIEW_SIZE.1, scale),
+                );
+                if let Ok(out) = Command::new(bin).arg("--accents").arg(wp).output() {
                     if out.status.success() {
                         accent_candidates =
                             parse_accent_lines(&String::from_utf8_lossy(&out.stdout));
@@ -226,10 +234,12 @@ impl Source for LookSource {
                 }
             }
         }
-        let recent_accents =
-            std::fs::read_to_string(self.home.join(".local/state/infynitae/settings-changes"))
-                .map(|raw| parse_recent_accents(&raw))
-                .unwrap_or_default();
+        let recent_accents = opt_home
+            .and_then(|h| {
+                std::fs::read_to_string(h.join(".local/state/infynitae/settings-changes")).ok()
+            })
+            .map(|raw| parse_recent_accents(&raw))
+            .unwrap_or_default();
         Box::new(LookData {
             wallpaper_bin,
             bad_colors,
@@ -322,6 +332,9 @@ pub fn parse_recent_accents(log_text: &str) -> Vec<String> {
 }
 
 fn resolve_active_wallpaper(home: &Path) -> Option<PathBuf> {
+    if home.as_os_str().is_empty() {
+        return None;
+    }
     let cfg_path = home.join(".config/infynitae/config");
     let raw = std::fs::read_to_string(&cfg_path)
         .ok()
@@ -329,8 +342,7 @@ fn resolve_active_wallpaper(home: &Path) -> Option<PathBuf> {
         .unwrap_or_default();
     let trimmed = raw.trim();
     if !trimmed.is_empty() {
-        let expanded = expand_home(trimmed, &home.to_string_lossy());
-        let p = PathBuf::from(expanded);
+        let p = crate::paths::expand_home_with(trimmed, Some(home));
         return p.is_file().then_some(p);
     }
     let dirs = [
@@ -354,7 +366,7 @@ pub struct WallpapersSource {
 impl WallpapersSource {
     pub fn system() -> WallpapersSource {
         WallpapersSource {
-            home: env_home(),
+            home: crate::paths::home().unwrap_or_default(),
             path: std::env::var("PATH").unwrap_or_default(),
         }
     }
@@ -392,12 +404,17 @@ impl Source for WallpapersSource {
                 thumbs_m,
             });
         }
-        let has_bin = has_wallpaper_bin(&self.home, &self.path);
-        let dirs = [
-            self.home.join("Pictures/Wallpapers"),
-            self.home.join(".local/share/wallpapers"),
-        ];
-        let files = scan_wallpapers(&dirs);
+        let opt_home = (!self.home.as_os_str().is_empty()).then_some(self.home.as_path());
+        let has_bin = has_wallpaper_bin(opt_home, &self.path);
+        let files = if let Some(home) = opt_home {
+            let dirs = [
+                home.join("Pictures/Wallpapers"),
+                home.join(".local/share/wallpapers"),
+            ];
+            scan_wallpapers(&dirs)
+        } else {
+            Vec::new()
+        };
         let (thumbs_s, thumbs_m) = decode_wallpaper_thumbs(&files);
         Box::new(WallpapersData {
             has_bin,
@@ -413,14 +430,19 @@ impl Source for WallpapersSource {
 }
 
 fn decode_wallpaper_thumbs(files: &[WallpaperFile]) -> (ThumbList, ThumbList) {
+    let scale = icons::display_scale();
+    let sw = icons::scaled_px(THUMB_S.0, scale);
+    let sh = icons::scaled_px(THUMB_S.1, scale);
+    let mw = icons::scaled_px(THUMB_M.0, scale);
+    let mh = icons::scaled_px(THUMB_M.1, scale);
     let shown = &files[..files.len().min(MAX_WALLPAPERS)];
     let thumbs_s = shown
         .iter()
-        .map(|f| icons::cached_wallpaper_thumb(Path::new(&f.path), THUMB_S.0, THUMB_S.1))
+        .map(|f| icons::cached_wallpaper_thumb(Path::new(&f.path), sw, sh))
         .collect();
     let thumbs_m = shown
         .iter()
-        .map(|f| icons::cached_wallpaper_thumb(Path::new(&f.path), THUMB_M.0, THUMB_M.1))
+        .map(|f| icons::cached_wallpaper_thumb(Path::new(&f.path), mw, mh))
         .collect();
     (thumbs_s, thumbs_m)
 }
@@ -442,16 +464,18 @@ pub struct FaceSource {
 
 impl FaceSource {
     pub fn system() -> FaceSource {
-        FaceSource { home: env_home() }
+        FaceSource {
+            home: crate::paths::home().unwrap_or_default(),
+        }
     }
 }
 
 impl Source for FaceSource {
     fn fetch(&mut self) -> Data {
+        let opt_home = (!self.home.as_os_str().is_empty()).then_some(self.home.as_path());
         if let Some(raw) = render_value("face") {
             let mut current_path: Option<PathBuf> = None;
             let mut files = Vec::new();
-            let home_s = self.home.to_string_lossy().into_owned();
             for line in raw.lines() {
                 let l = line.trim();
                 if l.is_empty() {
@@ -459,11 +483,13 @@ impl Source for FaceSource {
                 }
                 if let Some(p) = l.strip_prefix("current=") {
                     if !p.is_empty() {
-                        current_path = Some(PathBuf::from(expand_home(p, &home_s)));
+                        current_path = Some(crate::paths::expand_home_with(p, opt_home));
                     }
                     continue;
                 }
-                let expanded = expand_home(l, &home_s);
+                let expanded = crate::paths::expand_home_with(l, opt_home)
+                    .to_string_lossy()
+                    .into_owned();
                 let name = Path::new(&expanded)
                     .file_name()
                     .and_then(|s| s.to_str())
@@ -474,9 +500,10 @@ impl Source for FaceSource {
                     path: expanded,
                 });
             }
+            let row_px = icons::scaled_px(FACE_ROW_THUMB, icons::display_scale());
             let current = current_path
                 .filter(|p| p.is_file())
-                .and_then(|p| icons::cached_wallpaper_thumb(&p, FACE_ROW_THUMB, FACE_ROW_THUMB));
+                .and_then(|p| icons::cached_wallpaper_thumb(&p, row_px, row_px));
             let thumbs = decode_face_thumbs(&files);
             return Box::new(FaceData {
                 current,
@@ -484,15 +511,16 @@ impl Source for FaceSource {
                 thumbs,
             });
         }
-        let face_path = self.home.join(".face");
+        let Some(home) = opt_home else {
+            return Box::new(FaceData::default());
+        };
+        let face_path = home.join(".face");
+        let row_px = icons::scaled_px(FACE_ROW_THUMB, icons::display_scale());
         let current = face_path
             .is_file()
-            .then(|| icons::cached_wallpaper_thumb(&face_path, FACE_ROW_THUMB, FACE_ROW_THUMB))
+            .then(|| icons::cached_wallpaper_thumb(&face_path, row_px, row_px))
             .flatten();
-        let dirs = [
-            self.home.join("Pictures"),
-            self.home.join("Pictures/Wallpapers"),
-        ];
+        let dirs = [home.join("Pictures"), home.join("Pictures/Wallpapers")];
         let files = scan_wallpapers(&dirs);
         let thumbs = decode_face_thumbs(&files);
         Box::new(FaceData {
@@ -508,11 +536,10 @@ impl Source for FaceSource {
 }
 
 fn decode_face_thumbs(files: &[WallpaperFile]) -> ThumbList {
+    let px = icons::scaled_px(FACE_GRID_THUMB, icons::display_scale());
     files[..files.len().min(FACE_MAX_THUMBS)]
         .iter()
-        .map(|f| {
-            icons::cached_wallpaper_thumb(Path::new(&f.path), FACE_GRID_THUMB, FACE_GRID_THUMB)
-        })
+        .map(|f| icons::cached_wallpaper_thumb(Path::new(&f.path), px, px))
         .collect()
 }
 
@@ -575,7 +602,7 @@ pub struct IconsSource {
 impl IconsSource {
     pub fn system() -> IconsSource {
         IconsSource {
-            dirs: icon_roots(&env_home()),
+            dirs: icon_roots(crate::paths::home().as_deref()),
         }
     }
 }
@@ -601,7 +628,7 @@ pub struct CursorsSource {
 impl CursorsSource {
     pub fn system() -> CursorsSource {
         CursorsSource {
-            dirs: icon_roots(&env_home()),
+            dirs: icon_roots(crate::paths::home().as_deref()),
         }
     }
 }
@@ -619,31 +646,22 @@ impl Source for CursorsSource {
     }
 }
 
-fn env_home() -> PathBuf {
-    PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
+fn icon_roots(home: Option<&Path>) -> Vec<PathBuf> {
+    let mut dirs = vec![PathBuf::from("/usr/share/icons")];
+    if let Some(h) = home.filter(|p| !p.as_os_str().is_empty()) {
+        dirs.push(h.join(".local/share/icons"));
+        dirs.push(h.join(".icons"));
+    }
+    dirs
 }
 
-fn system_bad_colors_dir(home: &Path) -> PathBuf {
-    let base = match std::env::var_os("XDG_RUNTIME_DIR") {
-        Some(v) if !v.is_empty() => PathBuf::from(v),
-        _ => home.join(".cache"),
-    };
-    base.join("infynitae/look-bad")
-}
-
-fn icon_roots(home: &Path) -> Vec<PathBuf> {
-    vec![
-        PathBuf::from("/usr/share/icons"),
-        home.join(".local/share/icons"),
-        home.join(".icons"),
-    ]
-}
-
-fn has_wallpaper_bin(home: &Path, path: &str) -> bool {
-    if home.join(".local/bin/infynitae-wallpaper").is_file()
-        || home.join("infynitae/live/infynitae-wallpaper").is_file()
-    {
-        return true;
+fn has_wallpaper_bin(home: Option<&Path>, path: &str) -> bool {
+    if let Some(h) = home.filter(|p| !p.as_os_str().is_empty()) {
+        if h.join(".local/bin/infynitae-wallpaper").is_file()
+            || h.join("infynitae/live/infynitae-wallpaper").is_file()
+        {
+            return true;
+        }
     }
     path.split(':')
         .filter(|d| !d.is_empty())
@@ -1172,6 +1190,7 @@ pub struct LookCard {
     pick: Option<usize>,
     list: ui::List,
     list_scroll: usize,
+    list_scroll_accum: f64,
     accent_tab: AccentTab,
     accent_hsv: (f64, f64, f64),
     accent_drag: Option<AccentDrag>,
@@ -1183,7 +1202,7 @@ pub struct LookCard {
     query: String,
     sliding: Option<(usize, f64)>,
     slide_rects: std::cell::RefCell<HashMap<usize, Rect>>,
-    home: String,
+    home: Option<PathBuf>,
 }
 
 impl LookCard {
@@ -1214,6 +1233,7 @@ impl LookCard {
             pick: None,
             list: ui::List::default(),
             list_scroll: 0,
+            list_scroll_accum: 0.0,
             accent_tab: AccentTab::Wallpaper,
             accent_hsv: (220.0, 0.50, 0.97),
             accent_drag: None,
@@ -1225,7 +1245,7 @@ impl LookCard {
             query: String::new(),
             sliding: None,
             slide_rects: Default::default(),
-            home: std::env::var("HOME").unwrap_or_default(),
+            home: crate::paths::home(),
         }
     }
 
@@ -1350,7 +1370,9 @@ impl LookCard {
                 .collect(),
             LookControl::Wallpapers => {
                 let mut out = Vec::new();
-                let cur_expanded = expand_home(&cur, &self.home);
+                let cur_expanded = crate::paths::expand_home_with(&cur, self.home.as_deref())
+                    .to_string_lossy()
+                    .into_owned();
                 let mut any_file_matched = false;
                 if let Some(wp) = &self.wallpapers {
                     for (idx, f) in wp.files.iter().enumerate() {
@@ -1395,7 +1417,9 @@ impl LookCard {
                 }
                 let mut any_file_matched = false;
                 if source == "wallpapers" {
-                    let cur_expanded = expand_home(&cur, &self.home);
+                    let cur_expanded = crate::paths::expand_home_with(&cur, self.home.as_deref())
+                        .to_string_lossy()
+                        .into_owned();
                     if let Some(wp) = &self.wallpapers {
                         for f in &wp.files {
                             let active =
@@ -1873,6 +1897,15 @@ impl LookCard {
                 None,
             );
         }
+        if entries.len() > vis && lr.3 >= vis as f64 * ui::LIST_ROW_H {
+            ui::scrollbar(
+                cr,
+                cx,
+                (lr.0, lr.1 + 4.0, lr.2, (lr.3 - 8.0).max(0.0)),
+                entries.len() as f64 * ui::LIST_ROW_H,
+                start as f64 * ui::LIST_ROW_H,
+            );
+        }
     }
     fn draw_accent_picker(&self, cr: &Context, cx: &Cx, hits: &mut Hits, lr: Rect) {
         ui::list_box(cr, cx, lr);
@@ -1920,7 +1953,7 @@ impl LookCard {
                 .look
                 .as_ref()
                 .and_then(|l| l.accent_thumb.as_ref())
-                .and_then(thumb_surface)
+                .and_then(icons::surface_for_decoded)
             {
                 let sw = surf.width() as f64;
                 let sh = surf.height() as f64;
@@ -2420,6 +2453,7 @@ fn draw_color_square(
 
 fn draw_hue_strip(cr: &Context, cx: &Cx, hits: &mut Hits, id: u32, r: Rect, hue: f64) {
     let _ = hits.add(id, r) || hits.selected(id);
+    hits.mark_draggable(id);
     let pat = cairo::LinearGradient::new(r.0, r.1, r.0 + r.2, r.1);
     let stops = [
         (0.0 / 6.0, (1.0, 0.0, 0.0)),
@@ -2453,6 +2487,7 @@ fn draw_hue_strip(cr: &Context, cx: &Cx, hits: &mut Hits, id: u32, r: Rect, hue:
 
 fn draw_sv_square(cr: &Context, cx: &Cx, hits: &mut Hits, id: u32, r: Rect, hsv: (f64, f64, f64)) {
     let _ = hits.add(id, r) || hits.selected(id);
+    hits.mark_draggable(id);
     let pure = Rgba::rgb(hsv_to_rgb(hsv.0, 1.0, 1.0));
     let _ = cr.save();
     draw::round_rect(cr, r.0, r.1, r.2, r.3, THUMB_RADIUS);
@@ -2538,22 +2573,6 @@ fn draw_style_row(
     }
 }
 
-fn expand_home(raw: &str, home: &str) -> String {
-    if home.is_empty() {
-        return raw.to_string();
-    }
-    let h = home.trim_end_matches('/');
-    if raw == "~" {
-        h.to_string()
-    } else if let Some(rest) = raw.strip_prefix("~/") {
-        format!("{h}/{rest}")
-    } else if let Some(rest) = raw.strip_prefix("$HOME/") {
-        format!("{h}/{rest}")
-    } else {
-        raw.to_string()
-    }
-}
-
 fn fmt_number(v: f64) -> String {
     if (v - v.round()).abs() < 1e-9 {
         format!("{}", v.round() as i64)
@@ -2603,29 +2622,6 @@ fn thumb_cell_size(width: f64, size: Size) -> (usize, f64, f64) {
     let cw = (avail / cols as f64).floor();
     let ch = (cw * 9.0 / 16.0).round().max(9.0);
     (cols, cw, ch)
-}
-
-thread_local! {
-    static THUMB_SURFACES: RefCell<HashMap<usize, (Arc<DecodedImage>, cairo::ImageSurface)>> =
-        RefCell::new(HashMap::new());
-}
-
-fn thumb_surface(img: &Arc<DecodedImage>) -> Option<cairo::ImageSurface> {
-    let key = Arc::as_ptr(img) as usize;
-    THUMB_SURFACES.with(|cache| {
-        let mut map = cache.borrow_mut();
-        if let Some((held, surf)) = map.get(&key) {
-            if Arc::ptr_eq(held, img) {
-                return Some(surf.clone());
-            }
-        }
-        let surf = icons::image_surface_from_decoded(img)?;
-        if map.len() >= 64 {
-            map.clear();
-        }
-        map.insert(key, (Arc::clone(img), surf.clone()));
-        Some(surf)
-    })
 }
 
 impl LookCard {
@@ -2680,7 +2676,9 @@ impl LookCard {
         let (cols, cw, ch) = thumb_cell_size(body.2, cx.size);
         let grid_rows = shown_len.div_ceil(cols);
         let cur = self.value(i);
-        let cur_expanded = expand_home(&cur, &self.home);
+        let cur_expanded = crate::paths::expand_home_with(&cur, self.home.as_deref())
+            .to_string_lossy()
+            .into_owned();
         let thumbs = self.wallpapers.as_ref().map(|w| {
             if cx.size == Size::M {
                 &w.thumbs_m
@@ -2704,7 +2702,7 @@ impl LookCard {
             if let Some(surf) = thumbs
                 .and_then(|t| t.get(idx))
                 .and_then(|o| o.as_ref())
-                .and_then(thumb_surface)
+                .and_then(icons::surface_for_decoded)
             {
                 let sw = surf.width() as f64;
                 let sh = surf.height() as f64;
@@ -2912,7 +2910,7 @@ impl LookCard {
             let _ = cr.save();
             cr.arc(cx_c, cy_c, rad, 0.0, std::f64::consts::TAU);
             cr.clip();
-            if let Some(surf) = thumb_surface(img) {
+            if let Some(surf) = icons::surface_for_decoded(img) {
                 let sw = surf.width() as f64;
                 let sh = surf.height() as f64;
                 let d = 2.0 * rad;
@@ -2971,7 +2969,7 @@ impl LookCard {
             if let Some(surf) = thumbs
                 .and_then(|t| t.get(idx))
                 .and_then(|o| o.as_ref())
-                .and_then(thumb_surface)
+                .and_then(icons::surface_for_decoded)
             {
                 let sw = surf.width() as f64;
                 let sh = surf.height() as f64;
@@ -3316,7 +3314,7 @@ impl Card for LookCard {
                 }
                 true
             }
-            Event::Scroll { dy, .. } => {
+            Event::Scroll { dy, notches, .. } => {
                 let Some(i) = self.pick else {
                     return false;
                 };
@@ -3325,22 +3323,13 @@ impl Card for LookCard {
                 }
                 let total = self.list_entries(i).len();
                 let max_scroll = total.saturating_sub(MAX_LIST_ROWS);
-                if max_scroll == 0 {
-                    return false;
-                }
-                let cur = self.list_scroll.min(max_scroll);
-                let next = if *dy > 0.0 {
-                    (cur + 1).min(max_scroll)
-                } else if *dy < 0.0 {
-                    cur.saturating_sub(1)
-                } else {
-                    return false;
-                };
-                if next == self.list_scroll {
-                    return false;
-                }
-                self.list_scroll = next;
-                true
+                crate::card::scroll_rows(
+                    &mut self.list_scroll,
+                    &mut self.list_scroll_accum,
+                    max_scroll,
+                    *dy,
+                    *notches,
+                )
             }
             Event::Press {
                 hit,
@@ -3659,6 +3648,76 @@ impl Card for LookCard {
                 };
                 self.set(i, fmt_number(v), out);
                 true
+            }
+            Event::Cancel { .. } => {
+                let had_drag = self.accent_drag.take().is_some();
+                self.accent_preview = None;
+                self.sliding.take().is_some() || had_drag
+            }
+            Event::Step { hit, dir } if *dir != 0 => {
+                let hit = *hit;
+                if self.accent_picker_open() {
+                    if hit == H_TAB_WP || hit == H_TAB_ANY {
+                        let next = if *dir > 0 {
+                            AccentTab::AnyColor
+                        } else {
+                            AccentTab::Wallpaper
+                        };
+                        if next == self.accent_tab {
+                            return false;
+                        }
+                        self.accent_tab = next;
+                        self.wp_mode_open = false;
+                        if next == AccentTab::AnyColor && self.accent_preview.is_none() {
+                            self.sync_accent_hsv();
+                        }
+                        return true;
+                    }
+                    if hit == H_HUE {
+                        self.accent_hsv.0 =
+                            (self.accent_hsv.0 + f64::from(*dir) * 10.0).rem_euclid(360.0);
+                        let hex =
+                            hsv_to_hex(self.accent_hsv.0, self.accent_hsv.1, self.accent_hsv.2);
+                        self.set_accent(hex, out);
+                        return true;
+                    }
+                    if (H_SCHEME_BASE..H_SCHEME_BASE + SCHEME_OPTS.len() as u32).contains(&hit) {
+                        let cur = self.value(SCHEME_ROW);
+                        let cur_idx = SCHEME_OPTS
+                            .iter()
+                            .position(|(v, _)| v.eq_ignore_ascii_case(&cur))
+                            .unwrap_or((hit - H_SCHEME_BASE) as usize);
+                        let next = (cur_idx as isize + isize::from(*dir))
+                            .clamp(0, SCHEME_OPTS.len() as isize - 1)
+                            as usize;
+                        let (val, _) = SCHEME_OPTS[next];
+                        return self.set(SCHEME_ROW, val.to_string(), out);
+                    }
+                }
+                if !(ROW..MORE).contains(&hit) {
+                    return false;
+                }
+                let i = ((hit - ROW) / 10) as usize;
+                let part = (hit - ROW) % 10;
+                let Some(r) = self.table.get(i).copied() else {
+                    return false;
+                };
+                if !self.row_visible(&r) {
+                    return false;
+                }
+                match r.control {
+                    LookControl::Slide { min, max, step, .. } if part == 1 => {
+                        let cur = self.value(i).parse::<f64>().unwrap_or(min);
+                        let next = snap(cur + f64::from(*dir) * step, min, max, step);
+                        self.set(i, fmt_number(next), out)
+                    }
+                    LookControl::Step { min, max } if part == 1 || part == 2 => {
+                        let v: i64 = self.value(i).parse().unwrap_or(min);
+                        let n = (v + i64::from(*dir)).clamp(min, max);
+                        self.set(i, n.to_string(), out)
+                    }
+                    _ => false,
+                }
             }
             _ => false,
         }
@@ -4473,7 +4532,15 @@ mod tests {
             .map(|(_, r)| r.1 + r.3)
             .fold(0.0_f64, f64::max);
         assert!((h_list - max_bottom_l).abs() < 1.0);
-        assert!(f.event(&Event::Scroll { hit: None, dy: 1.0 }, &cx_m, &mut out));
+        assert!(f.event(
+            &Event::Scroll {
+                hit: None,
+                dy: 36.0,
+                notches: 1.0,
+            },
+            &cx_m,
+            &mut out
+        ));
         assert_eq!(f.list_scroll, 1);
 
         // When the bottom-most row's list opens and finishes animating, list box bottom sits 4 px inside height

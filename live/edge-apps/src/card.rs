@@ -7,7 +7,12 @@ use crate::app::App;
 use crate::provider::Size;
 use crate::theme::Theme;
 use std::collections::HashMap;
-use std::process::Command;
+use std::io::Read;
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
+use std::process::{Child, Command, Stdio};
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 pub type Rect = (f64, f64, f64, f64);
 
@@ -113,7 +118,14 @@ pub trait Card {
     fn show_list(&mut self) {}
     /// Called when the panel containing this card closes.
     fn panel_closed(&mut self) {}
+    /// True when the card reads `cx.now` and should redraw on minute boundaries while open.
+    fn wants_clock(&self) -> bool {
+        false
+    }
 }
+
+/// Pixels moved per discrete mouse wheel notch (120 units in Wayland).
+pub const SCROLL_NOTCH_PX: f64 = 36.0;
 
 /// The clickable rectangles of one card in one frame, with the pointer and the keyboard's selection.
 #[derive(Clone, Debug, Default)]
@@ -123,6 +135,8 @@ pub struct Hits {
     /// the hit the keyboard's selection is on
     pub selected: Option<u32>,
     pub list: Vec<(u32, Rect)>,
+    /// hits that respond to a pointer/touch drag (sliders) instead of panel scrolling
+    pub draggable: Vec<u32>,
 }
 
 fn inside(r: Rect, (x, y): (f64, f64)) -> bool {
@@ -135,6 +149,7 @@ impl Hits {
             pointer,
             selected,
             list: Vec::new(),
+            draggable: Vec::new(),
         }
     }
 
@@ -144,6 +159,18 @@ impl Hits {
     pub fn add(&mut self, id: u32, rect: Rect) -> bool {
         self.list.push((id, rect));
         self.pointer.is_some_and(|p| inside(rect, p))
+    }
+
+    /// Marks `id` as a draggable control (slider) so touch drags move it instead of scrolling.
+    pub fn mark_draggable(&mut self, id: u32) {
+        if !self.draggable.contains(&id) {
+            self.draggable.push(id);
+        }
+    }
+
+    /// True when `id` is a draggable control.
+    pub fn is_draggable(&self, id: u32) -> bool {
+        self.draggable.contains(&id)
     }
 
     /// True when the keyboard's selection is on `id`.
@@ -183,15 +210,88 @@ pub enum Event<'a> {
     Release {
         hit: u32,
     },
+    /// an active touch sequence on `hit` was cancelled by the compositor
+    Cancel {
+        hit: u32,
+    },
     /// None: over the card but on no hit
     Scroll {
         hit: Option<u32>,
+        /// scroll distance in pixels (positive = down)
         dy: f64,
+        /// discrete wheel notches when present, 0.0 for continuous touchpad scrolling
+        notches: f64,
+    },
+    /// Left/Right (-1 / +1) on the keyboard-selected hit (sliders, choice strips)
+    Step {
+        hit: u32,
+        dir: i8,
+    },
+    /// Delete on the keyboard-selected hit, for cards with an item remove action
+    Delete {
+        hit: u32,
     },
     /// what was typed, for a card with a search field (the whole query so far)
     Text(&'a str),
     /// Enter with nothing selected: the card's own default (a search's first result), if it has one
     Enter,
+}
+
+/// Converts discrete wheel notches or continuous pixel deltas into integer step counts.
+pub fn scroll_steps(accum: &mut f64, dy: f64, notches: f64, step_px: f64) -> isize {
+    let delta = if notches != 0.0 {
+        notches * step_px
+    } else {
+        dy
+    };
+    if delta == 0.0 || step_px <= 0.0 {
+        return 0;
+    }
+    if *accum != 0.0 && delta.signum() != accum.signum() {
+        *accum = 0.0;
+    }
+    *accum += delta;
+    let steps = (*accum / step_px).trunc() as isize;
+    *accum -= steps as f64 * step_px;
+    steps
+}
+
+/// Steps a row-indexed scroll offset by wheel notches or accumulated touchpad pixels.
+/// Returns `true` when the card consumed the event (changed rows or absorbed a sub-step swipe
+/// while it still has room to scroll in that direction), `false` at a boundary to hand over.
+pub fn scroll_rows(
+    scroll: &mut usize,
+    accum: &mut f64,
+    max_scroll: usize,
+    dy: f64,
+    notches: f64,
+) -> bool {
+    let cur = (*scroll).min(max_scroll);
+    let dir = if notches != 0.0 { notches } else { dy };
+    if max_scroll == 0 || dir == 0.0 {
+        *accum = 0.0;
+        return false;
+    }
+    let can_scroll = (dir > 0.0 && cur < max_scroll) || (dir < 0.0 && cur > 0);
+    if !can_scroll {
+        *accum = 0.0;
+        return false;
+    }
+    let steps = scroll_steps(accum, dy, notches, SCROLL_NOTCH_PX);
+    if steps == 0 {
+        return true;
+    }
+    let next = if steps > 0 {
+        cur.saturating_add(steps as usize).min(max_scroll)
+    } else {
+        cur.saturating_sub((-steps) as usize)
+    };
+    if next == cur {
+        *accum = 0.0;
+        return false;
+    }
+    *scroll = next;
+    true
 }
 
 /// What a card asks the core to do. Cards never start a process or touch a window themselves.
@@ -215,6 +315,10 @@ pub enum Action {
     /// these cards (words, as in a panel line) in the open panel's place until it closes: a tray
     /// app's menu and card
     ShowCards(Vec<String>),
+    /// remove this card from the panel line and save
+    RemoveCard,
+    /// a JSON request line sent to `$XDG_RUNTIME_DIR/infynitae/shell.sock`
+    ShellCommand(String),
 }
 
 /// The fixture's values (`INFYNITAE_EDGE_RENDER_DATA`: `key=value` lines, `\n` and `\t` escaped),
@@ -254,6 +358,11 @@ pub fn parse_render_data(text: &str) -> HashMap<String, String> {
             (k.trim().to_string(), out)
         })
         .collect()
+}
+
+/// Whether a render fixture (`INFYNITAE_EDGE_RENDER_DATA`) is active.
+pub fn has_render_data() -> bool {
+    render_data().is_some()
 }
 
 /// A render fixture's value for `key` (None outside renders, or not in the fixture).
@@ -299,20 +408,87 @@ pub fn render_notes() -> Vec<Note> {
         .collect()
 }
 
-/// Runs `cmd` with sh and gives its output; with a render fixture set, the fixture's value for `key`
-/// instead (nothing runs).
+const RUN_TIMEOUT: Duration = Duration::from_secs(5);
+
+fn kill_process_group(child: &mut Child) {
+    #[cfg(unix)]
+    {
+        let pgid = child.id() as libc::pid_t;
+        if pgid > 0 {
+            unsafe {
+                libc::kill(-pgid, libc::SIGKILL);
+            }
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+fn run_command_with_timeout(mut cmd: Command, limit: Duration) -> String {
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    #[cfg(unix)]
+    cmd.process_group(0);
+
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(_) => return String::new(),
+    };
+    let Some(mut stdout) = child.stdout.take() else {
+        kill_process_group(&mut child);
+        return String::new();
+    };
+
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = stdout.read_to_end(&mut buf);
+        let _ = tx.send(buf);
+    });
+
+    let deadline = Instant::now() + limit;
+    match rx.recv_timeout(limit) {
+        Ok(buf) => loop {
+            match child.try_wait() {
+                Ok(Some(_)) => return String::from_utf8_lossy(&buf).into_owned(),
+                Ok(None) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                _ => {
+                    kill_process_group(&mut child);
+                    return String::new();
+                }
+            }
+        },
+        Err(_) => {
+            kill_process_group(&mut child);
+            String::new()
+        }
+    }
+}
+
+/// Runs `cmd` with sh within `RUN_TIMEOUT` (5 s) and gives its output; with a render fixture set,
+/// returns the fixture's value for `key` instead (nothing runs). On timeout the process group is
+/// killed and an empty string is returned so the card shows its Missing status.
 pub fn run_sh(key: &str, cmd: &str) -> String {
     if let Some(d) = render_data() {
         return d.get(key).cloned().unwrap_or_default();
     }
-    Command::new("sh")
-        .arg("-c")
-        .arg(cmd)
-        .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
-        .unwrap_or_default()
+    let mut c = Command::new("sh");
+    c.arg("-c").arg(cmd);
+    run_command_with_timeout(c, RUN_TIMEOUT)
+}
+
+/// Runs `prog` directly with `args` (no shell, `LC_ALL=C`) within `RUN_TIMEOUT` (5 s) and gives
+/// its stdout; with a render fixture set, returns the fixture's value for `key` instead.
+pub fn run_cmd(key: &str, prog: &str, args: &[&str]) -> String {
+    if let Some(d) = render_data() {
+        return d.get(key).cloned().unwrap_or_default();
+    }
+    let mut c = Command::new(prog);
+    c.args(args).env("LC_ALL", "C");
+    run_command_with_timeout(c, RUN_TIMEOUT)
 }
 
 #[cfg(test)]
@@ -334,5 +510,45 @@ mod tests {
         let d = parse_render_data("wifi=enabled\\nyes:Home\\\\:Net:72\nempty=\n");
         assert_eq!(d["wifi"], "enabled\nyes:Home\\:Net:72");
         assert_eq!(d["empty"], "");
+    }
+
+    #[test]
+    fn run_sh_returns_stdout_of_fast_command() {
+        assert_eq!(run_sh("k", "printf 'ok\\n'"), "ok\n");
+    }
+
+    #[test]
+    fn run_sh_times_out_and_kills_stuck_command() {
+        let started = Instant::now();
+        let out = run_sh("k", "sleep 30");
+        let elapsed = started.elapsed();
+        assert_eq!(out, "");
+        assert!(
+            elapsed < Duration::from_secs(7),
+            "run_sh took {elapsed:?}, expected ~5 s timeout"
+        );
+    }
+
+    #[test]
+    fn scroll_rows_accumulates_touchpad_pixels_and_hands_over_at_bounds() {
+        let mut scroll = 0usize;
+        let mut accum = 0.0;
+        // At top, scrolling up cannot scroll the list and hands over immediately.
+        assert!(!scroll_rows(&mut scroll, &mut accum, 3, -2.5, 0.0));
+        assert_eq!(scroll, 0);
+
+        // Sub-step touchpad swipe down is absorbed without leaking until it reaches one notch.
+        for _ in 0..14 {
+            assert!(scroll_rows(&mut scroll, &mut accum, 3, 2.5, 0.0));
+        }
+        assert_eq!(scroll, 0);
+        // 15th * 2.5 = 37.5 >= 36.0 advances 1 row.
+        assert!(scroll_rows(&mut scroll, &mut accum, 3, 2.5, 0.0));
+        assert_eq!(scroll, 1);
+
+        // Two discrete wheel notches hit the bottom and the next notch hands over.
+        assert!(scroll_rows(&mut scroll, &mut accum, 3, 72.0, 2.0));
+        assert_eq!(scroll, 3);
+        assert!(!scroll_rows(&mut scroll, &mut accum, 3, 36.0, 1.0));
     }
 }

@@ -282,37 +282,6 @@ fn draw_row_entry(cr: &Context, cx: &Cx, hits: &mut Hits, e: &EntryRow<'_>) {
     );
 }
 
-fn draw_scrollbar(
-    cr: &Context,
-    th: &Theme,
-    body: Rect,
-    total_units: f64,
-    view_units: f64,
-    offset_units: f64,
-) {
-    if total_units <= view_units + 0.01 || body.3 <= 8.0 {
-        return;
-    }
-    let track_h = body.3 - 4.0;
-    let thumb_h = (track_h * (view_units / total_units)).clamp(18.0, track_h);
-    let max_offset = (total_units - view_units).max(1.0);
-    let frac = (offset_units / max_offset).clamp(0.0, 1.0);
-    let y = body.1 + 2.0 + (track_h - thumb_h) * frac;
-    draw::round_rect(cr, body.0 + body.2 - 3.0, y, 2.5, thumb_h, 1.25);
-    draw::set(cr, th.muted.alpha(0.45));
-    let _ = cr.fill();
-}
-
-fn scroll_delta(dy: f64) -> f64 {
-    if dy == 0.0 {
-        0.0
-    } else if dy.abs() <= 5.0 {
-        dy * ROW_H
-    } else {
-        dy
-    }
-}
-
 fn clamped_scroll(scroll: f64, total_h: f64, cap_h: f64) -> f64 {
     scroll.clamp(0.0, (total_h - cap_h).max(0.0))
 }
@@ -323,7 +292,7 @@ fn apply_scroll(scroll: &mut f64, dy: f64, total_h: f64, cap_h: f64) -> bool {
         return false;
     }
     let prev = clamped_scroll(*scroll, total_h, cap_h);
-    let next = (prev + scroll_delta(dy)).clamp(0.0, max);
+    let next = (prev + dy).clamp(0.0, max);
     *scroll = next;
     (next - prev).abs() > f64::EPSILON
 }
@@ -431,6 +400,7 @@ fn grouped_apps(apps: &[App]) -> Vec<OrderedApp> {
 #[derive(Default)]
 struct AppsListCard {
     scroll: usize,
+    scroll_accum: f64,
     /// what was typed in the panel: the list shows the matches, best first, without categories
     query: String,
 }
@@ -561,14 +531,11 @@ impl Card for AppsListCard {
             }
             y += h;
         }
-        draw_scrollbar(
-            cr,
-            cx.theme,
-            body,
-            total as f64,
-            Self::max_rows(cx.size) as f64,
-            start as f64,
-        );
+        let cap = Self::max_rows(cx.size);
+        if total > cap && cap > 0 {
+            let scale = body.3 / cap as f64;
+            ui::scrollbar(cr, cx, body, total as f64 * scale, start as f64 * scale);
+        }
     }
 
     fn event(&mut self, ev: &Event, cx: &Cx, out: &mut Vec<Action>) -> bool {
@@ -590,24 +557,20 @@ impl Card for AppsListCard {
                 out.push(Action::ClosePanel);
                 true
             }
-            Event::Scroll { dy, .. } => {
+            Event::Scroll { dy, notches, .. } => {
                 let total = if self.query.is_empty() {
                     cx.apps.len()
                 } else {
                     self.matches(cx).len()
                 };
                 let max = total.saturating_sub(Self::max_rows(cx.size));
-                if max == 0 || *dy == 0.0 {
-                    return false;
-                }
-                let prev = self.scroll.min(max);
-                let next = if *dy > 0.0 {
-                    (prev + 1).min(max)
-                } else {
-                    prev.saturating_sub(1)
-                };
-                self.scroll = next;
-                next != prev
+                crate::card::scroll_rows(
+                    &mut self.scroll,
+                    &mut self.scroll_accum,
+                    max,
+                    *dy,
+                    *notches,
+                )
             }
             Event::Press {
                 hit,
@@ -986,52 +949,30 @@ impl Card for SearchCard {
         let field_hot = hits.add(H_SEARCH_FIELD, bar);
         let field_sel = hits.selected(H_SEARCH_FIELD);
 
-        draw::round_rect(cr, bar.0, bar.1, bar.2, bar.3, th.small_radius());
-        draw::set(cr, th.track);
-        let _ = cr.fill_preserve();
-        let border = if active || field_hot || field_sel {
-            th.accent
+        let clear_w = if self.query.is_empty() { 0.0 } else { 48.0 };
+        let placeholder = if self.settings {
+            "Search settings"
         } else {
-            th.edge
+            "Search apps"
         };
-        draw::set(cr, border);
-        cr.set_line_width(1.0);
-        let _ = cr.stroke();
+        ui::text_field(
+            cr,
+            th,
+            bar,
+            &ui::TextField {
+                value: &self.query,
+                placeholder,
+                focused: active || field_hot || field_sel,
+                show_caret: !self.query.is_empty(),
+                left_pad: 34.0,
+                right_pad: 10.0 + clear_w,
+            },
+        );
 
         let icon_col = if active { th.accent_text } else { th.muted };
         draw_search_icon(cr, bar.0 + 18.0, bar.1 + bar.3 / 2.0 - 1.5, 5.5, icon_col);
 
-        let text_x = bar.0 + 34.0;
-        let clear_w = if self.query.is_empty() { 0.0 } else { 48.0 };
-        let text_max_w = (bar.0 + bar.2 - 10.0 - clear_w - text_x).max(0.0);
-
-        if self.query.is_empty() {
-            let ph_t = Text {
-                text: if self.settings {
-                    "Search settings"
-                } else {
-                    "Search apps"
-                },
-                size: 13.0,
-                bold: false,
-                color: th.muted,
-            };
-            let (_, ph) = draw::measure(cr, &ph_t);
-            draw::text_max(cr, text_x, bar.1 + (bar.3 - ph) / 2.0, text_max_w, &ph_t);
-        } else {
-            let q_t = Text {
-                text: &self.query,
-                size: 13.0,
-                bold: false,
-                color: th.text,
-            };
-            let (qw, qh) = draw::measure(cr, &q_t);
-            draw::text_max(cr, text_x, bar.1 + (bar.3 - qh) / 2.0, text_max_w, &q_t);
-            let caret_x = (text_x + qw.min(text_max_w) + 1.5).min(bar.0 + bar.2 - clear_w - 8.0);
-            draw::set(cr, th.accent);
-            cr.rectangle(caret_x, bar.1 + 11.0, 1.5, bar.3 - 22.0);
-            let _ = cr.fill();
-
+        if !self.query.is_empty() {
             let clear_r = (
                 bar.0 + bar.2 - clear_w - 4.0,
                 bar.1 + 4.0,
@@ -1486,7 +1427,7 @@ pub struct BackgroundSource {
 impl Default for BackgroundSource {
     fn default() -> Self {
         Self {
-            runtime_dir: std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from),
+            runtime_dir: Some(crate::paths::runtime_dir()),
         }
     }
 }
@@ -1616,7 +1557,7 @@ impl Card for BackgroundCard {
                 },
             );
         }
-        draw_scrollbar(cr, cx.theme, body, total_h, body.3, scroll);
+        ui::scrollbar(cr, cx, body, total_h, scroll);
         let _ = cr.restore();
     }
 
@@ -1801,13 +1742,22 @@ mod tests {
         assert!(!card.event(
             &Event::Scroll {
                 hit: None,
-                dy: -1.0
+                dy: -36.0,
+                notches: -1.0,
             },
             &cx_m,
             &mut out
         ));
         for _ in 0..4 {
-            assert!(card.event(&Event::Scroll { hit: None, dy: 1.0 }, &cx_m, &mut out));
+            assert!(card.event(
+                &Event::Scroll {
+                    hit: None,
+                    dy: 36.0,
+                    notches: 1.0,
+                },
+                &cx_m,
+                &mut out
+            ));
         }
         assert_eq!(card.scroll, 4);
         let h_split = card.height(&cx_m, 340.0);
@@ -1817,17 +1767,34 @@ mod tests {
         assert_eq!(hits_split.list.len(), 6);
 
         for _ in 0..20 {
-            card.event(&Event::Scroll { hit: None, dy: 1.0 }, &cx_m, &mut out);
+            card.event(
+                &Event::Scroll {
+                    hit: None,
+                    dy: 36.0,
+                    notches: 1.0,
+                },
+                &cx_m,
+                &mut out,
+            );
         }
         assert_eq!(card.scroll, 12);
-        assert!(!card.event(&Event::Scroll { hit: None, dy: 1.0 }, &cx_m, &mut out));
+        assert!(!card.event(
+            &Event::Scroll {
+                hit: None,
+                dy: 36.0,
+                notches: 1.0,
+            },
+            &cx_m,
+            &mut out
+        ));
 
         // Scroll back to top: first visible app is clickable; hidden app is not.
         for _ in 0..20 {
             card.event(
                 &Event::Scroll {
                     hit: None,
-                    dy: -1.0,
+                    dy: -36.0,
+                    notches: -1.0,
                 },
                 &cx_m,
                 &mut out,
@@ -2156,7 +2123,15 @@ mod tests {
             &cx,
             &mut out
         ));
-        assert!(!card.event(&Event::Scroll { hit: None, dy: 1.0 }, &cx, &mut out));
+        assert!(!card.event(
+            &Event::Scroll {
+                hit: None,
+                dy: 36.0,
+                notches: 1.0,
+            },
+            &cx,
+            &mut out
+        ));
 
         // 8 items clamp at BG_MAX_H and scroll within 0..=(2 * ROW_H).
         let many = TrayData {
@@ -2187,8 +2162,107 @@ mod tests {
             &cx,
             &mut out
         ));
-        assert!(card.event(&Event::Scroll { hit: None, dy: 1.0 }, &cx, &mut out));
-        assert!(card.event(&Event::Scroll { hit: None, dy: 1.0 }, &cx, &mut out));
-        assert!(!card.event(&Event::Scroll { hit: None, dy: 1.0 }, &cx, &mut out));
+        assert!(card.event(
+            &Event::Scroll {
+                hit: None,
+                dy: 2.5,
+                notches: 0.0,
+            },
+            &cx,
+            &mut out
+        ));
+        assert_eq!(card.scroll, 2.5);
+        assert!(card.event(
+            &Event::Scroll {
+                hit: None,
+                dy: 36.0,
+                notches: 1.0,
+            },
+            &cx,
+            &mut out
+        ));
+        assert!(card.event(
+            &Event::Scroll {
+                hit: None,
+                dy: 36.0,
+                notches: 1.0,
+            },
+            &cx,
+            &mut out
+        ));
+        assert!(card.event(
+            &Event::Scroll {
+                hit: None,
+                dy: 36.0,
+                notches: 1.0,
+            },
+            &cx,
+            &mut out
+        ));
+        assert_eq!(card.scroll, 2.0 * ROW_H);
+        assert!(!card.event(
+            &Event::Scroll {
+                hit: None,
+                dy: 36.0,
+                notches: 1.0,
+            },
+            &cx,
+            &mut out
+        ));
+    }
+
+    #[test]
+    #[ignore = "wall-clock limits: run by hand with --ignored --nocapture"]
+    fn first_draw_of_apps_card_with_200_entries_does_not_stall_on_icon_io() {
+        let th = Theme::from_config(&crate::config::Config::from_text(""));
+        let apps: Vec<App> = (0..200)
+            .map(|i| App {
+                id: format!("bench-app-{i:03}"),
+                name: format!("Bench App {i:03}"),
+                icon: format!("nonexistent-bench-icon-{i:03}"),
+                exec: "true".into(),
+                categories: vec!["Utility".into()],
+                ..Default::default()
+            })
+            .collect();
+        let cx = test_cx(&th, Size::L, &apps);
+        let card = AppsListCard::default();
+        let h = card.height(&cx, 340.0);
+        let surf =
+            cairo::ImageSurface::create(cairo::Format::ARgb32, 360, h.ceil() as i32 + 20).unwrap();
+        let cr = cairo::Context::new(&surf).unwrap();
+        let mut hits = Hits::new(None, None);
+
+        let t0 = std::time::Instant::now();
+        card.draw(&cr, &cx, (10.0, 10.0, 340.0, h), &mut hits);
+        let apps_card_ms = t0.elapsed().as_secs_f64() * 1000.0;
+
+        // Also time queuing all 200 distinct uncached icons directly on the UI thread.
+        let cache =
+            crate::icons::IconCache::new(|| crate::icons::IconSearch::with_dirs(Vec::new(), None));
+        let t1 = std::time::Instant::now();
+        for (i, app) in apps.iter().enumerate() {
+            crate::icons::draw_app_icon_with(
+                &cache,
+                &cr,
+                &cx,
+                &app.icon,
+                &app.name,
+                10.0,
+                10.0 + (i % 10) as f64 * 32.0,
+                28.0,
+            );
+        }
+        let all_200_ms = t1.elapsed().as_secs_f64() * 1000.0;
+        eprintln!("apps_200_first_draw: card={apps_card_ms:.3} ms, 200_icons={all_200_ms:.3} ms");
+        assert!(
+            apps_card_ms < 100.0,
+            "first AppsListCard::draw stalled: {apps_card_ms:.3} ms"
+        );
+        assert!(
+            all_200_ms < 250.0,
+            "first 200-icon draw stalled: {all_200_ms:.3} ms"
+        );
+        cache.wait_idle();
     }
 }

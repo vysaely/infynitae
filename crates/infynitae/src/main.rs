@@ -347,6 +347,7 @@ fn run() -> ExitCode {
     core.set_placement_policy(infynitae_core::PlacementPolicy::ClusterTiling);
     core.set_enter_mode(infynitae_core::EnterMode::Maximize);
     core.set_fullscreen_pan(true);
+    core.set_touchpad_gestures(true);
     core.set_focus_on_open(true);
     core.set_teleport_on_open(true);
 
@@ -354,11 +355,20 @@ fn run() -> ExitCode {
     let mut virtual_screen = true;
     let mut vrr: Option<bool> = None;
 
+    if let Ok(tg) = std::env::var("TOUCHPAD_GESTURES") {
+        core.set_touchpad_gestures(infynitae_wayland::parse_bool(&tg) != Some(false));
+    }
+
     if let Ok(fp) = std::env::var("FULLSCREEN_PAN") {
         core.set_fullscreen_pan(
             infynitae_wayland::parse_bool(&fp) != Some(false)
                 && !fp.eq_ignore_ascii_case("exclusive"),
         );
+    }
+    if let Ok(es) = std::env::var("TOUCH_EDGE_SWIPE")
+        && let Some(on) = infynitae_wayland::parse_bool(&es)
+    {
+        core.set_touch_edge_swipe(on);
     }
 
     if let Ok(sea) = std::env::var("SUPER_ENTER_ACTION") {
@@ -443,6 +453,16 @@ fn run() -> ExitCode {
                             infynitae_wayland::parse_bool(val) != Some(false)
                                 && !val.eq_ignore_ascii_case("exclusive"),
                         );
+                    }
+                    "TOUCHPAD_GESTURES" => {
+                        core.set_touchpad_gestures(
+                            infynitae_wayland::parse_bool(val) != Some(false),
+                        );
+                    }
+                    "TOUCH_EDGE_SWIPE" => {
+                        if let Some(on) = infynitae_wayland::parse_bool(val) {
+                            core.set_touch_edge_swipe(on);
+                        }
                     }
                     "OUTPUT_SCALE" => {
                         if scale_120.is_none()

@@ -26,6 +26,15 @@ pub fn dump(shell: &Shell, w: f64, h: f64) {
     }
 }
 
+pub fn dump_on(shell: &Shell, output: crate::shell::OutputId, w: f64, h: f64) {
+    if let Some(path) = boxes_path() {
+        write_boxes_to(
+            std::path::Path::new(&path),
+            &text_on(shell, Some(output), w, h),
+        );
+    }
+}
+
 pub fn dump_closed() {
     if let Some(path) = boxes_path() {
         write_boxes_to(std::path::Path::new(&path), "closed\n");
@@ -33,9 +42,25 @@ pub fn dump_closed() {
 }
 
 pub fn text(shell: &Shell, w: f64, h: f64) -> String {
+    text_on(shell, shell.visible_output(), w, h)
+}
+
+fn text_on(shell: &Shell, output: Option<crate::shell::OutputId>, w: f64, h: f64) -> String {
     if shell.ask.ask.on {
         let (x, y, aw, ah) = shell.ask.ask.geometry(w, h);
         return format!("ask {x:.0} {y:.0} {aw:.0} {ah:.0}\n");
+    }
+    if let Some((x, y, mw, mh)) = shell.window_menu_rect(w, h) {
+        let mut out = format!("windowmenu {x:.0} {y:.0} {mw:.0} {mh:.0}\n");
+        for (_, _, hits) in shell.frame.borrow().iter() {
+            for (id, r) in &hits.list {
+                out += &format!(
+                    "hit window/menu {id} {:.0} {:.0} {:.0} {:.0}\n",
+                    r.0, r.1, r.2, r.3
+                );
+            }
+        }
+        return out;
     }
     let Some(idx) = shell.open else {
         return "closed\n".into();
@@ -63,9 +88,9 @@ pub fn text(shell: &Shell, w: f64, h: f64) -> String {
             pc.word.owner, pc.word.kind, r.2, r.3
         );
     }
-    for (ci, _, hits) in shell.frame.borrow().iter() {
-        let pc = &ps.cards[*ci];
-        for (id, r) in &hits.list {
+    for (ci, _, hits) in shell.frame_hits(output) {
+        let pc = &ps.cards[ci];
+        for (id, r) in hits.list {
             out += &format!(
                 "hit {}/{} {id} {:.0} {:.0} {:.0} {:.0}\n",
                 pc.word.owner, pc.word.kind, r.0, r.1, r.2, r.3

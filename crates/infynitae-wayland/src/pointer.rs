@@ -353,6 +353,75 @@ impl WaylandState {
                     ptr.frame(self);
                 }
             }
+            Effect::GestureSwipeBegin { fingers, time_ms } => {
+                let event = GestureSwipeBeginEvent {
+                    serial: SERIAL_COUNTER.next_serial(),
+                    time: time_ms,
+                    fingers,
+                };
+                ptr.gesture_swipe_begin(self, &event);
+            }
+            Effect::GestureSwipeUpdate { delta, time_ms } => {
+                let event = GestureSwipeUpdateEvent {
+                    time: time_ms,
+                    delta: convert::global_delta(delta),
+                };
+                ptr.gesture_swipe_update(self, &event);
+            }
+            Effect::GestureSwipeEnd { cancelled, time_ms } => {
+                let event = GestureSwipeEndEvent {
+                    serial: SERIAL_COUNTER.next_serial(),
+                    time: time_ms,
+                    cancelled,
+                };
+                ptr.gesture_swipe_end(self, &event);
+            }
+            Effect::GesturePinchBegin { fingers, time_ms } => {
+                let event = GesturePinchBeginEvent {
+                    serial: SERIAL_COUNTER.next_serial(),
+                    time: time_ms,
+                    fingers,
+                };
+                ptr.gesture_pinch_begin(self, &event);
+            }
+            Effect::GesturePinchUpdate {
+                delta,
+                scale,
+                rotation,
+                time_ms,
+            } => {
+                let event = GesturePinchUpdateEvent {
+                    time: time_ms,
+                    delta: convert::global_delta(delta),
+                    scale,
+                    rotation,
+                };
+                ptr.gesture_pinch_update(self, &event);
+            }
+            Effect::GesturePinchEnd { cancelled, time_ms } => {
+                let event = GesturePinchEndEvent {
+                    serial: SERIAL_COUNTER.next_serial(),
+                    time: time_ms,
+                    cancelled,
+                };
+                ptr.gesture_pinch_end(self, &event);
+            }
+            Effect::GestureHoldBegin { fingers, time_ms } => {
+                let event = GestureHoldBeginEvent {
+                    serial: SERIAL_COUNTER.next_serial(),
+                    time: time_ms,
+                    fingers,
+                };
+                ptr.gesture_hold_begin(self, &event);
+            }
+            Effect::GestureHoldEnd { cancelled, time_ms } => {
+                let event = GestureHoldEndEvent {
+                    serial: SERIAL_COUNTER.next_serial(),
+                    time: time_ms,
+                    cancelled,
+                };
+                ptr.gesture_hold_end(self, &event);
+            }
             Effect::PointerZeroOutputBegin => {
                 let popup_target = self.popup_grab.as_ref().and_then(|g| {
                     if !g.has_ended() {
@@ -657,6 +726,8 @@ impl WaylandState {
 
     /// The seat's touch goes (the last touchscreen was removed): fingers down are given up.
     pub fn disable_touch(&mut self) {
+        let fx = self.core.clear_touches();
+        self.apply(&fx);
         self.cancel_touches();
         if self.seat.get_touch().is_some() {
             self.seat.remove_touch();
@@ -667,15 +738,27 @@ impl WaylandState {
     /// finger with an event since its last frame, which leaves out a finger that is held
     /// still: each one is sent its last location again first (a motion to where it is), so the
     /// cancel reaches every client holding a finger.
-    pub(crate) fn cancel_touches(&mut self) {
+    pub fn cancel_touches(&mut self) {
+        if let Some(l) = self.session_lock.as_mut() {
+            l.fingers.clear();
+        }
         let Some(touch) = self.seat.get_touch() else {
             self.touch_last.clear();
+            self.lock_touch_last.clear();
             return;
         };
         for (slot, location) in std::mem::take(&mut self.touch_last) {
             let event = TouchMotionEvent {
                 slot: Some(slot).into(),
                 location: convert::canvas_to_global(location),
+                time: 0,
+            };
+            touch.motion(self, None, &event);
+        }
+        for (slot, p) in std::mem::take(&mut self.lock_touch_last) {
+            let event = TouchMotionEvent {
+                slot: Some(slot).into(),
+                location: p.into(),
                 time: 0,
             };
             touch.motion(self, None, &event);
@@ -702,6 +785,8 @@ impl WaylandState {
                 },
             ) => {
                 if let Some(touch) = touch {
+                    self.lock_touch_last.retain(|(s, _)| *s != slot);
+                    self.lock_touch_last.push((slot, p));
                     // a lock surface covers its screen from its origin: the screen point is
                     // the surface point
                     let event = TouchDownEvent {
@@ -715,6 +800,9 @@ impl WaylandState {
             }
             (LockTouchRoute::Lock, P::TouchMotion { slot, p, time_us }) => {
                 if let Some(touch) = touch {
+                    if let Some(last) = self.lock_touch_last.iter_mut().find(|(s, _)| *s == slot) {
+                        last.1 = p;
+                    }
                     let event = TouchMotionEvent {
                         slot: Some(slot).into(),
                         location: p.into(),
@@ -725,6 +813,7 @@ impl WaylandState {
             }
             (LockTouchRoute::Lock, P::TouchUp { slot, time_us }) => {
                 if let Some(touch) = touch {
+                    self.lock_touch_last.retain(|(s, _)| *s != slot);
                     let event = TouchUpEvent {
                         slot: Some(slot).into(),
                         serial: SERIAL_COUNTER.next_serial(),
@@ -739,9 +828,7 @@ impl WaylandState {
                 }
             }
             (LockTouchRoute::Lock, P::TouchCancel) => {
-                if let Some(touch) = touch {
-                    touch.cancel(self);
-                }
+                self.cancel_touches();
             }
             _ => {}
         }
@@ -807,5 +894,838 @@ impl WaylandState {
             _ => return false,
         }
         true
+    }
+}
+
+// ---- tablet (`zwp_tablet_manager_v2`: tools, tablets, pads) ---------------------------------
+// Tablet tool and pad delivery lives here alongside pointer and touch delivery (C4.2, source
+// rule `smithay-pointer-only-in-adapter-pointer`). A surface whose client bound
+// `zwp_tablet_seat_v2` for this seat receives `zwp_tablet_tool_v2` events (proximity_in, down,
+// up, motion, pressure, tilt, distance, slider, rotation, wheel, button, frame) at its
+// surface-local coordinates through the output's camera; a client that has not bound it gets
+// pointer motion and left click instead, never both.
+
+const BTN_LEFT: u32 = 0x110;
+
+/// Extracts the button code from a backend's tablet tool button event inside `pointer` (C4.2:
+/// source rule `smithay-pointer-only-in-adapter-pointer` reserves `.button()` for this module).
+pub fn tablet_tool_button<B: smithay::backend::input::InputBackend>(
+    event: &B::TabletToolButtonEvent,
+) -> u32 {
+    use smithay::backend::input::TabletToolButtonEvent;
+    event.button()
+}
+
+/// Extra axes reported with a tablet tool event (`zwp_tablet_tool_v2`).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct TabletAxes {
+    pub pressure: Option<f64>,
+    pub distance: Option<f64>,
+    pub tilt: Option<(f64, f64)>,
+    pub rotation: Option<f64>,
+    pub slider: Option<f64>,
+    pub wheel: Option<(f64, i32)>,
+}
+
+impl TabletAxes {
+    fn any(&self) -> bool {
+        self.pressure.is_some()
+            || self.distance.is_some()
+            || self.tilt.is_some()
+            || self.rotation.is_some()
+            || self.slider.is_some()
+            || self.wheel.is_some()
+    }
+}
+
+/// One event from a tablet stylus or tool, mapped to `output`'s logical coordinates `p`.
+#[derive(Clone, Debug, PartialEq)]
+pub enum TabletEvent {
+    ProximityIn {
+        tablet: smithay::wayland::tablet_manager::TabletDescriptor,
+        tool: smithay::backend::input::TabletToolDescriptor,
+        output: infynitae_core::output::OutputId,
+        p: (f64, f64),
+        axes: TabletAxes,
+        time_us: u64,
+    },
+    ProximityOut {
+        tool: smithay::backend::input::TabletToolDescriptor,
+        time_us: u64,
+    },
+    Axis {
+        tablet: smithay::wayland::tablet_manager::TabletDescriptor,
+        tool: smithay::backend::input::TabletToolDescriptor,
+        output: infynitae_core::output::OutputId,
+        p: (f64, f64),
+        axes: TabletAxes,
+        time_us: u64,
+    },
+    Tip {
+        tablet: smithay::wayland::tablet_manager::TabletDescriptor,
+        tool: smithay::backend::input::TabletToolDescriptor,
+        output: infynitae_core::output::OutputId,
+        p: (f64, f64),
+        down: bool,
+        axes: TabletAxes,
+        time_us: u64,
+    },
+    Button {
+        tool: smithay::backend::input::TabletToolDescriptor,
+        button: u32,
+        pressed: bool,
+        time_us: u64,
+    },
+}
+
+/// Description of a tablet pad device (`zwp_tablet_pad_v2`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TabletPadDescriptor {
+    pub sysname: String,
+    pub path: Option<String>,
+    pub buttons: u32,
+    pub modes: u32,
+    pub tablet: smithay::wayland::tablet_manager::TabletDescriptor,
+}
+
+pub(crate) enum TabletCursor<'a> {
+    Inactive,
+    OnOutput {
+        p: (f64, f64),
+        status: Option<&'a smithay::input::pointer::CursorImageStatus>,
+    },
+    OnOtherOutput,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum TabletGrab {
+    /// Tip down on a client that bound `tablet-v2`: keeps that surface until tip up.
+    Tablet {
+        output: infynitae_core::output::OutputId,
+        target: PointerTarget,
+        layer_offset: Option<(f64, f64)>,
+    },
+    /// Tip down on a client without `tablet-v2` (or empty canvas): drives `BTN_LEFT` on the pointer.
+    Pointer,
+}
+
+struct PadEntry {
+    desc: TabletPadDescriptor,
+    max_server_id: u32,
+    instances: Vec<(
+        smithay::reexports::wayland_server::Weak<
+            smithay::reexports::wayland_protocols::wp::tablet::zv2::server::zwp_tablet_pad_v2::ZwpTabletPadV2,
+        >,
+        smithay::reexports::wayland_server::Weak<
+            smithay::reexports::wayland_protocols::wp::tablet::zv2::server::zwp_tablet_pad_group_v2::ZwpTabletPadGroupV2,
+        >,
+    )>,
+}
+
+#[derive(Default)]
+pub(crate) struct TabletState {
+    seats: Vec<
+        smithay::reexports::wayland_server::Weak<
+            smithay::reexports::wayland_protocols::wp::tablet::zv2::server::zwp_tablet_seat_v2::ZwpTabletSeatV2,
+        >,
+    >,
+    grab: Option<TabletGrab>,
+    focused_tool: Option<(smithay::backend::input::TabletToolDescriptor, WlSurface)>,
+    last_loc: Option<convert::GlobalPoint>,
+    cursor_at: Option<(infynitae_core::output::OutputId, (f64, f64))>,
+    tool_cursor: Option<smithay::input::pointer::CursorImageStatus>,
+    pads: Vec<PadEntry>,
+    pad_focus: Option<WlSurface>,
+}
+
+struct TabletDelivery<'a> {
+    tablet: &'a smithay::wayland::tablet_manager::TabletHandle,
+    tool_handle: &'a smithay::wayland::tablet_manager::TabletToolHandle,
+    tool: smithay::backend::input::TabletToolDescriptor,
+    output: infynitae_core::output::OutputId,
+    p: (f64, f64),
+    surface: WlSurface,
+    origin: convert::GlobalPoint,
+    location: infynitae_core::geom::CanvasPos,
+    axes: &'a TabletAxes,
+    force_motion: bool,
+    time_ms: u32,
+}
+
+fn queue_tablet_axes(tool: &smithay::wayland::tablet_manager::TabletToolHandle, axes: &TabletAxes) {
+    if let Some(pressure) = axes.pressure {
+        tool.pressure(pressure);
+    }
+    if let Some(distance) = axes.distance {
+        tool.distance(distance);
+    }
+    if let Some(tilt) = axes.tilt {
+        tool.tilt(tilt);
+    }
+    if let Some(rotation) = axes.rotation {
+        tool.rotation(rotation);
+    }
+    if let Some(slider) = axes.slider {
+        tool.slider_position(slider);
+    }
+    if let Some((degrees, clicks)) = axes.wheel {
+        tool.wheel(degrees, clicks);
+    }
+}
+
+impl WaylandState {
+    /// Registers a graphics tablet on the seat (`zwp_tablet_v2`).
+    pub fn add_tablet(&mut self, desc: &smithay::wayland::tablet_manager::TabletDescriptor) {
+        use smithay::wayland::tablet_manager::TabletSeatTrait;
+        self.seat.tablet_seat().add_tablet::<Self>(&self.dh, desc);
+    }
+
+    /// Removes a graphics tablet from the seat.
+    pub fn remove_tablet(&mut self, desc: &smithay::wayland::tablet_manager::TabletDescriptor) {
+        use smithay::wayland::tablet_manager::TabletSeatTrait;
+        self.seat.tablet_seat().remove_tablet(desc);
+    }
+
+    /// Registers a tablet pad (`zwp_tablet_pad_v2`) and announces it to bound tablet seats.
+    pub fn add_tablet_pad(&mut self, desc: TabletPadDescriptor) {
+        use smithay::wayland::tablet_manager::TabletSeatTrait;
+        self.seat
+            .tablet_seat()
+            .add_tablet::<Self>(&self.dh, &desc.tablet);
+        self.remove_tablet_pad(&desc.sysname);
+        let mut entry = PadEntry {
+            desc,
+            max_server_id: 0xFF00_0000,
+            instances: Vec::new(),
+        };
+        let seats: Vec<_> = self
+            .tablet
+            .seats
+            .iter()
+            .filter_map(|s| s.upgrade().ok())
+            .collect();
+        for seat in seats {
+            if let Ok(client) = self.dh.get_client(seat.id()) {
+                Self::announce_pad(&self.dh, &client, &seat, &mut entry);
+            }
+        }
+        self.tablet.pads.push(entry);
+        if let Some(surface) = self
+            .tablet
+            .pad_focus
+            .clone()
+            .or_else(|| self.keyboard_handle().current_focus())
+        {
+            self.tablet.pad_focus = Some(surface.clone());
+            self.send_pad_enter(&surface);
+        }
+    }
+
+    /// Removes a tablet pad by its device sysname.
+    pub fn remove_tablet_pad(&mut self, sysname: &str) {
+        self.tablet.pads.retain(|p| {
+            if p.desc.sysname == sysname {
+                for (pad, _) in &p.instances {
+                    if let Ok(wl_pad) = pad.upgrade() {
+                        wl_pad.removed();
+                    }
+                }
+                false
+            } else {
+                true
+            }
+        });
+    }
+
+    /// Forwards a tablet pad button press or release through `zwp_tablet_pad_v2.button` to the
+    /// focused client, and nothing else.
+    pub fn tablet_pad_button(&mut self, sysname: &str, button: u32, pressed: bool, time_us: u64) {
+        use smithay::reexports::wayland_protocols::wp::tablet::zv2::server::zwp_tablet_pad_v2;
+        if self.is_locked() {
+            return;
+        }
+        let target = self
+            .keyboard_handle()
+            .current_focus()
+            .or_else(|| self.tablet.pad_focus.clone())
+            .or_else(|| self.tablet.focused_tool.as_ref().map(|(_, s)| s.clone()));
+        let Some(surface) = target else {
+            return;
+        };
+        if self.tablet.pad_focus.as_ref() != Some(&surface) {
+            self.update_tablet_pad_focus(Some(&surface));
+        }
+        let time_ms = (time_us / 1000) as u32;
+        let state = if pressed {
+            zwp_tablet_pad_v2::ButtonState::Pressed
+        } else {
+            zwp_tablet_pad_v2::ButtonState::Released
+        };
+        for pad in &self.tablet.pads {
+            if !sysname.is_empty() && pad.desc.sysname != sysname {
+                continue;
+            }
+            for (pad_weak, _) in &pad.instances {
+                if pad_weak.id().same_client_as(&surface.id())
+                    && let Ok(wl_pad) = pad_weak.upgrade()
+                {
+                    wl_pad.button(time_ms, button, state);
+                }
+            }
+        }
+    }
+
+    pub(crate) fn tablet_seat_bound(
+        &mut self,
+        client: &smithay::reexports::wayland_server::Client,
+        seat: &smithay::reexports::wayland_protocols::wp::tablet::zv2::server::zwp_tablet_seat_v2::ZwpTabletSeatV2,
+    ) {
+        self.tablet.seats.retain(|s| s.upgrade().is_ok());
+        self.tablet.seats.push(seat.downgrade());
+        for pad in &mut self.tablet.pads {
+            Self::announce_pad(&self.dh, client, seat, pad);
+        }
+        if let Some(surface) = self
+            .keyboard_handle()
+            .current_focus()
+            .filter(|s| s.id().same_client_as(&seat.id()))
+        {
+            self.tablet.pad_focus = Some(surface.clone());
+            self.send_pad_enter(&surface);
+        }
+    }
+
+    pub(crate) fn tablet_seat_destroyed(
+        &mut self,
+        seat_id: &smithay::reexports::wayland_server::backend::ObjectId,
+    ) {
+        self.tablet.seats.retain(|s| &s.id() != seat_id);
+    }
+
+    pub(crate) fn client_has_tablet_seat(&self, surface: &WlSurface) -> bool {
+        self.tablet
+            .seats
+            .iter()
+            .any(|s| s.id().same_client_as(&surface.id()) && s.upgrade().is_ok())
+    }
+
+    pub(crate) fn set_tablet_tool_cursor(
+        &mut self,
+        image: smithay::input::pointer::CursorImageStatus,
+    ) {
+        if self.tablet.cursor_at.is_some() {
+            self.tablet.tool_cursor = Some(image);
+        } else {
+            self.set_cursor_status(image);
+        }
+    }
+
+    pub(crate) fn tablet_cursor(
+        &self,
+        output: infynitae_core::output::OutputId,
+    ) -> TabletCursor<'_> {
+        match self.tablet.cursor_at {
+            Some((o, p)) if o == output => TabletCursor::OnOutput {
+                p,
+                status: self.tablet.tool_cursor.as_ref(),
+            },
+            Some(_) => TabletCursor::OnOtherOutput,
+            None => TabletCursor::Inactive,
+        }
+    }
+
+    fn announce_pad(
+        dh: &smithay::reexports::wayland_server::DisplayHandle,
+        client: &smithay::reexports::wayland_server::Client,
+        seat: &smithay::reexports::wayland_protocols::wp::tablet::zv2::server::zwp_tablet_seat_v2::ZwpTabletSeatV2,
+        entry: &mut PadEntry,
+    ) {
+        use smithay::reexports::wayland_protocols::wp::tablet::zv2::server::{
+            zwp_tablet_pad_group_v2::ZwpTabletPadGroupV2, zwp_tablet_pad_v2::ZwpTabletPadV2,
+        };
+        let Ok(wl_pad) = client.create_resource::<ZwpTabletPadV2, _, Self>(dh, seat.version(), ())
+        else {
+            return;
+        };
+        entry.max_server_id = entry.max_server_id.max(wl_pad.id().protocol_id());
+        seat.pad_added(&wl_pad);
+        let Ok(wl_group) =
+            client.create_resource::<ZwpTabletPadGroupV2, _, Self>(dh, wl_pad.version(), ())
+        else {
+            return;
+        };
+        entry.max_server_id = entry.max_server_id.max(wl_group.id().protocol_id());
+        wl_pad.group(&wl_group);
+        let btns: Vec<u8> = (0..entry.desc.buttons).flat_map(u32::to_ne_bytes).collect();
+        wl_group.buttons(btns);
+        if entry.desc.modes > 1 {
+            wl_group.modes(entry.desc.modes);
+        }
+        wl_group.done();
+        if let Some(ref path) = entry.desc.path {
+            wl_pad.path(path.clone());
+        }
+        if entry.desc.buttons > 0 {
+            wl_pad.buttons(entry.desc.buttons);
+        }
+        wl_pad.done();
+        entry
+            .instances
+            .push((wl_pad.downgrade(), wl_group.downgrade()));
+    }
+
+    pub(crate) fn update_tablet_pad_focus(&mut self, focused: Option<&WlSurface>) {
+        if self.tablet.pad_focus.as_ref() == focused {
+            return;
+        }
+        if let Some(old) = self.tablet.pad_focus.take()
+            && old.is_alive()
+        {
+            let serial: u32 = SERIAL_COUNTER.next_serial().into();
+            for pad in &self.tablet.pads {
+                for (pad_weak, _) in &pad.instances {
+                    if pad_weak.id().same_client_as(&old.id())
+                        && let Ok(wl_pad) = pad_weak.upgrade()
+                    {
+                        wl_pad.leave(serial, &old);
+                    }
+                }
+            }
+        }
+        if let Some(surface) = focused {
+            self.tablet.pad_focus = Some(surface.clone());
+            self.send_pad_enter(surface);
+        }
+    }
+
+    fn send_pad_enter(&mut self, surface: &WlSurface) {
+        use smithay::reexports::wayland_protocols::wp::tablet::zv2::server::zwp_tablet_v2::ZwpTabletV2;
+        let max_id = self
+            .tablet
+            .pads
+            .iter()
+            .filter(|p| {
+                p.instances
+                    .iter()
+                    .any(|(pad_weak, _)| pad_weak.id().same_client_as(&surface.id()))
+            })
+            .map(|p| p.max_server_id)
+            .max();
+        let Some(max_id) = max_id else {
+            return;
+        };
+        let Ok(client) = self.dh.get_client(surface.id()) else {
+            return;
+        };
+        let upper = max_id.max(0xFF00_1000);
+        let Some(wl_tablet) = (0xFF00_0000..=upper).find_map(|id| {
+            client
+                .object_from_protocol_id::<ZwpTabletV2>(&self.dh, id)
+                .ok()
+        }) else {
+            return;
+        };
+        let serial: u32 = SERIAL_COUNTER.next_serial().into();
+        for pad in &self.tablet.pads {
+            for (pad_weak, group_weak) in &pad.instances {
+                if pad_weak.id().same_client_as(&surface.id())
+                    && let Ok(wl_pad) = pad_weak.upgrade()
+                {
+                    wl_pad.enter(serial, &wl_tablet, surface);
+                    if let Ok(wl_group) = group_weak.upgrade() {
+                        wl_group.mode_switch(0, serial, 0);
+                    }
+                }
+            }
+        }
+    }
+
+    pub(crate) fn cancel_tablet(&mut self) {
+        use smithay::wayland::tablet_manager::TabletSeatTrait;
+        if let Some((ref tool, _)) = self.tablet.focused_tool.take()
+            && let Some(handle) = self.seat.tablet_seat().get_tool(tool)
+        {
+            handle.proximity_out(0);
+        }
+        self.tablet.grab = None;
+        self.tablet.last_loc = None;
+        self.tablet.cursor_at = None;
+        self.tablet.tool_cursor = None;
+    }
+
+    fn clear_tablet_focus(
+        &mut self,
+        tool_handle: &smithay::wayland::tablet_manager::TabletToolHandle,
+        time_ms: u32,
+    ) {
+        tool_handle.proximity_out(time_ms);
+        self.tablet.focused_tool = None;
+        self.tablet.last_loc = None;
+        self.tablet.cursor_at = None;
+        self.tablet.tool_cursor = None;
+    }
+
+    fn pointer_delta_to(
+        &self,
+        output: infynitae_core::output::OutputId,
+        p: (f64, f64),
+    ) -> Option<(f64, f64)> {
+        let dst = self.core.output(output)?;
+        let target = (dst.arrangement.0 + p.0, dst.arrangement.1 + p.1);
+        let now = match self.core.pointer() {
+            infynitae_core::pointer::PointerState::Located {
+                output: cur,
+                p: cur_p,
+            } => {
+                let o = self.core.output(cur)?;
+                (o.arrangement.0 + cur_p.0, o.arrangement.1 + cur_p.1)
+            }
+            infynitae_core::pointer::PointerState::NoOutput => return None,
+        };
+        Some((target.0 - now.0, target.1 - now.1))
+    }
+
+    fn pointer_motion_to(
+        &self,
+        output: infynitae_core::output::OutputId,
+        p: (f64, f64),
+        time_us: u64,
+        even_if_zero_when_unfocused: bool,
+    ) -> Vec<infynitae_core::PhysicalEvent> {
+        let Some(delta) = self.pointer_delta_to(output, p) else {
+            return Vec::new();
+        };
+        let moved = delta.0.abs() > 1e-6 || delta.1.abs() > 1e-6;
+        if moved || (even_if_zero_when_unfocused && self.pointer_handle().current_focus().is_none())
+        {
+            vec![infynitae_core::PhysicalEvent::PointerMotion {
+                delta,
+                delta_unaccel: delta,
+                time_us,
+            }]
+        } else {
+            Vec::new()
+        }
+    }
+
+    fn deliver_tablet_surface(&mut self, d: TabletDelivery<'_>) {
+        let loc = convert::canvas_to_global(d.location);
+        let same = self
+            .tablet
+            .focused_tool
+            .as_ref()
+            .is_some_and(|(tl, s)| *tl == d.tool && *s == d.surface);
+        if !same {
+            self.tablet.tool_cursor = None;
+            d.tool_handle.proximity_in(
+                loc,
+                (d.surface.clone(), d.origin),
+                d.tablet,
+                SERIAL_COUNTER.next_serial(),
+                d.time_ms,
+            );
+            self.tablet.focused_tool = Some((d.tool, d.surface.clone()));
+            self.tablet.last_loc = Some(loc);
+            if d.axes.any() {
+                queue_tablet_axes(d.tool_handle, d.axes);
+                d.tool_handle.motion(
+                    loc,
+                    Some((d.surface, d.origin)),
+                    d.tablet,
+                    SERIAL_COUNTER.next_serial(),
+                    d.time_ms,
+                );
+            }
+        } else if d.force_motion || self.tablet.last_loc != Some(loc) || d.axes.any() {
+            queue_tablet_axes(d.tool_handle, d.axes);
+            d.tool_handle.motion(
+                loc,
+                Some((d.surface, d.origin)),
+                d.tablet,
+                SERIAL_COUNTER.next_serial(),
+                d.time_ms,
+            );
+            self.tablet.last_loc = Some(loc);
+        }
+        self.tablet.cursor_at = Some((d.output, d.p));
+    }
+
+    /// Delivers a tablet tool event (`zwp_tablet_tool_v2`) when the surface under the pen bound
+    /// `tablet-v2` for this seat, and returns the Core [`PhysicalEvent`](infynitae_core::PhysicalEvent)s
+    /// for the backend to submit through its input port (window focus on a pen tap, or pointer
+    /// motion and `BTN_LEFT` click when the surface under the pen has not bound `tablet-v2`).
+    pub fn tablet_event(&mut self, ev: TabletEvent) -> Vec<infynitae_core::PhysicalEvent> {
+        use infynitae_core::PhysicalEvent;
+        use smithay::wayland::tablet_manager::TabletSeatTrait;
+        if self.is_locked() {
+            self.cancel_tablet();
+            return Vec::new();
+        }
+        let ms = |t: u64| (t / 1000) as u32;
+        match ev {
+            TabletEvent::ProximityIn {
+                tablet,
+                tool,
+                output,
+                p,
+                axes,
+                time_us,
+            } => {
+                let time_ms = ms(time_us);
+                let dh = self.dh.clone();
+                let tablet_seat = self.seat.tablet_seat();
+                let tablet_handle = tablet_seat.add_tablet::<Self>(&dh, &tablet);
+                let tool_handle = tablet_seat.add_tool::<Self>(self, &dh, &tool);
+                let Some((target, location)) = self.core.route_point(output, p) else {
+                    return Vec::new();
+                };
+                if let Some((surface, origin)) = self.focus(target)
+                    && self.client_has_tablet_seat(&surface)
+                {
+                    // Force fresh proximity_in if re-entering after an out-of-band state reset.
+                    self.tablet.focused_tool = None;
+                    self.deliver_tablet_surface(TabletDelivery {
+                        tablet: &tablet_handle,
+                        tool_handle: &tool_handle,
+                        tool,
+                        output,
+                        p,
+                        surface,
+                        origin,
+                        location,
+                        axes: &axes,
+                        force_motion: false,
+                        time_ms,
+                    });
+                    Vec::new()
+                } else {
+                    self.clear_tablet_focus(&tool_handle, time_ms);
+                    self.pointer_motion_to(output, p, time_us, false)
+                }
+            }
+            TabletEvent::Axis {
+                tablet,
+                tool,
+                output,
+                p,
+                axes,
+                time_us,
+            } => {
+                let time_ms = ms(time_us);
+                let dh = self.dh.clone();
+                let tablet_seat = self.seat.tablet_seat();
+                let tablet_handle = tablet_seat.add_tablet::<Self>(&dh, &tablet);
+                let tool_handle = tablet_seat.add_tool::<Self>(self, &dh, &tool);
+                match self.tablet.grab {
+                    Some(TabletGrab::Tablet {
+                        output: grab_out,
+                        target,
+                        layer_offset,
+                    }) => {
+                        let Some(location) = self.core.unproject_point(grab_out, p, layer_offset)
+                        else {
+                            return Vec::new();
+                        };
+                        if let Some((surface, origin)) = self.focus(Some(target)) {
+                            self.deliver_tablet_surface(TabletDelivery {
+                                tablet: &tablet_handle,
+                                tool_handle: &tool_handle,
+                                tool,
+                                output: grab_out,
+                                p,
+                                surface,
+                                origin,
+                                location,
+                                axes: &axes,
+                                force_motion: true,
+                                time_ms,
+                            });
+                        }
+                        Vec::new()
+                    }
+                    Some(TabletGrab::Pointer) => self.pointer_motion_to(output, p, time_us, false),
+                    None => {
+                        let Some((target, location)) = self.core.route_point(output, p) else {
+                            return Vec::new();
+                        };
+                        if let Some((surface, origin)) = self.focus(target)
+                            && self.client_has_tablet_seat(&surface)
+                        {
+                            self.deliver_tablet_surface(TabletDelivery {
+                                tablet: &tablet_handle,
+                                tool_handle: &tool_handle,
+                                tool,
+                                output,
+                                p,
+                                surface,
+                                origin,
+                                location,
+                                axes: &axes,
+                                force_motion: true,
+                                time_ms,
+                            });
+                            Vec::new()
+                        } else {
+                            self.clear_tablet_focus(&tool_handle, time_ms);
+                            self.pointer_motion_to(output, p, time_us, false)
+                        }
+                    }
+                }
+            }
+            TabletEvent::Tip {
+                tablet,
+                tool,
+                output,
+                p,
+                down: true,
+                axes,
+                time_us,
+            } => {
+                let time_ms = ms(time_us);
+                let dh = self.dh.clone();
+                let tablet_seat = self.seat.tablet_seat();
+                let tablet_handle = tablet_seat.add_tablet::<Self>(&dh, &tablet);
+                let tool_handle = tablet_seat.add_tool::<Self>(self, &dh, &tool);
+                let Some((target, location)) = self.core.route_point(output, p) else {
+                    return Vec::new();
+                };
+                if let Some((surface, origin)) = self.focus(target)
+                    && self.client_has_tablet_seat(&surface)
+                {
+                    let t = target.expect("focus comes from target");
+                    let layer_offset = self.core.is_layer_surface(t.surface).then(|| {
+                        let q = infynitae_core::geom::Q16_ONE as f64;
+                        (p.0 - location.x as f64 / q, p.1 - location.y as f64 / q)
+                    });
+                    self.tablet.grab = Some(TabletGrab::Tablet {
+                        output,
+                        target: t,
+                        layer_offset,
+                    });
+                    self.deliver_tablet_surface(TabletDelivery {
+                        tablet: &tablet_handle,
+                        tool_handle: &tool_handle,
+                        tool,
+                        output,
+                        p,
+                        surface,
+                        origin,
+                        location,
+                        axes: &axes,
+                        force_motion: false,
+                        time_ms,
+                    });
+                    let serial = SERIAL_COUNTER.next_serial();
+                    self.record_serial_output(serial, output);
+                    tool_handle.tip_down(serial, time_ms);
+                    self.osk_pressed(true);
+                    vec![PhysicalEvent::TabletTap { output, p, time_us }]
+                } else {
+                    self.clear_tablet_focus(&tool_handle, time_ms);
+                    self.tablet.grab = Some(TabletGrab::Pointer);
+                    let mut out = self.pointer_motion_to(output, p, time_us, true);
+                    out.push(PhysicalEvent::PointerButton {
+                        button: BTN_LEFT,
+                        pressed: true,
+                        modifiers: self.seat_modifiers(),
+                        time_us,
+                    });
+                    out
+                }
+            }
+            TabletEvent::Tip {
+                tablet,
+                tool,
+                output,
+                p,
+                down: false,
+                axes,
+                time_us,
+            } => {
+                let time_ms = ms(time_us);
+                let dh = self.dh.clone();
+                let tablet_seat = self.seat.tablet_seat();
+                let tablet_handle = tablet_seat.add_tablet::<Self>(&dh, &tablet);
+                let tool_handle = tablet_seat.add_tool::<Self>(self, &dh, &tool);
+                match self.tablet.grab.take() {
+                    Some(TabletGrab::Tablet { .. }) => {
+                        tool_handle.tip_up(time_ms);
+                        if let Some((target, location)) = self.core.route_point(output, p)
+                            && let Some((surface, origin)) = self.focus(target)
+                            && self.client_has_tablet_seat(&surface)
+                        {
+                            self.deliver_tablet_surface(TabletDelivery {
+                                tablet: &tablet_handle,
+                                tool_handle: &tool_handle,
+                                tool,
+                                output,
+                                p,
+                                surface,
+                                origin,
+                                location,
+                                axes: &axes,
+                                force_motion: false,
+                                time_ms,
+                            });
+                        } else {
+                            self.clear_tablet_focus(&tool_handle, time_ms);
+                        }
+                        Vec::new()
+                    }
+                    Some(TabletGrab::Pointer) => {
+                        let mut out = self.pointer_motion_to(output, p, time_us, false);
+                        out.push(PhysicalEvent::PointerButton {
+                            button: BTN_LEFT,
+                            pressed: false,
+                            modifiers: self.seat_modifiers(),
+                            time_us,
+                        });
+                        out
+                    }
+                    None => {
+                        tool_handle.tip_up(time_ms);
+                        Vec::new()
+                    }
+                }
+            }
+            TabletEvent::Button {
+                tool,
+                button,
+                pressed,
+                time_us,
+            } => {
+                let time_ms = ms(time_us);
+                if let Some(tool_handle) = self.seat.tablet_seat().get_tool(&tool) {
+                    let state = if pressed {
+                        smithay::backend::input::ButtonState::Pressed
+                    } else {
+                        smithay::backend::input::ButtonState::Released
+                    };
+                    tool_handle.button(button, state, SERIAL_COUNTER.next_serial(), time_ms);
+                }
+                Vec::new()
+            }
+            TabletEvent::ProximityOut { tool, time_us } => {
+                let time_ms = ms(time_us);
+                if let Some(tool_handle) = self.seat.tablet_seat().get_tool(&tool) {
+                    self.clear_tablet_focus(&tool_handle, time_ms);
+                } else {
+                    self.tablet.focused_tool = None;
+                    self.tablet.last_loc = None;
+                    self.tablet.cursor_at = None;
+                    self.tablet.tool_cursor = None;
+                }
+                if matches!(self.tablet.grab.take(), Some(TabletGrab::Pointer)) {
+                    vec![PhysicalEvent::PointerButton {
+                        button: BTN_LEFT,
+                        pressed: false,
+                        modifiers: self.seat_modifiers(),
+                        time_us,
+                    }]
+                } else {
+                    Vec::new()
+                }
+            }
+        }
     }
 }

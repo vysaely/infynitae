@@ -555,11 +555,13 @@ pub struct Config {
     pub opacity: f64,
     /// SWITCH_LOOK
     pub switch_look: String,
+    /// MONITOR_LOG_DIR: optional folder of lab*.log files for the System monitor GPU card
+    pub monitor_log_dir: Option<PathBuf>,
 }
 
-pub fn config_path() -> PathBuf {
+pub fn config_path() -> Option<PathBuf> {
     // the C edge reads $HOME/.config, not XDG_CONFIG_HOME; the same here
-    PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".config/infynitae/config")
+    crate::paths::home().map(|h| h.join(".config/infynitae/config"))
 }
 
 pub fn parse_hex(v: &str) -> Option<[u8; 3]> {
@@ -579,7 +581,10 @@ impl Config {
     }
 
     pub fn load() -> Config {
-        Config::from_text(&std::fs::read_to_string(config_path()).unwrap_or_default())
+        let text = config_path()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .unwrap_or_default();
+        Config::from_text(&text)
     }
 
     pub fn from_text(text: &str) -> Config {
@@ -605,6 +610,7 @@ impl Config {
             tray_card: "menu".into(),
             opacity: 0.90, // 90 % until CARD_BLUR exists: 70 % without blur reads as see-through
             switch_look: "rows".into(),
+            monitor_log_dir: None,
         };
         let mut ctrl = vec![
             Module::Clock,
@@ -694,6 +700,11 @@ impl Config {
                     }
                 }
                 "SWITCH_LOOK" => c.switch_look = value_text(v).to_ascii_lowercase(),
+                "MONITOR_LOG_DIR" => {
+                    let t = value_text(v);
+                    let t = t.trim();
+                    c.monitor_log_dir = (!t.is_empty()).then(|| crate::paths::expand_home(t));
+                }
                 "CONTROL_MODULES" => {
                     // the control panel's modules before PANEL_CONTROL; "apps" there was the tray
                     let t = value_text(v);

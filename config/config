@@ -71,6 +71,16 @@ TOUCHPAD_NATURAL_SCROLL="false"
     # default: false
     # options: false  · true
 
+TOUCHPAD_GESTURES="true"
+    # Three-finger swipe pans the canvas, four-finger pinch zooms, four-finger swipe up opens overview
+    # default: true
+    # options: true  · false  (false: apps get all gestures)
+
+TOUCH_EDGE_SWIPE="true"
+    # Swiping in from a screen edge opens the panel on that side
+    # default: true
+    # options: true  · false
+
 SUPER_FREES_CURSOR="true"
     # Holding Super frees a cursor a game captured (Dota…)
     # default: true
@@ -452,8 +462,9 @@ VIRTUAL_SCREEN="auto"
     # options: auto  · off
 
 OSK="auto"
-    # On-screen keyboard (squeekboard): it opens when a text field is pressed, and goes when
-    # the field does; the panel's osk switch opens it by hand
+    # On-screen keyboard (squeekboard): opens when a text field is pressed (in tablet mode only
+    # when the device has a TabletMode switch), hides when leaving tablet mode or when the field
+    # goes; the panel's osk switch opens it by hand
     # default: auto
     #   auto    a finger's tap on a field  · always  a tap or a click (Steam Deck's trackpad)
     #   off     only by hand   (the lock screen has its own)
@@ -589,6 +600,11 @@ TRAY_CARD="menu"
     # app's own [reload]
     # default: menu
     # options: menu  · menu-first (its menu, then its card)  · card-first
+
+MONITOR_LOG_DIR=""
+    # Folder of lab*.log files shown by the System monitor GPU card; empty reads none [use]
+    # default: ""
+    # options: ""  · a folder path
 
 NOTIFICATIONS="auto"
     # Who shows notifications [reload]: the edge's own pop-ups (top right, in the system's
@@ -879,7 +895,7 @@ UPDATE_SIGNING_KEY=""
 #   BIND_<ACTION>="CHORD[,CHORD]"       e.g. BIND_TERMINAL="SUPER+RETURN"
 #   FOCUS_NEXT FOCUS_LEFT FOCUS_RIGHT FOCUS_UP FOCUS_DOWN OVERVIEW WINDOWS LAUNCHER TERMINAL FILE_MANAGER SYSTEM_MONITOR SCREENSHOT REGION_SCREENSHOT RELOAD LOCK
 #   CLIPBOARD CONTROL PRIVACY IDLE_INHIBIT TEARING SAVE_REPLAY RECORD FIT FULLSCREEN KEEP_ON_TOP CLOSE
-#   FORCE_CLOSE RECENTER RECENTER_KEEP_ZOOM
+#   FORCE_CLOSE RECENTER RECENTER_KEEP_ZOOM BACK WINDOW_MENU
 # Run a command:
 #   EXEC_<NAME>="CHORD:command"         e.g. EXEC_BROWSER="SUPER+B:firefox"
 # Chord: SUPER CTRL ALT SHIFT (exactly those held) + one key: A-Z 0-9 F1-F12 RETURN SPACE TAB

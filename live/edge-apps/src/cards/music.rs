@@ -5,16 +5,17 @@
 
 use crate::card::{run_sh, Action, Button, Card, Cx, Data, Event, Hits, Rect, Source, Status};
 use crate::draw::{self, Text};
+use crate::icons::{self, DecodedImage, ThumbCache};
 use crate::provider::{CardKind, Claim, Listed, Provider, Size};
 use crate::theme::Rgba;
 use crate::ui::{self, Row};
 use cairo::Context;
 use std::any::Any;
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::f64::consts::{FRAC_PI_2, PI};
-use std::fs::File;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, OnceLock};
 
 pub struct Music;
 
@@ -76,6 +77,7 @@ pub struct QueueSong {
     pub title: String,
     pub artist: String,
     pub art_url: String,
+    pub cover: Option<Arc<DecodedImage>>,
     pub length_us: i64,
     /// Present when read from `org.mpris.MediaPlayer2.TrackList`, absent for `app.melodyae.Extras`.
     pub track_id: Option<String>,
@@ -90,6 +92,7 @@ pub struct PlayerInfo {
     pub artist: String,
     pub album: String,
     pub art_url: String,
+    pub cover: Option<Arc<DecodedImage>>,
     pub format: String,
     pub track_id: String,
     pub playing: bool,
@@ -112,6 +115,7 @@ impl Default for PlayerInfo {
             artist: String::new(),
             album: String::new(),
             art_url: String::new(),
+            cover: None,
             format: String::new(),
             track_id: String::new(),
             playing: false,
@@ -277,6 +281,7 @@ pub fn parse_player(out: &str) -> Option<PlayerInfo> {
                             title: title.to_string(),
                             artist: parts.get(1).map(|s| s.trim()).unwrap_or("").to_string(),
                             art_url: parts.get(2).map(|s| s.trim()).unwrap_or("").to_string(),
+                            cover: None,
                             length_us: parts
                                 .get(3)
                                 .and_then(|s| s.trim().parse::<i64>().ok())
@@ -348,6 +353,7 @@ fn parse_json_player(text: &str) -> Option<PlayerInfo> {
         artist: extract_json_str(text, "artist").unwrap_or_default(),
         album: extract_json_str(text, "album").unwrap_or_default(),
         art_url: extract_json_str(text, "art_url").unwrap_or_default(),
+        cover: None,
         format: extract_json_str(text, "format").unwrap_or_default(),
         track_id: String::new(),
         playing,
@@ -410,20 +416,74 @@ fn extract_json_num(block: &str, key: &str) -> Option<i64> {
 // ---------------------------------------------------------------------------------------------
 // D-Bus Source
 
+const COVER_DECODE_SIZE: i32 = 92;
+const QUEUE_COVER_DECODE_SIZE: i32 = 28;
+
+fn cover_cache() -> &'static ThumbCache {
+    static COVER_CACHE: OnceLock<ThumbCache> = OnceLock::new();
+    COVER_CACHE.get_or_init(ThumbCache::default)
+}
+
+fn resolve_cover_path(art_url: &str) -> Option<PathBuf> {
+    if art_url.is_empty() {
+        return None;
+    }
+    let local_path = decode_file_url(art_url).unwrap_or_else(|| art_url.to_string());
+    let p = Path::new(&local_path);
+    p.is_absolute().then(|| p.to_path_buf())
+}
+
+fn populate_covers_scaled_with<F>(
+    cache: &ThumbCache,
+    data: &mut MusicData,
+    scale: f64,
+    mut decode: F,
+) where
+    F: FnMut(&Path, i32, i32) -> Option<DecodedImage>,
+{
+    let cover_px = icons::scaled_px(COVER_DECODE_SIZE, scale);
+    let queue_px = icons::scaled_px(QUEUE_COVER_DECODE_SIZE, scale);
+    for p in &mut data.players {
+        p.cover = resolve_cover_path(&p.art_url)
+            .and_then(|path| cache.get_or_decode_with(&path, cover_px, cover_px, &mut decode));
+        for song in &mut p.queue {
+            song.cover = resolve_cover_path(&song.art_url)
+                .and_then(|path| cache.get_or_decode_with(&path, queue_px, queue_px, &mut decode));
+        }
+    }
+}
+
+#[cfg(test)]
+fn populate_covers_with<F>(cache: &ThumbCache, data: &mut MusicData, decode: F)
+where
+    F: FnMut(&Path, i32, i32) -> Option<DecodedImage>,
+{
+    populate_covers_scaled_with(cache, data, 1.0, decode);
+}
+
 struct MusicSource;
 
 impl Source for MusicSource {
     fn fetch(&mut self) -> Data {
-        if std::env::var_os("INFYNITAE_EDGE_RENDER_DATA").is_some_and(|p| !p.is_empty()) {
-            let raw = run_sh("music", "");
-            let raw = if raw.is_empty() {
-                run_sh("media", "")
+        let mut data =
+            if std::env::var_os("INFYNITAE_EDGE_RENDER_DATA").is_some_and(|p| !p.is_empty()) {
+                let raw = run_sh("music", "");
+                let raw = if raw.is_empty() {
+                    run_sh("media", "")
+                } else {
+                    raw
+                };
+                parse_music(&raw)
             } else {
-                raw
+                fetch_dbus()
             };
-            return Box::new(parse_music(&raw));
-        }
-        Box::new(fetch_dbus())
+        populate_covers_scaled_with(
+            cover_cache(),
+            &mut data,
+            icons::display_scale(),
+            icons::decode_cover_image,
+        );
+        Box::new(data)
     }
 }
 
@@ -538,6 +598,7 @@ pub fn fetch_dbus() -> MusicData {
             artist: meta_artists(&meta),
             album: meta_str(&meta, "xesam:album"),
             art_url: meta_str(&meta, "mpris:artUrl"),
+            cover: None,
             format: String::new(),
             track_id: meta_str(&meta, "mpris:trackid"),
             playing: status.eq_ignore_ascii_case("playing"),
@@ -579,6 +640,7 @@ pub fn fetch_dbus() -> MusicData {
                         title,
                         artist,
                         art_url,
+                        cover: None,
                         length_us: length_us.max(0),
                         track_id: None,
                     });
@@ -610,6 +672,7 @@ pub fn fetch_dbus() -> MusicData {
                                     title: meta_str(&tm, "xesam:title"),
                                     artist: meta_artists(&tm),
                                     art_url: meta_str(&tm, "mpris:artUrl"),
+                                    cover: None,
                                     length_us: meta_i64(&tm, "mpris:length"),
                                     track_id: Some(track_path.as_str().to_string()),
                                 });
@@ -729,6 +792,7 @@ pub struct MusicCard {
     /// Remembers the most recently playing bus for `music/playing` when all players pause.
     pub last_playing_bus: Option<String>,
     pub queue_scroll: usize,
+    queue_scroll_accum: f64,
     pub pending_seek_us: Option<i64>,
     dragging_seek: bool,
     seek_rect: Cell<Option<Rect>>,
@@ -958,21 +1022,38 @@ impl Card for MusicCard {
         }
 
         match ev {
-            Event::Scroll { dy, .. } if cx.size == Size::L => {
+            Event::Scroll { dy, notches, .. } if cx.size == Size::L => {
                 let len = self.player(cx).map_or(0, |p| p.queue.len());
                 let max_scroll = len.saturating_sub(MAX_QUEUE_VISIBLE);
-                if max_scroll == 0 {
+                crate::card::scroll_rows(
+                    &mut self.queue_scroll,
+                    &mut self.queue_scroll_accum,
+                    max_scroll,
+                    *dy,
+                    *notches,
+                )
+            }
+            Event::Step { hit, dir } if *hit == H_SEEK => {
+                let Some(p) = self.player_mut(cx) else {
+                    return false;
+                };
+                if p.duration_us <= 0 || *dir == 0 {
                     return false;
                 }
-                if *dy > 0.0 && self.queue_scroll < max_scroll {
-                    self.queue_scroll += 1;
-                    return true;
+                let next = (p.position_us + i64::from(*dir) * 5_000_000).clamp(0, p.duration_us);
+                if next == p.position_us {
+                    return false;
                 }
-                if *dy < 0.0 && self.queue_scroll > 0 {
-                    self.queue_scroll -= 1;
-                    return true;
+                p.position_us = next;
+                if !p.bus_name.is_empty() {
+                    out.push(Action::Run(cmd_seek(&p.bus_name, &p.track_id, next)));
                 }
-                false
+                self.pending_seek_us = Some(next);
+                true
+            }
+            Event::Cancel { hit } if *hit == H_SEEK => {
+                self.pending_seek_us = None;
+                std::mem::take(&mut self.dragging_seek)
             }
             Event::Drag { hit, at } if *hit == H_SEEK => {
                 let r = self.seek_rect.get().unwrap_or((18.0, 0.0, 344.0, 18.0));
@@ -1130,7 +1211,7 @@ fn draw_small(cr: &Context, cx: &Cx, body: Rect, hits: &mut Hits, p: &PlayerInfo
     let cov = cover_size_for(Size::S, body.2);
     let narrow = cw < 200.0;
 
-    draw_cover(cr, cx, cx_left, body.1, cov, &p.art_url);
+    draw_cover(cr, cx, cx_left, body.1, cov, p.cover.as_ref());
 
     let title_str = if p.title.is_empty() {
         p.display_player()
@@ -1252,7 +1333,7 @@ fn draw_medium(
     let cov = cover_size_for(Size::M, body.2);
     let mut y = body.1;
 
-    draw_cover(cr, cx, cx_left, y, cov, &p.art_url);
+    draw_cover(cr, cx, cx_left, y, cov, p.cover.as_ref());
 
     let text_x = cx_left + cov + 12.0;
     let max_w = (cx_right - text_x).max(20.0);
@@ -1393,7 +1474,7 @@ fn draw_large(
     let cov = cover_size_for(Size::L, body.2);
     let mut y = body.1;
 
-    draw_cover(cr, cx, cx_left, y, cov, &p.art_url);
+    draw_cover(cr, cx, cx_left, y, cov, p.cover.as_ref());
 
     let text_x = cx_left + cov + 14.0;
     let max_w = (cx_right - text_x).max(20.0);
@@ -1553,6 +1634,7 @@ fn draw_large(
         y += 24.0;
 
         let start = queue_scroll.min(p.queue.len().saturating_sub(MAX_QUEUE_VISIBLE));
+        let queue_top = y;
         for (i, song) in p
             .queue
             .iter()
@@ -1565,7 +1647,7 @@ fn draw_large(
             if hits.add(id, row_r) || hits.selected(id) {
                 ui::light(cr, cx, row_r);
             }
-            draw_cover(cr, cx, cx_left, y + 4.0, 28.0, &song.art_url);
+            draw_cover(cr, cx, cx_left, y + 4.0, 28.0, song.cover.as_ref());
 
             let dur_str = format_time(song.length_us);
             let dur_w = if song.length_us > 0 {
@@ -1613,6 +1695,18 @@ fn draw_large(
             }
             y += QUEUE_ROW_H;
         }
+        ui::scrollbar(
+            cr,
+            cx,
+            (
+                body.0,
+                queue_top,
+                body.2,
+                MAX_QUEUE_VISIBLE as f64 * QUEUE_ROW_H,
+            ),
+            p.queue.len() as f64 * QUEUE_ROW_H,
+            start as f64 * QUEUE_ROW_H,
+        );
     }
 }
 
@@ -1781,82 +1875,25 @@ fn draw_play_button(cr: &Context, cx: &Cx, hits: &mut Hits, r: Rect, playing: bo
 // ---------------------------------------------------------------------------------------------
 // Cover art and line icons
 
-thread_local! {
-    static COVERS: RefCell<Vec<(String, i32, cairo::ImageSurface)>> =
-        const { RefCell::new(Vec::new()) };
-}
-
-fn load_cover_surface(path: &Path, size: i32) -> Option<cairo::ImageSurface> {
-    if size <= 0 || !path.is_file() {
-        return None;
-    }
-    let mut f = File::open(path).ok()?;
-    let mut magic = [0u8; 8];
-    let is_png =
-        std::io::Read::read_exact(&mut f, &mut magic).is_ok() && magic == *b"\x89PNG\r\n\x1a\n";
-    if is_png {
-        drop(f);
-        let mut f = File::open(path).ok()?;
-        let src = cairo::ImageSurface::create_from_png(&mut f).ok()?;
-        let (sw, sh) = (src.width(), src.height());
-        if sw <= 0 || sh <= 0 {
-            return None;
-        }
-        if sw == size && sh == size {
-            return Some(src);
-        }
-        let dst = cairo::ImageSurface::create(cairo::Format::ARgb32, size, size).ok()?;
-        let cr = cairo::Context::new(&dst).ok()?;
-        let scale = (size as f64 / sw as f64).max(size as f64 / sh as f64);
-        let dx = (size as f64 - sw as f64 * scale) / 2.0;
-        let dy = (size as f64 - sh as f64 * scale) / 2.0;
-        cr.translate(dx, dy);
-        cr.scale(scale, scale);
-        let _ = cr.set_source_surface(&src, 0.0, 0.0);
-        let _ = cr.paint();
-        drop(cr);
-        dst.flush();
-        return Some(dst);
-    }
-    crate::icons::load_pixbuf_surface(path, size)
-}
-
-fn cover_surface(p: &Path, size: i32) -> Option<cairo::ImageSurface> {
-    let key = p.to_string_lossy().to_string();
-    if let Some(hit) = COVERS.with(|c| {
-        c.borrow()
-            .iter()
-            .find(|(k, s, _)| *k == key && *s == size)
-            .map(|(_, _, surf)| surf.clone())
-    }) {
-        return Some(hit);
-    }
-    let surf = load_cover_surface(p, size)?;
-    COVERS.with(|c| {
-        let mut c = c.borrow_mut();
-        if c.len() >= 16 {
-            c.remove(0);
-        }
-        c.push((key, size, surf.clone()));
-    });
-    Some(surf)
-}
-
-fn draw_cover(cr: &Context, cx: &Cx, x: f64, y: f64, size: f64, art_url: &str) {
+fn draw_cover(cr: &Context, cx: &Cx, x: f64, y: f64, size: f64, cover: Option<&Arc<DecodedImage>>) {
     let th = cx.theme;
-    if !art_url.is_empty() {
-        let local_path = decode_file_url(art_url).unwrap_or_else(|| art_url.to_string());
-        let p = Path::new(&local_path);
-        if p.is_absolute() && p.is_file() {
-            if let Some(surf) = cover_surface(p, size.round() as i32) {
-                let _ = cr.save();
-                draw::round_rect(cr, x, y, size, size, th.small_radius());
-                cr.clip();
+    if let Some(img) = cover {
+        if let Some(surf) = icons::surface_for_decoded(img) {
+            let _ = cr.save();
+            draw::round_rect(cr, x, y, size, size, th.small_radius());
+            cr.clip();
+            let sw = surf.width() as f64;
+            let sh = surf.height() as f64;
+            if (sw - size).abs() > 0.5 || (sh - size).abs() > 0.5 {
+                cr.translate(x, y);
+                cr.scale(size / sw, size / sh);
+                let _ = cr.set_source_surface(&surf, 0.0, 0.0);
+            } else {
                 let _ = cr.set_source_surface(&surf, x, y);
-                let _ = cr.paint();
-                let _ = cr.restore();
-                return;
             }
+            let _ = cr.paint();
+            let _ = cr.restore();
+            return;
         }
     }
 
@@ -2494,16 +2531,41 @@ mod tests {
         let cx_l = test_cx(&th, Size::L, None);
         let h_before = card.height(&cx_l, 360.0);
         let mut out = Vec::new();
-        assert!(card.event(&Event::Scroll { hit: None, dy: 1.0 }, &cx_l, &mut out));
-        assert_eq!(card.queue_scroll, 1);
-        assert_eq!(card.height(&cx_l, 360.0), h_before);
-        assert!(card.event(&Event::Scroll { hit: None, dy: 1.0 }, &cx_l, &mut out));
-        assert_eq!(card.queue_scroll, 2);
-        assert!(!card.event(&Event::Scroll { hit: None, dy: 1.0 }, &cx_l, &mut out));
         assert!(card.event(
             &Event::Scroll {
                 hit: None,
-                dy: -1.0
+                dy: 36.0,
+                notches: 1.0,
+            },
+            &cx_l,
+            &mut out
+        ));
+        assert_eq!(card.queue_scroll, 1);
+        assert_eq!(card.height(&cx_l, 360.0), h_before);
+        assert!(card.event(
+            &Event::Scroll {
+                hit: None,
+                dy: 36.0,
+                notches: 1.0,
+            },
+            &cx_l,
+            &mut out
+        ));
+        assert_eq!(card.queue_scroll, 2);
+        assert!(!card.event(
+            &Event::Scroll {
+                hit: None,
+                dy: 36.0,
+                notches: 1.0,
+            },
+            &cx_l,
+            &mut out
+        ));
+        assert!(card.event(
+            &Event::Scroll {
+                hit: None,
+                dy: -36.0,
+                notches: -1.0,
             },
             &cx_l,
             &mut out
@@ -2512,25 +2574,129 @@ mod tests {
     }
 
     #[test]
-    fn loads_png_cover_from_disk_and_caches_it() {
+    fn loads_png_cover_in_source_and_decodes_broken_cover_once_over_three_draws() {
         let dir =
             std::env::temp_dir().join(format!("edge-apps-music-cover-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("cover.png");
+        let good_path = dir.join("cover.png");
+        let broken_path = dir.join("broken.jpg");
+        std::fs::write(&broken_path, b"not a valid image").unwrap();
+
         let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 64, 48).unwrap();
         {
             let cr = cairo::Context::new(&surf).unwrap();
-            cr.set_source_rgb(0.8, 0.4, 0.6);
+            cr.set_source_rgb(0.8, 0.2, 0.3);
             let _ = cr.paint();
         }
         surf.flush();
-        let mut f = File::create(&path).unwrap();
+        let mut f = std::fs::File::create(&good_path).unwrap();
         surf.write_to_png(&mut f).unwrap();
 
-        let loaded = cover_surface(&path, 60).expect("loaded png cover");
-        assert_eq!((loaded.width(), loaded.height()), (60, 60));
-        let cached = cover_surface(&path, 60).expect("cached png cover");
-        assert_eq!((cached.width(), cached.height()), (60, 60));
+        let cache = ThumbCache::default();
+        let th = Theme::from_config(&crate::config::Config::from_text(""));
+        let cx = test_cx(&th, Size::M, None);
+
+        // Broken cover: decoded once across three fetches and three draws (failure remembered).
+        let mut card = MusicCard::default();
+        for _ in 0..3 {
+            let mut data = parse_music(&format!(
+                "status=Playing\ntitle=Broken\nart_url=file://{}\n",
+                broken_path.display()
+            ));
+            populate_covers_with(&cache, &mut data, icons::decode_cover_image);
+            assert!(data.players[0].cover.is_none());
+            card.apply("music", &data);
+            let h = card.height(&cx, 360.0);
+            let draw_surf =
+                cairo::ImageSurface::create(cairo::Format::ARgb32, 360, h.ceil() as i32 + 20)
+                    .unwrap();
+            let cr = Context::new(&draw_surf).unwrap();
+            let mut hits = Hits::new(None, None);
+            card.draw(&cr, &cx, (0.0, 0.0, 360.0, h), &mut hits);
+        }
+        assert_eq!(cache.decode_count(), 1);
+
+        // Valid cover: decoded once across three fetches and drawn onto the card.
+        for _ in 0..3 {
+            let mut data = parse_music(&format!(
+                "status=Playing\ntitle=Good\nart_url=file://{}\n",
+                good_path.display()
+            ));
+            populate_covers_with(&cache, &mut data, icons::decode_cover_image);
+            let cov = data.players[0].cover.as_ref().expect("decoded cover");
+            assert_eq!(
+                (cov.width, cov.height),
+                (COVER_DECODE_SIZE, COVER_DECODE_SIZE)
+            );
+            card.apply("music", &data);
+            let h = card.height(&cx, 360.0);
+            let mut draw_surf =
+                cairo::ImageSurface::create(cairo::Format::ARgb32, 360, h.ceil() as i32 + 20)
+                    .unwrap();
+            {
+                let cr = Context::new(&draw_surf).unwrap();
+                let mut hits = Hits::new(None, None);
+                card.draw(&cr, &cx, (0.0, 0.0, 360.0, h), &mut hits);
+            }
+            draw_surf.flush();
+            let stride = draw_surf.stride() as usize;
+            let bytes = draw_surf.data().unwrap();
+            let off = 20 * stride + 20 * 4;
+            assert!(
+                bytes[off + 2] > bytes[off] + 50,
+                "expected red cover pixels at (20,20), got {:?}",
+                &bytes[off..off + 4]
+            );
+        }
+        assert_eq!(cache.decode_count(), 2);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn populate_covers_caches_separately_per_scale() {
+        let dir = std::env::temp_dir().join(format!(
+            "edge-apps-music-cover-scale-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let cover_path = dir.join("cover.png");
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 256, 256).unwrap();
+        surf.write_to_png(&mut std::fs::File::create(&cover_path).unwrap())
+            .unwrap();
+
+        let cache = ThumbCache::default();
+        let raw = format!(
+            "status=Playing\ntitle=Track\nart_url=file://{}\n",
+            cover_path.display()
+        );
+
+        let mut d1 = parse_music(&raw);
+        populate_covers_scaled_with(&cache, &mut d1, 1.0, icons::decode_cover_image);
+        let c1 = d1.players[0].cover.as_ref().unwrap();
+        assert_eq!(
+            (c1.width, c1.height),
+            (COVER_DECODE_SIZE, COVER_DECODE_SIZE)
+        );
+
+        let mut d2 = parse_music(&raw);
+        populate_covers_scaled_with(&cache, &mut d2, 2.0, icons::decode_cover_image);
+        let c2 = d2.players[0].cover.as_ref().unwrap();
+        assert_eq!(
+            (c2.width, c2.height),
+            (COVER_DECODE_SIZE * 2, COVER_DECODE_SIZE * 2)
+        );
+        assert_eq!(cache.decode_count(), 2);
+
+        // Repeated fetch at either scale hits the cache without re-decoding.
+        let mut d1_again = parse_music(&raw);
+        populate_covers_scaled_with(&cache, &mut d1_again, 1.0, icons::decode_cover_image);
+        let mut d2_again = parse_music(&raw);
+        populate_covers_scaled_with(&cache, &mut d2_again, 2.0, icons::decode_cover_image);
+        assert_eq!(cache.decode_count(), 2);
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 

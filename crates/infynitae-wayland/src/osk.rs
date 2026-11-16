@@ -53,13 +53,42 @@ pub struct OskState {
     /// A text field was active while it was shown (one shown by hand with none yet stays).
     had_field: bool,
     gone_since: Option<Instant>,
+    /// `None` when no `TabletMode` switch is present; `Some(on)` when one is.
+    tablet_mode: Option<bool>,
 }
 
 impl WaylandState {
+    /// Notes whether the machine has a hardware `TabletMode` switch (`DeviceAdded`/`DeviceRemoved`).
+    pub fn set_has_tablet_mode_switch(&mut self, present: bool) {
+        if present {
+            if self.osk.tablet_mode.is_none() {
+                self.osk.tablet_mode = Some(false);
+            }
+        } else {
+            self.osk.tablet_mode = None;
+        }
+    }
+
+    /// Whether the on-screen keyboard is currently shown.
+    pub fn osk_shown(&self) -> bool {
+        self.osk.shown
+    }
+
+    /// Updates tablet-mode state and hides the on-screen keyboard when leaving tablet mode.
+    pub(crate) fn osk_tablet_mode(&mut self, on: bool) {
+        self.osk.tablet_mode = Some(on);
+        if !on {
+            self.osk.pressed_at = None;
+            if self.osk.shown {
+                self.osk_show(false, false);
+            }
+        }
+    }
+
     /// A press reached a window (`touch`: a finger, else a button).
     pub(crate) fn osk_pressed(&mut self, touch: bool) {
         let counts = match self.osk.mode {
-            OskMode::Taps => touch,
+            OskMode::Taps => touch && self.osk.tablet_mode != Some(false),
             OskMode::Clicks => true,
             OskMode::Off => false,
         };
@@ -84,6 +113,9 @@ impl WaylandState {
 
     /// Once a loop turn: a pressed field shows the keyboard, a field gone hides it.
     pub(crate) fn osk_check(&mut self) {
+        if self.osk.mode == OskMode::Taps && self.osk.tablet_mode == Some(false) {
+            self.osk.pressed_at = None;
+        }
         if self.osk.pressed_at.is_none() && !self.osk.shown {
             return;
         }

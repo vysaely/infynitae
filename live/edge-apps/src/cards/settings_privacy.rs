@@ -122,15 +122,10 @@ pub struct SharesSource {
 
 impl SharesSource {
     pub fn system() -> SharesSource {
-        let state = std::env::var_os("XDG_STATE_HOME")
-            .filter(|v| !v.is_empty())
-            .map(PathBuf::from)
-            .unwrap_or_else(|| {
-                let home = std::env::var_os("HOME").unwrap_or_default();
-                PathBuf::from(home).join(".local/state")
-            });
         SharesSource {
-            path: state.join("infynitae/screenshare-allowed"),
+            path: crate::paths::state_dir()
+                .map(|s| s.join("infynitae/screenshare-allowed"))
+                .unwrap_or_default(),
             use_fixture: true,
         }
     }
@@ -291,6 +286,9 @@ fn draw_sub(card: &TableCard, offset: u32, cr: &Context, cx: &Cx, body: Rect, hi
     card.draw(cr, cx, body, &mut sub_hits);
     hits.list
         .extend(sub_hits.list.into_iter().map(|(id, r)| (id + offset, r)));
+    for id in sub_hits.draggable {
+        hits.mark_draggable(id + offset);
+    }
 }
 
 fn draw_remove_list<S: AsRef<str>>(
@@ -354,6 +352,43 @@ fn draw_remove_list<S: AsRef<str>>(
         ui::button(cr, cx, hits, hit_base + *idx as u32, bx, by, "Remove");
     }
     LIST_LABEL_H + box_h
+}
+
+impl PrivacyCard {
+    fn remove_hit(&mut self, hit: u32, out: &mut Vec<Action>) -> bool {
+        if (SHARES..HIDDEN).contains(&hit) {
+            let idx = (hit - SHARES) as usize;
+            let Some(app) = self.shares.apps.get(idx).cloned() else {
+                return false;
+            };
+            if !self.removed_shares.insert(app.clone()) {
+                return false;
+            }
+            out.push(Action::Run(remove_share_command(&app)));
+            return true;
+        }
+        if (HIDDEN..TOP).contains(&hit) {
+            let idx = (hit - HIDDEN) as usize;
+            let current = self.privacy_apps_value();
+            let Some(new_val) = remove_privacy_app_value(&current, idx) else {
+                return false;
+            };
+            let old_line = self.pending_privacy_apps.clone().or_else(|| {
+                self.config
+                    .as_ref()
+                    .and_then(|d| d.now.get("PRIVACY_APPS").cloned())
+            });
+            out.push(Action::Run(change_command(
+                "PRIVACY_APPS",
+                old_line.as_deref(),
+                &new_val,
+                After::Save,
+            )));
+            self.pending_privacy_apps = Some(new_val);
+            return true;
+        }
+        false
+    }
 }
 
 impl Card for PrivacyCard {
@@ -468,35 +503,7 @@ impl Card for PrivacyCard {
                 at,
             } => {
                 let hit = *hit;
-                if (SHARES..HIDDEN).contains(&hit) {
-                    let idx = (hit - SHARES) as usize;
-                    let Some(app) = self.shares.apps.get(idx).cloned() else {
-                        return false;
-                    };
-                    if !self.removed_shares.insert(app.clone()) {
-                        return false;
-                    }
-                    out.push(Action::Run(remove_share_command(&app)));
-                    return true;
-                }
-                if (HIDDEN..TOP).contains(&hit) {
-                    let idx = (hit - HIDDEN) as usize;
-                    let current = self.privacy_apps_value();
-                    let Some(new_val) = remove_privacy_app_value(&current, idx) else {
-                        return false;
-                    };
-                    let old_line = self.pending_privacy_apps.clone().or_else(|| {
-                        self.config
-                            .as_ref()
-                            .and_then(|d| d.now.get("PRIVACY_APPS").cloned())
-                    });
-                    out.push(Action::Run(change_command(
-                        "PRIVACY_APPS",
-                        old_line.as_deref(),
-                        &new_val,
-                        After::Save,
-                    )));
-                    self.pending_privacy_apps = Some(new_val);
+                if self.remove_hit(hit, out) {
                     return true;
                 }
                 if (TOP..BOTTOM).contains(&hit) {
@@ -546,6 +553,43 @@ impl Card for PrivacyCard {
                 } else {
                     false
                 }
+            }
+            Event::Delete { hit } => self.remove_hit(*hit, out),
+            Event::Step { hit, dir } => {
+                let hit = *hit;
+                if (TOP..BOTTOM).contains(&hit) {
+                    self.top.event(
+                        &Event::Step {
+                            hit: hit - TOP,
+                            dir: *dir,
+                        },
+                        cx,
+                        out,
+                    )
+                } else if hit >= BOTTOM {
+                    self.bottom.event(
+                        &Event::Step {
+                            hit: hit - BOTTOM,
+                            dir: *dir,
+                        },
+                        cx,
+                        out,
+                    )
+                } else {
+                    false
+                }
+            }
+            Event::Cancel { hit } => {
+                let sub_hit = if *hit >= BOTTOM {
+                    hit - BOTTOM
+                } else if *hit >= TOP {
+                    hit - TOP
+                } else {
+                    *hit
+                };
+                let a = self.top.event(&Event::Cancel { hit: sub_hit }, cx, out);
+                let b = self.bottom.event(&Event::Cancel { hit: sub_hit }, cx, out);
+                a || b
             }
             Event::Release { hit } => {
                 let sub_hit = if *hit >= BOTTOM {

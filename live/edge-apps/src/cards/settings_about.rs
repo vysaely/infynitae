@@ -4,7 +4,7 @@
 
 use crate::card::{self, Action, Button, Card, Cx, Data, Event, Hits, Rect, Source, Status};
 use crate::cards::settings;
-use crate::draw::{self, Text, FONT};
+use crate::draw::{self, Text};
 use crate::provider::{CardKind, Size};
 use crate::theme::Theme;
 use crate::ui::{self, Row};
@@ -121,16 +121,7 @@ struct PcPaths {
 }
 
 fn runtime_infynitae_dir() -> PathBuf {
-    let base = std::env::var_os("XDG_RUNTIME_DIR")
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME")
-                .filter(|v| !v.is_empty())
-                .map(|h| PathBuf::from(h).join(".cache"))
-        })
-        .unwrap_or_else(|| PathBuf::from(".cache"));
-    base.join("infynitae")
+    crate::paths::runtime_or_cache_dir().join("infynitae")
 }
 
 /// Clears transient "Load settings" preview and "Undo load" markers when the panel closes.
@@ -142,17 +133,15 @@ pub(crate) fn clear_load_state() {
 
 impl PcPaths {
     fn system() -> Self {
-        let home = std::env::var_os("HOME")
-            .filter(|v| !v.is_empty())
-            .map(PathBuf::from);
+        let home = crate::paths::home();
         let settings_changes = home
             .as_ref()
             .map(|h| h.join(".local/state/infynitae/settings-changes"))
-            .unwrap_or_else(|| PathBuf::from(".local/state/infynitae/settings-changes"));
+            .unwrap_or_default();
         let export_dir = home
             .as_ref()
             .map(|h| h.join("Documents/Infynitae"))
-            .unwrap_or_else(|| PathBuf::from("Documents/Infynitae"));
+            .unwrap_or_default();
         let rt_dir = runtime_infynitae_dir();
         let infynitae_repo = home.map(|h| h.join("infynitae"));
         let wayland_socket = match (
@@ -270,16 +259,11 @@ impl Source for PcSource {
 }
 
 fn parse_saved_fixture(raw: &str) -> Vec<SavedFile> {
-    let home = std::env::var("HOME").unwrap_or_default();
     raw.lines()
         .map(str::trim)
         .filter(|l| !l.is_empty())
         .map(|l| {
-            let expanded = if !home.is_empty() && l.starts_with("~/") {
-                format!("{home}{}", &l[1..])
-            } else {
-                l.to_string()
-            };
+            let expanded = crate::paths::expand_home(l).to_string_lossy().into_owned();
             let name = Path::new(&expanded)
                 .file_name()
                 .and_then(|s| s.to_str())
@@ -731,6 +715,7 @@ pub struct AboutCard {
     query: String,
     load_open: bool,
     load_scroll: usize,
+    load_scroll_accum: f64,
     dismissed_preview: Option<String>,
     undo_load: bool,
     loading_name: Option<String>,
@@ -929,17 +914,16 @@ impl AboutCard {
     }
 
     fn wrap_subtext_layout(cr: &Context, max_w: f64, text: &str) -> pango::Layout {
-        let l = pangocairo::functions::create_layout(cr);
-        let mut fd = pango::FontDescription::from_string(FONT);
-        fd.set_absolute_size(11.0 * pango::SCALE as f64);
-        l.set_font_description(Some(&fd));
-        l.set_width((max_w.max(40.0) * pango::SCALE as f64) as i32);
-        l.set_wrap(pango::WrapMode::WordChar);
-        l.set_text(text);
-        l
+        draw::wrapped_layout(cr, 11.0, false, max_w.max(40.0), None, text)
     }
 
-    fn measure_and_draw(
+    fn measure_and_draw(&self, cr: &Context, cx: &Cx, body: Rect, hits: Option<&mut Hits>) -> f64 {
+        draw::with_font(&cx.theme.font, || {
+            self.measure_and_draw_inner(cr, cx, body, hits)
+        })
+    }
+
+    fn measure_and_draw_inner(
         &self,
         cr: &Context,
         cx: &Cx,
@@ -1175,6 +1159,7 @@ impl AboutCard {
                 let max_scroll = total.saturating_sub(MAX_LOAD_ROWS);
                 let start = self.load_scroll.min(max_scroll);
                 let end = (start + MAX_LOAD_ROWS).min(total);
+                let list_top = y;
                 for i in start..end {
                     let f = &self.info.saved_files[i];
                     if let Some(h) = hits.as_deref_mut() {
@@ -1194,6 +1179,15 @@ impl AboutCard {
                         );
                     }
                     y += ui::ROW_H;
+                }
+                if hits.is_some() {
+                    ui::scrollbar(
+                        cr,
+                        cx,
+                        (body.0, list_top, body.2, (end - start) as f64 * ui::ROW_H),
+                        total as f64 * ui::ROW_H,
+                        start as f64 * ui::ROW_H,
+                    );
                 }
             }
         }
@@ -1321,27 +1315,18 @@ impl Card for AboutCard {
                 self.query = (*q).to_string();
                 true
             }
-            Event::Scroll { dy, .. } => {
+            Event::Scroll { dy, notches, .. } => {
                 if !self.showing_load_list() {
                     return false;
                 }
                 let max_scroll = self.info.saved_files.len().saturating_sub(MAX_LOAD_ROWS);
-                if max_scroll == 0 {
-                    return false;
-                }
-                let cur = self.load_scroll.min(max_scroll);
-                let next = if *dy > 0.0 {
-                    (cur + 1).min(max_scroll)
-                } else if *dy < 0.0 {
-                    cur.saturating_sub(1)
-                } else {
-                    return false;
-                };
-                if next == self.load_scroll {
-                    return false;
-                }
-                self.load_scroll = next;
-                true
+                crate::card::scroll_rows(
+                    &mut self.load_scroll,
+                    &mut self.load_scroll_accum,
+                    max_scroll,
+                    *dy,
+                    *notches,
+                )
             }
             Event::Press {
                 hit,

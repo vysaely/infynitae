@@ -151,8 +151,36 @@ pub enum PhysicalEvent {
     TouchFrame,
     /// The touchscreen gave up the touches (a gesture taken by the hardware, a palm).
     TouchCancel,
+    /// A tablet stylus tapped on `output` at `p` (output logical px): focuses and raises the
+    /// window under it like a touch tap.
+    TabletTap {
+        output: output::OutputId,
+        p: (f64, f64),
+        time_us: u64,
+    },
     /// Focus, raise and jump the camera to a mapped window chosen by the user in a bar or list.
     JumpToWindow { element: stage::ElementId },
+    /// A touchpad swipe gesture began (`fingers` fingers).
+    GestureSwipeBegin { fingers: u32, time_us: u64 },
+    /// A touchpad swipe gesture moved by `delta` (logical px).
+    GestureSwipeUpdate { delta: (f64, f64), time_us: u64 },
+    /// A touchpad swipe gesture ended (or was cancelled).
+    GestureSwipeEnd { cancelled: bool, time_us: u64 },
+    /// A touchpad pinch gesture began (`fingers` fingers).
+    GesturePinchBegin { fingers: u32, time_us: u64 },
+    /// A touchpad pinch gesture updated (`delta`, absolute `scale` from begin, `rotation` in degrees).
+    GesturePinchUpdate {
+        delta: (f64, f64),
+        scale: f64,
+        rotation: f64,
+        time_us: u64,
+    },
+    /// A touchpad pinch gesture ended (or was cancelled).
+    GesturePinchEnd { cancelled: bool, time_us: u64 },
+    /// A touchpad hold gesture began (`fingers` fingers).
+    GestureHoldBegin { fingers: u32, time_us: u64 },
+    /// A touchpad hold gesture ended (or was cancelled).
+    GestureHoldEnd { cancelled: bool, time_us: u64 },
 }
 
 /// A semantic command from the trusted shell (C7.2, INV-SHELL-1): a value Core validates and then
@@ -205,6 +233,22 @@ pub enum ShellCommand {
         output: Option<output::OutputId>,
         fullscreen: bool,
     },
+    /// Keeps `element` on top of normal windows (`stage::Stage` `above`, following camera pans)
+    /// or returns it to the normal stack (`on: None` toggles, as Super+Shift+K does).
+    KeepOnTop {
+        element: stage::ElementRef,
+        on: Option<bool>,
+    },
+    /// Minimizes `element` (as a client minimize does).
+    MinimizeElement { element: stage::ElementRef },
+    /// Maximizes `element` on its output or restores its saved place and size (`maximized: None`
+    /// toggles).
+    MaximizeElement {
+        element: stage::ElementRef,
+        maximized: Option<bool>,
+    },
+    /// Asks `element` to close (`Effect::CloseRequest`).
+    CloseElement { element: stage::ElementRef },
 }
 
 /// Where [`ShellCommand::Navigate`] centres the camera.
@@ -494,12 +538,19 @@ pub struct Core {
     pub(crate) overview_at: Vec<(output::OutputId, CameraView)>,
     /// Whether Super+Middle pan or camera navigation moves out of fullscreen presentation.
     pub fullscreen_pan: bool,
+    /// Whether compositor touchpad gestures (3-finger swipe, 4-finger pinch/swipe) are enabled.
+    pub touchpad_gestures: bool,
+    /// Whether swiping in from a screen edge opens the edge panel on that side (`TOUCH_EDGE_SWIPE`).
+    pub touch_edge_swipe: bool,
     /// Whether newly opened windows receive focus on map.
     pub focus_on_open: bool,
     /// The user's key bindings (`set_key_bindings`).
     key_bindings: input::keys::UserBindings,
     /// Pending IPC chord capture request (`begin_key_capture`).
     key_capture: Option<input::keys::KeyCapture>,
+    /// Pending window menu request (`show_window_menu`): the mapped element and its output-logical
+    /// screen position `(x, y)`.
+    window_menu: Option<(stage::ElementId, (f64, f64))>,
     /// `xdg_toplevel` parents, (child, parent), from the adapter (`set_toplevel_parent`).
     toplevel_parents: Vec<(stage::ElementId, stage::ElementId)>,
     /// The centre of each app's last destroyed window (app_id lowercase), newest last, at most
@@ -604,9 +655,12 @@ impl Core {
                 maximized_at: Vec::new(),
                 left_fullscreen: Vec::new(),
                 fullscreen_pan: false,
+                touchpad_gestures: true,
+                touch_edge_swipe: true,
                 focus_on_open: false,
                 key_bindings: input::keys::UserBindings::default(),
                 key_capture: None,
+                window_menu: None,
                 toplevel_parents: Vec::new(),
                 closed_windows: Vec::new(),
                 teleport_on_open: false,
@@ -869,6 +923,29 @@ impl Core {
     /// Read access to whether fullscreen pan is enabled.
     pub fn fullscreen_pan(&self) -> bool {
         self.fullscreen_pan
+    }
+
+    /// Sets whether compositor touchpad gestures are enabled (false = all gestures go to apps).
+    pub fn set_touchpad_gestures(&mut self, enabled: bool) {
+        self.touchpad_gestures = enabled;
+    }
+
+    /// Read access to whether compositor touchpad gestures are enabled.
+    pub fn touchpad_gestures(&self) -> bool {
+        self.touchpad_gestures
+    }
+
+    /// Sets whether swiping in from a screen edge opens the edge panel on that side.
+    pub fn set_touch_edge_swipe(&mut self, enabled: bool) {
+        self.touch_edge_swipe = enabled;
+        if !enabled {
+            self.touches.edge_swipe = None;
+        }
+    }
+
+    /// Read access to whether touch edge swipe is enabled.
+    pub fn touch_edge_swipe(&self) -> bool {
+        self.touch_edge_swipe
     }
 
     /// Sets whether newly opened windows receive focus on map.
@@ -1238,6 +1315,16 @@ impl Core {
         }
     }
 
+    /// Pending window menu request (`show_window_menu`), if any.
+    pub fn window_menu(&self) -> Option<(stage::ElementId, (f64, f64))> {
+        self.window_menu
+    }
+
+    /// Collects and clears the pending window menu request (`show_window_menu`).
+    pub fn take_window_menu(&mut self) -> Option<(stage::ElementId, (f64, f64))> {
+        self.window_menu.take()
+    }
+
     /// The output the pointer is currently located on, if any.
     pub fn pointer_output(&self) -> Option<output::OutputId> {
         match self.pointer {
@@ -1429,7 +1516,16 @@ impl Core {
             E::PointerRelative { target, .. } => {
                 recipients[0] = target.and_then(|t| self.frame_kick_surface(t.surface));
             }
-            E::PointerButton { .. } | E::PointerAxis { .. } => {
+            E::PointerButton { .. }
+            | E::PointerAxis { .. }
+            | E::GestureSwipeBegin { .. }
+            | E::GestureSwipeUpdate { .. }
+            | E::GestureSwipeEnd { .. }
+            | E::GesturePinchBegin { .. }
+            | E::GesturePinchUpdate { .. }
+            | E::GesturePinchEnd { .. }
+            | E::GestureHoldBegin { .. }
+            | E::GestureHoldEnd { .. } => {
                 recipients[0] = self
                     .frame_liveness
                     .pointer_surface
@@ -2234,6 +2330,18 @@ impl Core {
         let pointer::PointerState::Located { output, p } = self.pointer else {
             return None;
         };
+        self.route_point(output, p)
+    }
+
+    /// Routes an output logical point `(output, p)` through `output`'s layer surfaces and
+    /// `ProjectionFrame` (F-HIT-1, F-UNPROJECT-1), returning the hit target (if any) and the
+    /// Canvas position (or layer-local position when `origin` is `(0, 0)`). Shared by the seat
+    /// pointer and tablet tools.
+    pub fn route_point(
+        &mut self,
+        output: output::OutputId,
+        p: (f64, f64),
+    ) -> Option<(Option<protocol::PointerTarget>, geom::CanvasPos)> {
         let pt = geom::OutputLogicalPoint { x: p.0, y: p.1 };
         // L3: overlay and top surfaces first, then the Canvas, then bottom and background. A layer
         // surface's events are in its own surface-local frame: origin 0, the location the position
@@ -2272,6 +2380,37 @@ impl Core {
                 },
             ),
             None => (None, view.unproject(pt)),
+        })
+    }
+
+    /// Unprojects `p` (output logical px) through `output`'s view into Canvas coordinates (or
+    /// relative to `layer_offset` for a layer surface), building the output's `ProjectionFrame`
+    /// on demand if needed.
+    pub fn unproject_point(
+        &mut self,
+        output: output::OutputId,
+        p: (f64, f64),
+        layer_offset: Option<(f64, f64)>,
+    ) -> Option<geom::CanvasPos> {
+        if let Some((ox, oy)) = layer_offset {
+            return Some(geom::CanvasPos {
+                x: geom::q16(p.0 - ox),
+                y: geom::q16(p.1 - oy),
+            });
+        }
+        if self.current_frame(output).is_none() {
+            self.render_list(output).ok()?;
+        }
+        let view = self.current_frame(output)?.view;
+        Some(view.unproject(geom::OutputLogicalPoint { x: p.0, y: p.1 }))
+    }
+
+    /// Whether `surface` belongs to a layer surface tree rather than a Canvas window.
+    pub fn is_layer_surface(&self, surface: snapshot::SurfaceKey) -> bool {
+        self.layers.iter().any(|l| {
+            l.tree
+                .as_ref()
+                .is_some_and(|t| t.surfaces.iter().any(|s| s.key == surface))
         })
     }
 

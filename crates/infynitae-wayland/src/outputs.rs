@@ -333,6 +333,7 @@ impl WaylandState {
     /// The convertible went into tablet mode (`on`) or out of it: the session's on-screen
     /// keyboard follows (`launch.sh tablet-mode`, OSK).
     pub fn tablet_mode_changed(&mut self, on: bool) {
+        self.osk_tablet_mode(on);
         self.spawn_action_with("tablet-mode", if on { "on" } else { "off" });
     }
 
@@ -566,6 +567,13 @@ impl WaylandState {
         h.tracker = convert::damage_tracker(&model, &view, self.target);
         h.tracker_k = view.k;
         self.output_heads_changed(id);
+        if self
+            .session_lock
+            .as_ref()
+            .is_some_and(|l| !l.fingers.is_empty())
+        {
+            self.cancel_touches();
+        }
     }
 
     fn output_removed(&mut self, id: OutputId) {
@@ -579,6 +587,13 @@ impl WaylandState {
         }
         self.output_management.info.remove(&id);
         self.output_heads_changed(id);
+        if self
+            .session_lock
+            .as_ref()
+            .is_some_and(|l| !l.fingers.is_empty())
+        {
+            self.cancel_touches();
+        }
     }
 
     /// A vblank of `output` at `now`: the requested frame callbacks of each element complete

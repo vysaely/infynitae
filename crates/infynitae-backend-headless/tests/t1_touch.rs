@@ -494,3 +494,767 @@ fn three_fingers_spread_on_a_window_resize_it() {
         "the top-left corner stayed"
     );
 }
+
+/// A portrait 800×1280 panel rotated Right Side Up (`Transform::R270`) at 1.5× scale (`180/120`):
+/// the view is 1280×800, and a touch in physical panel coordinates mapped through
+/// `panel_point_to_view` lands at the exact surface-local coordinates on the window.
+#[test]
+fn a_touch_on_a_rotated_panel_maps_through_the_output_transform() {
+    use infynitae_core::output::Transform;
+    let mut out = common::output((800, 1280), 180);
+    out.transform = Transform::R270;
+    let mut r = Rig::new(common::Lockstep::new(Some(out)));
+    r.ls.state.enable_touch();
+    r.ls.pump();
+    let qh = r.ls.qh.clone();
+    let seat: WlSeat = r.ls.probe.seat.clone().expect("a seat");
+    let _touch = seat.get_touch(&qh, ());
+    r.ls.pump();
+    r.map_w();
+
+    let output = r.ls.output();
+    let model = r.ls.state.core().output(output).unwrap().clone();
+    assert_eq!(model.view_size(), (1280, 800));
+
+    // Pick an asymmetric physical point on the 800×1280 panel that maps inside W on the 1280×800
+    // view: for R270, panel (px, py) maps to view (py, 800 - px).
+    let panel_px = (300.0, 600.0);
+    let view_px =
+        infynitae_wayland::convert::panel_point_to_view(panel_px, (800, 1280), model.transform);
+    assert_eq!(view_px, (600.0, 500.0));
+
+    let logical = (view_px.0 / model.scale, view_px.1 / model.scale);
+    let pt = infynitae_core::geom::OutputLogicalPoint {
+        x: logical.0,
+        y: logical.1,
+    };
+    let hit =
+        r.ls.state
+            .core_mut()
+            .hit_test(output, pt)
+            .expect("center of rotated view hits W");
+    let q = infynitae_core::geom::Q16_ONE as f64;
+    let local = (hit.local.x as f64 / q, hit.local.y as f64 / q);
+
+    r.ls.probe.log.clear();
+    down(&mut r, 0, logical);
+    assert!(
+        r.ls.probe
+            .log
+            .contains(&format!("down 0 W {:.1},{:.1}", local.0, local.1)),
+        "{:?}",
+        r.ls.probe.log
+    );
+    up(&mut r, 0);
+}
+
+#[test]
+fn touch_on_rotated_and_scaled_second_output() {
+    use infynitae_core::output::Transform;
+
+    let o1 = common::output_k("DP-1", (1920, 1080), 120, 60_000);
+    let mut o2 = common::output_k("HDMI-A-1", (1920, 1080), 180, 60_000); // 1.5x scale
+    o2.transform = Transform::R90; // logical extent: 1080/1.5 = 720 x 1920/1.5 = 1280
+    let mut ls = common::Lockstep::with(Default::default(), &[o1, o2]);
+    let qh = ls.qh.clone();
+    // Place W on the second output by locating the pointer on it first, or hit-test on output 2.
+    let out2 = ls.state.core().outputs()[1].id;
+    let w_idx = ls.probe.toplevel(&qh, "W2", (400, 300), 0);
+    ls.pump();
+    ls.probe.draw(&qh, w_idx);
+    ls.pump();
+    // Move W2 onto output 2's view center.
+    let w_id = *ls.state.core().stage().mapped_elements().last().unwrap();
+    let cam2 = ls.state.core().cameras().camera_for_output(out2).unwrap();
+    let c2 = ls.state.core().cameras().center(cam2).unwrap();
+    let q = infynitae_core::geom::Q16_ONE;
+    let target_anchor = ((c2.x / q) as f64 - 200.0, (c2.y / q) as f64 - 150.0);
+    let eref = infynitae_core::stage::ElementRef {
+        instance: ls.state.core().stage().instance(),
+        element: w_id,
+    };
+    let fx = ls
+        .state
+        .core_mut()
+        .shell_command(
+            &mut ls.shell,
+            infynitae_core::ShellCommand::MoveElement {
+                element: eref,
+                to: target_anchor,
+                stream: infynitae_core::ShellStream::Atomic,
+            },
+        )
+        .unwrap();
+    ls.state.apply(&fx);
+    ls.pump();
+    let mut r = Rig::new(ls);
+    r.frame();
+
+    r.ls.state.enable_touch();
+    r.ls.pump();
+    let seat: WlSeat = r.ls.probe.seat.clone().expect("seat");
+    let _touch = seat.get_touch(&qh, ());
+    r.ls.pump();
+    r.ls.probe.log.clear();
+
+    // Touch at logical center of rotated/scaled output 2: (360, 640).
+    r.t += 1000;
+    let t1 = r.t;
+    touch(
+        &mut r,
+        PhysicalEvent::TouchDown {
+            slot: 0,
+            output: out2,
+            p: (360.0, 640.0),
+            time_us: t1,
+        },
+    );
+    touch(&mut r, PhysicalEvent::TouchFrame);
+    assert!(
+        r.ls.probe.log.iter().any(|l| l == "down 0 W2 200.0,150.0"),
+        "expected touch on W2 at 200.0,150.0: {:?}",
+        r.ls.probe.log
+    );
+    assert!(r.ls.probe.log.contains(&"frame".to_string()));
+
+    r.ls.probe.log.clear();
+    r.t += 1000;
+    let t2 = r.t;
+    touch(
+        &mut r,
+        PhysicalEvent::TouchMotion {
+            slot: 0,
+            p: (390.0, 660.0),
+            time_us: t2,
+        },
+    );
+    touch(&mut r, PhysicalEvent::TouchFrame);
+    assert!(
+        r.ls.probe.log.iter().any(|l| l == "motion 0 230.0,170.0"),
+        "expected motion on W2 at 230.0,170.0: {:?}",
+        r.ls.probe.log
+    );
+    assert!(r.ls.probe.log.contains(&"frame".to_string()));
+
+    r.ls.probe.log.clear();
+    r.t += 1000;
+    let t3 = r.t;
+    touch(
+        &mut r,
+        PhysicalEvent::TouchUp {
+            slot: 0,
+            time_us: t3,
+        },
+    );
+    touch(&mut r, PhysicalEvent::TouchFrame);
+    assert!(r.ls.probe.log.contains(&"up 0".to_string()));
+    assert!(r.ls.probe.log.contains(&"frame".to_string()));
+}
+
+#[test]
+fn finger_down_when_window_unmaps_or_closes_cancels_touch() {
+    let mut r = Rig::new(common::Lockstep::new(Some(a_1080())));
+    r.ls.state.enable_touch();
+    r.ls.pump();
+    let qh = r.ls.qh.clone();
+    let seat: WlSeat = r.ls.probe.seat.clone().expect("seat");
+    let _touch = seat.get_touch(&qh, ());
+    let w1 = r.ls.probe.toplevel(&qh, "W1", (400, 300), 0);
+    let w2 = r.ls.probe.toplevel(&qh, "W2", (400, 300), 0);
+    r.ls.pump();
+    r.ls.probe.draw(&qh, w1);
+    r.ls.probe.draw(&qh, w2);
+    r.ls.pump();
+    r.frame();
+
+    // Place W1 left of center and W2 right of center so both are visible and disjoint.
+    let out = r.ls.output();
+    let cam = r.ls.state.core().cameras().camera_for_output(out).unwrap();
+    let center = r.ls.state.core().cameras().center(cam).unwrap();
+    let q = infynitae_core::geom::Q16_ONE as f64;
+    let cx = center.x as f64 / q;
+    let cy = center.y as f64 / q;
+    let elems: Vec<_> = r.ls.state.core().stage().mapped_elements().to_vec();
+    for (id, pos) in [
+        (elems[0], (cx - 500.0, cy - 150.0)),
+        (elems[1], (cx + 100.0, cy - 150.0)),
+    ] {
+        let eref = infynitae_core::stage::ElementRef {
+            instance: r.ls.state.core().stage().instance(),
+            element: id,
+        };
+        let fx =
+            r.ls.state
+                .core_mut()
+                .shell_command(
+                    &mut r.ls.shell,
+                    infynitae_core::ShellCommand::MoveElement {
+                        element: eref,
+                        to: pos,
+                        stream: infynitae_core::ShellStream::Atomic,
+                    },
+                )
+                .unwrap();
+        r.ls.state.apply(&fx);
+    }
+    r.ls.pump();
+    r.frame();
+
+    // Find logical point on W1 and W2.
+    let find_on = |r: &mut Rig, target_id| -> (f64, f64) {
+        let out = r.ls.output();
+        for y in (0..1080).step_by(40) {
+            for x in (0..1920).step_by(40) {
+                let pt = infynitae_core::geom::OutputLogicalPoint {
+                    x: f64::from(x) + 10.0,
+                    y: f64::from(y) + 10.0,
+                };
+                if r.ls
+                    .state
+                    .core_mut()
+                    .hit_test(out, pt)
+                    .is_some_and(|h| h.element == target_id)
+                {
+                    return (pt.x, pt.y);
+                }
+            }
+        }
+        panic!("target not on screen");
+    };
+    let p1 = find_on(&mut r, elems[0]);
+    let p2 = find_on(&mut r, elems[1]);
+
+    // 1. Finger 0 down on W1, then W1 unmaps -> W1 gets cancel and slot 1 on W2 goes to W2.
+    r.ls.probe.log.clear();
+    down(&mut r, 0, p1);
+    assert!(r.ls.probe.log.iter().any(|l| l.starts_with("down 0 W1")));
+    r.ls.probe.log.clear();
+    r.ls.probe.unmap(w1);
+    r.ls.pump();
+    assert!(
+        r.ls.probe.log.contains(&"cancel".to_string()),
+        "unmapping W1 should cancel touch on W1: {:?}",
+        r.ls.probe.log
+    );
+    r.ls.probe.log.clear();
+    down(&mut r, 1, p2);
+    assert!(
+        r.ls.probe.log.iter().any(|l| l.starts_with("down 1 W2")),
+        "new finger on W2 after W1 unmapped should reach W2: {:?}",
+        r.ls.probe.log
+    );
+
+    // 2. Finger 1 is now down on W2, destroy W2 -> touch cleared and a new finger on W3 works.
+    r.ls.probe.destroy_toplevel(w2);
+    r.ls.pump();
+    let w3 = r.ls.probe.toplevel(&qh, "W3", (400, 300), 0);
+    r.ls.pump();
+    r.ls.probe.draw(&qh, w3);
+    r.ls.pump();
+    r.frame();
+    let w3_id = *r.ls.state.core().stage().mapped_elements().last().unwrap();
+    r.ls.probe.log.clear();
+    let p3 = find_on(&mut r, w3_id);
+    down(&mut r, 2, p3);
+    assert!(
+        r.ls.probe.log.iter().any(|l| l.starts_with("down 2 W3")),
+        "new finger on W3 after W2 destroyed should reach W3: {:?}",
+        r.ls.probe.log
+    );
+}
+
+#[test]
+fn finger_down_when_panel_opens_or_closes_cancels_touch() {
+    use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::Layer;
+    use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::{
+        Anchor, KeyboardInteractivity,
+    };
+
+    let (mut r, _touch) = rig();
+    r.ls.bind_layer_shell();
+    r.ls.pump();
+    let qh = r.ls.qh.clone();
+    let (p, _) = on_w(&mut r);
+
+    // Finger 0 down on window W.
+    down(&mut r, 0, p);
+    assert!(r.ls.probe.log.iter().any(|l| l.starts_with("down 0 W")));
+    r.ls.probe.log.clear();
+
+    // An exclusive top-layer panel opens.
+    let panel = r.ls.probe.layer_surface(
+        &qh,
+        "PANEL",
+        Layer::Top,
+        Anchor::Top | Anchor::Left | Anchor::Right,
+        (0, 200),
+        0,
+        KeyboardInteractivity::Exclusive,
+    );
+    r.ls.pump();
+    r.ls.probe.draw(&qh, panel);
+    r.ls.pump();
+
+    assert!(
+        r.ls.probe.log.contains(&"cancel".to_string()),
+        "opening exclusive panel should cancel W's active touch: {:?}",
+        r.ls.probe.log
+    );
+
+    // Finger 1 taps on the panel -> reaches PANEL (not absorbed by W's stale touch).
+    r.ls.probe.log.clear();
+    down(&mut r, 1, (100.0, 50.0));
+    assert!(
+        r.ls.probe.log.iter().any(|l| l.starts_with("down 1 PANEL")),
+        "tap on open panel should reach PANEL: {:?}",
+        r.ls.probe.log
+    );
+
+    // Panel unmaps while finger 1 is down on it -> PANEL gets cancel, next tap reaches W.
+    r.ls.probe.log.clear();
+    r.ls.probe.unmap(panel);
+    r.ls.pump();
+    assert!(
+        r.ls.probe.log.contains(&"cancel".to_string()),
+        "unmapping panel while finger is down should cancel touch: {:?}",
+        r.ls.probe.log
+    );
+    r.ls.probe.log.clear();
+    down(&mut r, 2, p);
+    assert!(
+        r.ls.probe.log.iter().any(|l| l.starts_with("down 2 W")),
+        "tap on W after panel closed should reach W: {:?}",
+        r.ls.probe.log
+    );
+}
+
+#[test]
+fn finger_down_when_output_rotates_cancels_panel_touch() {
+    use infynitae_core::output::Transform;
+    use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::Layer;
+    use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::{
+        Anchor, KeyboardInteractivity,
+    };
+
+    let (mut r, _touch) = rig();
+    r.ls.bind_layer_shell();
+    r.ls.pump();
+    let qh = r.ls.qh.clone();
+
+    let panel = r.ls.probe.layer_surface(
+        &qh,
+        "PANEL",
+        Layer::Top,
+        Anchor::Bottom | Anchor::Left | Anchor::Right,
+        (0, 120),
+        0,
+        KeyboardInteractivity::None,
+    );
+    r.ls.pump();
+    r.ls.probe.draw(&qh, panel);
+    r.ls.pump();
+
+    r.ls.probe.log.clear();
+    down(&mut r, 0, (200.0, 1000.0));
+    assert!(r.ls.probe.log.iter().any(|l| l.starts_with("down 0 PANEL")));
+
+    // Autorotate turns the output to 90 degrees while finger 0 is down on the panel.
+    r.ls.probe.log.clear();
+    let out = r.ls.output();
+    let mut rotated = a_1080();
+    rotated.transform = Transform::R90;
+    r.ls.reconfigure(out, &rotated);
+    r.ls.pump();
+
+    assert!(
+        r.ls.probe.log.contains(&"cancel".to_string()),
+        "rotating output while finger is down on panel should cancel touch: {:?}",
+        r.ls.probe.log
+    );
+    r.ls.probe.log.clear();
+    motion(&mut r, 0, (220.0, 1000.0));
+    up(&mut r, 0);
+    assert!(
+        !r.ls
+            .probe
+            .log
+            .iter()
+            .any(|l| l.starts_with("motion") || l.starts_with("up")),
+        "cancelled finger should send no motion/up after rotation: {:?}",
+        r.ls.probe.log
+    );
+}
+
+#[test]
+fn finger_down_when_fullscreen_starts_cancels_touch() {
+    let mut r = Rig::new(common::Lockstep::new(Some(a_1080())));
+    let qh = r.ls.qh.clone();
+    let w = r.ls.probe.toplevel(&qh, "W", (800, 600), 0);
+    r.ls.pump();
+    r.ls.probe.draw(&qh, w);
+    r.ls.pump();
+    r.frame();
+    r.ls.state.enable_touch();
+    r.ls.pump();
+    let seat: WlSeat = r.ls.probe.seat.clone().expect("seat");
+    let _touch = seat.get_touch(&qh, ());
+    r.ls.pump();
+    let (p, _) = on_w(&mut r);
+
+    down(&mut r, 0, p);
+    assert!(r.ls.probe.log.iter().any(|l| l.starts_with("down 0 W")));
+
+    r.ls.probe.log.clear();
+    // Ask W to go fullscreen via its xdg_toplevel, ack configure, and commit.
+    r.ls.probe.surfaces[w]
+        .toplevel
+        .as_ref()
+        .unwrap()
+        .set_fullscreen(None);
+    r.ls.pump();
+    let last = r.ls.probe.toplevel_configures.last().cloned().unwrap();
+    r.ls.probe.surfaces[w].size = last.1;
+    r.ls.probe.draw(&qh, w);
+    r.ls.pump();
+    r.frame();
+
+    assert!(
+        r.ls.probe.log.contains(&"cancel".to_string()),
+        "entering fullscreen while finger is down should cancel touch: {:?}",
+        r.ls.probe.log
+    );
+    r.ls.probe.log.clear();
+    down(&mut r, 1, (500.0, 500.0));
+    assert!(
+        r.ls.probe.log.iter().any(|l| l.starts_with("down 1 W")),
+        "new finger on fullscreen W should reach W: {:?}",
+        r.ls.probe.log
+    );
+}
+
+#[test]
+fn stationary_finger_cancel_reaches_client() {
+    let (mut r, _touch) = rig();
+    let (p, _) = on_w(&mut r);
+
+    down(&mut r, 0, p);
+    assert!(r.ls.probe.log.iter().any(|l| l.starts_with("down 0 W")));
+    assert!(r.ls.probe.log.contains(&"frame".to_string()));
+
+    r.ls.probe.log.clear();
+    touch(&mut r, PhysicalEvent::TouchCancel);
+    assert!(
+        r.ls.probe.log.contains(&"cancel".to_string()),
+        "TouchCancel on stationary finger must reach client: {:?}",
+        r.ls.probe.log
+    );
+}
+
+#[test]
+fn edge_swipe_from_screen_edges_opens_hover_strip_and_cancels_touch() {
+    use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::Layer;
+    use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::{
+        Anchor, KeyboardInteractivity,
+    };
+
+    let (mut r, _touch) = rig();
+    r.ls.bind_layer_shell();
+    r.ls.pump();
+    let qh = r.ls.qh.clone();
+
+    let strip_top = r.ls.probe.layer_surface(
+        &qh,
+        "STRIP_TOP",
+        Layer::Overlay,
+        Anchor::Top,
+        (400, 2),
+        0,
+        KeyboardInteractivity::None,
+    );
+    let strip_bot = r.ls.probe.layer_surface(
+        &qh,
+        "STRIP_BOT",
+        Layer::Overlay,
+        Anchor::Bottom,
+        (400, 2),
+        0,
+        KeyboardInteractivity::None,
+    );
+    let strip_left = r.ls.probe.layer_surface(
+        &qh,
+        "STRIP_LEFT",
+        Layer::Overlay,
+        Anchor::Left,
+        (2, 400),
+        0,
+        KeyboardInteractivity::None,
+    );
+    let strip_right = r.ls.probe.layer_surface(
+        &qh,
+        "STRIP_RIGHT",
+        Layer::Overlay,
+        Anchor::Right,
+        (2, 400),
+        0,
+        KeyboardInteractivity::None,
+    );
+    r.ls.pump();
+    for s in [strip_top, strip_bot, strip_left, strip_right] {
+        r.ls.probe.draw(&qh, s);
+    }
+    r.ls.pump();
+
+    for (start, step, strip_label) in [
+        ((960.0, 10.0), (960.0, 48.0), "STRIP_TOP"),
+        ((960.0, 1070.0), (960.0, 1032.0), "STRIP_BOT"),
+        ((10.0, 540.0), (48.0, 540.0), "STRIP_LEFT"),
+        ((1910.0, 540.0), (1872.0, 540.0), "STRIP_RIGHT"),
+    ] {
+        // Put pointer in the middle before each swipe.
+        let _ = infynitae_backend_headless::pointer_motion(
+            &mut r.ls.state,
+            &mut r.ls.input,
+            (0.0, 0.0),
+            (0.0, 0.0),
+            r.t + 1,
+        );
+        r.t += 1000;
+        r.ls.probe.log.clear();
+        r.ls.probe.ptr.clear();
+
+        down(&mut r, 0, start);
+        motion(&mut r, 0, step);
+        up(&mut r, 0);
+
+        assert!(
+            r.ls.probe
+                .ptr
+                .iter()
+                .any(|l| l.starts_with(&format!("enter {strip_label} "))),
+            "inward swipe from {start:?} -> {step:?} should move pointer onto {strip_label}: ptr={:?} log={:?}",
+            r.ls.probe.ptr,
+            r.ls.probe.log
+        );
+    }
+
+    // Swiping in while a window is under the finger cancels the window's touch too.
+    let (p_top_on_w, _) = on_w(&mut r);
+    // W covers 560..1360 x 240..840 in Rig::x8, so resize/reposition or map a near-top strip test:
+    // Tap at (960, 250) isn't near edge, so move pointer out and map a near-edge window.
+    let w_top = r.ls.probe.toplevel(&qh, "WTOP", (1800, 1070), 0);
+    r.ls.pump();
+    r.ls.probe.draw(&qh, w_top);
+    r.ls.pump();
+    r.frame();
+    let _ = p_top_on_w;
+    r.ls.probe.log.clear();
+    down(&mut r, 0, (960.0, 12.0));
+    assert!(
+        r.ls.probe.log.iter().any(|l| l.starts_with("down 0 WTOP")),
+        "initial finger near edge starts on WTOP: {:?}",
+        r.ls.probe.log
+    );
+    r.ls.probe.log.clear();
+    r.ls.probe.ptr.clear();
+    motion(&mut r, 0, (960.0, 50.0));
+    up(&mut r, 0);
+    assert!(
+        r.ls.probe.log.contains(&"cancel".to_string()),
+        "inward edge swipe should cancel WTOP's touch: {:?}",
+        r.ls.probe.log
+    );
+    assert!(
+        r.ls.probe
+            .ptr
+            .iter()
+            .any(|l| l.starts_with("enter STRIP_TOP ")),
+        "inward edge swipe over WTOP should enter STRIP_TOP: {:?}",
+        r.ls.probe.ptr
+    );
+}
+
+#[test]
+fn edge_swipe_ignores_parallel_drag_and_open_panel() {
+    use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::Layer;
+    use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::{
+        Anchor, KeyboardInteractivity,
+    };
+
+    let (mut r, _touch) = rig();
+    r.ls.bind_layer_shell();
+    r.ls.pump();
+    let qh = r.ls.qh.clone();
+
+    let strip_top = r.ls.probe.layer_surface(
+        &qh,
+        "STRIP_TOP",
+        Layer::Overlay,
+        Anchor::Top,
+        (400, 2),
+        0,
+        KeyboardInteractivity::None,
+    );
+    let open_bot = r.ls.probe.layer_surface(
+        &qh,
+        "OPEN_BOT",
+        Layer::Top,
+        Anchor::Bottom | Anchor::Left | Anchor::Right,
+        (0, 200),
+        0,
+        KeyboardInteractivity::None,
+    );
+    r.ls.pump();
+    r.ls.probe.draw(&qh, strip_top);
+    r.ls.probe.draw(&qh, open_bot);
+    r.ls.pump();
+
+    // 1. Parallel drag along top edge does not open STRIP_TOP.
+    r.ls.probe.log.clear();
+    r.ls.probe.ptr.clear();
+    down(&mut r, 0, (960.0, 10.0));
+    motion(&mut r, 0, (1010.0, 10.0));
+    up(&mut r, 0);
+    assert!(
+        !r.ls
+            .probe
+            .ptr
+            .iter()
+            .any(|l| l.starts_with("enter STRIP_TOP")),
+        "parallel drag along edge must not trigger edge swipe: {:?}",
+        r.ls.probe.ptr
+    );
+
+    // 2. Touch starting inside an open panel/OSK near the bottom edge (including within 2px) stays with that layer surface.
+    for start_y in [1068.0, 1078.0] {
+        r.ls.probe.log.clear();
+        r.ls.probe.ptr.clear();
+        down(&mut r, 0, (500.0, start_y));
+        motion(&mut r, 0, (500.0, 1020.0));
+        up(&mut r, 0);
+        assert!(
+            r.ls.probe
+                .log
+                .iter()
+                .any(|l| l.starts_with("down 0 OPEN_BOT"))
+                && r.ls.probe.log.iter().any(|l| l.starts_with("motion 0"))
+                && !r.ls.probe.log.contains(&"cancel".to_string()),
+            "finger at y={start_y} on an open bottom layer/OSK must not trigger edge swipe cancel: {:?}",
+            r.ls.probe.log
+        );
+    }
+
+    // 3. TOUCH_EDGE_SWIPE="false" disables edge swipe and removing the line reverts to true.
+    let home = infynitae_wayland::cursor::TestTempDir::new("touch-edge-swipe");
+    let cfg_dir = home.path().join(".config/infynitae");
+    std::fs::create_dir_all(&cfg_dir).unwrap();
+    std::fs::write(cfg_dir.join("config"), "TOUCH_EDGE_SWIPE=\"false\"\n").unwrap();
+    r.ls.state.set_config_home(home.path().to_path_buf());
+    r.ls.state.reload_config();
+    assert!(!r.ls.state.core().touch_edge_swipe());
+
+    r.ls.probe.log.clear();
+    r.ls.probe.ptr.clear();
+    down(&mut r, 0, (960.0, 10.0));
+    motion(&mut r, 0, (960.0, 50.0));
+    up(&mut r, 0);
+    assert!(
+        !r.ls
+            .probe
+            .ptr
+            .iter()
+            .any(|l| l.starts_with("enter STRIP_TOP")),
+        "TOUCH_EDGE_SWIPE=\"false\" must disable edge swipe: {:?}",
+        r.ls.probe.ptr
+    );
+
+    std::fs::write(cfg_dir.join("config"), "").unwrap();
+    r.ls.state.reload_config();
+    assert!(
+        r.ls.state.core().touch_edge_swipe(),
+        "removing TOUCH_EDGE_SWIPE must revert to default true"
+    );
+}
+
+#[test]
+fn finger_down_when_output_unplugged_cancels_touch() {
+    let (mut r, _touch) = rig();
+    let (p, _) = on_w(&mut r);
+
+    // 1. Finger down on window W when its output unplugs -> W receives cancel, reconnect works.
+    down(&mut r, 0, p);
+    assert!(r.ls.probe.log.iter().any(|l| l.starts_with("down 0 W")));
+    r.ls.probe.log.clear();
+    let out = r.ls.output();
+    r.ls.disconnect(out);
+    assert!(
+        r.ls.probe.log.contains(&"cancel".to_string()),
+        "unplugging output while finger is down on W must cancel touch: {:?}",
+        r.ls.probe.log
+    );
+
+    let out2 = r.ls.connect(&a_1080());
+    r.frame();
+    r.ls.probe.log.clear();
+    r.t += 1000;
+    let t1 = r.t;
+    touch(
+        &mut r,
+        PhysicalEvent::TouchDown {
+            slot: 1,
+            output: out2,
+            p: (960.0, 540.0),
+            time_us: t1,
+        },
+    );
+    touch(&mut r, PhysicalEvent::TouchFrame);
+    r.t += 1000;
+    let t2 = r.t;
+    touch(
+        &mut r,
+        PhysicalEvent::TouchUp {
+            slot: 1,
+            time_us: t2,
+        },
+    );
+    touch(&mut r, PhysicalEvent::TouchFrame);
+    assert!(
+        r.ls.probe.log.iter().any(|l| l.starts_with("down 1 W")),
+        "tap on W after output reconnect must reach W: {:?}",
+        r.ls.probe.log
+    );
+
+    // 2. Finger down on empty canvas when its output unplugs -> cleared, not stuck on reconnect.
+    r.t += 1000;
+    let t3 = r.t;
+    touch(
+        &mut r,
+        PhysicalEvent::TouchDown {
+            slot: 2,
+            output: out2,
+            p: (100.0, 100.0),
+            time_us: t3,
+        },
+    );
+    touch(&mut r, PhysicalEvent::TouchFrame);
+    r.ls.disconnect(out2);
+    let out3 = r.ls.connect(&a_1080());
+    r.frame();
+    r.ls.probe.log.clear();
+    r.t += 1000;
+    let t4 = r.t;
+    touch(
+        &mut r,
+        PhysicalEvent::TouchDown {
+            slot: 3,
+            output: out3,
+            p: (960.0, 540.0),
+            time_us: t4,
+        },
+    );
+    touch(&mut r, PhysicalEvent::TouchFrame);
+    assert!(
+        r.ls.probe.log.iter().any(|l| l.starts_with("down 3 W")),
+        "tap on W after canvas-touch output unplug must reach W (no stale canvas slot): {:?}",
+        r.ls.probe.log
+    );
+}

@@ -98,9 +98,6 @@ pub struct Theme {
     /// a thin bar's empty part
     pub track: Rgba,
     pub corners: f64,
-    /// SWITCH_LOOK: rows, icons, tiles
-    #[allow(dead_code)] // Read once SWITCH_LOOK styling is wired (docs/POLISH_PLAN.md Wave 2).
-    pub switch_look: String,
     /// typeface family (LOOK_FONT)
     pub font: String,
 }
@@ -202,7 +199,6 @@ impl Theme {
             alert: theme_alert(card, text, accent, c.light),
             track: text.alpha(0.12),
             corners: c.corners,
-            switch_look: c.switch_look.clone(),
             font: c.font.clone(),
         }
     }

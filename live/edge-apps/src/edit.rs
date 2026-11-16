@@ -1408,13 +1408,7 @@ fn draw_add_list(
     }
 
     if max_scroll > 0.0 {
-        let total_h = view.3 + max_scroll;
-        let thumb_h = ((view.3 / total_h) * view.3).clamp(20.0, view.3);
-        let track = (view.3 - thumb_h).max(1.0);
-        let thumb_y = view.1 + (scroll / max_scroll) * track;
-        draw::round_rect(cr, add.0 + add.2 - 6.0, thumb_y, 3.0, thumb_h, 1.5);
-        draw::set(cr, th.muted.alpha(0.45));
-        let _ = cr.fill();
+        crate::ui::scrollbar(cr, cx, view, view.3 + max_scroll, scroll);
     }
     let _ = cr.restore();
 }
@@ -1506,7 +1500,12 @@ pub fn save_panel_to(
 }
 
 pub fn save_panel(panel: &Panel, before_line: &str) -> std::io::Result<String> {
-    let cfg = crate::config::config_path();
+    let Some(cfg) = crate::config::config_path() else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "HOME is not set",
+        ));
+    };
     let bak = cfg.with_file_name("panels.backup");
     save_panel_to(&cfg, &bak, panel, before_line)
 }

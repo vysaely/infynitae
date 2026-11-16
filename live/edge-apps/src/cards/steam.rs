@@ -333,8 +333,8 @@ pub struct SteamSource {
 impl Source for SteamSource {
     fn fetch(&mut self) -> Data {
         let root = self.root.clone().or_else(|| {
-            let home = std::env::var_os("HOME").filter(|s| !s.is_empty())?;
-            find_steam_dir(Path::new(&home))
+            let home = crate::paths::home()?;
+            find_steam_dir(&home)
         });
         let data = root
             .filter(|p| p.is_dir())
@@ -378,6 +378,7 @@ pub fn format_last_played(last_played: u64, now: NaiveDateTime) -> String {
 pub struct GamesCard {
     pub data: Option<SteamData>,
     pub scroll: usize,
+    scroll_accum: f64,
 }
 
 impl GamesCard {
@@ -424,6 +425,7 @@ impl Card for GamesCard {
     fn draw(&self, cr: &Context, cx: &Cx, body: Rect, hits: &mut Hits) {
         let Some(d) = &self.data else { return };
         let range = self.visible_range(cx);
+        let start = range.start;
         if range.is_empty() {
             return;
         }
@@ -470,6 +472,13 @@ impl Card for GamesCard {
                 ui::button(cr, cx, hits, play_id, bx, by, "Play");
             }
         }
+        ui::scrollbar(
+            cr,
+            cx,
+            body,
+            d.games.len() as f64 * ui::ROW_H,
+            start as f64 * ui::ROW_H,
+        );
         cr.restore().ok();
     }
 
@@ -494,22 +503,17 @@ impl Card for GamesCard {
                 out.push(Action::OpenUri(format!("steam://rungameid/{}", g.appid)));
                 true
             }
-            Event::Scroll { dy, .. } if cx.size == Size::L && d.games.len() > LARGE_ROWS => {
+            Event::Scroll { dy, notches, .. }
+                if cx.size == Size::L && d.games.len() > LARGE_ROWS =>
+            {
                 let max_scroll = d.games.len() - LARGE_ROWS;
-                let cur = self.scroll.min(max_scroll);
-                let next = if *dy > 0.0 {
-                    (cur + 1).min(max_scroll)
-                } else if *dy < 0.0 {
-                    cur.saturating_sub(1)
-                } else {
-                    cur
-                };
-                if next != self.scroll {
-                    self.scroll = next;
-                    true
-                } else {
-                    false
-                }
+                crate::card::scroll_rows(
+                    &mut self.scroll,
+                    &mut self.scroll_accum,
+                    max_scroll,
+                    *dy,
+                    *notches,
+                )
             }
             _ => false,
         }
@@ -925,13 +929,45 @@ mod tests {
 
         // Scroll is ignored in S, works in L and clamps to [0, n - LARGE_ROWS].
         let mut out = Vec::new();
-        assert!(!c.event(&Event::Scroll { hit: None, dy: 1.0 }, &cx_s, &mut out));
-        assert!(c.event(&Event::Scroll { hit: None, dy: 1.0 }, &cx_l, &mut out));
+        assert!(!c.event(
+            &Event::Scroll {
+                hit: None,
+                dy: 36.0,
+                notches: 1.0,
+            },
+            &cx_s,
+            &mut out
+        ));
+        assert!(c.event(
+            &Event::Scroll {
+                hit: None,
+                dy: 36.0,
+                notches: 1.0,
+            },
+            &cx_l,
+            &mut out
+        ));
         assert_eq!(c.scroll, 1);
-        assert!(c.event(&Event::Scroll { hit: None, dy: 1.0 }, &cx_l, &mut out));
+        assert!(c.event(
+            &Event::Scroll {
+                hit: None,
+                dy: 36.0,
+                notches: 1.0,
+            },
+            &cx_l,
+            &mut out
+        ));
         assert_eq!(c.scroll, 2);
         assert!(
-            !c.event(&Event::Scroll { hit: None, dy: 1.0 }, &cx_l, &mut out),
+            !c.event(
+                &Event::Scroll {
+                    hit: None,
+                    dy: 36.0,
+                    notches: 1.0,
+                },
+                &cx_l,
+                &mut out
+            ),
             "clamped at bottom"
         );
         // After scrolling 2 down on 10 games (visible indices 2..10), the last game (idx 9, hit 18) is clickable.
