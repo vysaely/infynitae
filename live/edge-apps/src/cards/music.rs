@@ -433,25 +433,32 @@ fn resolve_cover_path(art_url: &str) -> Option<PathBuf> {
     p.is_absolute().then(|| p.to_path_buf())
 }
 
-fn populate_covers_with<F>(cache: &ThumbCache, data: &mut MusicData, mut decode: F)
+fn populate_covers_scaled_with<F>(
+    cache: &ThumbCache,
+    data: &mut MusicData,
+    scale: f64,
+    mut decode: F,
+) where
+    F: FnMut(&Path, i32, i32) -> Option<DecodedImage>,
+{
+    let cover_px = icons::scaled_px(COVER_DECODE_SIZE, scale);
+    let queue_px = icons::scaled_px(QUEUE_COVER_DECODE_SIZE, scale);
+    for p in &mut data.players {
+        p.cover = resolve_cover_path(&p.art_url)
+            .and_then(|path| cache.get_or_decode_with(&path, cover_px, cover_px, &mut decode));
+        for song in &mut p.queue {
+            song.cover = resolve_cover_path(&song.art_url)
+                .and_then(|path| cache.get_or_decode_with(&path, queue_px, queue_px, &mut decode));
+        }
+    }
+}
+
+#[cfg(test)]
+fn populate_covers_with<F>(cache: &ThumbCache, data: &mut MusicData, decode: F)
 where
     F: FnMut(&Path, i32, i32) -> Option<DecodedImage>,
 {
-    for p in &mut data.players {
-        p.cover = resolve_cover_path(&p.art_url).and_then(|path| {
-            cache.get_or_decode_with(&path, COVER_DECODE_SIZE, COVER_DECODE_SIZE, &mut decode)
-        });
-        for song in &mut p.queue {
-            song.cover = resolve_cover_path(&song.art_url).and_then(|path| {
-                cache.get_or_decode_with(
-                    &path,
-                    QUEUE_COVER_DECODE_SIZE,
-                    QUEUE_COVER_DECODE_SIZE,
-                    &mut decode,
-                )
-            });
-        }
-    }
+    populate_covers_scaled_with(cache, data, 1.0, decode);
 }
 
 struct MusicSource;
@@ -470,7 +477,12 @@ impl Source for MusicSource {
             } else {
                 fetch_dbus()
             };
-        populate_covers_with(cover_cache(), &mut data, icons::decode_cover_image);
+        populate_covers_scaled_with(
+            cover_cache(),
+            &mut data,
+            icons::display_scale(),
+            icons::decode_cover_image,
+        );
         Box::new(data)
     }
 }
@@ -2594,6 +2606,52 @@ mod tests {
                 &bytes[off..off + 4]
             );
         }
+        assert_eq!(cache.decode_count(), 2);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn populate_covers_caches_separately_per_scale() {
+        let dir = std::env::temp_dir().join(format!(
+            "edge-apps-music-cover-scale-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let cover_path = dir.join("cover.png");
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 256, 256).unwrap();
+        surf.write_to_png(&mut std::fs::File::create(&cover_path).unwrap())
+            .unwrap();
+
+        let cache = ThumbCache::default();
+        let raw = format!(
+            "status=Playing\ntitle=Track\nart_url=file://{}\n",
+            cover_path.display()
+        );
+
+        let mut d1 = parse_music(&raw);
+        populate_covers_scaled_with(&cache, &mut d1, 1.0, icons::decode_cover_image);
+        let c1 = d1.players[0].cover.as_ref().unwrap();
+        assert_eq!(
+            (c1.width, c1.height),
+            (COVER_DECODE_SIZE, COVER_DECODE_SIZE)
+        );
+
+        let mut d2 = parse_music(&raw);
+        populate_covers_scaled_with(&cache, &mut d2, 2.0, icons::decode_cover_image);
+        let c2 = d2.players[0].cover.as_ref().unwrap();
+        assert_eq!(
+            (c2.width, c2.height),
+            (COVER_DECODE_SIZE * 2, COVER_DECODE_SIZE * 2)
+        );
+        assert_eq!(cache.decode_count(), 2);
+
+        // Repeated fetch at either scale hits the cache without re-decoding.
+        let mut d1_again = parse_music(&raw);
+        populate_covers_scaled_with(&cache, &mut d1_again, 1.0, icons::decode_cover_image);
+        let mut d2_again = parse_music(&raw);
+        populate_covers_scaled_with(&cache, &mut d2_again, 2.0, icons::decode_cover_image);
         assert_eq!(cache.decode_count(), 2);
 
         let _ = std::fs::remove_dir_all(&dir);

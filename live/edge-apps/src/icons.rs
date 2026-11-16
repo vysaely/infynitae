@@ -11,7 +11,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::{c_char, c_double, c_int, c_void, CString};
 use std::fs::File;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::UNIX_EPOCH;
 
@@ -952,9 +952,40 @@ impl IconCache {
 }
 
 static GLOBAL_ICON_CACHE: OnceLock<IconCache> = OnceLock::new();
+static DISPLAY_SCALE_BITS: AtomicU32 = AtomicU32::new(1.0f32.to_bits());
 
 fn global_icon_cache() -> &'static IconCache {
     GLOBAL_ICON_CACHE.get_or_init(IconCache::system)
+}
+
+/// Records the active output scale used when off-UI sources decode covers and thumbnails.
+pub fn set_display_scale(scale: f64) {
+    let s = if scale.is_finite() && scale > 0.0 {
+        scale as f32
+    } else {
+        1.0
+    };
+    DISPLAY_SCALE_BITS.store(s.to_bits(), Ordering::Relaxed);
+}
+
+/// Active output scale for cover and thumbnail decoding (1.0 until set).
+pub fn display_scale() -> f64 {
+    let s = f64::from(f32::from_bits(DISPLAY_SCALE_BITS.load(Ordering::Relaxed)));
+    if s.is_finite() && s > 0.0 {
+        s
+    } else {
+        1.0
+    }
+}
+
+/// Logical size converted to rounded device pixels at `scale` (at least 1).
+pub fn scaled_px(logical: i32, scale: f64) -> i32 {
+    let s = if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    };
+    ((f64::from(logical) * s).round().max(1.0)) as i32
 }
 
 /// Clears the shared app-icon cache so theme, desktop-entry, or icon file changes are picked up.
@@ -992,10 +1023,26 @@ pub fn draw_app_icon_with(
     y: f64,
     size: f64,
 ) {
-    if let Some(img) = cache.get_or_queue(icon, size.round() as i32) {
+    let (dx, dy) = cr
+        .user_to_device_distance(size, size)
+        .unwrap_or((size, size));
+    let px_size = dx.abs().max(dy.abs()).round().max(1.0) as i32;
+    if let Some(img) = cache.get_or_queue(icon, px_size) {
         if let Some(surface) = surface_for_decoded(&img) {
             let _ = cr.save();
-            let _ = cr.set_source_surface(&surface, x.round(), y.round());
+            let sw = surface.width() as f64;
+            let sh = surface.height() as f64;
+            if (sw - size).abs() > 0.25 || (sh - size).abs() > 0.25 {
+                let (dev_x, dev_y) = cr.user_to_device(x, y);
+                let (ux, uy) = cr
+                    .device_to_user(dev_x.round(), dev_y.round())
+                    .unwrap_or((x, y));
+                cr.translate(ux, uy);
+                cr.scale(size / sw, size / sh);
+                let _ = cr.set_source_surface(&surface, 0.0, 0.0);
+            } else {
+                let _ = cr.set_source_surface(&surface, x.round(), y.round());
+            }
             let _ = cr.paint();
             let _ = cr.restore();
             return;
@@ -1297,6 +1344,90 @@ mod tests {
             blue_px[0] > 180 && blue_px[2] < 60,
             "expected blue for retried icon after reload: {blue_px:?}"
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn app_icon_caches_and_draws_at_device_pixel_size_when_scaled() {
+        let dir = std::env::temp_dir().join(format!("edge-apps-icon-scale-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let apps_dir = dir.join("custom/256x256/apps");
+        std::fs::create_dir_all(&apps_dir).unwrap();
+        let icon_path = apps_dir.join("scaled-app.png");
+        // Left half red, right half blue at 128x128 so scaling down to 64px keeps crisp halves.
+        let mut src = cairo::ImageSurface::create(cairo::Format::ARgb32, 128, 128).unwrap();
+        {
+            let stride = src.stride() as usize;
+            let mut data = src.data().unwrap();
+            for y in 0..128usize {
+                for x in 0..128usize {
+                    let off = y * stride + x * 4;
+                    let bgra = if x < 64 {
+                        [0, 0, 240, 255]
+                    } else {
+                        [240, 0, 0, 255]
+                    };
+                    data[off..off + 4].copy_from_slice(&bgra);
+                }
+            }
+        }
+        src.mark_dirty();
+        src.write_to_png(&mut File::create(&icon_path).unwrap())
+            .unwrap();
+
+        let base = dir.clone();
+        let cache =
+            IconCache::new(move || IconSearch::with_dirs(vec![base.clone()], Some("custom")));
+        let th = crate::theme::Theme::from_config(&crate::config::Config::from_text(""));
+        let cx = Cx {
+            theme: &th,
+            now: chrono::NaiveDateTime::default(),
+            size: crate::provider::Size::M,
+            app: None,
+            apps: &[],
+            windows: &[],
+            notes: &[],
+            list_above: false,
+            editing: false,
+        };
+
+        // 1x draw queues and caches 32x32.
+        let surf_1x = cairo::ImageSurface::create(cairo::Format::ARgb32, 48, 48).unwrap();
+        {
+            let cr = Context::new(&surf_1x).unwrap();
+            draw_app_icon_with(&cache, &cr, &cx, "scaled-app", "App", 8.0, 8.0, 32.0);
+        }
+        cache.wait_idle();
+        assert_eq!(cache.lookup_count(), 1);
+        let img_1x = cache.get_or_queue("scaled-app", 32).unwrap();
+        assert_eq!((img_1x.width, img_1x.height), (32, 32));
+
+        // 2x scaled draw queues and caches 64x64 independently and paints the full 64x64 device box.
+        let mut surf_2x = cairo::ImageSurface::create(cairo::Format::ARgb32, 96, 96).unwrap();
+        {
+            let cr = Context::new(&surf_2x).unwrap();
+            cr.scale(2.0, 2.0);
+            draw_app_icon_with(&cache, &cr, &cx, "scaled-app", "App", 8.0, 8.0, 32.0);
+        }
+        cache.wait_idle();
+        assert_eq!(cache.lookup_count(), 2);
+        let img_2x = cache.get_or_queue("scaled-app", 64).unwrap();
+        assert_eq!((img_2x.width, img_2x.height), (64, 64));
+
+        {
+            let cr = Context::new(&surf_2x).unwrap();
+            cr.scale(2.0, 2.0);
+            draw_app_icon_with(&cache, &cr, &cx, "scaled-app", "App", 8.0, 8.0, 32.0);
+        }
+        surf_2x.flush();
+        let stride = surf_2x.stride() as usize;
+        let data = surf_2x.data().unwrap();
+        // Device pixels (16..48) are red (left half of 64x64), (48..80) are blue (right half).
+        let left_off = 48 * stride + 30 * 4;
+        let right_off = 48 * stride + 66 * 4;
+        assert!(data[left_off + 2] > 200 && data[left_off] < 30);
+        assert!(data[right_off] > 200 && data[right_off + 2] < 30);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
