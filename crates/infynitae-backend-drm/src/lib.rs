@@ -4328,7 +4328,7 @@ where
                 dev.output_name(),
                 dev.size(),
                 &candidates,
-                pointer_output_id(&core),
+                pointer_output_id(core),
             )?
         }
     };
@@ -4459,7 +4459,7 @@ where
         dev.output_name(),
         dev.size(),
         &candidates,
-        pointer_output_id(&core),
+        pointer_output_id(core),
     ) {
         let screen = data.screens.iter().find(|s| s.id == screen_id)?;
         let model = core.output(screen.id)?;
