@@ -4,11 +4,17 @@
 //! Replay card of child.rs); a switch this PC cannot use is not shown: the layout with one layout,
 //! the screen keyboard without squeekboard.
 
-use crate::card::{run_sh, Action, Button, Card, Cx, Data, Event, Hits, Rect, Source, Status};
+use crate::card::{
+    has_render_data, render_value, run_cmd, Action, Button, Card, Cx, Data, Event, Hits, Rect,
+    Source, Status,
+};
 use crate::provider::{CardKind, Size};
 use crate::ui::{self, Icon, Row};
 use cairo::Context;
 use std::any::Any;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
 
 pub const KIND: CardKind = CardKind {
     id: "quick",
@@ -110,43 +116,96 @@ pub fn parse_osk(out: &str) -> Option<bool> {
 
 const RT: &str = "${XDG_RUNTIME_DIR:-/tmp}/infynitae";
 
-/// Each part from its own command, under today's fixture keys (dnd, nightlight, keyboard, osk,
-/// replay).
+fn runtime_root() -> PathBuf {
+    std::env::var_os("XDG_RUNTIME_DIR")
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
+}
+
+fn has_program(path_env: &str, name: &str) -> bool {
+    std::env::split_paths(path_env).any(|dir| {
+        let p = dir.join(name);
+        if !p.is_file() {
+            return false;
+        }
+        #[cfg(unix)]
+        {
+            std::fs::metadata(&p).is_ok_and(|m| m.permissions().mode() & 0o111 != 0)
+        }
+        #[cfg(not(unix))]
+        {
+            true
+        }
+    })
+}
+
+fn pid_alive(rt: &Path, proc_dir: &Path, file: &str) -> bool {
+    let Ok(s) = std::fs::read_to_string(rt.join(file)) else {
+        return false;
+    };
+    let Ok(pid) = s.trim().parse::<u32>() else {
+        return false;
+    };
+    pid > 0 && proc_dir.join(pid.to_string()).is_dir()
+}
+
+/// Reads quick switch state directly from runtime files, avoiding shell spawns. Only `makoctl`
+/// is queried directly when `do-not-disturb` is absent and `makoctl` is on `PATH`.
+pub fn fetch_quick_with(
+    rt: &Path,
+    path_env: &str,
+    proc_dir: &Path,
+    mut run: impl FnMut(&[&str]) -> String,
+) -> QuickData {
+    let dir = rt.join("infynitae");
+    let dnd = if dir.join("do-not-disturb").exists() {
+        true
+    } else if has_program(path_env, "makoctl") {
+        parse_dnd(&run(&["makoctl", "mode"]))
+    } else {
+        false
+    };
+    let night = dir.join("night-light").exists();
+    let kb = std::fs::read_to_string(dir.join("keyboard-layout")).unwrap_or_default();
+    let (layout, layouts) = parse_keyboard(&kb);
+    let osk = has_program(path_env, "squeekboard").then(|| dir.join("osk-visible").exists());
+    let replay = pid_alive(rt, proc_dir, "infynitae-recorder-supervisor.pid")
+        || pid_alive(rt, proc_dir, "infynitae-replay.pid");
+    QuickData {
+        dnd,
+        night,
+        layout,
+        layouts,
+        osk,
+        replay,
+    }
+}
+
+/// Each part from its runtime file (or fixture keys dnd, nightlight, keyboard, osk, replay).
 pub struct QuickSource;
 
 impl Source for QuickSource {
     fn fetch(&mut self) -> Data {
-        let dnd = run_sh(
-            "dnd",
-            &format!("[ -e \"{RT}/do-not-disturb\" ] && echo on || makoctl mode 2>/dev/null"),
-        );
-        let night = run_sh(
-            "nightlight",
-            &format!("[ -e \"{RT}/night-light\" ] && echo on || echo off"),
-        );
-        let kb = run_sh(
-            "keyboard",
-            &format!("cat \"{RT}/keyboard-layout\" 2>/dev/null"),
-        );
-        let osk = run_sh(
-            "osk",
-            &format!(
-                "command -v squeekboard >/dev/null 2>&1 && {{ [ -e \"{RT}/osk-visible\" ] && echo shown || echo hidden; }} || echo none"
-            ),
-        );
-        let replay = run_sh(
-            "replay",
-            "for f in \"${XDG_RUNTIME_DIR:-/tmp}/infynitae-recorder-supervisor.pid\" \"${XDG_RUNTIME_DIR:-/tmp}/infynitae-replay.pid\"; do [ -f \"$f\" ] && kill -0 \"$(cat \"$f\" 2>/dev/null)\" 2>/dev/null && { echo on; exit 0; }; done; echo off",
-        );
-        let (layout, layouts) = parse_keyboard(&kb);
-        Box::new(QuickData {
-            dnd: parse_dnd(&dnd),
-            night: parse_bool(&night),
-            layout,
-            layouts,
-            osk: parse_osk(&osk),
-            replay: parse_bool(&replay),
-        })
+        if has_render_data() {
+            let get = |k| render_value(k).unwrap_or_default();
+            let (layout, layouts) = parse_keyboard(&get("keyboard"));
+            return Box::new(QuickData {
+                dnd: parse_dnd(&get("dnd")),
+                night: parse_bool(&get("nightlight")),
+                layout,
+                layouts,
+                osk: parse_osk(&get("osk")),
+                replay: parse_bool(&get("replay")),
+            });
+        }
+        let path_env = std::env::var("PATH").unwrap_or_default();
+        Box::new(fetch_quick_with(
+            &runtime_root(),
+            &path_env,
+            Path::new("/proc"),
+            |args| run_cmd("dnd", args[0], &args[1..]),
+        ))
     }
 }
 
@@ -531,5 +590,75 @@ mod tests {
             ids,
             vec![ROW, SWITCH, ROW + 1, SWITCH + 1, SAVE_CLIP, CLIPS]
         );
+    }
+
+    #[test]
+    fn quick_source_reads_files_in_rust_without_spawning_shell() {
+        let base =
+            std::env::temp_dir().join(format!("infynitae-quick-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let rt = base.join("rt");
+        let infy = rt.join("infynitae");
+        let bin = base.join("bin");
+        let proc_dir = base.join("proc");
+        std::fs::create_dir_all(&infy).unwrap();
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(proc_dir.join("4242")).unwrap();
+
+        std::fs::write(infy.join("do-not-disturb"), "").unwrap();
+        std::fs::write(infy.join("night-light"), "").unwrap();
+        std::fs::write(infy.join("keyboard-layout"), "de\tGerman\t2\n").unwrap();
+        std::fs::write(infy.join("osk-visible"), "").unwrap();
+        std::fs::write(rt.join("infynitae-replay.pid"), "4242\n").unwrap();
+
+        let squeek = bin.join("squeekboard");
+        std::fs::write(&squeek, "#!/bin/sh\n").unwrap();
+        #[cfg(unix)]
+        {
+            let mut perms = std::fs::metadata(&squeek).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&squeek, perms).unwrap();
+        }
+
+        let mut spawned: Vec<Vec<String>> = Vec::new();
+        let d = fetch_quick_with(&rt, &bin.to_string_lossy(), &proc_dir, |args| {
+            spawned.push(args.iter().map(|s| s.to_string()).collect());
+            String::new()
+        });
+        assert!(spawned.is_empty(), "expected 0 commands, got {spawned:?}");
+        assert!(d.dnd);
+        assert!(d.night);
+        assert_eq!(d.layout, "German");
+        assert_eq!(d.layouts, 2);
+        assert_eq!(d.osk, Some(true));
+        assert!(d.replay);
+
+        // Without do-not-disturb or makoctl, still 0 commands; with makoctl on PATH, 1 direct call.
+        std::fs::remove_file(infy.join("do-not-disturb")).unwrap();
+        spawned.clear();
+        let d_no_mako = fetch_quick_with(&rt, &bin.to_string_lossy(), &proc_dir, |args| {
+            spawned.push(args.iter().map(|s| s.to_string()).collect());
+            String::new()
+        });
+        assert!(spawned.is_empty());
+        assert!(!d_no_mako.dnd);
+
+        let makoctl = bin.join("makoctl");
+        std::fs::write(&makoctl, "#!/bin/sh\n").unwrap();
+        #[cfg(unix)]
+        {
+            let mut perms = std::fs::metadata(&makoctl).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&makoctl, perms).unwrap();
+        }
+        spawned.clear();
+        let d_mako = fetch_quick_with(&rt, &bin.to_string_lossy(), &proc_dir, |args| {
+            spawned.push(args.iter().map(|s| s.to_string()).collect());
+            "default\ndo-not-disturb\n".into()
+        });
+        assert_eq!(spawned, vec![vec!["makoctl", "mode"]]);
+        assert!(d_mako.dnd);
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

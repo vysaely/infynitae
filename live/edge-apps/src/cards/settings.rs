@@ -2,7 +2,10 @@
 //! (`docs/EDGE_APPS.md`, `docs/design/apps-edge/system-cards.html`). The data comes from `nmcli`,
 //! `bluetoothctl` and `powerprofilesctl`.
 
-use crate::card::{run_sh, Action, Button, Card, Cx, Data, Event, Hits, Rect, Source, Status};
+use crate::card::{
+    has_render_data, render_value, run_cmd, run_sh, Action, Button, Card, Cx, Data, Event, Hits,
+    Rect, Source, Status,
+};
 use crate::provider::{CardKind, Claim, Listed, Provider, Size};
 use crate::ui::{self, Icon, List, Row};
 use cairo::Context;
@@ -300,15 +303,48 @@ pub fn parse_network(out: &str) -> NetworkData {
     d
 }
 
+pub fn fetch_network_with(mut run: impl FnMut(&[&str]) -> String) -> NetworkData {
+    let dev_out = run(&["nmcli", "-t", "-f", "TYPE,STATE", "device"]);
+    if dev_out.trim().is_empty() {
+        return NetworkData::default();
+    }
+    let has_wifi = dev_out.lines().any(|l| {
+        let f = nmcli_fields(l.trim());
+        f.len() >= 2 && f[0] == "wifi" && f[1] != "unavailable"
+    });
+    let mut wifi_out = String::new();
+    let mut conn_out = String::new();
+    let radio = if has_wifi {
+        wifi_out = run(&[
+            "nmcli",
+            "-t",
+            "-f",
+            "IN-USE,SIGNAL,SECURITY,SSID",
+            "dev",
+            "wifi",
+            "list",
+            "--rescan",
+            "no",
+        ]);
+        conn_out = run(&["nmcli", "-t", "-f", "NAME,TYPE", "connection", "show"]);
+        "enabled"
+    } else {
+        "disabled"
+    };
+    parse_network(&format!(
+        "{radio}\n---\n{dev_out}\n---\n{wifi_out}\n---\n{conn_out}"
+    ))
+}
+
 struct NetworkSource;
 impl Source for NetworkSource {
     fn fetch(&mut self) -> Data {
-        Box::new(parse_network(&run_sh(
-            "network",
-            "nmcli radio wifi 2>/dev/null; echo ---; nmcli -t -f TYPE,STATE device 2>/dev/null; echo ---; \
-             nmcli -t -f IN-USE,SIGNAL,SECURITY,SSID dev wifi list --rescan no 2>/dev/null; echo ---; \
-             nmcli -t -f NAME,TYPE connection show 2>/dev/null",
-        )))
+        if has_render_data() {
+            return Box::new(parse_network(&render_value("network").unwrap_or_default()));
+        }
+        Box::new(fetch_network_with(|args| {
+            run_cmd("network", args[0], &args[1..])
+        }))
     }
 }
 
@@ -1204,6 +1240,37 @@ pub(crate) mod tests {
                 "nmcli dev wifi connect 'Cafe' >/dev/null 2>&1".into()
             )]
         );
+    }
+
+    #[test]
+    fn network_fetch_minimizes_spawned_commands() {
+        let mut calls: Vec<Vec<String>> = Vec::new();
+        let wired = fetch_network_with(|args| {
+            calls.push(args.iter().map(|s| s.to_string()).collect());
+            "ethernet:connected\nwifi:unavailable\n".into()
+        });
+        assert_eq!(calls.len(), 1, "wired-only needs only nmcli device");
+        assert!(wired.service && wired.wired && !wired.wifi_device);
+
+        calls.clear();
+        let wifi = fetch_network_with(|args| {
+            calls.push(args.iter().map(|s| s.to_string()).collect());
+            match args.get(3).copied() {
+                Some("TYPE,STATE") => "wifi:connected\n".into(),
+                Some("IN-USE,SIGNAL,SECURITY,SSID") => "*:70:WPA2:Home\n".into(),
+                Some("NAME,TYPE") => "Home:802-11-wireless\n".into(),
+                _ => String::new(),
+            }
+        });
+        assert_eq!(
+            calls.len(),
+            3,
+            "active Wi-Fi uses 3 direct nmcli calls, 0 sh"
+        );
+        assert!(calls
+            .iter()
+            .all(|c| c.first().map(String::as_str) == Some("nmcli")));
+        assert!(wifi.wifi_device && wifi.radio_on && wifi.saved == vec!["Home"]);
     }
 
     pub fn test_cx(th: &crate::theme::Theme) -> Cx<'_> {
