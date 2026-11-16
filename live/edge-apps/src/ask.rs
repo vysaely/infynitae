@@ -1560,9 +1560,18 @@ mod tests {
         assert_eq!(world.ask.queue.len(), 1);
         assert_eq!(world.ask.title, "Question 1");
 
-        // Asker 1 killed (close rfd1)
+        // Asker 1 killed (close rfd1). Other tests in this process start commands; a child that
+        // is between fork and exec still holds a copy of rfd1 (O_CLOEXEC closes it only at exec),
+        // so the reader can look alive for a moment: allow up to 2 s for the copy to go.
         unsafe { libc::close(rfd1) };
-        assert!(check_asker_gone(&mut world));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while !check_asker_gone(&mut world) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "asker 1 still looks alive after 2 s"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
 
         // Question 2 shows!
         assert!(world.ask.on);
