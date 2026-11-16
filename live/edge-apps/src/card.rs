@@ -7,7 +7,12 @@ use crate::app::App;
 use crate::provider::Size;
 use crate::theme::Theme;
 use std::collections::HashMap;
-use std::process::Command;
+use std::io::Read;
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
+use std::process::{Child, Command, Stdio};
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 pub type Rect = (f64, f64, f64, f64);
 
@@ -256,6 +261,11 @@ pub fn parse_render_data(text: &str) -> HashMap<String, String> {
         .collect()
 }
 
+/// Whether a render fixture (`INFYNITAE_EDGE_RENDER_DATA`) is active.
+pub fn has_render_data() -> bool {
+    render_data().is_some()
+}
+
 /// A render fixture's value for `key` (None outside renders, or not in the fixture).
 pub fn render_value(key: &str) -> Option<String> {
     render_data()?.get(key).cloned()
@@ -299,20 +309,87 @@ pub fn render_notes() -> Vec<Note> {
         .collect()
 }
 
-/// Runs `cmd` with sh and gives its output; with a render fixture set, the fixture's value for `key`
-/// instead (nothing runs).
+const RUN_TIMEOUT: Duration = Duration::from_secs(5);
+
+fn kill_process_group(child: &mut Child) {
+    #[cfg(unix)]
+    {
+        let pgid = child.id() as libc::pid_t;
+        if pgid > 0 {
+            unsafe {
+                libc::kill(-pgid, libc::SIGKILL);
+            }
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+fn run_command_with_timeout(mut cmd: Command, limit: Duration) -> String {
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    #[cfg(unix)]
+    cmd.process_group(0);
+
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(_) => return String::new(),
+    };
+    let Some(mut stdout) = child.stdout.take() else {
+        kill_process_group(&mut child);
+        return String::new();
+    };
+
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = stdout.read_to_end(&mut buf);
+        let _ = tx.send(buf);
+    });
+
+    let deadline = Instant::now() + limit;
+    match rx.recv_timeout(limit) {
+        Ok(buf) => loop {
+            match child.try_wait() {
+                Ok(Some(_)) => return String::from_utf8_lossy(&buf).into_owned(),
+                Ok(None) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                _ => {
+                    kill_process_group(&mut child);
+                    return String::new();
+                }
+            }
+        },
+        Err(_) => {
+            kill_process_group(&mut child);
+            String::new()
+        }
+    }
+}
+
+/// Runs `cmd` with sh within `RUN_TIMEOUT` (5 s) and gives its output; with a render fixture set,
+/// returns the fixture's value for `key` instead (nothing runs). On timeout the process group is
+/// killed and an empty string is returned so the card shows its Missing status.
 pub fn run_sh(key: &str, cmd: &str) -> String {
     if let Some(d) = render_data() {
         return d.get(key).cloned().unwrap_or_default();
     }
-    Command::new("sh")
-        .arg("-c")
-        .arg(cmd)
-        .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
-        .unwrap_or_default()
+    let mut c = Command::new("sh");
+    c.arg("-c").arg(cmd);
+    run_command_with_timeout(c, RUN_TIMEOUT)
+}
+
+/// Runs `prog` directly with `args` (no shell, `LC_ALL=C`) within `RUN_TIMEOUT` (5 s) and gives
+/// its stdout; with a render fixture set, returns the fixture's value for `key` instead.
+pub fn run_cmd(key: &str, prog: &str, args: &[&str]) -> String {
+    if let Some(d) = render_data() {
+        return d.get(key).cloned().unwrap_or_default();
+    }
+    let mut c = Command::new(prog);
+    c.args(args).env("LC_ALL", "C");
+    run_command_with_timeout(c, RUN_TIMEOUT)
 }
 
 #[cfg(test)]
@@ -334,5 +411,22 @@ mod tests {
         let d = parse_render_data("wifi=enabled\\nyes:Home\\\\:Net:72\nempty=\n");
         assert_eq!(d["wifi"], "enabled\nyes:Home\\:Net:72");
         assert_eq!(d["empty"], "");
+    }
+
+    #[test]
+    fn run_sh_returns_stdout_of_fast_command() {
+        assert_eq!(run_sh("k", "printf 'ok\\n'"), "ok\n");
+    }
+
+    #[test]
+    fn run_sh_times_out_and_kills_stuck_command() {
+        let started = Instant::now();
+        let out = run_sh("k", "sleep 30");
+        let elapsed = started.elapsed();
+        assert_eq!(out, "");
+        assert!(
+            elapsed < Duration::from_secs(7),
+            "run_sh took {elapsed:?}, expected ~5 s timeout"
+        );
     }
 }
