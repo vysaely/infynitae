@@ -222,6 +222,44 @@ fn activating_is_the_users_only_from_a_bar_they_are_using() {
 }
 
 #[test]
+fn unminimizing_is_the_users_only_from_a_bar_they_are_using() {
+    let (mut s, _, _) = S::new();
+    s.bind();
+    // the app's own minimize needs its window focused
+    s.focus(Some(s.e[1]));
+    s.ls.probe.wlr_handles[1].set_minimized();
+    s.pump();
+    assert!(s.ls.state.core().stage().is_minimized(s.e[1]));
+
+    // the bar holds neither the pointer nor the keyboard: its request does not bring the window back
+    s.focus(None);
+    s.t += 1000;
+    pointer_motion(
+        &mut s.ls.state,
+        &mut s.ls.input,
+        (900.0, 500.0),
+        (900.0, 500.0),
+        s.t,
+    )
+    .expect("motion");
+    s.pump();
+    s.ls.probe.wlr_handles[1].unset_minimized();
+    s.pump();
+    assert!(
+        s.ls.state.core().stage().is_minimized(s.e[1]),
+        "a client the user is not using does not unminimize a window"
+    );
+    assert_eq!(s.ls.state.core().focus().target(), None);
+
+    // holding the keyboard focus, it is the user's
+    s.focus(Some(s.e[0]));
+    s.ls.probe.wlr_handles[1].unset_minimized();
+    s.pump();
+    assert!(!s.ls.state.core().stage().is_minimized(s.e[1]));
+    assert_eq!(s.ls.state.core().focus().target(), Some(s.e[1]));
+}
+
+#[test]
 fn pointer_motion_sends_no_toplevel_events_when_nothing_changed() {
     let (mut s, w1, _) = S::new();
     s.focus(Some(s.e[0]));

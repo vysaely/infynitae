@@ -241,7 +241,8 @@ impl WaylandState {
     }
 
     /// `activate`: the user's when the asking client holds the pointer or the keyboard focus.
-    fn wlr_toplevel_activate(&mut self, client: &Client, id: ElementId) {
+    /// Whether `client` holds the pointer or the keyboard: a request from it is the user's.
+    fn wlr_client_in_use(&self, client: &Client) -> bool {
         let holds =
             |s: Option<smithay::reexports::wayland_server::protocol::wl_surface::WlSurface>| {
                 s.and_then(|s| s.client())
@@ -249,8 +250,11 @@ impl WaylandState {
             };
         let pointer = self.pointer_handle().current_focus();
         let keyboard = self.seat.get_keyboard().and_then(|k| k.current_focus());
-        let validated = holds(pointer) || holds(keyboard);
-        if validated {
+        holds(pointer) || holds(keyboard)
+    }
+
+    fn wlr_toplevel_activate(&mut self, client: &Client, id: ElementId) {
+        if self.wlr_client_in_use(client) {
             self.virtual_input
                 .queue
                 .push(crate::virtual_input::VirtualInput::JumpToWindow(id));
@@ -370,8 +374,10 @@ impl Dispatch<ZwlrForeignToplevelHandleV1, ElementId> for WaylandState {
                 let fx = state.core.client_minimize(id);
                 state.apply(&fx);
             }
+            // from a bar the user is using, as activate (B8): any other client only asks
             Request::UnsetMinimized => {
-                if let Ok(fx) = state.core.activation_request(id, true) {
+                let validated = state.wlr_client_in_use(client);
+                if let Ok(fx) = state.core.activation_request(id, validated) {
                     state.apply(&fx);
                 }
             }

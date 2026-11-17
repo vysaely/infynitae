@@ -841,8 +841,10 @@ impl Core {
     }
 
     /// Whether fullscreen presentation is temporarily suppressed on `output`.
+    /// Only while the output presents a window: a fullscreen that ends, unmaps, moves to another
+    /// output or is destroyed takes its suppression with it (B10).
     pub fn is_presentation_suppressed(&self, output: output::OutputId) -> bool {
-        self.presentation_suppressed.contains(&output)
+        self.presentation_suppressed.contains(&output) && self.presentation(output).is_some()
     }
 
     /// Temporarily suppresses fullscreen presentation on `output` (e.g. to reveal canvas or other windows).
@@ -851,6 +853,14 @@ impl Core {
         output: output::OutputId,
         out: &mut Vec<protocol::Effect>,
     ) {
+        // entries left by fullscreen windows that are gone are dropped here (B10)
+        let stale: Vec<_> = self
+            .presentation_suppressed
+            .iter()
+            .copied()
+            .filter(|&o| self.presentation(o).is_none())
+            .collect();
+        self.presentation_suppressed.retain(|o| !stale.contains(o));
         if !self.presentation_suppressed.contains(&output) {
             self.presentation_suppressed.push(output);
             // it keeps its place in the stack: a window the user turns to comes over it by its
@@ -1131,6 +1141,16 @@ impl Core {
                 && self.camera_view(o.id).is_some_and(|view| {
                     !render::entries_culled(&view, element, anchor, tree, bounds).is_empty()
                 })
+        })
+    }
+
+    /// Whether `output`'s camera view, without a presentation over it, would show `element`.
+    pub(crate) fn view_covers(&self, output: output::OutputId, element: stage::ElementId) -> bool {
+        let Some((anchor, tree, bounds)) = self.stage.mapped(element) else {
+            return false;
+        };
+        self.camera_view(output).is_some_and(|view| {
+            !render::entries_culled(&view, element, anchor, tree, bounds).is_empty()
         })
     }
 

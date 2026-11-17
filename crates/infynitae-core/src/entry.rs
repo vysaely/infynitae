@@ -916,15 +916,8 @@ impl Core {
             crate::input::keys::KeyAction::FocusNext => {
                 let (fx, attention) = self.focus_next();
                 out.extend(fx);
-                if let PointerState::Located { output, .. } = self.pointer
-                    && let Some(pres) = self.presentation(output)
-                    && let Some(target) = self.focus.target()
-                {
-                    if pres == target {
-                        self.unsuppress_presentation(output, out);
-                    } else {
-                        self.suppress_presentation(output, out);
-                    }
+                if let Some(target) = self.focus.target() {
+                    self.show_chosen(target, out);
                 }
                 // a window that asked for attention is brought into view as a focus jump does
                 // (Super+1..9), whatever FOCUS_CYCLE_NAVIGATE says (owner, 2026-10-31)
@@ -1461,15 +1454,7 @@ impl Core {
         proof: Option<authority::Authorized>,
         out: &mut Vec<Effect>,
     ) {
-        if let PointerState::Located { output, .. } = self.pointer
-            && let Some(pres) = self.presentation(output)
-        {
-            if pres == element {
-                self.unsuppress_presentation(output, out);
-            } else {
-                self.suppress_presentation(output, out);
-            }
-        }
+        self.show_chosen(element, out);
         self.raise_and_focus(element, out);
         if let Some(p) = proof {
             self.recenter(p, false, true, out);
@@ -1509,15 +1494,7 @@ impl Core {
         let Some(&primary) = cluster.first() else {
             return;
         };
-        if let PointerState::Located { output, .. } = self.pointer
-            && let Some(pres) = self.presentation(output)
-        {
-            if pres == primary {
-                self.unsuppress_presentation(output, out);
-            } else {
-                self.suppress_presentation(output, out);
-            }
-        }
+        self.show_chosen(primary, out);
         let raised = self.raise_by_user(primary);
         out.extend(
             self.focus
@@ -1695,13 +1672,14 @@ impl Core {
         self.overview_at.retain(|o| o.0 != output);
 
         if at_overview {
-            // back from the overview: into the fullscreen window if it still has the focus
+            // back from the overview: the camera first (a presenting output refuses a restore,
+            // B5), then into the fullscreen window if it still has the focus
+            self.viewport_restore(proof, out);
             if self.presentation(output).is_some()
                 && self.presentation(output) == self.focus.target()
             {
                 self.unsuppress_presentation(output, out);
             }
-            self.viewport_restore(proof, out);
         } else {
             // the overview shows the canvas: a fullscreen window steps aside for it
             if self.presentation(output).is_some() {
@@ -1922,14 +1900,25 @@ impl Core {
 
     /// The user chose `id`: its own fullscreen comes back, another one on the pointer's screen,
     /// or one that would hide it, steps aside.
+    ///
+    /// Screen by screen, not only the pointer's (B2, B6): a screen whose fullscreen window is
+    /// `id` presents it again; a screen presenting another window steps aside when its view
+    /// covers `id`, or when it is the pointer's screen and no other screen shows `id` (the
+    /// camera is about to bring it there). Other screens keep their fullscreen window.
     fn show_chosen(&mut self, id: crate::stage::ElementId, out: &mut Vec<Effect>) {
         let pointer_on = self.pointer_output();
-        let hidden = self.hidden_by_presentation(id);
-        let outputs: Vec<_> = self.outputs.iter().map(|o| o.id).collect();
-        for o in outputs {
+        let shown_elsewhere = self.membership.observing_outputs(id).next().is_some();
+        let covers: Vec<_> = self
+            .outputs
+            .iter()
+            .map(|o| (o.id, self.view_covers(o.id, id)))
+            .collect();
+        for (o, covered) in covers {
             match self.presentation(o) {
                 Some(p) if p == id => self.unsuppress_presentation(o, out),
-                Some(_) if hidden || pointer_on == Some(o) => self.suppress_presentation(o, out),
+                Some(_) if covered || (pointer_on == Some(o) && !shown_elsewhere) => {
+                    self.suppress_presentation(o, out)
+                }
                 _ => {}
             }
         }
@@ -7735,7 +7724,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "AUDIT_PRESENTATION: overview_toggle unsuppresses before viewport_restore so fullscreen blocks camera restore"]
     fn audit_presentation_overview_toggle_closing_on_fullscreen_leaves_camera_zoomed_out() {
         let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
         let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
@@ -7772,7 +7760,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "AUDIT_PRESENTATION: FocusNext checks only pointer_output and suppresses unrelated fullscreen on A when target lives on B"]
     fn audit_presentation_focus_next_to_other_output_window_wrongly_suppresses_fullscreen() {
         let far = PersistedCameras::from_entries(vec![(
             key("B"),
@@ -7812,7 +7799,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "AUDIT_PRESENTATION: FocusNext checks only pointer_output and fails to unsuppress A when pointer is on B"]
     fn audit_presentation_focus_next_with_pointer_on_other_output_fails_to_unsuppress() {
         let far = PersistedCameras::from_entries(vec![(
             key("B"),
@@ -7864,7 +7850,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "AUDIT_PRESENTATION: jump_to_window checks only pointer_output so jumping to a window hidden under A while pointer is on B leaves A presenting"]
     fn audit_presentation_jump_to_window_with_pointer_on_other_output_leaves_presentation_covering_target()
      {
         let far = PersistedCameras::from_entries(vec![(
@@ -7910,7 +7895,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "AUDIT_PRESENTATION: show_chosen suppresses every presenting output instead of only outputs hiding the target"]
     fn audit_presentation_show_chosen_over_suppresses_unrelated_second_output() {
         let far = PersistedCameras::from_entries(vec![(
             key("B"),
