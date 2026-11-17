@@ -7229,7 +7229,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "AUDIT_PRESENTATION: presentation_suppressed leaks on UnsetFullscreen, unmap, destroy, and move to another output"]
     fn audit_presentation_suppression_leaks_when_fullscreen_ends_without_take_output() {
         let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
         let a = out(&mut c, &mut t, "A", (1920, 1080), 120);
