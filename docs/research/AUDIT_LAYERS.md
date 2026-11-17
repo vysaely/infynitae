@@ -1,6 +1,6 @@
 # Audit: layer surfaces against presentation, fit and lock (AUDIT_LAYERS)
 
-Status (Claude's review, 2026-11-15): fixed in fix/layers-after-fullscreen: finding 1 for a layer lowered below the Canvas (its first half, an exclusive Top panel over a presentation, is the intended behaviour since PR #82, so those two reproducers were removed), finding 3, finding 4 (fullscreen while stepped aside; the per-output OutputEnter part is open). Open: 2 (the obvious fix, a configure for every bufferless commit, could loop with the edge's hidden mode; needs a null-attach signal), 4b, 5-11.
+Status (Claude's review, 2026-11-15): fixed in fix/layers-after-fullscreen: finding 1 for a layer lowered below the Canvas (its first half, an exclusive Top panel over a presentation, is the intended behaviour since PR #82, so those two reproducers were removed), finding 3, finding 4 (fullscreen while stepped aside; the per-output OutputEnter part is open). Finding 4b fixed in fix/toplevel-outputs (2026-11-17): a window list sees a window on the screens it fills, else on every screen, with output_leave when that changes. Open: 2 (the obvious fix, a configure for every bufferless commit, could loop with the edge's hidden mode; needs a null-attach signal), 4b, 5-11.
 
 | Rank | Kind | Finding | Evidence (`file:line`) | How sure | What the user would see | Fix | Size |
 |---|---|---|---|---|---|---|---|
