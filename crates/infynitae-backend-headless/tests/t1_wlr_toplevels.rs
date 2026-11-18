@@ -651,7 +651,6 @@ fn audit_layers_fitted_window_clear_in_render_leaves_wlr_toplevels_unsynced() {
 }
 
 #[test]
-#[ignore = "AUDIT_LAYERS: wlr_toplevels announces OutputEnter for every output regardless of presentation"]
 fn audit_layers_wlr_toplevel_announces_output_enter_for_non_presenting_output() {
     let mut ls = Lockstep::with(
         Default::default(),

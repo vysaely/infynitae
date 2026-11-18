@@ -12,6 +12,7 @@
 
 use std::collections::HashMap;
 
+use infynitae_core::output::OutputId;
 use infynitae_core::protocol::ToplevelRequest;
 use infynitae_core::stage::ElementId;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
@@ -33,6 +34,8 @@ struct Told {
     title: String,
     app_id: String,
     states: Vec<u32>,
+    /// The screens it is on: those it fills (its fullscreen in front, or fitted), else every screen.
+    outputs: Vec<OutputId>,
 }
 
 /// The managers bound by clients and the handles of every listed window.
@@ -109,7 +112,52 @@ impl WaylandState {
         if self.core.stage().is_minimized(id) {
             told.states.push(State::Minimized as u32);
         }
+        told.outputs = self.wlr_toplevel_outputs(id);
         told
+    }
+
+    /// The screens `id` is on for a bar: the ones it fills, else every screen (a canvas window
+    /// is on no screen in particular). A fullscreen window on one screen is not on the others,
+    /// or the edge unmapped its panels on every screen (AUDIT_LAYERS 4b, AUDIT_PRESENTATION B7).
+    fn wlr_toplevel_outputs(&self, id: ElementId) -> Vec<OutputId> {
+        let filled: Vec<OutputId> = self
+            .outputs
+            .iter()
+            .map(|h| h.id)
+            .filter(|&o| {
+                (self.core.presentation(o) == Some(id) && !self.core.is_presentation_suppressed(o))
+                    || self.fitted_windows.get(&o) == Some(&id)
+            })
+            .collect();
+        if filled.is_empty() {
+            self.outputs.iter().map(|h| h.id).collect()
+        } else {
+            filled
+        }
+    }
+
+    /// Sends `output_enter` or `output_leave` (`enter`) on `handle` for screen `id`. Sent as an
+    /// `Event`: the name `output_enter` is kept for Smithay's `Window::output_enter`, which the
+    /// architecture rejects (OB-26).
+    fn wlr_toplevel_output_event(
+        &self,
+        handle: &ZwlrForeignToplevelHandleV1,
+        id: OutputId,
+        enter: bool,
+    ) {
+        use zwlr_foreign_toplevel_handle_v1::Event;
+        let (Some(client), Some(h)) = (handle.client(), self.outputs.iter().find(|h| h.id == id))
+        else {
+            return;
+        };
+        for output in h.output.client_outputs(&client) {
+            let event = if enter {
+                Event::OutputEnter { output }
+            } else {
+                Event::OutputLeave { output }
+            };
+            handle.send_event(event).ok();
+        }
     }
 
     /// Whether `id` is in front of some screen as its fullscreen window (not stepped aside).
@@ -150,15 +198,8 @@ impl WaylandState {
         manager.toplevel(&handle);
         handle.title(now.title.clone());
         handle.app_id(now.app_id.clone());
-        // a canvas window is on no screen in particular: it is on every screen the bar is on.
-        // The protocol's event, sent as an `Event` (the name `output_enter` is kept for Smithay's
-        // `Window::output_enter`, which the architecture rejects: OB-26)
-        for h in &self.outputs {
-            for output in h.output.client_outputs(&client) {
-                handle
-                    .send_event(zwlr_foreign_toplevel_handle_v1::Event::OutputEnter { output })
-                    .ok();
-            }
+        for &o in &now.outputs {
+            self.wlr_toplevel_output_event(&handle, o, true);
         }
         handle.state(states_bytes(&now.states));
         handle.done();
@@ -214,7 +255,15 @@ impl WaylandState {
                         continue;
                     }
                     handles.retain(|h| h.is_alive());
+                    let handles = handles.clone();
+                    let told = std::mem::replace(told, now.clone());
                     for h in handles.iter() {
+                        for &o in told.outputs.iter().filter(|o| !now.outputs.contains(o)) {
+                            self.wlr_toplevel_output_event(h, o, false);
+                        }
+                        for &o in now.outputs.iter().filter(|o| !told.outputs.contains(o)) {
+                            self.wlr_toplevel_output_event(h, o, true);
+                        }
                         if told.title != now.title {
                             h.title(now.title.clone());
                         }
@@ -226,7 +275,6 @@ impl WaylandState {
                         }
                         h.done();
                     }
-                    *told = now;
                 }
                 None => {
                     let managers = self.wlr_toplevels.managers.clone();
