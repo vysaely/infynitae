@@ -776,6 +776,11 @@ struct App {
     workers: HashMap<SourceId, SourceWorker>,
     /// cards with a command running, and the latest one waiting after it
     queued: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, Option<String>>>>,
+    /// tests: the commands the actions asked for, in order, recorded when asked (the worker does
+    /// not run them in tests: they would change the machine's settings; and its exit, which
+    /// empties `queued`, does not race a test's check)
+    #[cfg(test)]
+    ran: Vec<String>,
     was_animating: bool,
     /// the notification pop-ups' strip, made with the first pop-up
     popups: Option<PopupLayer>,
@@ -1088,6 +1093,8 @@ impl App {
         for (a, card, prov, keys) in actions {
             match a {
                 Action::Run(cmd) => {
+                    #[cfg(test)]
+                    self.ran.push(cmd.clone());
                     // one command at a time per card, the latest waiting one next: a slider dragged
                     // sends many levels, and run in no order an older one could land last
                     let mut q = self.queued.lock().unwrap_or_else(|p| p.into_inner());
@@ -1102,6 +1109,10 @@ impl App {
                     std::thread::spawn(move || {
                         let mut cmd = cmd;
                         loop {
+                            // a test never runs it: it would change the machine's settings
+                            #[cfg(test)]
+                            let _ = &cmd;
+                            #[cfg(not(test))]
                             if let Err(e) = Command::new("sh")
                                 .arg("-c")
                                 .arg(&cmd)
@@ -2211,6 +2222,8 @@ fn init_app(
         app_refresh: AppRefresh::new(app_dirs, apps_mtime),
         workers: HashMap::new(),
         queued: Default::default(),
+        #[cfg(test)]
+        ran: Vec::new(),
         was_animating: false,
         popups: None,
         popup_touch: None,
@@ -4368,7 +4381,7 @@ mod tests {
             app.shell.actions.iter().any(|(a, _, _, _)| matches!(
                 a,
                 Action::Run(cmd) if cmd.contains("performance")
-            )) || app.queued.lock().unwrap().contains_key("settings/power"),
+            )) || app.ran.iter().any(|c| c.contains("performance")),
             "click on Output 2 must trigger performance action"
         );
         app.shell.actions.clear();
@@ -4627,9 +4640,10 @@ mod tests {
                 .actions
                 .iter()
                 .any(|(a, ..)| matches!(a, Action::Run(cmd) if cmd.contains("performance")))
-                || app.queued.lock().unwrap().contains_key("settings/power")
+                || app.ran.iter().any(|c| c.contains("performance"))
         );
         app.shell.actions.clear();
+        app.ran.clear();
 
         // Touch drag on slider followed by cancel clears state without committing.
         let slider_r = {
@@ -4648,7 +4662,11 @@ mod tests {
         mock.send_touch_cancel();
         eq.roundtrip(&mut app).unwrap();
         assert!(app.shell.actions.is_empty());
-        assert!(!app.queued.lock().unwrap().contains_key("settings/input"));
+        assert!(
+            app.ran.is_empty(),
+            "a cancelled drag commits nothing: {:?}",
+            app.ran
+        );
     }
 
     #[test]
