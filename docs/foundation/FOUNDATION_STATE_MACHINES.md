@@ -125,10 +125,10 @@ Object: OBJ-19. Implements INV-PRES-1.
 
 | From | Trigger [guard] | To | Effects | Cites |
 |---|---|---|---|---|
-| Windowed | `set_fullscreen(o)` [ActiveElementFocus = W, or pre-map] | Fullscreen{O} | output choice; configure `[fullscreen]`; if W is mapped: older grants on O end, presentation starts (F-PRESENT-1), other elements leave O, reconciliation trigger, settlement; if W is not mapped yet: the grant waits for W's map (INV-PRES-1) | INV-PRES-1 |
+| Windowed | `set_fullscreen(o)` [ActiveElementFocus = W, or pre-map, or W opening: mapped last, no press, touch or focus change since; then W takes the focus] | Fullscreen{O} | output choice; configure `[fullscreen]`; if W is mapped: older grants on O end, presentation starts (F-PRESENT-1), other elements leave O, reconciliation trigger, settlement; if W is not mapped yet: the grant waits for W's map (INV-PRES-1) | INV-PRES-1 |
 | Fullscreen{O}, waiting (W not mapped) | W's first map | Fullscreen{O} | grants on O older than W's end (each element gets a configure with its saved size, if available); presentation starts (F-PRESENT-1); other elements leave O; reconciliation trigger; settlement | INV-PRES-1 |
 | Fullscreen{O}, waiting | W destroyed before its map | — | the grant is dropped; nothing else changes | INV-PRES-1 |
-| Windowed | `set_fullscreen` [not focused] | Windowed | configure without `fullscreen`; nothing stored | INV-PRES-1 |
+| Windowed | `set_fullscreen` [not focused, not opening] | Windowed | configure without `fullscreen`; nothing stored | INV-PRES-1 |
 | Fullscreen{O} | `unset_fullscreen` | Windowed | configure with the saved size, if available; presentation ends, if it had started | INV-PRES-1 |
 | Fullscreen{O} | unmap (M1) | Windowed (unmapped) | state dropped (spec): no configure and no saved size; presentation ends, if it had started; a target-loss configure (M11), if W held ActiveElementFocus, carries neither `fullscreen` nor a size; the next initial configure (M1) is not fullscreen | INV-PRES-1, INV-PROTO-1 |
 | Fullscreen{O} by W | a newer grant for O whose element is mapped, at the grant or at that element's map | Windowed (W) | W gets a configure with its saved size, if available; a newer grant still waiting leaves W unchanged | INV-PRES-1 |

@@ -532,6 +532,10 @@ pub struct Core {
     /// Windows the user took out of fullscreen: their own requests for it are declined until the
     /// user asks again. A Wine window as large as the screen asks at once, and snaps back.
     pub(crate) left_fullscreen: Vec<stage::ElementId>,
+    /// The window that mapped last and the window that held the focus then, until a key press,
+    /// button press or touch: while the focus has not moved, its fullscreen request is granted
+    /// as one made before its map would be (a game asking a frame after it shows).
+    pub(crate) opening: Option<(stage::ElementId, Option<stage::ElementId>)>,
     /// Where each maximized window was put (by Super+Enter or a refit): one found elsewhere when
     /// it is restored was moved by the user, and is restored where it is now.
     pub(crate) maximized_at: Vec<(stage::ElementId, geom::CanvasPoint)>,
@@ -654,6 +658,7 @@ impl Core {
                 overview_at: Vec::new(),
                 maximized_at: Vec::new(),
                 left_fullscreen: Vec::new(),
+                opening: None,
                 fullscreen_pan: false,
                 touchpad_gestures: true,
                 touch_edge_swipe: true,

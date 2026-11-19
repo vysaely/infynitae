@@ -339,7 +339,7 @@ Evidence class: P protocol · S Smithay source · M math/model · H harness expe
 - **Revisit trigger:** OB-22 results; a PD-F2-10 disposition.
 - **1R amendment:**
   - Every `set_fullscreen`/`unset_fullscreen`/`set_maximized`/`unset_maximized` is answered with exactly one configure (protocol requirement; ER-3).
-  - Unfocused fullscreen requests are declined at once (no pending state).
+  - Unfocused fullscreen requests are declined at once (no pending state), except from the window that opened last, before any press, touch or focus change (amended 2026-11-19).
   - Maximize is declined and never invokes fit (INV-PRES-1, INV-PROTO-1).
   - Fit is one-shot (INV-CAMERA-5).
 

@@ -448,6 +448,20 @@ impl Core {
         self.fullscreen.iter().copied().find(|f| f.element == id)
     }
 
+    /// Whether the window's geometry is the logical size of a screen (a game opening a window
+    /// as large as the screen, the X11 way of going fullscreen): either rounding of a
+    /// fractional size counts.
+    pub fn fills_a_screen(&self, id: ElementId) -> bool {
+        let Some(size) = self.stage.tree(id).map(|t| t.geometry.size) else {
+            return false;
+        };
+        let (w, h) = (f64::from(size.w), f64::from(size.h));
+        self.outputs.iter().any(|o| {
+            let (ew, eh) = o.logical_extent();
+            (ew.floor()..=ew.ceil()).contains(&w) && (eh.floor()..=eh.ceil()).contains(&h)
+        })
+    }
+
     /// The element presented exclusively on `output`, if any: a fullscreen element that is
     /// mapped. A grant whose element is not mapped yet presents nothing.
     pub fn presentation(&self, output: OutputId) -> Option<ElementId> {
@@ -1336,7 +1350,14 @@ impl Core {
                 Lifecycle::Unmapped => (Ignored, Vec::new()),
                 Lifecycle::AwaitingFirstBuffer | Lifecycle::Mapped => {
                     let before_first_map = !self.stage.mapped_before(id);
-                    let allowed = (before_first_map || self.focus.target() == Some(id))
+                    let focused = self.focus.target() == Some(id);
+                    // a window asking as it opens: mapped last, nothing pressed since and the
+                    // focus where it was (owner's report, 2026-11-19: a game that maps, then asks
+                    // a frame later, was declined for want of the focus it never had the time to
+                    // get, and stayed a window wherever it had opened)
+                    let opening = state == Lifecycle::Mapped
+                        && self.opening == Some((id, self.focus.target()));
+                    let allowed = (before_first_map || focused || opening)
                         && !self.left_fullscreen.contains(&id);
                     match self.fullscreen_output(id, output).filter(|_| allowed) {
                         Some(o) => {
@@ -1354,6 +1375,11 @@ impl Core {
                             let mut fx = vec![Effect::ToplevelConfigure(id)];
                             fx.extend(replaced);
                             fx.extend(self.presentation_changed_since(&before));
+                            // it has the screen: the keys go to it too, not to the window it
+                            // hides (an unfocused grant is one asked as it opens)
+                            if !focused && !before_first_map {
+                                fx.extend(self.focus_opener(id));
+                            }
                             Self::hints_before_configures(&mut fx);
                             (Granted, fx)
                         }
@@ -1638,6 +1664,8 @@ impl Core {
                 let remap = self.stage.default_placed(id);
                 if self.fullscreen_of(id).is_none() {
                     self.place_by_default(id, &tree)?;
+                } else if !remap && let Some(at) = self.fullscreen_map_spot(id, &tree) {
+                    self.stage.place(id, at).map_err(stale)?;
                 }
                 // a window shown again (Discord back from the tray, a game restarting its window)
                 // keeps its place unless another window took it meanwhile: then it moves to the
@@ -1649,6 +1677,7 @@ impl Core {
                 self.stage.set_tree(id, Some(tree)).map_err(stale)?;
                 self.stage.set_state(id, Lifecycle::Mapped).map_err(stale)?;
                 self.stage.raise(id);
+                self.opening = Some((id, self.focus.target()));
                 // a grant made before this map takes its output now (A-3)
                 out.extend(self.take_output(id));
             }
@@ -2164,6 +2193,35 @@ impl Core {
             x: chosen_gx,
             y: chosen_gy,
         })
+    }
+
+    /// A window that maps in fullscreen keeps its place on the Canvas off the other windows at
+    /// its fullscreen size: it shows there when it steps aside, in the overview and on the other
+    /// screens' cameras. Until 2026-11-19 its corner stayed at the view's centre, over whatever
+    /// was there. Its windowed place is still chosen at its first windowed frame (P9b). `None`:
+    /// the spot is free, or the policy stacks windows.
+    fn fullscreen_map_spot(&self, id: ElementId, tree: &SurfaceTree) -> Option<CanvasPoint> {
+        if self.placement == PlacementPolicy::CentredInView
+            || self.placement == PlacementPolicy::OriginAtCameraCentre
+        {
+            return None;
+        }
+        let size = (
+            i64::from(tree.geometry.size.w),
+            i64::from(tree.geometry.size.h),
+        );
+        if size.0 <= 0 || size.1 <= 0 {
+            return None;
+        }
+        self.free_place_for(id, size, self.stage.anchor(id)?)
+    }
+
+    /// A window granted fullscreen as it opened takes the focus with the screen (2026-11-19):
+    /// until then the keys went to the window it hid.
+    fn focus_opener(&mut self, id: ElementId) -> Vec<Effect> {
+        let mut fx = self.focus.set_focus_at(self.input.clock.now_us(), Some(id));
+        fx.extend(self.reconcile_constraints());
+        fx
     }
 
     /// Where a remapped window goes when its kept anchor (INV-STAGE-5) now covers another window;
@@ -3642,8 +3700,6 @@ mod tests {
             for request in ToplevelRequest::ALL {
                 let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
                 out(&mut c, &mut t, "A", (1920, 1080), 120);
-                let other = map_win(&mut c, 9, 300, 200);
-                focus(&mut c, &mut i, other);
                 let id = c.toplevel_created();
                 if state != Lifecycle::AwaitingInitialCommit {
                     c.toplevel_committed(id, win(1, 100, 50, false)).unwrap();
@@ -3654,6 +3710,10 @@ mod tests {
                 if state == Lifecycle::Unmapped {
                     c.toplevel_committed(id, win(1, 100, 50, false)).unwrap();
                 }
+                // another window opened after it and has the focus: `id` is not opening any more
+                // (a window asking as it opens is granted, see the headless t1_start_fullscreen)
+                let other = map_win(&mut c, 9, 300, 200);
+                focus(&mut c, &mut i, other);
                 assert_eq!(c.stage().state(id), Some(state));
                 let configured =
                     matches!(state, Lifecycle::AwaitingFirstBuffer | Lifecycle::Mapped);
