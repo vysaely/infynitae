@@ -269,7 +269,8 @@ impl WaylandState {
     /// size they saved, which outgrows the screen (Discord at 1944x1124 on 1920x1080, a little
     /// more at each start); an X11 window asks for its own size through xwayland-satellite,
     /// which binds no bounds at all (xterm -geometry 400x150: 2404x1954). A size the compositor
-    /// chose itself is left as it is.
+    /// chose itself is left as it is, and so is a window exactly as large as a screen: a game
+    /// that fills it would no longer fill it at the room's size.
     fn fit_opening_window(&mut self, id: infynitae_core::stage::ElementId, window: &Window) {
         let Some(toplevel) = window.toplevel() else {
             return;
@@ -282,7 +283,7 @@ impl WaylandState {
             return;
         };
         let size = window.geometry().size;
-        if chosen || (size.w <= room_w && size.h <= room_h) {
+        if chosen || (size.w <= room_w && size.h <= room_h) || self.core.fills_a_screen(id) {
             return;
         }
         let fitted = (size.w.min(room_w), size.h.min(room_h));

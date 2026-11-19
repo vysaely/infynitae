@@ -12,7 +12,11 @@
 //!    windows all belong to xwayland-satellite;
 //! 3. the user typed or clicked less than [`TYPED`] ago and the window is a child window
 //!    (`xdg_toplevel` parent) of the focused one, or its process descends from the focused
-//!    window's (a command run in the focused terminal).
+//!    window's (a command run in the focused terminal);
+//! 4. it opens fullscreen or as large as a screen: a game, started from a launcher (Steam, a
+//!    Roblox launcher) long enough ago that no rule above still traces it, and often shown through
+//!    xwayland-satellite. It takes the screen whoever opened it, so it takes the keys and the
+//!    camera with it (owner's report, 2026-11-19: games opened unfocused, wherever the free space was).
 
 use std::process::{Child, Command};
 use std::time::{Duration, Instant};
@@ -164,6 +168,9 @@ impl WaylandState {
     pub fn opened_by_user(&mut self, element: ElementId, last_input: Instant) -> bool {
         let now = Instant::now();
         self.launches.prune(now);
+        if self.core.fullscreen_of(element).is_some() || self.core.fills_a_screen(element) {
+            return true;
+        }
         let typed = now.duration_since(last_input) < TYPED;
         // a dialog or child window of the focused window, right after the user acted on it
         let focused = self.core.focus().target().filter(|f| *f != element);

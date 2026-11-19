@@ -117,6 +117,7 @@ impl Core {
                 let proof = (reset_zoom || pan).then(authority::Authorized::mint);
                 if pressed {
                     self.closed_windows.clear();
+                    self.opening = None;
                     self.button_press(button, modifiers, ms(time_us), proof, out);
                 } else {
                     self.button_release(button, ms(time_us), out);
@@ -171,6 +172,7 @@ impl Core {
                 ));
                 if pressed {
                     self.closed_windows.clear();
+                    self.opening = None;
                     // a press bound to fit or restore mutates a camera: its proof is minted here
                     let navigation = (!self.is_capturing_key()
                         && matches!(
@@ -220,6 +222,7 @@ impl Core {
                 }
                 self.input.clock.accepted(time_us);
                 self.closed_windows.clear();
+                self.opening = None;
                 self.arm_edge_swipe(slot, output, p);
                 self.touch_down(slot, output, p, ms(time_us), out);
                 self.touch_resize_settle(out);
@@ -289,6 +292,7 @@ impl Core {
                 }
                 self.input.clock.accepted(time_us);
                 self.closed_windows.clear();
+                self.opening = None;
                 if self.output(output).is_some() && !self.input.interaction.active() {
                     self.tap_focus(output, p, out);
                     out.extend(self.reconcile_constraints());
