@@ -1,0 +1,206 @@
+#!/usr/bin/env bash
+# infynitae-windows-run [--offline] [--x11] [--prefix NAME] FILE [ARGS...]: a Windows program
+# (.exe, .msi, or a shortcut .lnk its installer made) as a window on the canvas, in a sandbox
+# (docs/SECURITY.md, "Windows and Android programs").
+#
+# Proton runs it through umu-run, with Wine's Wayland driver, inside bwrap. The sandbox sees the
+# system read-only, the program's own C: drive (~/.local/share/infynitae/windows/NAME), the shared
+# folder ~/Windows, the file opened (read-only), the graphics card, sound, and a Wayland socket
+# from security-context-v1 (infynitae-sandbox-socket), so Infynitae treats it as sandboxed. None
+# of the rest of the home folder, no session bus, no X11 unless --x11.
+#   --offline     no network
+#   --x11         X11 instead of Wayland, for a program that fails on Wayland: X11 programs can
+#                 read each other's windows and keys, so this is less isolated
+#   --prefix NAME the C: drive to use; by default the file's name, so an installer and the
+#                 program it installs share one
+#
+# NAME's C: drive is made the first time, by umu and Proton only (`umu-run ""`), with the network
+# and with umu's runtime writable: the program itself never runs where it could change the
+# runtime other programs use. Afterwards the shortcuts the program's installer made in its Start
+# menu and desktop folders become desktop entries in ~/.local/share/applications that start them
+# through this script with the same C: drive.
+
+WINDOWS_DATA="$HOME/.local/share/infynitae"
+WINDOWS_PREFIXES="$WINDOWS_DATA/windows"
+# umu's own folders (UMU_FOLDERS_PATH): its runtime, and UMU-Proton when Steam has no Proton
+WINDOWS_RUNTIME="$WINDOWS_DATA/windows-runtime"
+WINDOWS_SHARED="$HOME/Windows"
+STEAM_PROTONS="$HOME/.local/share/Steam/compatibilitytools.d"
+
+note() { command -v notify-send >/dev/null 2>&1 && notify-send -a Infynitae "$1" "${2:-}"; }
+fail() {
+    echo "infynitae-windows-run: $1${2:+: $2}" >&2
+    note "$1" "${2:-}"
+    exit 1
+}
+
+# The prefix's name from a file name: its base name without the extension, in letters, digits,
+# dots and dashes (no "_": shortcut file names use it as the separator).
+prefix_name() {
+    local base="${1##*/}"
+    base="${base%.*}"
+    base=$(printf '%s' "$base" | tr -c 'A-Za-z0-9.-' '-')
+    base="${base#.}"
+    printf '%s' "${base:-program}"
+}
+
+# The Proton to use: the newest (by its proton script's time) in Steam's compatibilitytools.d,
+# else in umu's own folder (UMU-Proton, fetched by the first setup); nothing when there is none.
+pick_proton() {
+    local dir p best=""
+    for dir in "$STEAM_PROTONS" "$WINDOWS_RUNTIME/Steam/compatibilitytools.d"; do
+        for p in "$dir"/*/proton; do
+            [ -f "$p" ] || continue
+            if [ -z "$best" ] || [ "$p" -nt "$best" ]; then best="$p"; fi
+        done
+        [ -n "$best" ] && break
+    done
+    [ -n "$best" ] && printf '%s' "${best%/proton}"
+}
+
+# The bwrap arguments into the array SANDBOX, for MODE "setup" (making the C: drive: the runtime
+# writable, the network on, no file of the user's) or "run". Reads PREFIX, SOCKET (the
+# security-context socket outside), PROTON (may be empty), FILE (run; empty when it is inside the
+# prefix or ~/Windows), OFFLINE and X11 ("true" or not).
+sandbox_args() {
+    local mode="$1" uid run_dir
+    uid=$(id -u)
+    run_dir="/run/user/$uid"
+    SANDBOX=(--unshare-user --unshare-pid --unshare-ipc --unshare-uts --unshare-cgroup-try
+        --die-with-parent --new-session --clearenv
+        --ro-bind /usr /usr --symlink usr/bin /bin --symlink usr/bin /sbin
+        --symlink usr/lib /lib --symlink usr/lib /lib64 --ro-bind /etc /etc
+        --proc /proc --dev /dev --dev-bind-try /dev/dri /dev/dri --ro-bind /sys /sys
+        --tmpfs /tmp --tmpfs /run --dir "$run_dir" --chmod 0700 "$run_dir"
+        --tmpfs "$HOME"
+        --bind "$SOCKET" "$run_dir/wayland-0")
+    [ "$mode" = run ] && [ "${OFFLINE:-false}" = true ] && SANDBOX+=(--unshare-net)
+    [ -S "${XDG_RUNTIME_DIR:-}/pipewire-0" ] && SANDBOX+=(--bind "$XDG_RUNTIME_DIR/pipewire-0" "$run_dir/pipewire-0")
+    [ -S "${XDG_RUNTIME_DIR:-}/pulse/native" ] && SANDBOX+=(--bind "$XDG_RUNTIME_DIR/pulse/native" "$run_dir/pulse/native")
+    if [ "$mode" = setup ]; then
+        SANDBOX+=(--bind "$WINDOWS_RUNTIME" "$WINDOWS_RUNTIME")
+    else
+        # read-only for the program: umu's lock files and the runtime's scratch folder go to a
+        # tmpfs that is gone when the program ends
+        SANDBOX+=(--overlay-src "$WINDOWS_RUNTIME" --tmp-overlay "$WINDOWS_RUNTIME"
+            --bind "$WINDOWS_SHARED" "$WINDOWS_SHARED")
+    fi
+    [ -n "$PROTON" ] && SANDBOX+=(--ro-bind "$PROTON" "$PROTON")
+    SANDBOX+=(--bind "$PREFIX" "$PREFIX")
+    [ "$mode" = run ] && [ -n "$FILE" ] && SANDBOX+=(--ro-bind "$FILE" "$FILE")
+    SANDBOX+=(--setenv HOME "$HOME" --setenv USER "$(id -un)" --setenv LOGNAME "$(id -un)"
+        --setenv PATH /usr/local/bin:/usr/bin --setenv LANG "${LANG:-C.UTF-8}"
+        --setenv XDG_RUNTIME_DIR "$run_dir" --setenv XDG_SESSION_TYPE wayland
+        --setenv WAYLAND_DISPLAY wayland-0
+        --setenv WINEPREFIX "$PREFIX" --setenv UMU_FOLDERS_PATH "$WINDOWS_RUNTIME")
+    [ -n "$PROTON" ] && SANDBOX+=(--setenv PROTONPATH "$PROTON")
+    [ "$mode" = run ] && SANDBOX+=(--setenv UMU_RUNTIME_UPDATE 0)
+    if [ "$mode" = run ] && [ "${X11:-false}" = true ]; then
+        local n="${DISPLAY#*:}"
+        n="${n%%.*}"
+        SANDBOX+=(--ro-bind "/tmp/.X11-unix/X$n" "/tmp/.X11-unix/X$n" --setenv DISPLAY ":$n"
+            --setenv PROTON_ENABLE_WAYLAND 0)
+        [ -n "${XAUTHORITY:-}" ] && SANDBOX+=(--ro-bind "$XAUTHORITY" /tmp/.Xauthority
+            --setenv XAUTHORITY /tmp/.Xauthority)
+    else
+        SANDBOX+=(--setenv PROTON_ENABLE_WAYLAND 1)
+    fi
+    SANDBOX+=(--chdir "$PREFIX")
+}
+
+# Desktop entries for the shortcuts in PREFIX's Start menu and desktop folders, replacing the
+# ones written for NAME before. A shortcut's name and path come from inside the sandbox, so one
+# with a character that would end a quoted Exec argument or start a field code is left out.
+write_shortcuts() {
+    local apps="$HOME/.local/share/applications" self dirs=() u f label sum
+    self=$(realpath -e "$0")
+    mkdir -p "$apps"
+    rm -f "$apps/infynitae-windows-${NAME}_"*.desktop
+    dirs+=("$PREFIX/drive_c/ProgramData/Microsoft/Windows/Start Menu/Programs")
+    for u in "$PREFIX/drive_c/users/"*; do
+        [ -d "$u" ] && [ ! -L "$u" ] || continue
+        dirs+=("$u/Desktop" "$u/AppData/Roaming/Microsoft/Windows/Start Menu/Programs")
+    done
+    while IFS= read -r -d '' f; do
+        [ "$(realpath -e "$f")" = "$f" ] || continue
+        case "$f$self" in *[[:cntrl:]\"\`\$\\%]*) continue ;; esac
+        label="${f##*/}"
+        label="${label%.[lL][nN][kK]}"
+        sum=$(printf '%s' "$f" | cksum | cut -d' ' -f1)
+        printf '[Desktop Entry]\nType=Application\nName=%s\nComment=Windows program, in a sandbox\nExec="%s" --prefix %s "%s"\nX-Infynitae-Prefix=%s\n' \
+            "$label" "$self" "$NAME" "$f" "$NAME" > "$apps/infynitae-windows-${NAME}_$sum.desktop"
+    done < <(find "${dirs[@]}" -type f -iname '*.lnk' -print0 2>/dev/null)
+}
+
+main() {
+    OFFLINE=false X11=false NAME=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --offline) OFFLINE=true ;;
+            --x11) X11=true ;;
+            --prefix) NAME="$2"; shift ;;
+            --) shift; break ;;
+            -*) fail "Unknown option" "$1" ;;
+            *) break ;;
+        esac
+        shift
+    done
+    [ $# -ge 1 ] || { echo "usage: infynitae-windows-run [--offline] [--x11] [--prefix NAME] FILE [ARGS...]" >&2; exit 2; }
+    FILE=$(realpath -e "$1") || fail "Cannot open" "$1"
+    shift
+    case "$NAME" in
+        '') NAME=$(prefix_name "$FILE") ;;
+        *[!A-Za-z0-9.-]* | .*) fail "Not a prefix name" "$NAME" ;;
+    esac
+    PREFIX="$WINDOWS_PREFIXES/$NAME"
+
+    command -v bwrap >/dev/null 2>&1 || fail "Windows programs need bubblewrap" "Install it: sudo pacman -S bubblewrap"
+    command -v umu-run >/dev/null 2>&1 || fail "Windows programs need umu-launcher" "Install it: sudo pacman -S umu-launcher"
+    command -v infynitae-sandbox-socket >/dev/null 2>&1 \
+        || fail "infynitae-sandbox-socket is not installed" "Run infynitae-update"
+    [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -n "${WAYLAND_DISPLAY:-}" ] \
+        || fail "Not in a Wayland session" "Start Windows programs from Infynitae"
+    [ "$X11" = true ] && [ -z "${DISPLAY:-}" ] && fail "No X11 display" "DISPLAY is not set"
+
+    local cmd=()
+    case "$FILE" in
+        *.[mM][sS][iI]) cmd=(umu-run msiexec /i "$FILE") ;;
+        *.[lL][nN][kK]) cmd=(umu-run start.exe /unix "$FILE") ;;
+        *) cmd=(umu-run "$FILE") ;;
+    esac
+    # a shortcut runs only from inside its own C: drive
+    case "$FILE" in
+        *.[lL][nN][kK]) case "$FILE" in "$PREFIX/drive_c/"*) ;; *) fail "Not a shortcut of $NAME" "$FILE" ;; esac ;;
+    esac
+    # the file is visible already when it is in the C: drive or the shared folder
+    case "$FILE" in "$PREFIX/"* | "$WINDOWS_SHARED/"*) FILE_BIND="" ;; *) FILE_BIND="$FILE" ;; esac
+
+    mkdir -p "$WINDOWS_PREFIXES" "$WINDOWS_RUNTIME" "$WINDOWS_SHARED"
+    local sockets="$XDG_RUNTIME_DIR/infynitae-windows"
+    mkdir -p -m 700 "$sockets"
+    local app_id="infynitae.windows.$NAME" engine="infynitae-windows"
+
+    if [ ! -d "$PREFIX" ]; then
+        mkdir -p "$PREFIX"
+        PROTON=$(pick_proton)
+        FILE="" SOCKET="$sockets/$NAME.$$.setup"
+        sandbox_args setup
+        echo "==> Making the C: drive for $NAME (the first time takes a few minutes)" >&2
+        if ! infynitae-sandbox-socket "$SOCKET" "$app_id" "$engine" -- \
+            bwrap "${SANDBOX[@]}" umu-run ""; then
+            rm -rf "$PREFIX"
+            fail "Could not make the C: drive for $NAME" "umu-run failed; the first time needs the network"
+        fi
+    fi
+
+    PROTON=$(pick_proton)
+    FILE="$FILE_BIND" SOCKET="$sockets/$NAME.$$"
+    sandbox_args run
+    infynitae-sandbox-socket "$SOCKET" "$app_id" "$engine" -- bwrap "${SANDBOX[@]}" "${cmd[@]}" "$@"
+    local status=$?
+    write_shortcuts
+    return "$status"
+}
+
+# sourced (tools/test-windows-run): the functions only
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then main "$@"; fi
