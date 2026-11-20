@@ -78,13 +78,19 @@ sandbox_args run
 uid=$(id -u)
 # everything of the home folder that is mounted, outside the system paths
 home_mounts=$(mounts | grep -F -- "$HOME" | sort)
+# the runtime: an overlay where bubblewrap has them (0.10+), read-only before that
+if bwrap --help 2>&1 | grep -q -- --overlay-src; then
+    runtime_mounts="--overlay-src $HOME/.local/share/infynitae/windows-runtime
+--tmp-overlay $HOME/.local/share/infynitae/windows-runtime"
+else
+    runtime_mounts="--ro-bind $HOME/.local/share/infynitae/windows-runtime -> $HOME/.local/share/infynitae/windows-runtime"
+fi
 expected=$(printf '%s\n' \
     "--bind $HOME/.local/share/infynitae/windows/Setup-Tool -> $HOME/.local/share/infynitae/windows/Setup-Tool" \
     "--bind $HOME/Windows -> $HOME/Windows" \
-    "--overlay-src $HOME/.local/share/infynitae/windows-runtime" \
+    "$runtime_mounts" \
     "--ro-bind $HOME/.local/share/Steam/compatibilitytools.d/Proton-CachyOS Latest -> $HOME/.local/share/Steam/compatibilitytools.d/Proton-CachyOS Latest" \
     "--ro-bind $HOME/Downloads/Setup Tool.exe -> $HOME/Downloads/Setup Tool.exe" \
-    "--tmp-overlay $HOME/.local/share/infynitae/windows-runtime" \
     "--tmpfs $HOME" | sort)
 check "only the prefix, ~/Windows, the runtime, Proton and the file are mounted from the home" \
     "$home_mounts" "$expected"

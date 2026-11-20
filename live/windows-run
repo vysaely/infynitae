@@ -68,12 +68,21 @@ sandbox_args() {
     run_dir="/run/user/$uid"
     SANDBOX=(--unshare-user --unshare-pid --unshare-ipc --unshare-uts --unshare-cgroup-try
         --die-with-parent --new-session --clearenv
-        --ro-bind /usr /usr --symlink usr/bin /bin --symlink usr/bin /sbin
-        --symlink usr/lib /lib --symlink usr/lib /lib64 --ro-bind /etc /etc
+        --ro-bind /usr /usr --ro-bind /etc /etc
         --proc /proc --dev /dev --dev-bind-try /dev/dri /dev/dri --ro-bind /sys /sys
         --tmpfs /tmp --tmpfs /run --dir "$run_dir" --chmod 0700 "$run_dir"
         --tmpfs "$HOME"
         --bind "$SOCKET" "$run_dir/wayland-0")
+    # /bin, /lib and the rest as this system has them: links into /usr (Arch: /lib64 -> usr/lib;
+    # Ubuntu: /lib64 -> usr/lib64) or folders of their own, so the program's loader is found
+    local top
+    for top in /bin /sbin /lib /lib32 /lib64; do
+        if [ -L "$top" ]; then
+            SANDBOX+=(--symlink "$(readlink "$top")" "$top")
+        elif [ -d "$top" ]; then
+            SANDBOX+=(--ro-bind "$top" "$top")
+        fi
+    done
     [ "$mode" = run ] && [ "${OFFLINE:-false}" = true ] && SANDBOX+=(--unshare-net)
     [ -S "${XDG_RUNTIME_DIR:-}/pipewire-0" ] && SANDBOX+=(--bind "$XDG_RUNTIME_DIR/pipewire-0" "$run_dir/pipewire-0")
     [ -S "${XDG_RUNTIME_DIR:-}/pulse/native" ] && SANDBOX+=(--bind "$XDG_RUNTIME_DIR/pulse/native" "$run_dir/pulse/native")
