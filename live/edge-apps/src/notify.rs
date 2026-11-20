@@ -417,7 +417,8 @@ pub fn button_rects(cr: Option<&Context>, note: &Note, r: Rect) -> Vec<(String, 
         let t = Text {
             size: 12.0,
             bold: false,
-            color: crate::theme::Rgba(0.0, 0.0, 0.0, 1.0),
+            // measured only, never drawn: the colour does not change the size
+            color: crate::theme::Rgba(0.0, 0.0, 0.0, 0.0),
             text: label,
         };
         let tw = cr.map_or(label.chars().count() as f64 * 7.0, |c| {

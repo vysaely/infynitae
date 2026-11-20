@@ -43,6 +43,7 @@ cargo test --workspace --locked          # over 1,000 tests, a few minutes
 tools/verify-architecture                # several minutes
 tools/check-foundation-docs              # and --self-test
 tools/verify-knowledge --content-only    # and --self-test
+tools/verify-theme-colours               # tested by tools/test-verify-theme-colours
 tools/verify-test-efficacy               # hours: CI, or single controls by hand
 ```
 
@@ -52,6 +53,7 @@ tools/verify-test-efficacy               # hours: CI, or single controls by hand
 | `verify-test-efficacy` | 543 controls: each injects one bug into the product code and requires a named test to fail. A control whose test already fails on clean code, or times out, is reported as broken. |
 | `check-foundation-docs` | The design spec is consistent: one home per namespace, the invariant set and its wording, the formulas. |
 | `verify-knowledge` | Knowledge records have their fields, unique IDs, working links, and an `INDEX.md` entry. |
+| `verify-theme-colours` | No colour literal (`"#rrggbb"`, `set_source_rgb(0.2, 0.6, 0.9)`, `Color32F::new(…)`) in `crates/` or `live/` outside the theme modules, tests and `tools/theme-colours-allow.txt` (one `path:reason` line per exception). |
 
 When a change moves code a control is anchored on, update the control's anchor and seed to the
 new code (same defect), and confirm its test fails with the seed and passes without it.
