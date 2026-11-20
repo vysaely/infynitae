@@ -58,12 +58,11 @@ case "$uuid" in
     '' | -* | *[!0-9A-Fa-f-]*) fail "not a filesystem UUID: $uuid" ;;
 esac
 [ "${#uuid}" -ge 4 ] && [ "${#uuid}" -le 36 ] || fail "not a filesystem UUID: $uuid"
-NUMERALS="I II III IV V VI VII VIII IX X XI XII XIII XIV XV XVI XVII XVIII XIX XX XXI XXII XXIII
-XXIV XXV XXVI XXVII XXVIII XXIX XXX XXXI XXXII XXXIII XXXIV XXXV XXXVI XXXVII XXXVIII XXXIX"
+NUMERALS="I II III IV V VI VII VIII IX X XI XII XIII XIV XV XVI XVII XVIII XIX XX XXI XXII XXIII XXIV XXV XXVI XXVII XXVIII XXIX XXX XXXI XXXII XXXIII XXXIV XXXV XXXVI XXXVII XXXVIII XXXIX"
 case "$numeral" in
     '' | *[!IVX]*) fail "not a Roman numeral from I to XXXIX: $numeral" ;;
 esac
-case " $(printf '%s' "$NUMERALS" | tr '\n' ' ') " in
+case " $NUMERALS " in
     *" $numeral "*) ;;
     *) fail "not a Roman numeral from I to XXXIX: $numeral" ;;
 esac
