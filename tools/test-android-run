@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+# tools/test-android-run: what live/android-run asks Waydroid to do, with a stand-in `waydroid`,
+# `infynitae-sandbox-socket` and `notify-send` that write down their calls (Waydroid itself is
+# never run): the messages when Waydroid is missing or not set up, the session started through
+# the sandbox socket, window mode turned on once, and the newly installed app opened.
+set -eu
+
+REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
+TMP=$(mktemp -d "/tmp/infynitae-test-android-run.XXXXXX")
+trap 'rm -rf "$TMP"' EXIT INT TERM
+
+fail=0
+check() {
+    if [ "$2" = "$3" ]; then
+        echo "ok   $1"
+    else
+        echo "FAIL $1: expected '$3', got '$2'"
+        fail=1
+    fi
+}
+
+BIN="$TMP/bin" STATE="$TMP/state"
+mkdir -p "$BIN" "$STATE" "$TMP/run"
+cat > "$BIN/waydroid" <<'EOF'
+#!/bin/sh
+s="$STATE"
+echo "waydroid $*" >> "$s/calls"
+case "$1 ${2:-}" in
+    "status ") if [ -f "$s/running" ]; then printf 'Session:\tRUNNING\n'; else printf 'Session:\tSTOPPED\n'; fi ;;
+    "session start") echo "$WAYLAND_DISPLAY" > "$s/display"; : > "$s/running" ;;
+    "session stop") rm -f "$s/running" ;;
+    "prop get") cat "$s/prop" 2>/dev/null ;;
+    "prop set") echo "$4" > "$s/prop" ;;
+    "app list") while read -r p; do printf 'Name: %s\npackageName: %s\ncategories:\n' "$p" "$p"; done < "$s/packages" ;;
+    "app install") cat "$s/installs" >> "$s/packages"; sort -u -o "$s/packages" "$s/packages" ;;
+esac
+EOF
+cat > "$BIN/infynitae-sandbox-socket" <<'EOF'
+#!/bin/sh
+echo "sandbox-socket $1 $2 $3" >> "$STATE/calls"
+shift 4
+exec "$@"
+EOF
+cat > "$BIN/notify-send" <<'EOF'
+#!/bin/sh
+shift 2
+echo "$*" >> "$STATE/notes"
+EOF
+chmod +x "$BIN"/*
+export STATE XDG_RUNTIME_DIR="$TMP/run" WAYLAND_DISPLAY=wayland-1
+APK="$TMP/Notes.apk"
+: > "$APK"
+
+# the script's functions, with the folder `waydroid init` makes in the test's folder
+run() {
+    (PATH="$BIN:/usr/bin:/bin"; . "$REPO_DIR/live/android-run"; WAYDROID_ROOTFS="$TMP/rootfs"; main "$@") 2>/dev/null
+}
+reset() { rm -f "$STATE"/*; : > "$STATE/packages"; : > "$STATE/installs"; }
+
+# Waydroid not installed: the stand-in is hidden
+reset
+mv "$BIN/waydroid" "$TMP/waydroid"
+status=0; run "$APK" || status=$?
+check "without Waydroid: fails" "$status" 1
+check "without Waydroid: says what to install" "$(cut -d: -f1 "$STATE/notes")" "Android apps need Waydroid Install it"
+mv "$TMP/waydroid" "$BIN/waydroid"
+
+# installed, not set up: the rootfs `waydroid init` makes is missing
+reset
+status=0; run "$APK" || status=$?
+check "not set up: fails" "$status" 1
+check "not set up: says to run waydroid init" "$(grep -c 'sudo waydroid init' "$STATE/notes")" 1
+check "not set up: nothing asked of Waydroid" "$(cat "$STATE/calls" 2>/dev/null | grep -c 'waydroid app\|session start' || true)" 0
+
+# set up, session stopped, window mode off: a new app
+mkdir -p "$TMP/rootfs"
+reset
+echo org.example.weather > "$STATE/packages"
+echo org.example.notes > "$STATE/installs"
+status=0; run "$APK" || status=$?
+check "first app: succeeds" "$status" 0
+check "the session starts through the sandbox socket, app id infynitae.android" \
+    "$(grep -c "^sandbox-socket $XDG_RUNTIME_DIR/infynitae-android/wayland\.[0-9]* infynitae.android waydroid$" "$STATE/calls")" 2
+check "the session's Wayland display is that socket" \
+    "$(dirname "$(cat "$STATE/display")")" "$XDG_RUNTIME_DIR/infynitae-android"
+check "window mode on" "$(cat "$STATE/prop")" true
+check "the session restarts once for window mode" "$(grep -c '^waydroid session stop$' "$STATE/calls")" 1
+check "the file is installed" "$(grep -c "^waydroid app install $APK$" "$STATE/calls")" 1
+check "the new app opens, not the old one" "$(sed -n 's/^waydroid app launch //p' "$STATE/calls")" org.example.notes
+check "first app: no note" "$(cat "$STATE/notes" 2>/dev/null)" ""
+
+# running, window mode on: an app installed before (Waydroid shows no new package)
+reset
+: > "$STATE/running"
+echo true > "$STATE/prop"
+echo org.example.notes > "$STATE/packages"
+echo org.example.notes > "$STATE/installs"
+status=0; run "$APK" || status=$?
+check "update: succeeds" "$status" 0
+check "update: the running session is used" "$(grep -c 'session start\|session stop\|^sandbox-socket' "$STATE/calls")" 0
+check "update: window mode is not set again" "$(grep -c '^waydroid prop set' "$STATE/calls")" 0
+check "update: nothing opened" "$(grep -c '^waydroid app launch' "$STATE/calls")" 0
+check "update: says where the app is" "$(cut -c1-20 "$STATE/notes")" "Installed or updated"
+
+exit $fail

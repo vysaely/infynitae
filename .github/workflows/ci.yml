@@ -80,6 +80,7 @@ jobs:
       - run: sh tools/test-install-lib
       - run: sh tools/test-log-caps
       - run: bash tools/test-windows-run
+      - run: bash tools/test-android-run
 
   # The two old edges are frozen (owner, 2026-11-13: archived, look only; tags edge-c-final and
   # edge-rs-final). The Rust one keeps running until live/edge-apps replaces it, so a real bug fix can
