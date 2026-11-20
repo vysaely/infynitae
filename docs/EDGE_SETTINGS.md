@@ -282,12 +282,13 @@ names in `/usr/share/X11/xkb/rules/evdev.lst` is a later step.
 | Reopen apps at login | Switch | `SESSION_RESTORE` | | Reload(`restore`) |
 | M Open a terminal when nothing was reopened | Switch | `START_TERMINAL` | | restart |
 | M Mount USB drives when plugged in | Switch | `AUTOMOUNT` | | Reload(`automount`) |
+| M Name drives by Roman numeral | Switch | `DRIVE_NAMES` | on `roman`, off `label` | Reload(`automount`) |
 | M X11 apps and games | Switch | `XWAYLAND` | | restart |
 
 No source: the lists come from `cx.apps`. A value that is no listed app's `exec` shows as written and
 stays (a command of the owner's). "Automatic" shows what it resolves to only where that is cheap to
 know; otherwise the word alone. Hidden: a row with no app of its category installed; "Mount USB
-drives" without `udisksctl`. Left to the file: `LAUNCHER`, `MENU_PICKER`, `CLIPBOARD_PICKER`,
+drives" and "Name drives" without `udisksctl`. Left to the file: `LAUNCHER`, `MENU_PICKER`, `CLIPBOARD_PICKER`,
 `CONTROL_MENU`, `POLKIT_AGENT`, `NOTIFICATIONS`, `ENABLE_EDGE`, `EDGE_IMPL`, `EDGE_POSITION`,
 `EDGE_CONTROL_SIDE` (a reload of the edge closes the panel; a panel's edge is set by editing it),
 `MONITOR_LOG_DIR` (empty by default; folder of `lab*.log` files for the System monitor GPU card).

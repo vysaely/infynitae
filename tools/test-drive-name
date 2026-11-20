@@ -1,0 +1,194 @@
+#!/bin/sh
+# tools/test-drive-name: tests live/infynitae-drive-name against a temporary folder standing for /
+# (INFYNITAE_DRIVE_NAME_ROOT), as the user running it: never /etc/fstab, never root.
+set -eu
+
+REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
+HELPER="$REPO_DIR/live/infynitae-drive-name"
+[ -x "$HELPER" ] || { echo "FAIL: $HELPER not found or not executable" >&2; exit 1; }
+if [ "$(id -u)" = 0 ]; then
+    echo "FAIL: run this test as a user, not root (as root the helper writes /etc/fstab)" >&2
+    exit 1
+fi
+
+TMP=$(mktemp -d "/tmp/infynitae-test-drive-name.XXXXXX")
+trap 'rm -rf "$TMP"' EXIT INT TERM
+ROOT="$TMP/root"
+mkdir -p "$ROOT/etc" "$ROOT/mnt" "$ROOT/bin"
+FSTAB="$ROOT/etc/fstab"
+CALLS="$TMP/systemctl-calls"
+cat > "$ROOT/bin/systemctl" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$CALLS"
+EOF
+chmod +x "$ROOT/bin/systemctl"
+U=$(id -u)
+G=$(id -g)
+
+# the drives named by hand, as on the owner's PC: / is I, then /mnt/II to /mnt/IV
+cat > "$TMP/fstab.start" <<'EOF'
+# /etc/fstab: static file system information.
+UUID=3b60f0cc-0000-4000-8000-000000000001	/         	btrfs     	rw,noatime,subvol=/@,x-gvfs-show,x-gvfs-name=I	0 0
+UUID=3b60f0cc-0000-4000-8000-000000000001	/home     	btrfs     	rw,noatime,subvol=/@home	0 0
+UUID=0000-B007      	/boot     	vfat      	rw,relatime,fmask=0177,dmask=0077	0 2
+UUID=5ede596b-0000-4000-8000-000000000002 /mnt/II  btrfs noatime,nofail,x-gvfs-show,x-gvfs-name=II 0 0
+UUID=0b55c610-0000-4000-8000-000000000003 /mnt/III btrfs noatime,nofail,x-gvfs-show,x-gvfs-name=III 0 0
+UUID=16f3575b-0000-4000-8000-000000000004 /mnt/IV  btrfs noatime,nofail,x-gvfs-show,x-gvfs-name=IV 0 0
+EOF
+cp "$TMP/fstab.start" "$FSTAB"
+
+fail() {
+    echo "FAIL: $*" >&2
+    echo "--- fstab:" >&2
+    cat "$FSTAB" >&2
+    exit 1
+}
+name() {
+    INFYNITAE_DRIVE_NAME_ROOT="$ROOT" "$HELPER" "$@"
+}
+# a refused call leaves the file as it was, and says why
+refused() {
+    cp "$FSTAB" "$TMP/before"
+    if out=$(name "$@" 2>&1); then
+        fail "accepted: $*"
+    fi
+    cmp -s "$FSTAB" "$TMP/before" || fail "a refused call changed fstab: $*"
+    printf '%s\n' "$out"
+}
+lines_for() {
+    grep -c "^UUID=$1 " "$FSTAB" || true
+}
+
+echo "Test 1: an exFAT stick is named V"
+name 1234-ABCD V exfat removable "KINGSTON" >/dev/null || fail "naming 1234-ABCD failed"
+want="UUID=1234-ABCD /mnt/V exfat noauto,nofail,x-systemd.device-timeout=5s,x-udisks-auth,x-gvfs-show,x-gvfs-name=V,nosuid,nodev,uid=$U,gid=$G,umask=022,iocharset=utf8,errors=remount-ro 0 0"
+grep -qxF "$want" "$FSTAB" || fail "the exFAT line is not: $want"
+grep -qxF "# removable: KINGSTON" "$FSTAB" || fail "no comment with the label"
+head -n "$(wc -l < "$TMP/fstab.start")" "$FSTAB" | cmp -s - "$TMP/fstab.start" \
+    || fail "the lines outside the block changed"
+cmp -s "$FSTAB.infynitae-bak" "$TMP/fstab.start" || fail "the backup is not the file before"
+[ -d "$ROOT/mnt/V" ] || fail "$ROOT/mnt/V was not made"
+grep -qx "daemon-reload" "$CALLS" || fail "systemctl daemon-reload was not run"
+[ "$(sed -n '/^# infynitae drives: begin$/,/^# infynitae drives: end$/p' "$FSTAB" | grep -c '^UUID=')" = 1 ] \
+    || fail "the line is not inside the block"
+# the drives of this file are not plugged in here: findmnt counts each as an error, before and after
+echo "PASS: exFAT line, comment, block, backup, folder, daemon-reload (beside fstab errors already there)"
+
+echo "Test 2: an internal NTFS partition is named VI and fixed"
+name 0123456789ABCDEF VI ntfs3 fixed "Windows" >/dev/null || fail "naming the NTFS partition failed"
+want="UUID=0123456789ABCDEF /mnt/VI ntfs3 noauto,nofail,x-systemd.device-timeout=5s,x-udisks-auth,x-gvfs-show,x-gvfs-name=VI,nosuid,nodev,uid=$U,gid=$G,umask=022 0 0"
+grep -qxF "$want" "$FSTAB" || fail "the NTFS line is not: $want"
+grep -qxF "# fixed: Windows" "$FSTAB" || fail "no fixed comment"
+[ "$(grep -c '^# infynitae drives: begin$' "$FSTAB")" = 1 ] || fail "a second block was made"
+echo "PASS: NTFS line in the same block"
+
+echo "Test 3: a new numeral rewrites the stick's line; the old folder goes when unused"
+name 1234-ABCD VII exfat removable "KINGSTON" >/dev/null || fail "renaming 1234-ABCD failed"
+[ "$(lines_for 1234-ABCD)" = 1 ] || fail "1234-ABCD has $(lines_for 1234-ABCD) lines"
+grep -q "^UUID=1234-ABCD /mnt/VII exfat .*x-gvfs-name=VII," "$FSTAB" || fail "1234-ABCD is not VII"
+[ "$(grep -c '^# removable: KINGSTON$' "$FSTAB")" = 1 ] || fail "the old comment stayed"
+[ ! -e "$ROOT/mnt/V" ] || fail "the empty, unused $ROOT/mnt/V stayed"
+echo "PASS: one line per UUID, empty old folder removed"
+
+echo "Test 4: two removable drives may remember the same numeral; a folder in use stays"
+name AAAA-0001 VIII vfat removable "STICK_A" >/dev/null || fail "naming AAAA-0001 failed"
+name BBBB-0002 VIII vfat removable "STICK_B" >/dev/null || fail "naming BBBB-0002 failed"
+[ "$(grep -c ' /mnt/VIII ' "$FSTAB")" = 2 ] || fail "both removable lines for VIII should stay"
+name AAAA-0001 IX vfat removable "STICK_A" >/dev/null || fail "renaming AAAA-0001 failed"
+[ -d "$ROOT/mnt/VIII" ] || fail "/mnt/VIII went while BBBB-0002's line names it"
+touch "$ROOT/mnt/IX/file"
+name AAAA-0001 X vfat removable "STICK_A" >/dev/null || fail "renaming AAAA-0001 to X failed"
+[ -e "$ROOT/mnt/IX/file" ] || fail "a folder with a file in it was removed"
+grep -q "^UUID=AAAA-0001 /mnt/X vfat .*,uid=$U,gid=$G,umask=022,shortname=mixed,utf8=1,showexec,flush 0 0$" "$FSTAB" \
+    || fail "the FAT line's options"
+echo "PASS: shared memory of VIII, folders in use or not empty kept"
+
+echo "Test 5: a fixed drive takes a numeral from removable drives that only remembered it"
+name 5555-0005 VIII ext4 fixed "Data" >/dev/null || fail "naming a fixed drive VIII failed"
+[ "$(lines_for BBBB-0002)" = 0 ] || fail "BBBB-0002 still remembers VIII, now fixed"
+grep -q "^UUID=5555-0005 /mnt/VIII ext4 noauto,nofail,x-systemd.device-timeout=5s,x-udisks-auth,x-gvfs-show,x-gvfs-name=VIII,nosuid,nodev 0 0$" "$FSTAB" \
+    || fail "the ext4 line"
+echo "PASS: fixed numerals are one drive's"
+
+echo "Test 6: refused, and fstab left as it was"
+out=$(refused 5ede596b-0000-4000-8000-000000000002 XI btrfs fixed "II") || exit 1
+case "$out" in *"outside the block"*) ;; *) fail "UUID outside the block: $out" ;; esac
+out=$(refused 5ede596b-0000-4000-8000-000000000002 XI btrfs fixed) || exit 1
+out=$(refused 5EDE596B-0000-4000-8000-000000000002 XI btrfs fixed) || exit 1
+refused CCCC-0003 II exfat removable >/dev/null || exit 1
+refused CCCC-0003 I exfat removable >/dev/null || exit 1
+refused CCCC-0003 VI exfat removable >/dev/null || exit 1
+refused CCCC-0003 VI exfat fixed >/dev/null || exit 1
+for bad in "" "-123" "12" "1234/ABCD" "1234-ABCD /mnt/I" "../../x" "1234-ABCD
+UUID=EVIL" "0123456789abcdef0123456789abcdef01234"; do
+    refused "$bad" XI exfat removable >/dev/null || exit 1
+done
+for bad in "" "IIII" "XL" "v" "VX" "IIV" "XI I" "XI
+I" "0" "L"; do
+    refused CCCC-0003 "$bad" exfat removable >/dev/null || exit 1
+done
+for bad in nfs "exfat,uid=0" "" "vfat " cifs swap; do
+    refused CCCC-0003 XI "$bad" removable >/dev/null || exit 1
+done
+refused CCCC-0003 XI exfat internal >/dev/null || exit 1
+refused CCCC-0003 XI exfat removable note extra >/dev/null || exit 1
+refused CCCC-0003 XI exfat >/dev/null || exit 1
+echo "PASS: UUIDs outside the block, taken numerals and bad input refused"
+
+echo "Test 7: a label cannot add a line"
+name DDDD-0004 XI vfat removable "x
+UUID=EEEE-0005 / ext4 defaults 0 0" >/dev/null || fail "naming with a two-line label failed"
+grep -q "^UUID=EEEE-0005" "$FSTAB" && fail "the label added a line"
+grep -qxF "# removable: x_UUID_EEEE-0005 _ ext4 defaults 0 0" "$FSTAB" || fail "the label was not made one line"
+echo "PASS: the label stays in its comment"
+
+echo "Test 8: a result in which findmnt --verify finds a new error keeps the old file"
+# findmnt as it answers for a line it cannot read in the new file: one error more there
+mkdir -p "$TMP/findmnt-bin"
+cat > "$TMP/findmnt-bin/findmnt" <<'EOF'
+#!/bin/sh
+for f; do :; done
+if grep -q '^UUID=FFFF-0006 ' "$f"; then
+    printf '\n1 parse errors, 0 errors, 0 warnings\n'
+    exit 1
+fi
+printf 'Success, no errors or warnings detected\n'
+EOF
+chmod +x "$TMP/findmnt-bin/findmnt"
+cp "$FSTAB" "$TMP/before8"
+if out=$(PATH="$TMP/findmnt-bin:$PATH" INFYNITAE_DRIVE_NAME_ROOT="$ROOT" "$HELPER" FFFF-0006 XII vfat removable 2>&1); then
+    fail "accepted a result with a new findmnt error"
+fi
+case "$out" in *"findmnt --verify"*) ;; *) fail "not refused for findmnt: $out" ;; esac
+cmp -s "$FSTAB" "$TMP/before8" || fail "the file changed"
+ls -A "$ROOT/etc" | grep -q '^\.fstab\.infynitae' && fail "a temporary file was left in etc"
+echo "PASS: a new findmnt error keeps the file, no temporary file left"
+
+echo "Test 9: a broken block is refused"
+cp "$FSTAB" "$TMP/good"
+printf '# infynitae drives: begin\n' >> "$FSTAB"
+refused FFFF-0006 XII vfat removable >/dev/null || exit 1
+cp "$TMP/good" "$FSTAB"
+echo "PASS: two begins refused"
+
+echo "Test 10: drives named at once all keep their line"
+for i in 1 2 3 4 5 6; do
+    name "7777-000$i" XIII vfat removable "S$i" >/dev/null &
+done
+wait
+for i in 1 2 3 4 5 6; do
+    [ "$(lines_for "7777-000$i")" = 1 ] || fail "7777-000$i has $(lines_for "7777-000$i") lines"
+done
+echo "PASS: six writers at once, six lines"
+
+echo "Test 11: the test folder is only read when not root, and never /"
+if out=$("$HELPER" 9999-0009 XIV vfat removable 2>&1); then
+    fail "ran as a user without INFYNITAE_DRIVE_NAME_ROOT"
+fi
+if out=$(INFYNITAE_DRIVE_NAME_ROOT=/ "$HELPER" 9999-0009 XIV vfat removable 2>&1); then
+    fail "accepted / as its test folder"
+fi
+case "$out" in *"cannot be /"*) ;; *) fail "/ refused for another reason: $out" ;; esac
+echo "PASS: no test folder, or /, refused"
+
+echo "test-drive-name: all tests passed"

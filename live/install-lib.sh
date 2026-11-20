@@ -363,6 +363,12 @@ PORTAL
         install_root_file "$src/live/remote/50-infynitae-rustdesk.rules" \
             /etc/polkit-1/rules.d/50-infynitae-rustdesk.rules 644
     fi
+    # drives named by Roman numeral (DRIVE_NAMES, docs/DRIVES.md): the helper that writes their
+    # block of /etc/fstab, and the rule that lets the person at the machine run it and mount
+    # those lines without a password
+    install_root_file "$src/live/infynitae-drive-name" /usr/local/lib/infynitae-drive-name 755
+    install_root_file "$src/live/50-infynitae-drive-names.rules" \
+        /etc/polkit-1/rules.d/50-infynitae-drive-names.rules 644
     # Clean shutdown/reboot guard (prevents respawning a locked session during system shutdown)
     mkdir -p "$HOME/.config/systemd/user"
     cat > "$HOME/.config/systemd/user/infynitae-shutdown-guard.service" <<'GUARD'

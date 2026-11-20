@@ -4,13 +4,27 @@
 # interfaces on removable media, mounts them with udisksctl, and posts a notification with Open and
 # Eject. An encrypted drive asks for its passphrase (the edge's question card, else fuzzel) and
 # mounts once unlocked. Started by session.sh; ends with the session.
+# Drives are named by Roman numeral, as Windows names them C:, D:, E: (DRIVE_NAMES="roman", the
+# default; docs/DRIVES.md): a new filesystem is first given a numeral by the root helper
+# infynitae-drive-name (through pkexec), which writes its line in /etc/fstab, so udisks mounts it at
+# /mnt/<numeral>. A partition inside the PC gets a numeral it keeps and is not mounted; a USB drive
+# or card gets its last numeral when no drive plugged in has it, else the lowest one free. Without
+# the helper, or refused, a drive mounts under /run/media by its label, as DRIVE_NAMES="label".
 #   infynitae-automount eject [DEVICE]: unmounts DEVICE (else every drive mounted under
-#   /run/media), locks it if encrypted and powers the drive off, so it is safe to pull
+#   /run/media or at a removable drive's /mnt/<numeral>), locks it if encrypted and powers the
+#   drive off, so it is safe to pull
 #   INFYNITAE_AUTOMOUNT_MONITOR: a command printing udisks2 signals instead of gdbus (tests)
 #   INFYNITAE_AUTOMOUNT_UDISKSCTL: a command used instead of udisksctl (tests)
 #   INFYNITAE_AUTOMOUNT_ASK: a command printing a passphrase instead of fuzzel (tests)
 #   INFYNITAE_AUTOMOUNT_MOUNTS: a mounts file instead of /proc/mounts (tests)
+#   INFYNITAE_AUTOMOUNT_FSTAB: a file read instead of /etc/fstab (tests)
+#   INFYNITAE_AUTOMOUNT_BY_UUID: a folder read instead of /dev/disk/by-uuid (tests)
+#   INFYNITAE_AUTOMOUNT_DRIVE_NAME: a program run instead of pkexec infynitae-drive-name (tests)
 set -u
+if [ -f "$HOME/infynitae/live/config.sh" ]; then
+    . "$HOME/infynitae/live/config.sh"
+fi
+FSTAB="${INFYNITAE_AUTOMOUNT_FSTAB:-/etc/fstab}"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/infynitae"
 LOG="$STATE_DIR/automount.log"
 mkdir -p "$STATE_DIR"
@@ -86,6 +100,31 @@ eject_device() {
     notify "$label can be removed"
 }
 
+NUMERALS="I II III IV V VI VII VIII IX X XI XII XIII XIV XV XVI XVII XVIII XIX XX XXI XXII XXIII XXIV XXV XXVI XXVII XXVIII XXIX XXX XXXI XXXII XXXIII XXXIV XXXV XXXVI XXXVII XXXVIII XXXIX"
+
+# The drives fstab names, one per line: where ("out" outside the block infynitae-drive-name
+# writes, else the kind it gives: fixed or removable), the UUID in capitals (or -), the numeral of
+# its /mnt/ folder (or -) and of its x-gvfs-name (or -)
+fstab_entries() {
+    awk '
+    $0 == "# infynitae drives: begin" { inb = 1; next }
+    $0 == "# infynitae drives: end" { inb = 0; next }
+    inb && /^# (fixed|removable):/ { k = $2; sub(/:$/, "", k); next }
+    /^[[:space:]]*(#|$)/ { next }
+    {
+        s = toupper($1); u = "-"
+        if (s ~ /^UUID=/) u = substr(s, 6)
+        else if (s ~ /^\/DEV\/DISK\/BY-UUID\//) u = substr(s, 19)
+        m = "-"
+        if ($2 ~ /^\/mnt\/[IVX]+$/) m = substr($2, 6)
+        g = "-"
+        o = "," $4 ","
+        if (match(o, /,x-gvfs-name=[IVX]+,/)) g = substr(o, RSTART + 13, RLENGTH - 14)
+        print (inb ? (k != "" ? k : "fixed") : "out"), u, m, g
+        k = ""
+    }' "$FSTAB" 2>/dev/null
+}
+
 if [ "${1:-}" = "eject" ]; then
     if [ -n "${2:-}" ]; then
         eject_device "$2"
@@ -94,10 +133,17 @@ if [ "${1:-}" = "eject" ]; then
     rc=0
     found=0
     user_media="/run/media/${USER:-$(id -un)}"
+    # the folders of removable drives named by numeral (a fixed one is part of the PC)
+    named=" $(fstab_entries | awk '$1 == "removable" && $3 != "-" { printf "/mnt/%s ", $3 }')"
     # every filesystem udisks mounted for this user
     while read -r src target _; do
         case "$target" in
             "$user_media"/*) found=1; eject_device "$src" "$(printf '%b' "${target##*/}")" || rc=1 ;;
+            *)
+                case "$named" in
+                    *" $target "*) found=1; eject_device "$src" "${target#/mnt/}" || rc=1 ;;
+                esac
+                ;;
         esac
     done < "${INFYNITAE_AUTOMOUNT_MOUNTS:-/proc/mounts}"
     [ "$found" = 1 ] || notify "No drive to eject"
@@ -137,10 +183,132 @@ is_removable_drive() {
     return 1
 }
 
+DRIVE_NAME_HELPER="${INFYNITAE_AUTOMOUNT_DRIVE_NAME:-/usr/local/lib/infynitae-drive-name}"
+names_refused=0
+
+# the helper as root, through pkexec (a test's own helper runs as it is)
+run_drive_name() {
+    if [ -n "${INFYNITAE_AUTOMOUNT_DRIVE_NAME:-}" ]; then
+        "$DRIVE_NAME_HELPER" "$@"
+    else
+        pkexec --disable-internal-agent "$DRIVE_NAME_HELPER" "$@"
+    fi
+}
+drive_name_installed() {
+    [ -x "$DRIVE_NAME_HELPER" ] && { [ -n "${INFYNITAE_AUTOMOUNT_DRIVE_NAME:-}" ] || command -v pkexec >/dev/null 2>&1; }
+}
+
+# Gives the filesystem on $1 its Roman numeral, of kind $2 (fixed or removable), and sets
+# $numeral to it; returns 1 when it gets none (it then mounts by its label under /run/media). The
+# helper is asked only when the numeral, or the line, is new.
+name_drive() {
+    numeral=""
+    case "${DRIVE_NAMES:-roman}" in
+        label) return 1 ;;
+    esac
+    if ! nd_info=$(block_info "$1"); then
+        log "no numeral for $1: udisks does not describe it"
+        return 1
+    fi
+    IFS="$SEP" read -r nd_label _ _ _ _ nd_drive nd_uuid nd_type nd_fstab <<INFO
+$nd_info
+INFO
+    case "$nd_type" in
+        vfat | exfat | btrfs | ext4 | xfs | f2fs) nd_fs="$nd_type" ;;
+        # the kernel's NTFS driver since Linux 5.15, the one udisks 2.11 tries first
+        ntfs) nd_fs=ntfs3 ;;
+        *)
+            log "no numeral for $1: its filesystem (${nd_type:-none}) is not one named here"
+            return 1
+            ;;
+    esac
+    # Ventoy's boot partition, beside the one that holds the images
+    if [ "$nd_label" = VTOYEFI ]; then
+        log "no numeral for $1: Ventoy's boot partition"
+        return 1
+    fi
+    case "$nd_uuid" in
+        '' | -* | *[!0-9A-Fa-f-]*)
+            log "no numeral for $1: no UUID udisks gives (${nd_uuid:-none})"
+            return 1
+            ;;
+    esac
+    # the drives plugged in now (by-uuid lists every filesystem the kernel sees)
+    nd_here=$(ls -1 "${INFYNITAE_AUTOMOUNT_BY_UUID:-/dev/disk/by-uuid}" 2>/dev/null | tr '\n' ' ')
+    nd_pick=$(fstab_entries | awk -v U="$nd_uuid" -v KIND="$2" -v FSTAB_LINE="$nd_fstab" \
+        -v HERE="$nd_here" -v NUMS="$NUMERALS" '
+    BEGIN {
+        U = toupper(U)
+        nh = split(toupper(HERE), h, " ")
+        for (i = 1; i <= nh; i++) here[h[i]] = 1
+    }
+    # outside the block: named by hand, those numerals are fixed
+    $1 == "out" { if ($2 == U) outside = 1; fixed[$3] = 1; fixed[$4] = 1; next }
+    $2 == U { if (mine == "") { mine = $3; kind = $1 }; next }
+    $1 == "fixed" { fixed[$3] = 1; fixed[$4] = 1; next }
+    # a removable drive plugged in now holds its numeral; one that is out leaves it free
+    ($2 in here) { taken[$3] = 1 }
+    END {
+        # a line of its own outside the block (udisks matches LABEL= and PARTUUID= ones too)
+        if (outside || (mine == "" && FSTAB_LINE == "1")) { print "outside"; exit }
+        if (mine != "" && mine != "-") {
+            if (kind == "fixed" || (!(mine in fixed) && !(mine in taken))) { print mine, kind, "keep"; exit }
+        } else {
+            kind = KIND
+        }
+        n = split(NUMS, order, " ")
+        for (i = 1; i <= n; i++) {
+            if (!(order[i] in fixed) && !(order[i] in taken)) { print order[i], kind, "write"; exit }
+        }
+        print "full"
+    }')
+    case "$nd_pick" in
+        outside)
+            log "$1 keeps the name of its own line in fstab"
+            return 1
+            ;;
+        full | '')
+            log "no numeral for $1: I to XXXIX are all taken"
+            return 1
+            ;;
+    esac
+    set -- "$1" $nd_pick
+    if [ "$4" = write ]; then
+        if ! drive_name_installed; then
+            log "no numeral for $1: $DRIVE_NAME_HELPER (or pkexec) is not installed (infynitae-update installs the helper)"
+            return 1
+        fi
+        if [ "$names_refused" = 1 ]; then
+            log "no numeral for $1: naming drives was refused earlier in this session"
+            return 1
+        fi
+        # its note in fstab: the label, else udisks' name of the drive (vendor, model, serial)
+        nd_note="$nd_label"
+        [ -n "$nd_note" ] || nd_note="${nd_drive##*/}"
+        nd_rc=0
+        nd_out=$(run_drive_name "$nd_uuid" "$2" "$nd_fs" "$3" "$nd_note" 2>&1 </dev/null) || nd_rc=$?
+        case "$nd_rc" in
+            0) log "named $1 $2 ($3): $nd_out" ;;
+            # pkexec: not allowed, or the password prompt dismissed; not asked again this session
+            126 | 127)
+                names_refused=1
+                log "naming $1 $2 was refused (pkexec $nd_rc): $nd_out"
+                return 1
+                ;;
+            *)
+                log "naming $1 $2 failed: $nd_out"
+                return 1
+                ;;
+        esac
+    fi
+    numeral="$2"
+}
+
 mount_device() {
     dev="$1"
     label="$2"
     [ -n "$label" ] || label="$dev"
+    name_drive "$dev" removable || true
 
     log "mounting $dev ($label)"
     mount_out=$(run_udisksctl mount --no-user-interaction -b "$dev" 2>&1)
@@ -152,11 +320,18 @@ mount_device() {
         [ -z "$mount_path" ] && mount_path="$mount_out"
         log "mounted $dev at $mount_path"
         # Open shows it in the file manager, Eject makes it safe to pull (in the background:
-        # the notification waits for its answer)
+        # the notification waits for its answer). A drive at its numeral's folder is called by
+        # the numeral, its label below it.
+        name="$label"
+        set -- -A open=Open -A eject=Eject "$(plain "$label mounted at $mount_path")"
+        if [ -n "$numeral" ] && [ "$mount_path" = "/mnt/$numeral" ]; then
+            name="$numeral"
+            set -- -A open=Open -A eject=Eject "$(plain "$numeral mounted")" "$(plain "$label")"
+        fi
         (
-            case $(notify_actions -A open=Open -A eject=Eject "$(plain "$label mounted at $mount_path")") in
+            case $(notify_actions "$@") in
                 open) xdg-open "$mount_path" >/dev/null 2>&1 ;;
-                eject) eject_device "$dev" "$label" ;;
+                eject) eject_device "$dev" "$name" ;;
             esac
         ) 9>&- &
     else
@@ -255,12 +430,21 @@ handle_block() {
         log "ignoring $dev (HintIgnore is set)"
         return 0
     fi
+    removable=0
+    if [ "$hint_auto" = "true" ] || is_removable_drive "$drv"; then
+        removable=1
+    fi
+    # a partition inside the PC (udisks calls every one a system device) is not mounted here: it
+    # gets the numeral it keeps, and a file manager opens it at that folder
+    if [ "$removable" = 0 ] && [ "${8:-}" != "encrypted" ]; then
+        name_drive "$dev" fixed || true
+    fi
     if [ "$hint_sys" = "true" ]; then
         log "ignoring $dev (system disk)"
         return 0
     fi
 
-    if [ "$hint_auto" = "true" ] || is_removable_drive "$drv"; then
+    if [ "$removable" = 1 ]; then
         if [ "${8:-}" = "encrypted" ]; then
             unlock_device "$dev" "$label"
         else
@@ -388,8 +572,9 @@ $items
 EOF
 }
 
-# A block's label, HintAuto, HintSystem, HintIgnore, mounted (1/0) and drive, from udisksctl info
-# (false when udisks does not know it)
+# A block's label, HintAuto, HintSystem, HintIgnore, mounted (1/0), drive, UUID, filesystem type
+# and whether udisks finds a line for it in fstab (1/0), from udisksctl info (false when udisks
+# does not know it)
 block_info() {
     run_udisksctl info -b "$1" 2>/dev/null | awk -v SEP="$SEP" '
     /^\// { if (objs++) bad = 1 }
@@ -400,11 +585,14 @@ block_info() {
     section == "org.freedesktop.UDisks2.Block" && $1 == "HintSystem:" { hs = $2 }
     section == "org.freedesktop.UDisks2.Block" && $1 == "HintIgnore:" { hi = $2 }
     section == "org.freedesktop.UDisks2.Block" && $1 == "Drive:" { d = $2; gsub(/\047/, "", d) }
+    section == "org.freedesktop.UDisks2.Block" && $1 == "IdUUID:" { u = $2 }
+    section == "org.freedesktop.UDisks2.Block" && $1 == "IdType:" { t = $2 }
+    section == "org.freedesktop.UDisks2.Block" && $1 == "Configuration:" { if ($0 ~ /\(\047fstab\047/) f = 1 }
     section == "org.freedesktop.UDisks2.Filesystem" && $1 == "MountPoints:" { if (NF > 1) m = 1 }
     END {
         # text that only looks like udisks own lines (see scan_existing): not trusted
         if (d == "" || bad) exit 1
-        print label SEP (ha == "true" ? "true" : "false") SEP (hs == "true" ? "true" : "false") SEP (hi == "true" ? "true" : "false") SEP (m ? 1 : 0) SEP d
+        print label SEP (ha == "true" ? "true" : "false") SEP (hs == "true" ? "true" : "false") SEP (hi == "true" ? "true" : "false") SEP (m ? 1 : 0) SEP d SEP u SEP t SEP (f ? 1 : 0)
     }'
 }
 
@@ -506,7 +694,7 @@ process_line() {
                         log "no information on $f1 from udisks: not mounted"
                         continue
                     fi
-                    IFS="$SEP" read -r f2 f3 f4 f5 f6 f7 <<INFO
+                    IFS="$SEP" read -r f2 f3 f4 f5 f6 f7 _ <<INFO
 $info
 INFO
                 fi

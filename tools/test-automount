@@ -20,6 +20,65 @@ STATE_DIR="$TMP/state"
 RUN_DIR="$TMP/run"
 mkdir -p "$BIN_DIR" "$STATE_DIR" "$RUN_DIR"
 
+# No run reads the owner's config, asks pkexec or reads /etc/fstab: a home of its own, a
+# drive-name helper that is not there (tests that name drives give their own), a temporary
+# fstab and /dev/disk/by-uuid
+export HOME="$TMP/home"
+mkdir -p "$HOME"
+ROOT="$TMP/root"
+mkdir -p "$ROOT/etc" "$ROOT/mnt" "$ROOT/bin" "$TMP/by-uuid"
+: > "$ROOT/etc/fstab"
+printf '#!/bin/sh\n' > "$ROOT/bin/systemctl"
+chmod +x "$ROOT/bin/systemctl"
+export INFYNITAE_AUTOMOUNT_DRIVE_NAME="$BIN_DIR/no-drive-name-helper"
+export INFYNITAE_AUTOMOUNT_FSTAB="$ROOT/etc/fstab"
+export INFYNITAE_AUTOMOUNT_BY_UUID="$TMP/by-uuid"
+export TEST_DEVICES="$TMP/devices"
+: > "$TEST_DEVICES"
+
+# Devices of the drive-name tests, one per line of $TEST_DEVICES: "DEV UUID TYPE LABEL DRIVE
+# HINTAUTO HINTSYSTEM". Like udisks, a device with a line in fstab mounts at that line's folder
+# and lists it in its Configuration.
+cat > "$BIN_DIR/mock-devices" <<'EOF'
+#!/bin/sh
+what="$1"
+shift
+case "$what" in
+    info) [ "$1" = -b ] || exit 1; dev="$2" ;;
+    mount) dev="$1" ;;
+esac
+row=$(awk -v d="$dev" '$1 == d' "$TEST_DEVICES")
+if [ -z "$row" ]; then
+    echo "Error: unknown device in mock: $dev" >&2
+    exit 1
+fi
+set -- $row
+uuid="$2" type="$3" label="$4" drive="$5" auto="$6" sys="$7"
+dir=$(awk -v u="$uuid" 'toupper($1) == "UUID=" toupper(u) { print $2; exit }' "$INFYNITAE_AUTOMOUNT_FSTAB")
+if [ "$what" = mount ]; then
+    echo "Mounted $dev at ${dir:-/run/media/testuser/$label}"
+    exit 0
+fi
+printf '/org/freedesktop/UDisks2/block_devices/%s:\n' "${dev#/dev/}"
+echo "  org.freedesktop.UDisks2.Block:"
+if [ -n "$dir" ]; then
+    printf "    Configuration:              [('fstab', {'dir': <b'%s'>})]\n" "$dir"
+else
+    echo "    Configuration:              []"
+fi
+printf '    Device:                     %s\n' "$dev"
+printf "    Drive:                      '/org/freedesktop/UDisks2/drives/%s'\n" "$drive"
+printf '    HintAuto:                   %s\n' "$auto"
+echo "    HintIgnore:                 false"
+printf '    HintSystem:                 %s\n' "$sys"
+printf '    IdLabel:                    %s\n' "$label"
+printf '    IdType:                     %s\n' "$type"
+printf '    IdUUID:                     %s\n' "$uuid"
+echo "  org.freedesktop.UDisks2.Filesystem:"
+echo "    MountPoints:"
+EOF
+chmod +x "$BIN_DIR/mock-devices"
+
 MOCK_UDISKSCTL="$BIN_DIR/mock-udisksctl"
 NOTIFY_LOG="$TMP/notifications.log"
 CALLS_LOG="$TMP/udisksctl-calls.log"
@@ -79,8 +138,7 @@ case "\$cmd" in
                 exit 0
                 ;;
             *)
-                echo "Error mounting \$dev: unknown device in mock" >&2
-                exit 1
+                exec "$BIN_DIR/mock-devices" mount "\$dev"
                 ;;
         esac
         ;;
@@ -109,7 +167,7 @@ case "\$cmd" in
             echo "    CryptoBackingDevice:        '/org/freedesktop/UDisks2/block_devices/dm_2d0'"
             exit 0
         fi
-        exit 1
+        exec "$BIN_DIR/mock-devices" info "\$@"
         ;;
     unlock)
         # the passphrase comes on stdin, never in the arguments
@@ -497,6 +555,224 @@ if ! wait_for "$NOTIFY_LOG" "&lt;b&gt;START&lt;/b&gt;&amp; mounted at"; then
     exit 1
 fi
 echo "PASS: a label is shown as plain text"
+
+echo "Test 6: drives are named by Roman numeral, with I to IV named by hand"
+rm -f "$DUMP"
+FSTAB="$ROOT/etc/fstab"
+BY_UUID="$TMP/by-uuid"
+NAME_CALLS="$TMP/drive-name-calls"
+# the real helper, against the temporary root folder
+cat > "$BIN_DIR/drive-name" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$NAME_CALLS"
+INFYNITAE_DRIVE_NAME_ROOT="$ROOT" exec "$REPO_DIR/live/infynitae-drive-name" "\$@"
+EOF
+chmod +x "$BIN_DIR/drive-name"
+cat > "$FSTAB" <<'EOF'
+UUID=3b60f0cc-0000-4000-8000-000000000001 / btrfs rw,noatime,subvol=/@,x-gvfs-show,x-gvfs-name=I 0 0
+UUID=5ede596b-0000-4000-8000-000000000002 /mnt/II btrfs noatime,nofail,x-gvfs-show,x-gvfs-name=II 0 0
+UUID=0b55c610-0000-4000-8000-000000000003 /mnt/III btrfs noatime,nofail,x-gvfs-show,x-gvfs-name=III 0 0
+UUID=16f3575b-0000-4000-8000-000000000004 /mnt/IV btrfs noatime,nofail,x-gvfs-show,x-gvfs-name=IV 0 0
+EOF
+cat > "$TEST_DEVICES" <<'EOF'
+/dev/sdm1 AAAA-0001 exfat STICK_A Stick_A true false
+/dev/sdn1 BBBB-0002 vfat STICK_B Stick_B true false
+/dev/sdo1 CCCC-0003 ntfs STICK_C Stick_C true false
+/dev/sdq1 EEEE-0005 exfat STICK_E Stick_E true false
+/dev/sdr1 FFFF-0006 exfat STICK_F Stick_F true false
+/dev/sds1 6666-0007 exfat STICK_G Stick_G true false
+/dev/sdt1 8888-0008 exfat STICK_H Stick_H true false
+/dev/sdp2 0123456789ABCDEF ntfs Windows Internal_HDD false true
+EOF
+# a stick plugged in: its filesystem's InterfacesAdded, as gdbus monitor prints it
+plug_line() {
+    printf "%s\n" "/org/freedesktop/UDisks2: org.freedesktop.DBus.ObjectManager.InterfacesAdded (objectpath '/org/freedesktop/UDisks2/block_devices/${1#/dev/}', {'org.freedesktop.UDisks2.Block': {'Device': <b'$1'>, 'IdLabel': <'$2'>, 'HintAuto': <$4>, 'HintSystem': <$5>, 'HintIgnore': <false>, 'Drive': <objectpath '/org/freedesktop/UDisks2/drives/$3'>}, 'org.freedesktop.UDisks2.Filesystem': {'MountPoints': <@aay []>}})"
+}
+# runs the watcher on what $1 holds, as a session would
+run_watcher() {
+    rm -f "$CALLS_LOG" "$NOTIFY_LOG" "$LOG_FILE"
+    PATH="$BIN_DIR:$PATH" \
+    XDG_STATE_HOME="$STATE_DIR" \
+    XDG_RUNTIME_DIR="$RUN_DIR" \
+    INFYNITAE_AUTOMOUNT_MONITOR="cat $1" \
+    INFYNITAE_AUTOMOUNT_UDISKSCTL="$MOCK_UDISKSCTL" \
+    INFYNITAE_AUTOMOUNT_DRIVE_NAME="${2:-$BIN_DIR/drive-name}" \
+    "$WATCHER"
+}
+plug() {
+    : > "$TMP/plug"
+    for d in "$@"; do
+        set -- $(awk -v d="$d" '$1 == d' "$TEST_DEVICES")
+        touch "$BY_UUID/$2"
+        plug_line "$1" "$4" "$5" "$6" "$7" >> "$TMP/plug"
+    done
+}
+unplug() {
+    rm -f "$BY_UUID/$1"
+}
+numeral_of() {
+    awk -v u="$1" '$1 == "UUID=" u { sub("/mnt/", "", $2); print $2 }' "$FSTAB"
+}
+expect() {
+    got=$(numeral_of "$1")
+    if [ "$got" != "$2" ]; then
+        echo "FAIL: $3: $1 is ${got:-unnamed}, not $2" >&2
+        cat "$FSTAB" "$LOG_FILE" >&2
+        exit 1
+    fi
+}
+lines_of() {
+    grep -c "^UUID=$1 " "$FSTAB" || true
+}
+
+: > "$NAME_CALLS"
+plug /dev/sdm1
+run_watcher "$TMP/plug"
+expect AAAA-0001 V "a first stick"
+if ! grep -qx "AAAA-0001 V exfat removable STICK_A" "$NAME_CALLS"; then
+    echo "FAIL: the helper was not asked for V:" >&2
+    cat "$NAME_CALLS" >&2
+    exit 1
+fi
+if ! grep -q "mount --no-user-interaction -b /dev/sdm1" "$CALLS_LOG"; then
+    echo "FAIL: the stick was not mounted after it was named" >&2
+    exit 1
+fi
+if ! wait_for "$NOTIFY_LOG" "-A open=Open -A eject=Eject V mounted STICK_A"; then
+    echo "FAIL: no notification \"V mounted\" with the label:" >&2
+    cat "$NOTIFY_LOG" >&2
+    exit 1
+fi
+echo "PASS: a new stick is named V, mounted at /mnt/V, \"V mounted\" said with its label"
+
+plug /dev/sdn1
+run_watcher "$TMP/plug"
+expect BBBB-0002 VI "a second stick beside the first"
+echo "PASS: a second stick beside it is VI"
+
+unplug AAAA-0001
+plug /dev/sdo1
+run_watcher "$TMP/plug"
+expect CCCC-0003 V "a third stick while the first is out"
+grep -q "^UUID=CCCC-0003 /mnt/V ntfs3 " "$FSTAB" || { echo "FAIL: NTFS not mounted with ntfs3" >&2; exit 1; }
+echo "PASS: the first one out, a third stick takes its V"
+cp "$FSTAB" "$TMP/fstab.after-third"
+
+plug /dev/sdm1
+run_watcher "$TMP/plug"
+expect AAAA-0001 VII "the first stick back while V is taken"
+[ "$(lines_of AAAA-0001)" = 1 ] || { echo "FAIL: AAAA-0001 has $(lines_of AAAA-0001) lines" >&2; exit 1; }
+echo "PASS: the first stick back while V is taken is VII, on one line"
+
+# the same moment, but the third stick out before the first comes back
+cp "$TMP/fstab.after-third" "$FSTAB"
+unplug CCCC-0003
+: > "$NAME_CALLS"
+plug /dev/sdm1
+run_watcher "$TMP/plug"
+expect AAAA-0001 V "the first stick back while V is free"
+if [ -s "$NAME_CALLS" ]; then
+    echo "FAIL: the helper was asked again for a stick whose line is right:" >&2
+    cat "$NAME_CALLS" >&2
+    exit 1
+fi
+if ! wait_for "$NOTIFY_LOG" "V mounted STICK_A"; then
+    echo "FAIL: no \"V mounted\" for the stick back" >&2
+    exit 1
+fi
+echo "PASS: the first stick back while V is free is V again, without asking the helper"
+
+echo "Test 7: a partition inside the PC gets a fixed numeral and is not mounted"
+plug /dev/sdp2
+run_watcher "$TMP/plug"
+expect 0123456789ABCDEF VII "an internal NTFS partition"
+grep -qxF "# fixed: Windows" "$FSTAB" || { echo "FAIL: not marked fixed" >&2; cat "$FSTAB" >&2; exit 1; }
+if grep -q "mount .* /dev/sdp2" "$CALLS_LOG"; then
+    echo "FAIL: the internal partition was mounted" >&2
+    exit 1
+fi
+echo "PASS: the internal partition is VII, fixed, and left unmounted"
+# out of sight, its numeral stays its own: the next stick skips it
+unplug 0123456789ABCDEF
+plug /dev/sdq1
+run_watcher "$TMP/plug"
+expect EEEE-0005 VIII "a stick while VII is fixed"
+: > "$NAME_CALLS"
+plug /dev/sdp2
+run_watcher "$TMP/plug"
+expect 0123456789ABCDEF VII "the internal partition seen again"
+[ ! -s "$NAME_CALLS" ] || { echo "FAIL: the fixed partition was named again" >&2; exit 1; }
+echo "PASS: VII stays the partition's, sticks skip it"
+for u in AAAA-0001 BBBB-0002 CCCC-0003 EEEE-0005 0123456789ABCDEF; do
+    [ "$(lines_of "$u")" = 1 ] || { echo "FAIL: $u has $(lines_of "$u") lines" >&2; cat "$FSTAB" >&2; exit 1; }
+done
+echo "PASS: every UUID has one line"
+
+echo "Test 8: eject without a device ejects the named removable drives, not fixed ones"
+rm -f "$CALLS_LOG" "$NOTIFY_LOG"
+cat > "$MOCK_MOUNTS" <<EOF
+/dev/sdm1 /mnt/V exfat rw 0 0
+/dev/sdp2 /mnt/VII ntfs3 rw 0 0
+/dev/sda3 /mnt/II btrfs rw 0 0
+EOF
+PATH="$BIN_DIR:$PATH" USER=testuser XDG_STATE_HOME="$STATE_DIR" XDG_RUNTIME_DIR="$RUN_DIR" \
+INFYNITAE_AUTOMOUNT_UDISKSCTL="$MOCK_UDISKSCTL" INFYNITAE_AUTOMOUNT_MOUNTS="$MOCK_MOUNTS" \
+"$WATCHER" eject
+if ! grep -q -- "unmount --no-user-interaction -b /dev/sdm1" "$CALLS_LOG"; then
+    echo "FAIL: the stick at /mnt/V was not ejected" >&2
+    cat "$CALLS_LOG" >&2
+    exit 1
+fi
+if grep -q -- "/dev/sdp2\|/dev/sda3" "$CALLS_LOG"; then
+    echo "FAIL: a fixed drive was ejected" >&2
+    cat "$CALLS_LOG" >&2
+    exit 1
+fi
+grep -q "V can be removed" "$NOTIFY_LOG" || { echo "FAIL: no \"V can be removed\"" >&2; cat "$NOTIFY_LOG" >&2; exit 1; }
+echo "PASS: V ejected as \"V\", VII and II left alone"
+
+echo "Test 9: DRIVE_NAMES=label keeps the label and /run/media"
+cp "$FSTAB" "$TMP/fstab.before-label"
+: > "$NAME_CALLS"
+plug /dev/sdr1
+DRIVE_NAMES=label run_watcher "$TMP/plug"
+[ ! -s "$NAME_CALLS" ] || { echo "FAIL: the helper was asked in label mode" >&2; exit 1; }
+cmp -s "$FSTAB" "$TMP/fstab.before-label" || { echo "FAIL: fstab changed in label mode" >&2; exit 1; }
+if ! wait_for "$NOTIFY_LOG" "-A open=Open -A eject=Eject STICK_F mounted at /run/media/testuser/STICK_F"; then
+    echo "FAIL: label mode notification changed:" >&2
+    cat "$NOTIFY_LOG" >&2
+    exit 1
+fi
+echo "PASS: label mode as before"
+
+echo "Test 10: without the helper, or refused, a drive mounts under /run/media"
+
+plug /dev/sds1
+run_watcher "$TMP/plug" "$BIN_DIR/no-drive-name-helper"
+if ! wait_for "$NOTIFY_LOG" "STICK_G mounted at /run/media/testuser/STICK_G"; then
+    echo "FAIL: without the helper the stick did not mount under /run/media" >&2
+    cat "$NOTIFY_LOG" "$LOG_FILE" >&2
+    exit 1
+fi
+grep -q "is not installed" "$LOG_FILE" || { echo "FAIL: no log line for the missing helper" >&2; cat "$LOG_FILE" >&2; exit 1; }
+echo "PASS: no helper: /run/media, said in the log"
+cat > "$BIN_DIR/drive-name-refused" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$NAME_CALLS"
+exit 126
+EOF
+chmod +x "$BIN_DIR/drive-name-refused"
+: > "$NAME_CALLS"
+plug /dev/sds1 /dev/sdt1
+run_watcher "$TMP/plug" "$BIN_DIR/drive-name-refused"
+if ! wait_for "$NOTIFY_LOG" "STICK_H mounted at /run/media/testuser/STICK_H"; then
+    echo "FAIL: refused, the stick did not mount under /run/media" >&2
+    cat "$NOTIFY_LOG" "$LOG_FILE" >&2
+    exit 1
+fi
+[ "$(wc -l < "$NAME_CALLS")" = 1 ] || { echo "FAIL: asked $(wc -l < "$NAME_CALLS") times after a refusal" >&2; exit 1; }
+grep -q "refused" "$LOG_FILE" || { echo "FAIL: no log line for the refusal" >&2; exit 1; }
+echo "PASS: refused once, not asked again; both sticks under /run/media"
 
 echo "test-automount: all tests passed"
 exit 0
