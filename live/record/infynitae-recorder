@@ -295,6 +295,7 @@ supervisor_loop() {
     while true; do
         # Start replay engine in background; its errors stay visible (helpers.log): a failure
         # hidden here kept the buffer empty for hours, restarted every second (2026-10-25)
+        started=$(date +%s)
         start_replay_engine >/dev/null &
         ENGINE_PID=$!
         echo $ENGINE_PID > "$REPLAY_PID_FILE"

@@ -56,4 +56,13 @@ rm "$TMP/run/infynitae-gsr-failed"
 
 check "REPLAY_BACKEND defaults to auto" "$(run 'echo $REPLAY_BACKEND')" "auto"
 
+# the supervisor with an engine that is gpu-screen-recorder and dies at once: after 3 quick deaths
+# the compositor's capture takes over for the session (the review of 2026-11-20 found it never did)
+check "gpu-screen-recorder dying at once 3 times falls back to the compositor's capture" "$(run '
+    start_replay_engine() { echo gsr > "$RUNTIME_DIR/infynitae-replay-engine"; return 1; }
+    supervisor_loop >/dev/null 2>&1 &
+    sleep 4
+    kill -9 $! 2>/dev/null
+    [ -e "$RUNTIME_DIR/infynitae-gsr-failed" ] && echo yes || echo no')" "yes"
+
 exit $fail
