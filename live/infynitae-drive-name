@@ -1,0 +1,208 @@
+#!/bin/sh
+# infynitae-drive-name UUID NUMERAL FSTYPE KIND [NOTE]: names the filesystem UUID after the Roman
+# numeral NUMERAL (I to XXXIX), as Windows names drives C:, D:, E:. It writes one line for it in
+# the marked block of /etc/fstab ("# infynitae drives: begin" ... "end"), so udisks mounts it at
+# /mnt/NUMERAL and file managers show it as NUMERAL. KIND is "removable" (a USB drive or card: its
+# numeral can change) or "fixed" (a part of the PC: it keeps it). NOTE (the drive's label or model)
+# goes in the comment above the line, for whoever reads the file. FSTYPE is the mount type: vfat,
+# exfat, ntfs3, ntfs, btrfs, ext4, xfs or f2fs.
+# Runs as root through pkexec, started by infynitae-automount; installed to /usr/local/lib by the
+# installer, with live/50-infynitae-drive-names.rules letting the person at the machine run it
+# without a password. Every line outside the block stays as it was. Refused: a UUID that has a line
+# outside the block, a numeral that a line outside the block or a fixed drive in it has, a result
+# in which `findmnt --verify` finds more errors than in the file before. That file is kept as
+# /etc/fstab.infynitae-bak.
+#   INFYNITAE_DRIVE_NAME_ROOT: a folder that stands for / (its etc/fstab, mnt and run/lock, and
+#   bin/systemctl run instead of systemctl); read only when not run as root (tests)
+set -u
+export LC_ALL=C
+umask 022
+
+fail() {
+    printf 'infynitae-drive-name: %s\n' "$*" >&2
+    exit 1
+}
+
+if [ "$(id -u)" = 0 ]; then
+    ROOT=""
+    SYSTEMCTL=systemctl
+    # pkexec says who asked: the files on a FAT, exFAT or NTFS drive belong to them
+    user_uid="${PKEXEC_UID:-}"
+    case "$user_uid" in
+        '' | *[!0-9]*) fail "run it through pkexec (PKEXEC_UID is not set)" ;;
+    esac
+    user_gid=$(getent passwd "$user_uid" | cut -d: -f4)
+    [ -n "$user_gid" ] || fail "no user has the uid $user_uid"
+else
+    [ -n "${INFYNITAE_DRIVE_NAME_ROOT:-}" ] || fail "run it as root, through pkexec"
+    ROOT=$(cd "$INFYNITAE_DRIVE_NAME_ROOT" 2>/dev/null && pwd -P) \
+        || fail "no folder $INFYNITAE_DRIVE_NAME_ROOT"
+    [ "$ROOT" != / ] || fail "INFYNITAE_DRIVE_NAME_ROOT cannot be /"
+    SYSTEMCTL="$ROOT/bin/systemctl"
+    user_uid=$(id -u)
+    user_gid=$(id -g)
+fi
+FSTAB="$ROOT/etc/fstab"
+MNT="$ROOT/mnt"
+LOCK="$ROOT/run/lock/infynitae-drive-name.lock"
+
+[ "$#" -ge 4 ] && [ "$#" -le 5 ] || fail "usage: infynitae-drive-name UUID NUMERAL FSTYPE KIND [NOTE]"
+uuid="$1"
+numeral="$2"
+fstype="$3"
+kind="$4"
+note="${5:-}"
+
+# UUIDs as blkid prints them: 1234-ABCD (FAT, exFAT), 16 hex digits (NTFS), 8-4-4-4-12 (the rest)
+case "$uuid" in
+    '' | -* | *[!0-9A-Fa-f-]*) fail "not a filesystem UUID: $uuid" ;;
+esac
+[ "${#uuid}" -ge 4 ] && [ "${#uuid}" -le 36 ] || fail "not a filesystem UUID: $uuid"
+NUMERALS="I II III IV V VI VII VIII IX X XI XII XIII XIV XV XVI XVII XVIII XIX XX XXI XXII XXIII
+XXIV XXV XXVI XXVII XXVIII XXIX XXX XXXI XXXII XXXIII XXXIV XXXV XXXVI XXXVII XXXVIII XXXIX"
+case "$numeral" in
+    '' | *[!IVX]*) fail "not a Roman numeral from I to XXXIX: $numeral" ;;
+esac
+case " $(printf '%s' "$NUMERALS" | tr '\n' ' ') " in
+    *" $numeral "*) ;;
+    *) fail "not a Roman numeral from I to XXXIX: $numeral" ;;
+esac
+case "$kind" in
+    fixed | removable) ;;
+    *) fail "KIND is fixed or removable, not: $kind" ;;
+esac
+# what udisks would mount the filesystem with, and the files the user's on FAT, exFAT and NTFS
+# (which have no owners of their own); nosuid and nodev as udisks mounts every drive
+case "$fstype" in
+    vfat) fs_options="uid=$user_uid,gid=$user_gid,umask=022,shortname=mixed,utf8=1,showexec,flush" ;;
+    exfat) fs_options="uid=$user_uid,gid=$user_gid,umask=022,iocharset=utf8,errors=remount-ro" ;;
+    ntfs3) fs_options="uid=$user_uid,gid=$user_gid,umask=022" ;;
+    ntfs) fs_options="uid=$user_uid,gid=$user_gid,umask=022,windows_names" ;;
+    btrfs | ext4 | xfs | f2fs) fs_options="" ;;
+    *) fail "not a filesystem type named here: $fstype (vfat exfat ntfs3 ntfs btrfs ext4 xfs f2fs)" ;;
+esac
+# a label is the drive's own text: in the comment it keeps letters, digits, a few marks and
+# UTF-8 bytes, never a line break that would start a line of its own
+note=$(printf '%s' "$note" | tr -c 'A-Za-z0-9 ._()+\200-\377-' '_' | cut -b 1-100)
+line="UUID=$uuid /mnt/$numeral $fstype noauto,nofail,x-systemd.device-timeout=5s,x-udisks-auth,x-gvfs-show,x-gvfs-name=$numeral,nosuid,nodev${fs_options:+,$fs_options} 0 0"
+
+[ -f "$FSTAB" ] || fail "$FSTAB is not there"
+mkdir -p "${LOCK%/*}" || fail "cannot make ${LOCK%/*}"
+# two drives plugged in at once: one writer at a time, each reading what the other wrote
+exec 8> "$LOCK" || fail "cannot open $LOCK"
+flock 8 || fail "cannot lock $LOCK"
+
+tmp=$(mktemp "$ROOT/etc/.fstab.infynitae.XXXXXX") || fail "cannot write in $ROOT/etc"
+trap 'rm -f "$tmp"' EXIT
+# The new file, to $tmp; on stdout the numeral this UUID had in the block (when it had one), or
+# what refuses the change. In the block, each drive is a comment "# fixed: NOTE" or
+# "# removable: NOTE" and its line; a line without such a comment counts as fixed.
+old=$(awk -v U="$uuid" -v N="$numeral" -v KIND="$kind" -v NOTE="$note" -v LINE="$line" -v OUT="$tmp" '
+function num(target, options,   o) {
+    o = "," options ","
+    if (match(o, /,x-gvfs-name=[IVX]+,/)) return substr(o, RSTART + 13, RLENGTH - 14)
+    if (target ~ /^\/mnt\/[IVX]+$/) return substr(target, 6)
+    return ""
+}
+function src_uuid(s) {
+    s = toupper(s)
+    if (s ~ /^UUID=/) return substr(s, 6)
+    if (s ~ /^\/DEV\/DISK\/BY-UUID\//) return substr(s, 19)
+    return ""
+}
+function flush_block(   i) {
+    for (i = 1; i <= nb; i++) print block[i] > OUT
+    if (NOTE != "") print "# " KIND ": " NOTE > OUT
+    else print "# " KIND ":" > OUT
+    print LINE > OUT
+}
+BEGIN { U = toupper(U) }
+{ last = $0 }
+$0 == "# infynitae drives: begin" {
+    if (seen++) { refuse = "two blocks"; next }
+    inb = 1; print > OUT; next
+}
+$0 == "# infynitae drives: end" {
+    if (!inb) { refuse = "an end without a begin"; next }
+    inb = 0; flush_block(); print > OUT; next
+}
+!inb {
+    print > OUT
+    if ($0 !~ /^[[:space:]]*(#|$)/) {
+        if (src_uuid($1) == U) refuse = "uuid"
+        if (num($2, $4) == N || $2 == "/mnt/" N) refuse = "numeral"
+    }
+    next
+}
+# in the block
+/^# (fixed|removable):/ { pending = $0; next }
+/^[[:space:]]*(#|$)/ { block[++nb] = $0; next }
+{
+    k = (pending ~ /^# removable:/) ? "removable" : "fixed"
+    n = num($2, $4)
+    if (src_uuid($1) == U) {
+        mine = n
+    } else if (n == N && k == "fixed") {
+        refuse = "fixed"
+    } else if (n == N && KIND == "fixed") {
+        # a fixed numeral is that drive alone: a removable drive that had it gets another next time
+    } else {
+        if (pending != "") block[++nb] = pending
+        block[++nb] = $0
+    }
+    pending = ""
+}
+END {
+    if (inb) refuse = "a begin without an end"
+    if (!seen) {
+        if (last != "") print "" > OUT
+        print "# infynitae drives: begin" > OUT
+        print "# Drive names given by Infynitae (docs/DRIVES.md): rename a drive by changing its /mnt/ and x-gvfs-name=, forget it by deleting its two lines" > OUT
+        flush_block()
+        print "# infynitae drives: end" > OUT
+    }
+    if (refuse != "") print "refuse " refuse
+    else print "old " mine
+}
+' "$FSTAB")
+case "$old" in
+    "refuse uuid") fail "UUID=$uuid has a line of its own in $FSTAB, outside the block: it keeps that one" ;;
+    "refuse numeral") fail "$numeral is a drive in $FSTAB outside the block" ;;
+    "refuse fixed") fail "$numeral is a fixed drive's in the block" ;;
+    "refuse "*) fail "the block in $FSTAB is broken (${old#refuse }): fix it by hand" ;;
+    "old "*) old="${old#old }" ;;
+    *) fail "could not read $FSTAB" ;;
+esac
+
+# findmnt --verify on the result: a new error (a line it cannot read, a mount the boot needs that
+# cannot be reached) keeps the file as it was. Errors the file had before stay allowed: findmnt
+# counts a disk of the PC that is unplugged or broken as one, and that is not this change's.
+# Warnings (a drive not plugged in) are what noauto,nofail lines are for.
+verify_errors() {
+    findmnt --verify --tab-file "$1" 2>&1 | awk '
+        /^Success, no errors/ { n = 0; found = 1 }
+        / parse errors?, [0-9]+ errors?,/ { split($0, f, /[ ,]+/); n = f[1] + f[4]; found = 1 }
+        END { if (found) print n; else print "unknown" }'
+}
+before=$(verify_errors "$FSTAB")
+after=$(verify_errors "$tmp")
+case "$before" in unknown) before=0 ;; esac
+if [ "$after" = unknown ] || [ "$after" -gt "$before" ]; then
+    fail "the new $FSTAB would not pass findmnt --verify ($after errors, $before before), nothing was changed: $(findmnt --verify --tab-file "$tmp" 2>&1)"
+fi
+chmod 644 "$tmp" || fail "cannot set the mode of $tmp"
+cp -p "$FSTAB" "$FSTAB.infynitae-bak" || fail "cannot back $FSTAB up, nothing was changed"
+sync "$tmp" || fail "cannot write $tmp to the disk, nothing was changed"
+mv -f "$tmp" "$FSTAB" || fail "cannot replace $FSTAB, nothing was changed"
+trap - EXIT
+mkdir -p "$MNT/$numeral" || fail "the line is written, but $MNT/$numeral could not be made"
+# the folder of the numeral the drive had: removed when no line names it any more, nothing is
+# mounted on it and it is empty (rmdir refuses a folder with files, which then stays)
+if [ -n "$old" ] && [ "$old" != "$numeral" ] \
+        && ! grep -qE "^[^#]*[[:space:]]/mnt/$old[[:space:]]" "$FSTAB" \
+        && ! findmnt --mountpoint "$MNT/$old" >/dev/null 2>&1; then
+    rmdir "$MNT/$old" 2>/dev/null || true
+fi
+# systemd makes its mount units from fstab: they follow the file once it is read again
+"$SYSTEMCTL" daemon-reload || printf 'infynitae-drive-name: the line is written; systemctl daemon-reload failed\n' >&2
+printf '%s\n' "$line"

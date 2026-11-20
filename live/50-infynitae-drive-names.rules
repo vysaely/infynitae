@@ -1,0 +1,19 @@
+// Drives named by Roman numeral (docs/DRIVES.md), for the person at the machine and nobody else
+// (a session that is local and active): running live/infynitae-drive-name as root, which writes
+// only its marked block of /etc/fstab, and mounting and unmounting the fstab lines marked
+// x-udisks-auth (that block's: udisks asks "filesystem-fstab" for them, by default with the
+// administrator password). Both without a password.
+// Install (root): install -m 644 live/50-infynitae-drive-names.rules /etc/polkit-1/rules.d/
+polkit.addRule(function (action, subject) {
+    if (!subject.local || !subject.active) {
+        return polkit.Result.NOT_HANDLED;
+    }
+    if (action.id == "org.freedesktop.policykit.exec" &&
+        action.lookup("program") == "/usr/local/lib/infynitae-drive-name") {
+        return polkit.Result.YES;
+    }
+    if (action.id == "org.freedesktop.udisks2.filesystem-fstab") {
+        return polkit.Result.YES;
+    }
+    return polkit.Result.NOT_HANDLED;
+});
