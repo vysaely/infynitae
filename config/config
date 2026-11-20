@@ -618,6 +618,13 @@ AUTOMOUNT="true"
     # default: true
     # options: true  · false
 
+DRIVE_NAMES="roman"
+    # How drives are named [reload]: by Roman numeral, as Windows names them C:, D:, E:. The PC's
+    # own partitions keep theirs; a USB drive or card gets its last one when free, else the lowest
+    # free (V, VI...), and mounts at /mnt/V. The names are lines in /etc/fstab (docs/DRIVES.md).
+    # default: roman
+    # options: roman  · label (mounted under /run/media by the drive's label)
+
 ENABLE_EDGE="true"
     # The edge: panels that open from the screen's edges (below) [reload] (ENABLE_ISLAND, its old
     # name, still works)

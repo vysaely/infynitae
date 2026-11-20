@@ -124,6 +124,18 @@ pub const TABLE: &[Setting] = &[
         needs: &["udisksctl"],
     },
     Setting {
+        key: "DRIVE_NAMES",
+        name: "Name drives by Roman numeral",
+        says: "Off: by label, under /run/media",
+        control: Control::Switch {
+            on: "roman",
+            off: "label",
+        },
+        after: After::Reload("automount"),
+        more: true,
+        needs: &["udisksctl"],
+    },
+    Setting {
         key: "XWAYLAND",
         name: "X11 apps and games",
         says: "",
@@ -590,16 +602,18 @@ mod tests {
         // At Size::S: 2 Found rows + SESSION_RESTORE + More row (START_TERMINAL & XWAYLAND).
         assert_eq!(c.height(&cx, 400.0), 4.0 * ui::ROW_H);
 
-        // Clicking More (9000) reveals START_TERMINAL and XWAYLAND, still hiding AUTOMOUNT without udisksctl.
+        // Clicking More (9000) reveals START_TERMINAL and XWAYLAND, still hiding AUTOMOUNT and
+        // DRIVE_NAMES without udisksctl.
         let mut out = Vec::new();
         assert!(c.event(&press(9000), &cx, &mut out));
         assert_eq!(c.height(&cx, 400.0), 6.0 * ui::ROW_H);
 
-        // Adding udisksctl reveals AUTOMOUNT too; Size::M shows everything without a More row.
+        // Adding udisksctl reveals AUTOMOUNT and DRIVE_NAMES too; Size::M shows everything without
+        // a More row.
         c.apply("config", &data(&[], &[], &["udisksctl"]) as &dyn Any);
-        assert_eq!(c.height(&cx, 400.0), 7.0 * ui::ROW_H);
+        assert_eq!(c.height(&cx, 400.0), 8.0 * ui::ROW_H);
         cx.size = Size::M;
-        assert_eq!(c.height(&cx, 400.0), 6.0 * ui::ROW_H);
+        assert_eq!(c.height(&cx, 400.0), 7.0 * ui::ROW_H);
 
         // Searching filters both Found and Switch rows, ignoring More, and hides when nothing matches.
         c.event(&Event::Text("usb"), &cx, &mut out);
@@ -686,6 +700,7 @@ mod tests {
                     ("TERMINAL", "old'term"),
                     ("SESSION_RESTORE", "true"),
                     ("AUTOMOUNT", "true"),
+                    ("DRIVE_NAMES", "roman"),
                 ],
                 &[],
                 &["udisksctl"],
@@ -733,6 +748,16 @@ mod tests {
             out,
             vec![Action::Run(
                 "sh \"$HOME/infynitae/live/settings.sh\" log START_TERMINAL - && sh \"$HOME/infynitae/live/settings.sh\" set START_TERMINAL 'true' >/dev/null 2>&1"
+                    .to_string()
+            )]
+        );
+        // DRIVE_NAMES (index 3 -> 131): off writes "label", then the automount watcher restarts
+        out.clear();
+        assert!(c.event(&press(131), &cx, &mut out));
+        assert_eq!(
+            out,
+            vec![Action::Run(
+                "sh \"$HOME/infynitae/live/settings.sh\" log DRIVE_NAMES 'roman' && sh \"$HOME/infynitae/live/settings.sh\" set DRIVE_NAMES 'label' >/dev/null 2>&1 && sh \"$HOME/infynitae/live/infynitae-reload\" automount >/dev/null 2>&1"
                     .to_string()
             )]
         );
