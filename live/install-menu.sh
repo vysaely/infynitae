@@ -91,7 +91,7 @@ Next: what to install. Nothing is changed before the last screen." "$MENU_H" "$M
     if pacman -Qq steam wine wine-staging lutris 2>/dev/null | grep -q .; then status=ON; else status=OFF; fi
     items+=(gaming "$(part_label gaming)" "$status")
     items+=(replay-buffer "$(part_label replay-buffer)" OFF)
-    items+=(foreign-apps "$(part_label foreign-apps)" OFF)
+    items+=(foreign-apps "$(part_label foreign-apps)" ON)
 
     chosen=$(whiptail --title "Parts to install" --separate-output --ok-button "Next" \
         --cancel-button "Cancel" --checklist "Space ticks a part, Enter goes on." \
