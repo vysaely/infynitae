@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# infynitae-android-run FILE.apk: installs an Android app in Waydroid and opens it, each Android
+# app its own window on the canvas (docs/SECURITY.md, "Windows and Android programs").
+#
+# Starts the Waydroid session when it is not running, through a security-context-v1 socket
+# (infynitae-sandbox-socket, app id infynitae.android), so Infynitae treats Android as sandboxed.
+# Turns on Waydroid's window mode (persist.waydroid.multi_windows) once; Waydroid's documentation
+# says most settings apply from the next session, so the session is restarted that one time.
+# `waydroid app install` prints nothing, not even the app's package name: the new package is the
+# one in `waydroid app list` after the install that was not there before.
+
+# made by `sudo waydroid init` (Waydroid's tools/actions/initializer.py checks it)
+WAYDROID_ROOTFS=/var/lib/waydroid/rootfs
+
+note() { command -v notify-send >/dev/null 2>&1 && notify-send -a Infynitae "$1" "${2:-}"; }
+fail() {
+    echo "infynitae-android-run: $1${2:+: $2}" >&2
+    note "$1" "${2:-}"
+    exit 1
+}
+
+session_running() { waydroid status 2>/dev/null | grep -q "^Session:"$'\t'"RUNNING"; }
+
+# The package names `waydroid app list` prints, sorted.
+packages() { waydroid app list 2>/dev/null | sed -n 's/^packageName: //p' | sort; }
+
+# Starts the session in the background, through the sandbox socket, and waits until Waydroid
+# says it runs. Waydroid gives no signal for that, so its status is asked once a second.
+start_session() {
+    local sockets="$XDG_RUNTIME_DIR/infynitae-android" socket i
+    mkdir -p -m 700 "$sockets"
+    socket="$sockets/wayland.$$"
+    # an absolute WAYLAND_DISPLAY is the socket's path (Waydroid's session_manager.py)
+    setsid -f infynitae-sandbox-socket "$socket" infynitae.android waydroid -- \
+        env WAYLAND_DISPLAY="$socket" waydroid session start >/dev/null 2>&1 < /dev/null
+    for i in $(seq 60); do
+        session_running && return 0
+        sleep 1
+    done
+    fail "The Android session did not start in 60 seconds" "See: waydroid log"
+}
+
+main() {
+    [ $# -eq 1 ] || { echo "usage: infynitae-android-run FILE.apk" >&2; exit 2; }
+    local file before after new
+    file=$(realpath -e "$1") || fail "Cannot open" "$1"
+
+    command -v waydroid >/dev/null 2>&1 \
+        || fail "Android apps need Waydroid" "Install it: sudo pacman -S waydroid, then sudo waydroid init"
+    [ -d "$WAYDROID_ROOTFS" ] \
+        || fail "Waydroid is not set up" "Run once: sudo waydroid init (downloads Android, about 1 GB), then sudo systemctl enable --now waydroid-container"
+    command -v infynitae-sandbox-socket >/dev/null 2>&1 \
+        || fail "infynitae-sandbox-socket is not installed" "Run infynitae-update"
+    [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -n "${WAYLAND_DISPLAY:-}" ] \
+        || fail "Not in a Wayland session" "Start Android apps from Infynitae"
+
+    session_running || start_session
+    if [ "$(waydroid prop get persist.waydroid.multi_windows 2>/dev/null)" != true ]; then
+        waydroid prop set persist.waydroid.multi_windows true \
+            || fail "Could not turn on Waydroid's window mode" "waydroid prop set persist.waydroid.multi_windows true"
+        waydroid session stop
+        start_session
+    fi
+
+    before=$(packages)
+    waydroid app install "$file" || fail "Waydroid could not install" "${file##*/}"
+    after=$(packages)
+    new=$(comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$after") | grep .)
+    if [ "$(printf '%s\n' "$new" | grep -c .)" -eq 1 ]; then
+        waydroid app launch "$new"
+    else
+        # installed before (an update keeps the name), or not installed: Waydroid says neither
+        note "Installed or updated ${file##*/}" "It is in the app list; if not, Waydroid could not install it (waydroid log)"
+    fi
+}
+
+# sourced (tools/test-android-run): the functions only
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then main "$@"; fi

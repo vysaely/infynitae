@@ -231,4 +231,72 @@ check_power_key "power key suspend on handheld (touchscreen + battery)" false fa
 check_power_key "no power key suspend on desktop with USB touchscreen" false false true false no
 check_power_key "no power key suspend on clamshell laptop without touchscreen" false false false true no
 
+# 8. The Windows and Android file handlers (install_foreign_apps), with GLib's own gio in a fake
+# home: another app that opens .exe files keeps them unless the menu's question was answered yes;
+# the types no app opens go to the handlers.
+foreign() {
+    home="$TMP/foreign-$1"
+    rm -rf "$home"
+    mkdir -p "$home/sys/applications" "$home/home/.config" "$home/home/.local/bin" "$home/bin"
+    # GLib lists an app only when its program is on PATH: the handlers' in ~/.local/bin, as
+    # install_programs puts them, the others' on PATH
+    for p in home/.local/bin/infynitae-windows-run home/.local/bin/infynitae-android-run bin/other bin/archives; do
+        printf '#!/bin/sh\n' > "$home/$p"
+        chmod +x "$home/$p"
+    done
+    printf '[Desktop Entry]\nType=Application\nName=Other launcher\nExec=other %%f\nMimeType=application/x-ms-dos-executable;application/x-msdownload;\n' \
+        > "$home/sys/applications/other-launcher.desktop"
+    printf '[Desktop Entry]\nType=Application\nName=Archives\nExec=archives %%f\nMimeType=application/vnd.android.package-archive;\n' \
+        > "$home/sys/applications/archives.desktop"
+    # GLib finds the apps for a type in the folder's mimeinfo.cache (update-desktop-database)
+    printf '[MIME Cache]\napplication/x-ms-dos-executable=other-launcher.desktop;\napplication/x-msdownload=other-launcher.desktop;\napplication/vnd.android.package-archive=archives.desktop;\n' \
+        > "$home/sys/applications/mimeinfo.cache"
+    # a choice of the user's own
+    printf '[Default Applications]\napplication/vnd.android.package-archive=archives.desktop\n' \
+        > "$home/home/.config/mimeapps.list"
+    env -i PATH="$home/bin:$PATH" HOME="$home/home" XDG_DATA_DIRS="$home/sys" FOREIGN_DEFAULTS="$2" bash -c '
+        . "'"$REPO_DIR"'/live/install-lib.sh"
+        [ "$1" = menu ] && { foreign_other_defaults "'"$REPO_DIR"'"; exit; }
+        install_foreign_apps "'"$REPO_DIR"'"
+        # the session has ~/.local/bin on PATH
+        PATH="$HOME/.local/bin:$PATH"
+        for t in application/x-ms-dos-executable application/x-msdownload application/x-msi \
+            application/vnd.microsoft.portable-executable application/vnd.android.package-archive; do
+            printf "%s " "$(default_app "$t")"
+        done
+    ' sh "$1" 2>&1
+}
+if command -v gio >/dev/null 2>&1; then
+    check "the menu is told which types another app opens" "$(foreign menu false | tr '\t\n' '= ')" \
+        "application/vnd.android.package-archive=archives.desktop application/x-ms-dos-executable=other-launcher.desktop application/x-msdownload=other-launcher.desktop "
+    check "not asked: the other apps keep their types, the rest go to the handlers" "$(foreign keep false)" \
+        "other-launcher.desktop other-launcher.desktop infynitae-windows-run.desktop infynitae-windows-run.desktop archives.desktop "
+    check "not asked: the handlers are installed" \
+        "$(cd "$TMP/foreign-keep/home/.local/share/applications" && ls *.desktop | tr '\n' ' ')" \
+        "infynitae-android-run.desktop infynitae-windows-run.desktop "
+    check "asked, yes: the handlers open every type" "$(foreign take true)" \
+        "infynitae-windows-run.desktop infynitae-windows-run.desktop infynitae-windows-run.desktop infynitae-windows-run.desktop infynitae-android-run.desktop "
+else
+    echo "FAIL gio (glib2) is needed for the file handler checks"
+    fail=1
+fi
+
+# 9. The part "Windows and Android programs": its packages only when chosen, and the choice kept
+# for infynitae-update. pacman is a stand-in that has nothing installed.
+mkdir -p "$TMP/nopacman"
+printf '#!/bin/sh\nexit 1\n' > "$TMP/nopacman/pacman"
+chmod +x "$TMP/nopacman/pacman"
+foreign_pkgs() {
+    PATH="$TMP/nopacman:$PATH" FOREIGN_APPS="$1" bash -c '. "'"$REPO_DIR"'/live/install-lib.sh"; wanted_pkgs' 2>/dev/null \
+        | grep -x 'bubblewrap\|waydroid' | tr '\n' ' '
+}
+check "chosen: bubblewrap and waydroid are wanted" "$(foreign_pkgs true)" "bubblewrap waydroid "
+check "not chosen: neither is" "$(foreign_pkgs false)" ""
+check "the choice is saved and read back" "$(XDG_STATE_HOME="$TMP/state" bash -c '
+    . "'"$REPO_DIR"'/live/install-lib.sh"
+    FOREIGN_APPS=true save_install_choices
+    FOREIGN_APPS=""
+    load_install_choices
+    echo "$FOREIGN_APPS"')" true
+
 exit $fail

@@ -1,0 +1,26 @@
+# Infynitae's sandbox socket (`infynitae-sandbox-socket`): a Wayland socket for one sandboxed program
+# through security-context-v1. Its own crate and lockfile, outside the compositor workspace, like
+# live/shot-rs.
+[package]
+name = "infynitae-sandbox-socket"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "A security-context-v1 Wayland socket for one sandboxed program"
+
+[[bin]]
+name = "infynitae-sandbox-socket"
+path = "src/main.rs"
+
+[dependencies]
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
+
+[profile.release]
+opt-level = "s"
+lto = "thin"
+codegen-units = 1
+strip = true
+
+# not a member of the compositor's workspace
+[workspace]

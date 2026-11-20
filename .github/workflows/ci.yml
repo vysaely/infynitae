@@ -43,7 +43,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libglib2.0-dev libwayland-dev libxkbcommon-dev libpolkit-agent-1-dev libgtk-3-dev libcairo2-dev libpango1.0-dev libpam0g-dev libgdk-pixbuf-2.0-dev fonts-dejavu-core dbus libglib2.0-bin
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libglib2.0-dev libwayland-dev libxkbcommon-dev libpolkit-agent-1-dev libgtk-3-dev libcairo2-dev libpango1.0-dev libpam0g-dev libgdk-pixbuf-2.0-dev fonts-dejavu-core dbus libglib2.0-bin bubblewrap desktop-file-utils
       - run: sh live/build-helpers.sh "$PWD" "$RUNNER_TEMP/bin"
       - run: sh tools/test-automount
       - run: sh tools/test-drive-name
@@ -80,6 +80,11 @@ jobs:
       - run: sh tools/test-session
       - run: sh tools/test-install-lib
       - run: sh tools/test-log-caps
+      # Ubuntu 24.04 lets AppArmor refuse unprivileged user namespaces, which bwrap needs: the
+      # sandbox checks run bwrap for real, so they get them (Arch, the target, allows them)
+      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - run: bash tools/test-windows-run
+      - run: bash tools/test-android-run
 
   # The two old edges are frozen (owner, 2026-11-13: archived, look only; tags edge-c-final and
   # edge-rs-final). The Rust one keeps running until live/edge-apps replaces it, so a real bug fix can
@@ -162,6 +167,28 @@ jobs:
         with:
           name: infynitae-shot
           path: live/shot-rs/target/debug/infynitae-shot
+
+  # The sandbox socket (live/sandbox-socket): its own crate; its test runs a real session of the
+  # workspace with the helper as built (t1_trust, ignored without INFYNITAE_SANDBOX_SOCKET).
+  sandbox-socket:
+    name: Sandbox socket (Rust)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends $NATIVE_DEPS
+      - name: Toolchain pinned by rust-toolchain.toml
+        run: |
+          channel=$(python3 -c 'import tomllib; print(tomllib.load(open("rust-toolchain.toml", "rb"))["toolchain"]["channel"])')
+          rustup toolchain install "$channel" --profile minimal --component rustfmt,clippy
+      - uses: Swatinem/rust-cache@v2.7.8
+        with:
+          workspaces: |
+            live/sandbox-socket
+            .
+      - run: cd live/sandbox-socket && cargo fmt -- --check
+      - run: cd live/sandbox-socket && cargo clippy --locked --all-targets -- -D warnings
+      - run: cd live/sandbox-socket && cargo build --locked
+      - run: INFYNITAE_SANDBOX_SOCKET="$PWD/live/sandbox-socket/target/debug/infynitae-sandbox-socket" cargo test --locked -p infynitae-backend-headless --test t1_trust -- --ignored
 
   # The edge from apps (docs/EDGE_APPS.md): its own crate in live/edge-apps
   edge-apps:

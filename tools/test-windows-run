@@ -1,0 +1,206 @@
+#!/usr/bin/env bash
+# tools/test-windows-run: the sandbox live/windows-run builds for a Windows program. First the
+# bwrap arguments for a fake home (what is bound, what is not), then bwrap itself, running cat
+# and touch inside the same sandbox: a file of the home outside the allowed folders cannot be
+# read, and a write outside the C: drive and ~/Windows does not reach the disk. Proton, Wine and
+# umu are never run.
+set -eu
+
+REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
+TMP=$(mktemp -d "/tmp/infynitae-test-windows-run.XXXXXX")
+trap 'rm -rf "$TMP"' EXIT INT TERM
+
+fail=0
+check() {
+    if [ "$2" = "$3" ]; then
+        echo "ok   $1"
+    else
+        echo "FAIL $1: expected '$3', got '$2'"
+        fail=1
+    fi
+}
+
+# a fake home with things the program must not see, and the file it is opened with
+export HOME="$TMP/home"
+export XDG_RUNTIME_DIR="$TMP/run"
+mkdir -p "$HOME/.ssh" "$HOME/Downloads" "$HOME/Documents" "$XDG_RUNTIME_DIR"
+echo private-key > "$HOME/.ssh/id_ed25519"
+echo letter > "$HOME/Documents/letter.txt"
+echo installer > "$HOME/Downloads/Setup Tool.exe"
+unset DISPLAY XAUTHORITY
+
+# shellcheck source=../live/windows-run
+. "$REPO_DIR/live/windows-run"
+
+check "the prefix is named after the file" "$(prefix_name "$HOME/Downloads/Setup Tool.exe")" "Setup-Tool"
+check "a prefix name has no underscore" "$(prefix_name "/x/my_app.v2.msi")" "my-app.v2"
+check "a file named only by its extension" "$(prefix_name "/x/.exe")" "program"
+
+# Proton: the newest in Steam's folder, else UMU-Proton in umu's own
+check "no Proton anywhere" "$(pick_proton)" ""
+mkdir -p "$WINDOWS_RUNTIME/Steam/compatibilitytools.d/UMU-Proton-9"
+: > "$WINDOWS_RUNTIME/Steam/compatibilitytools.d/UMU-Proton-9/proton"
+check "UMU-Proton without a Steam one" "$(pick_proton)" "$WINDOWS_RUNTIME/Steam/compatibilitytools.d/UMU-Proton-9"
+mkdir -p "$STEAM_PROTONS/GE-Proton9-1" "$STEAM_PROTONS/Proton-CachyOS Latest"
+touch -d '2026-01-01' "$STEAM_PROTONS/GE-Proton9-1/proton"
+touch -d '2026-06-01' "$STEAM_PROTONS/Proton-CachyOS Latest/proton"
+check "the newest of Steam's" "$(pick_proton)" "$STEAM_PROTONS/Proton-CachyOS Latest"
+
+NAME="Setup-Tool"
+PREFIX="$WINDOWS_PREFIXES/$NAME"
+SOCKET="$XDG_RUNTIME_DIR/infynitae-windows/$NAME.1"
+PROTON=$(pick_proton)
+FILE="$HOME/Downloads/Setup Tool.exe"
+OFFLINE=false X11=false
+
+# The paths each argument mounts, one "OPTION SRC DEST" per line.
+mounts() {
+    local i=0 n=${#SANDBOX[@]}
+    while [ $i -lt $n ]; do
+        case "${SANDBOX[$i]}" in
+            --bind | --ro-bind | --dev-bind-try | --symlink)
+                printf '%s %s -> %s\n' "${SANDBOX[$i]}" "${SANDBOX[$((i + 1))]}" "${SANDBOX[$((i + 2))]}"
+                i=$((i + 3)) ;;
+            --tmpfs | --dir | --overlay-src | --tmp-overlay | --proc | --dev)
+                printf '%s %s\n' "${SANDBOX[$i]}" "${SANDBOX[$((i + 1))]}"
+                i=$((i + 2)) ;;
+            --setenv | --chmod)
+                i=$((i + 3)) ;;
+            --chdir)
+                i=$((i + 2)) ;;
+            *) i=$((i + 1)) ;;
+        esac
+    done
+}
+has() { printf '%s\n' "${SANDBOX[@]}" | grep -qxF -- "$1"; }
+
+sandbox_args run
+uid=$(id -u)
+# everything of the home folder that is mounted, outside the system paths
+home_mounts=$(mounts | grep -F -- "$HOME" | sort)
+# the runtime: an overlay where bubblewrap has them (0.10+), read-only before that
+if bwrap --help 2>&1 | grep -q -- --overlay-src; then
+    runtime_mounts="--overlay-src $HOME/.local/share/infynitae/windows-runtime
+--tmp-overlay $HOME/.local/share/infynitae/windows-runtime"
+else
+    runtime_mounts="--ro-bind $HOME/.local/share/infynitae/windows-runtime -> $HOME/.local/share/infynitae/windows-runtime"
+fi
+expected=$(printf '%s\n' \
+    "--bind $HOME/.local/share/infynitae/windows/Setup-Tool -> $HOME/.local/share/infynitae/windows/Setup-Tool" \
+    "--bind $HOME/Windows -> $HOME/Windows" \
+    "$runtime_mounts" \
+    "--ro-bind $HOME/.local/share/Steam/compatibilitytools.d/Proton-CachyOS Latest -> $HOME/.local/share/Steam/compatibilitytools.d/Proton-CachyOS Latest" \
+    "--ro-bind $HOME/Downloads/Setup Tool.exe -> $HOME/Downloads/Setup Tool.exe" \
+    "--tmpfs $HOME" | sort)
+check "only the prefix, ~/Windows, the runtime, Proton and the file are mounted from the home" \
+    "$home_mounts" "$expected"
+check "the home itself is an empty tmpfs, never bound" \
+    "$(mounts | grep -cE -- "^--(bind|ro-bind|dev-bind-try) $HOME -> " || true)" "0"
+check "~/.ssh is not named" "$(printf '%s\n' "${SANDBOX[@]}" | grep -c '\.ssh' || true)" "0"
+check "the Wayland socket is the security-context one" \
+    "$(mounts | grep -F -- "-> /run/user/$uid/wayland-0")" "--bind $SOCKET -> /run/user/$uid/wayland-0"
+check "the environment is cleared" "$(has --clearenv && echo yes)" "yes"
+check "no session bus" "$(printf '%s\n' "${SANDBOX[@]}" | grep -c 'DBUS\|/bus' || true)" "0"
+check "no X11 socket" "$(printf '%s\n' "${SANDBOX[@]}" | grep -cE '^(DISPLAY|XAUTHORITY)$|X11' || true)" "0"
+check "Wine's Wayland driver" "$(printf '%s\n' "${SANDBOX[@]}" | grep -A1 -x PROTON_ENABLE_WAYLAND | tail -1)" "1"
+check "the runtime is not updated by the program" "$(printf '%s\n' "${SANDBOX[@]}" | grep -A1 -x UMU_RUNTIME_UPDATE | tail -1)" "0"
+check "network on by default" "$(has --unshare-net && echo unshared || echo shared)" "shared"
+
+OFFLINE=true
+sandbox_args run
+check "--offline unshares the network" "$(has --unshare-net && echo yes)" "yes"
+OFFLINE=false
+
+# the first run makes the C: drive: no file of the user's, no ~/Windows, the runtime writable
+FILE=""
+sandbox_args setup
+check "setup mounts neither the file nor ~/Windows" \
+    "$(mounts | grep -cF -e 'Setup Tool.exe' -e "$HOME/Windows" || true)" "0"
+check "setup writes the runtime" \
+    "$(mounts | grep -F -- "--bind $WINDOWS_RUNTIME -> $WINDOWS_RUNTIME")" "--bind $WINDOWS_RUNTIME -> $WINDOWS_RUNTIME"
+check "setup has the network, even with --offline" \
+    "$(OFFLINE=true; sandbox_args setup; has --unshare-net && echo unshared || echo shared)" "shared"
+
+# --x11: the display's socket and the cookie, Wine on X11
+X11=true DISPLAY=":3" XAUTHORITY="$TMP/xauth"
+FILE="$HOME/Downloads/Setup Tool.exe"
+sandbox_args run
+check "--x11 mounts the display's socket" \
+    "$(mounts | grep -F X11-unix)" "--ro-bind /tmp/.X11-unix/X3 -> /tmp/.X11-unix/X3"
+check "--x11 turns Wine's Wayland driver off" \
+    "$(printf '%s\n' "${SANDBOX[@]}" | grep -A1 -x PROTON_ENABLE_WAYLAND | tail -1)" "0"
+X11=false
+unset DISPLAY XAUTHORITY
+
+# ---- bwrap itself ------------------------------------------------------------------------------
+if ! command -v bwrap >/dev/null 2>&1; then
+    echo "FAIL bwrap is not installed"
+    exit 1
+fi
+mkdir -p "$PREFIX" "$WINDOWS_SHARED" "$(dirname "$SOCKET")"
+: > "$SOCKET"
+echo runtime > "$WINDOWS_RUNTIME/runtime-file"
+FILE="$HOME/Downloads/Setup Tool.exe"
+sandbox_args run
+inside() { bwrap "${SANDBOX[@]}" /bin/sh -c "$1" 2>/dev/null; }
+# a sandbox that cannot start at all says why once, instead of a row of empty answers
+if ! probe=$(bwrap "${SANDBOX[@]}" /bin/true 2>&1); then
+    echo "FAIL bwrap cannot start this sandbox here: $probe"
+    echo "     bwrap $(bwrap --version 2>&1)"
+fi
+
+check "the opened file is readable" "$(inside "cat '$FILE'")" "installer"
+check "the opened file cannot be changed" "$(inside "echo x >> '$FILE' && echo written || echo refused")" "refused"
+check "~/.ssh cannot be read" "$(inside "cat '$HOME/.ssh/id_ed25519' || echo refused")" "refused"
+check "a document outside the allowed folders cannot be read" \
+    "$(inside "cat '$HOME/Documents/letter.txt' || echo refused")" "refused"
+check "the home shows only what is mounted" "$(inside "ls -A '$HOME' | LC_ALL=C sort | tr '\n' ' '")" ".local Downloads Windows "
+check "the runtime is readable" "$(inside "cat '$WINDOWS_RUNTIME/runtime-file'")" "runtime"
+check "the system is read-only" "$(inside "touch /usr/x 2>/dev/null && echo written || echo refused")" "refused"
+
+inside "echo c > '$PREFIX/c-drive.txt'; echo w > '$WINDOWS_SHARED/shared.txt';
+    echo h > '$HOME/Documents/new.txt'; mkdir -p '$HOME/Documents'; echo h > '$HOME/Documents/new.txt';
+    echo h > '$HOME/.bashrc'; echo r > '$WINDOWS_RUNTIME/planted'; echo r >> '$WINDOWS_RUNTIME/runtime-file'" || true
+check "a write to the C: drive stays" "$(cat "$PREFIX/c-drive.txt" 2>/dev/null)" "c"
+check "a write to ~/Windows stays" "$(cat "$WINDOWS_SHARED/shared.txt" 2>/dev/null)" "w"
+check "a write elsewhere in the home does not reach the disk" \
+    "$([ -e "$HOME/Documents/new.txt" ] || [ -e "$HOME/.bashrc" ] && echo reached || echo gone)" "gone"
+check "a write to the runtime does not reach the disk" \
+    "$([ -e "$WINDOWS_RUNTIME/planted" ] && echo reached || echo gone) $(cat "$WINDOWS_RUNTIME/runtime-file")" "gone runtime"
+check "no session bus or Wayland display of the host" \
+    "$(inside 'echo "${DBUS_SESSION_BUS_ADDRESS:-none} $WAYLAND_DISPLAY $XDG_RUNTIME_DIR"')" "none wayland-0 /run/user/$uid"
+check "the runtime folder of the host is not visible" "$(inside "ls '$XDG_RUNTIME_DIR' 2>/dev/null || echo absent")" "absent"
+
+OFFLINE=true
+sandbox_args run
+check "--offline: no network but loopback" "$(inside "tail -n +3 /proc/net/dev | cut -d: -f1 | tr -d ' ' | tr '\n' ' '")" "lo "
+OFFLINE=false
+
+# ---- shortcuts ---------------------------------------------------------------------------------
+# what the installer left in the C: drive, as the scanner meets it; names come from the sandbox
+menu="$PREFIX/drive_c/ProgramData/Microsoft/Windows/Start Menu/Programs/Tool"
+mkdir -p "$menu" "$PREFIX/drive_c/users/steamuser/Desktop"
+ln -s steamuser "$PREFIX/drive_c/users/$(id -un)"
+: > "$menu/Tool.lnk"
+: > "$PREFIX/drive_c/users/steamuser/Desktop/Tool Desktop.LNK"
+: > "$menu/bad\$(touch x).lnk"
+: > "$menu/bad\"quote.lnk"
+: > "$menu/bad%f.lnk"
+ln -s "$HOME/.ssh/id_ed25519" "$menu/link.lnk"
+mkdir -p "$HOME/.local/share/applications"
+echo stale > "$HOME/.local/share/applications/infynitae-windows-${NAME}_1.desktop"
+echo other > "$HOME/.local/share/applications/infynitae-windows-${NAME}-2_1.desktop"
+# $0 is this test inside write_shortcuts; the entries name it as the program to start
+write_shortcuts
+apps="$HOME/.local/share/applications"
+check "one entry per real shortcut, the unsafe names and the link left out" \
+    "$(grep -h '^Name=' "$apps"/infynitae-windows-"${NAME}"_*.desktop | sort | tr '\n' ' ')" "Name=Tool Name=Tool Desktop "
+check "the old entries of this prefix are gone, another prefix's stay" \
+    "$(ls "$apps" | grep -c stale; cat "$apps/infynitae-windows-${NAME}-2_1.desktop")" "0
+other"
+self=$(realpath -e "$0")
+check "an entry starts the shortcut through windows-run with its prefix" \
+    "$(grep -h '^Exec=' "$apps"/infynitae-windows-"${NAME}"_*.desktop | grep -F 'Tool.lnk')" \
+    "Exec=\"$self\" --prefix $NAME \"$menu/Tool.lnk\""
+
+exit "$fail"

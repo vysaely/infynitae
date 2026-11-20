@@ -115,15 +115,16 @@ is_skipped() {
 }
 load_install_choices() {
     # an install from before these were saved: nothing added that it may have left out
-    SKIP="" BLUETOOTH=false POWER_PROFILES=false TERMINAL_PKG=false
+    SKIP="" BLUETOOTH=false POWER_PROFILES=false TERMINAL_PKG=false FOREIGN_APPS=false
     # shellcheck disable=SC1090
     [ -f "$INSTALL_CHOICES" ] && . "$INSTALL_CHOICES"
     return 0
 }
 save_install_choices() {
     mkdir -p "$INFY_STATE"
-    printf 'SKIP="%s"\nBLUETOOTH=%s\nPOWER_PROFILES=%s\nTERMINAL_PKG=%s\n' "${SKIP:-}" \
-        "${BLUETOOTH:-false}" "${POWER_PROFILES:-false}" "${TERMINAL_PKG:-false}" > "$INSTALL_CHOICES"
+    printf 'SKIP="%s"\nBLUETOOTH=%s\nPOWER_PROFILES=%s\nTERMINAL_PKG=%s\nFOREIGN_APPS=%s\n' "${SKIP:-}" \
+        "${BLUETOOTH:-false}" "${POWER_PROFILES:-false}" "${TERMINAL_PKG:-false}" \
+        "${FOREIGN_APPS:-false}" > "$INSTALL_CHOICES"
 }
 
 # The hardware parts: chosen, and the hardware is there. Asked again at each update, so an
@@ -135,6 +136,14 @@ want_bluetooth() {
 want_power_profiles() {
     [ "${POWER_PROFILES:-false}" = true ] && ls -d /sys/class/power_supply/BAT* >/dev/null 2>&1 \
         && ! pacman -Qi tlp >/dev/null 2>&1
+}
+# Windows and Android programs (docs/SECURITY.md); umu-launcher is in [multilib]
+want_foreign_apps() {
+    [ "${FOREIGN_APPS:-false}" = true ]
+}
+# `sudo waydroid init` has run: it makes this folder (Waydroid's tools/actions/initializer.py)
+waydroid_ready() {
+    [ -d /var/lib/waydroid/rootfs ]
 }
 # a terminal for Super+Q, when there is none
 want_terminal() {
@@ -156,6 +165,14 @@ wanted_pkgs() {
     want_terminal && echo alacritty
     want_bluetooth && missing_pkgs bluez bluez-utils
     want_power_profiles && missing_pkgs power-profiles-daemon
+    if want_foreign_apps; then
+        missing_pkgs bubblewrap waydroid
+        if grep -q '^\[multilib\]' /etc/pacman.conf 2>/dev/null; then
+            missing_pkgs umu-launcher
+        else
+            warn "umu-launcher is in [multilib], which is off: Windows programs need it (infynitae-drivers --gaming turns it on)"
+        fi
+    fi
     # the compiler through rustup: the source pins its version (rust-toolchain.toml), which
     # Arch's own rust package ignores; rustup replaces it
     missing_pkgs rustup
@@ -258,6 +275,8 @@ live/infynitae-xkill infynitae-xkill
 live/infynitae-sleep-lock infynitae-sleep-lock
 live/infynitae-automount infynitae-automount
 live/infynitae-format-drive infynitae-format-drive
+live/windows-run infynitae-windows-run
+live/android-run infynitae-android-run
 LIST
     # xwayland-satellite with our patch; a failed build keeps the copy already installed
     sh "$src/live/build-satellite.sh" "$src" "$bin"
@@ -420,6 +439,56 @@ $t"
         printf '\n[Default Applications]\n%s' "$add" >> "$list"
     fi
     echo "==> Default apps for $(printf '%s' "$add" | grep -c .) more file types (~/.config/mimeapps.list)"
+}
+
+# Windows and Android programs (FOREIGN_APPS): the app that opens a file type now, as GLib picks
+# it (a choice in mimeapps.list, else the first app that says it handles the type); empty when
+# none does.
+default_app() {
+    LC_ALL=C gio mime "$1" 2>/dev/null | sed -n 's/^Default application for .*: //p'
+}
+# "type<TAB>app" for each type of the handlers in $1/live/applications that another app opens now.
+foreign_other_defaults() {
+    local f t cur
+    for f in "$1"/live/applications/*.desktop; do
+        for t in $(sed -n 's/^MimeType=//p' "$f" | tr ';' ' '); do
+            cur=$(default_app "$t")
+            [ -n "$cur" ] && [ "$cur" != "${f##*/}" ] && printf '%s\t%s\n' "$t" "$cur"
+        done
+    done
+    return 0
+}
+# The handlers into ~/.local/share/applications. Each opens its types by default where no other
+# app does, and everywhere with FOREIGN_DEFAULTS=true (the installer's menu asked). An app that
+# opens a type now is written in mimeapps.list as its default first: GLib would otherwise pick
+# the handler in the user's own folder over it, a change nobody chose. GLib ignores an entry whose
+# program is not on PATH, and the install runs before ~/.local/bin is on it.
+install_foreign_apps() {
+    local src="$1" apps="$HOME/.local/share/applications" others f id t cur
+    local PATH="$HOME/.local/bin:$PATH"
+    if ! command -v gio >/dev/null 2>&1; then
+        warn "gio is missing (glib2): .exe and .apk files are not linked to Windows and Android programs"
+        return 0
+    fi
+    others=$(foreign_other_defaults "$src")
+    mkdir -p "$apps"
+    for f in "$src"/live/applications/*.desktop; do
+        id="${f##*/}"
+        install -m 644 "$f" "$apps/$id" || { warn "Could not install $apps/$id"; continue; }
+        for t in $(sed -n 's/^MimeType=//p' "$f" | tr ';' ' '); do
+            cur=$(printf '%s\n' "$others" | awk -F '\t' -v t="$t" '$1 == t { print $2 }')
+            if [ -n "$cur" ] && [ "${FOREIGN_DEFAULTS:-false}" != true ]; then
+                gio mime "$t" "$cur" >/dev/null || warn "Could not keep $cur for $t"
+            else
+                gio mime "$t" "$id" >/dev/null || warn "Could not make $id open $t"
+            fi
+        done
+    done
+    # "Open with" lists the handlers for a type another app keeps: GLib finds them in the folder's
+    # mimeinfo.cache
+    if command -v update-desktop-database >/dev/null 2>&1; then
+        update-desktop-database -q "$apps" || warn "Could not update $apps/mimeinfo.cache"
+    fi
 }
 
 # The config: created when missing, with the parts left out switched off too, so it says what the

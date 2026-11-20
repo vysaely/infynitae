@@ -283,3 +283,112 @@ fn the_screen_locker_setting_may_lock() {
     let p = Peer::connect(&mut ls, sandboxed("org.example.Untrusted"));
     assert!(!p.seen.names().contains("ext_session_lock_manager_v1"));
 }
+
+/// A client through `infynitae-sandbox-socket` (live/sandbox-socket, the socket of
+/// live/windows-run) is sandboxed, with the app id the helper set: a real session with a real
+/// socket, the helper as built, and a client connecting to the helper's socket. Ignored by
+/// default: needs `INFYNITAE_SANDBOX_SOCKET`, the helper binary (CI's job "Sandbox socket").
+#[test]
+#[ignore = "needs INFYNITAE_SANDBOX_SOCKET, the built live/sandbox-socket"]
+fn a_client_through_the_sandbox_socket_is_sandboxed_with_its_app_id() {
+    use infynitae_wayland::session::{Session, SessionOptions};
+    use smithay::reexports::calloop::EventLoop;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    let helper = std::env::var_os("INFYNITAE_SANDBOX_SOCKET").expect("INFYNITAE_SANDBOX_SOCKET");
+    let (core, _input, _shell, _token) =
+        infynitae_core::Core::new(infynitae_core::navigation::PersistedCameras::default());
+    let display =
+        smithay::reexports::wayland_server::Display::<infynitae_wayland::WaylandState>::new()
+            .unwrap();
+    let mut state = infynitae_wayland::WaylandState::new(&display.handle(), core);
+    // capture for this app id only: a sandboxed client with it sees capture and nothing else
+    // privileged, where a native client would see every list's default
+    let home = TestTempDir::new("t1_trust_sandbox_socket");
+    write_config(
+        home.path(),
+        "ALLOW_CAPTURE=\"native infynitae.windows.probe\"\n",
+    );
+    state.set_config_home(home.path().to_path_buf());
+    state.reload_config();
+    let mut event_loop: EventLoop<()> = EventLoop::try_new().unwrap();
+    let mut session = Session::new(
+        display,
+        &event_loop.handle(),
+        &SessionOptions {
+            socket_name: Some(format!("infynitae-sandbox-test-{}", std::process::id())),
+            ..SessionOptions::default()
+        },
+    )
+    .unwrap();
+    let display_name = session.socket_name().to_string();
+    let mut pump = |state: &mut infynitae_wayland::WaylandState| {
+        event_loop
+            .dispatch(Some(Duration::from_millis(5)), &mut ())
+            .unwrap();
+        session.dispatch(state);
+    };
+
+    let socket = home.path().join("probe.socket");
+    // the helper's command waits for its input to close, then exits 7: the status passes through
+    let mut child = Command::new(&helper)
+        .arg(&socket)
+        .args(["infynitae.windows.probe", "infynitae-windows", "--"])
+        .args(["sh", "-c", "cat; exit 7"])
+        .env("WAYLAND_DISPLAY", &display_name)
+        .stdin(Stdio::piped())
+        .spawn()
+        .expect("start the helper");
+    let start = Instant::now();
+    while !socket.exists() {
+        assert!(start.elapsed() < Duration::from_secs(10), "no socket");
+        assert!(child.try_wait().unwrap().is_none(), "the helper ended");
+        pump(&mut state);
+    }
+
+    let stream = UnixStream::connect(&socket).expect("connect through the helper");
+    stream.set_nonblocking(true).unwrap();
+    let conn = Connection::from_socket(stream).unwrap();
+    let mut queue: EventQueue<Seen> = conn.new_event_queue();
+    let _registry = conn.display().get_registry(&queue.handle(), ());
+    let mut seen = Seen::default();
+    while start.elapsed() < Duration::from_secs(10) && !seen.names().contains("wl_compositor") {
+        pump(&mut state);
+        conn.flush().unwrap();
+        if let Some(guard) = conn.prepare_read() {
+            match guard.read() {
+                Ok(_) => {}
+                Err(WaylandError::Io(e)) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(e) => panic!("the connection failed: {e}"),
+            }
+        }
+        queue.dispatch_pending(&mut seen).unwrap();
+    }
+    let names = seen.names();
+    assert!(names.contains("xdg_wm_base"), "ordinary globals: {names:?}");
+    for g in &PRIVILEGED[..4] {
+        assert!(names.contains(g), "the listed app id lacks {g}: {names:?}");
+    }
+    for g in &PRIVILEGED[4..] {
+        assert!(!names.contains(g), "a sandboxed client saw {g}");
+    }
+    assert!(
+        !names.contains(SECURITY_CONTEXT),
+        "a sandbox cannot nest another"
+    );
+
+    drop(child.stdin.take());
+    let status = loop {
+        if let Some(s) = child.try_wait().unwrap() {
+            break s;
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(20),
+            "the helper did not end"
+        );
+        pump(&mut state);
+    };
+    assert_eq!(status.code(), Some(7), "the command's status");
+    assert!(!socket.exists(), "the socket file is removed");
+}

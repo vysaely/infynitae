@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Android app
+Comment=Installs an Android app (.apk) in Waydroid and opens it
+Exec=infynitae-android-run %f
+MimeType=application/vnd.android.package-archive;
+NoDisplay=true
+Terminal=false

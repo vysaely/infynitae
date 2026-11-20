@@ -40,6 +40,7 @@ there are no menus: it installs what fits the machine, minus what the options le
 | `--defaults` | No menus: what fits this machine |
 | `--replay-buffer` | Keep the last minutes of the screen, saved with `Super + Alt + C` |
 | `--gaming` | 32-bit graphics drivers for Steam, Wine and 32-bit games (automatic when Steam or Wine is installed; later: `infynitae-drivers --gaming`) |
+| `--foreign-apps` | Windows programs (`.exe`, `.msi`) and Android apps (`.apk`), each in a sandbox (umu-launcher, bubblewrap, waydroid; turns on `--gaming`). Android needs `sudo waydroid init` once afterwards (downloads ~1 GB). See docs/SECURITY.md, "Windows and Android programs" |
 | `--no-autologin` | Log in on tty1 instead of booting to the lock screen |
 
 `./install.sh --help` explains each one.
