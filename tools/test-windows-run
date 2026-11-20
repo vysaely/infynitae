@@ -137,6 +137,11 @@ echo runtime > "$WINDOWS_RUNTIME/runtime-file"
 FILE="$HOME/Downloads/Setup Tool.exe"
 sandbox_args run
 inside() { bwrap "${SANDBOX[@]}" /bin/sh -c "$1" 2>/dev/null; }
+# a sandbox that cannot start at all says why once, instead of a row of empty answers
+if ! probe=$(bwrap "${SANDBOX[@]}" /bin/true 2>&1); then
+    echo "FAIL bwrap cannot start this sandbox here: $probe"
+    echo "     bwrap $(bwrap --version 2>&1)"
+fi
 
 check "the opened file is readable" "$(inside "cat '$FILE'")" "installer"
 check "the opened file cannot be changed" "$(inside "echo x >> '$FILE' && echo written || echo refused")" "refused"
