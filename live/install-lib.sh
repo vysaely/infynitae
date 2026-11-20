@@ -416,6 +416,56 @@ $t"
     echo "==> Default apps for $(printf '%s' "$add" | grep -c .) more file types (~/.config/mimeapps.list)"
 }
 
+# Windows and Android programs (FOREIGN_APPS): the app that opens a file type now, as GLib picks
+# it (a choice in mimeapps.list, else the first app that says it handles the type); empty when
+# none does.
+default_app() {
+    LC_ALL=C gio mime "$1" 2>/dev/null | sed -n 's/^Default application for .*: //p'
+}
+# "type<TAB>app" for each type of the handlers in $1/live/applications that another app opens now.
+foreign_other_defaults() {
+    local f t cur
+    for f in "$1"/live/applications/*.desktop; do
+        for t in $(sed -n 's/^MimeType=//p' "$f" | tr ';' ' '); do
+            cur=$(default_app "$t")
+            [ -n "$cur" ] && [ "$cur" != "${f##*/}" ] && printf '%s\t%s\n' "$t" "$cur"
+        done
+    done
+    return 0
+}
+# The handlers into ~/.local/share/applications. Each opens its types by default where no other
+# app does, and everywhere with FOREIGN_DEFAULTS=true (the installer's menu asked). An app that
+# opens a type now is written in mimeapps.list as its default first: GLib would otherwise pick
+# the handler in the user's own folder over it, a change nobody chose. GLib ignores an entry whose
+# program is not on PATH, and the install runs before ~/.local/bin is on it.
+install_foreign_apps() {
+    local src="$1" apps="$HOME/.local/share/applications" others f id t cur
+    local PATH="$HOME/.local/bin:$PATH"
+    if ! command -v gio >/dev/null 2>&1; then
+        warn "gio is missing (glib2): .exe and .apk files are not linked to Windows and Android programs"
+        return 0
+    fi
+    others=$(foreign_other_defaults "$src")
+    mkdir -p "$apps"
+    for f in "$src"/live/applications/*.desktop; do
+        id="${f##*/}"
+        install -m 644 "$f" "$apps/$id" || { warn "Could not install $apps/$id"; continue; }
+        for t in $(sed -n 's/^MimeType=//p' "$f" | tr ';' ' '); do
+            cur=$(printf '%s\n' "$others" | awk -F '\t' -v t="$t" '$1 == t { print $2 }')
+            if [ -n "$cur" ] && [ "${FOREIGN_DEFAULTS:-false}" != true ]; then
+                gio mime "$t" "$cur" >/dev/null || warn "Could not keep $cur for $t"
+            else
+                gio mime "$t" "$id" >/dev/null || warn "Could not make $id open $t"
+            fi
+        done
+    done
+    # "Open with" lists the handlers for a type another app keeps: GLib finds them in the folder's
+    # mimeinfo.cache
+    if command -v update-desktop-database >/dev/null 2>&1; then
+        update-desktop-database -q "$apps" || warn "Could not update $apps/mimeinfo.cache"
+    fi
+}
+
 # The config: created when missing, with the parts left out switched off too, so it says what the
 # desktop does. Yours is never overwritten: settings added since are appended with their
 # defaults and comments (a value of yours is never changed), and the whole new file goes to

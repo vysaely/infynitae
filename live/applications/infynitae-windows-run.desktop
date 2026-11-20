@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Windows program, in a sandbox
+Comment=Runs a Windows program (.exe, .msi) with Proton, in a sandbox
+Exec=infynitae-windows-run %f
+MimeType=application/x-ms-dos-executable;application/x-msdownload;application/x-msi;application/vnd.microsoft.portable-executable;
+NoDisplay=true
+Terminal=false
