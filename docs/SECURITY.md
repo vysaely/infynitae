@@ -91,6 +91,52 @@ Before the machine sleeps, the sleep lock asks the compositor whether the sessio
 (`infynitae msg snapshot`, its `locked` field), never whether a process of some name runs; a
 lock screen that does not confirm in time holds the sleep back as long as logind allows.
 
+## Windows and Android programs
+
+A Windows program (`.exe`, `.msi`) opened with `infynitae-windows-run` runs with Proton (through
+umu-run) inside a bubblewrap sandbox; an Android app (`.apk`) opened with `infynitae-android-run`
+runs in Waydroid. Both connect to Infynitae through `infynitae-sandbox-socket`, a
+security-context-v1 listener, so they are sandboxed apps (above): no capture, clipboard without
+focus, typing for you, window list, display, layers or lock unless you list their app id,
+`infynitae.windows.NAME` (NAME is the program's C: drive) or `infynitae.android`.
+
+What a Windows program sees, and nothing else of the machine:
+
+- `/usr`, `/etc` and `/sys`, read-only (the system's programs and settings, as any user sees them)
+- its own C: drive, `~/.local/share/infynitae/windows/NAME`, read and write; NAME is the file's
+  name, so an installer and the program it installs share one, and the program's shortcuts in
+  the app list start it with the same one
+- `~/Windows`, read and write: the one folder shared with your other files
+- the file it was opened with, read-only
+- Proton, read-only: the newest in Steam's `compatibilitytools.d`, else the UMU-Proton umu
+  fetched; and umu's runtime, where the program's writes vanish when it ends
+- the graphics card (`/dev/dri`), sound (the PipeWire and PulseAudio sockets), the network, and
+  its own empty `/tmp`, home folder and `/run`
+
+It does not see the rest of your home folder (`~/.ssh`, browser profiles, documents), the
+session bus (D-Bus), the X11 display, other processes, or other programs' C: drives. Its
+environment starts empty. `--offline` takes the network away too; `tools/test-windows-run`
+checks these with bubblewrap itself.
+
+What this does not protect against:
+
+- A bug in the Linux kernel or the graphics driver: the program talks to both directly.
+- Sound: the PipeWire socket lets a program record the microphone and every app's sound.
+- The network: the program can reach anything your machine can, the local network too, unless
+  it runs with `--offline`.
+- `--x11`, for a program that fails on Wayland: X11 programs can read each other's windows and
+  keystrokes, so such a program can watch every other X11 app (games, older apps through
+  Xwayland).
+- What you put in `~/Windows`, and what the program keeps in its own C: drive: a program you
+  ran once can change its own C: drive for the next start.
+- The first start of a new C: drive runs umu and Proton with their runtime writable, so they can
+  set it up; the program itself never runs that way.
+- Waydroid: its container manager (`waydroid-container`) runs as root, and Android runs in an
+  LXC container it starts; a bug there is a bug as root. Android apps are sandboxed to
+  Infynitae only when `infynitae-android-run` started the Waydroid session. Waydroid's own app
+  entries (`waydroid app launch`) start a session of their own while none runs, and that one
+  connects as a desktop app.
+
 ## Data kept on disk
 
 - The screen-sharing log (`~/.local/state/infynitae/screenshare.log`) names screens and counts
