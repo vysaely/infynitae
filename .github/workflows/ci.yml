@@ -27,6 +27,16 @@ jobs:
       - run: ./tools/verify-knowledge --content-only
       - run: ./tools/verify-knowledge --self-test
 
+  # docs/NO_SLOP.md: colours come from the theme. No colour literal in crates/ or live/ outside the
+  # theme modules, tests and tools/theme-colours-allow.txt.
+  theme-colours:
+    name: Theme colours
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./tools/verify-theme-colours
+      - run: sh tools/test-verify-theme-colours
+
   # The C helpers as the installer builds them, and the automount test.
   helpers:
     name: C helpers
