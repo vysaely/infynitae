@@ -1,0 +1,173 @@
+#!/usr/bin/env python3
+"""
+verify-theme-colours: colours come from the theme only (docs/NO_SLOP.md, "What people see").
+
+Scans the Rust and C sources under crates/ and live/ for colour literals and prints
+`file:line: text` for each one outside the theme modules and tests; exits 1 if there is any.
+
+A colour literal is:
+  - a hex colour in a string: "#rrggbb" or "#rrggbbaa";
+  - a colour built from number literals: set_source_rgb(0.2, 0.6, 0.9), Rgba(1.0, 1.0, 1.0, 0.9),
+    Rgba::rgb([0x11, 0x13, 0x17]), Color32F::new(0.48, 0.64, 0.97, 1.0), cairo_set_source_rgb(cr,
+    0, 0, 0) and the like (any call whose name ends in rgb, rgba, hsl or hsla, or Rgba(...) / Color*::new(...),
+    with three to five number arguments: a gradient stop has its offset first);
+  - three hex bytes, [0x11, 0x13, 0x17] (how the edges' config holds a colour);
+  - Color32F::BLACK or Color32F::WHITE.
+A colour whose alpha is the literal 0 draws nothing (it clears) and is not counted.
+
+Not scanned: comments, `tests/` folders, and Rust items under `#[cfg(test)]`.
+Exceptions: tools/theme-colours-allow.txt, one `path:reason` line per file (path from the root).
+
+Usage: tools/verify-theme-colours [ROOT]   (ROOT defaults to the repository root)
+"""
+
+import os
+import re
+import sys
+
+NUM = r"-?(?:0x[0-9a-fA-F]+|\d+(?:\.\d*)?)(?:_?(?:f32|f64|u8))?(?:\s*/\s*\d+(?:\.\d*)?)?"
+HEX = re.compile(r"#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?(?![0-9a-zA-Z_])")
+CALL = re.compile(
+    r"(?:\b\w*(?:rgba?|hsla?)|\bRgba|\b\w*Colou?r\w*::new)\s*\(\s*(?:[A-Za-z_]\w*\s*,\s*)?\[?\s*"
+    rf"({NUM}(?:\s*,\s*{NUM}){{2,4}})\s*\]?\s*\)"
+)
+NAMED = re.compile(r"\bColor32F::(?:BLACK|WHITE)\b")
+BYTES = re.compile(r"\[\s*0x[0-9a-fA-F]{2}\s*,\s*0x[0-9a-fA-F]{2}\s*,\s*0x[0-9a-fA-F]{2}\s*\]")
+
+
+def strip(text, rust):
+    """Returns (code, bare): `code` is `text` with comments blanked; `bare` also has string and
+    char literals blanked (for counting braces). Newlines are kept, so line numbers stay."""
+    code, bare = [], []
+    i, n = 0, len(text)
+
+    def keep(s, in_bare):
+        code.append(s)
+        bare.append(s if in_bare else re.sub(r"[^\n]", " ", s))
+
+    while i < n:
+        c = text[i]
+        if text.startswith("//", i):
+            j = text.find("\n", i)
+            j = n if j < 0 else j
+            blank = " " * (j - i)
+            code.append(blank)
+            bare.append(blank)
+            i = j
+        elif text.startswith("/*", i):
+            j = text.find("*/", i + 2)
+            j = n if j < 0 else j + 2
+            blank = re.sub(r"[^\n]", " ", text[i:j])
+            code.append(blank)
+            bare.append(blank)
+            i = j
+        elif rust and re.match(r'(?:b?r)(#*)"', text[i:i + 20]) and (i == 0 or not (text[i - 1].isalnum() or text[i - 1] == "_")):
+            m = re.match(r'(?:b?r)(#*)"', text[i:])
+            end = '"' + m.group(1)
+            j = text.find(end, i + m.end())
+            j = n if j < 0 else j + len(end)
+            keep(text[i:j], False)
+            i = j
+        elif c == '"':
+            j = i + 1
+            while j < n and text[j] != '"':
+                j += 2 if text[j] == "\\" else 1
+            keep(text[i:j + 1], False)
+            i = j + 1
+        elif c == "'":
+            m = re.match(r"'(?:\\.[^']*|[^'\\\n])'", text[i:])
+            if m:
+                keep(m.group(0), False)
+                i += m.end()
+            else:  # a Rust lifetime
+                keep(c, True)
+                i += 1
+        else:
+            keep(c, True)
+            i += 1
+    return "".join(code), "".join(bare)
+
+
+def test_lines(bare):
+    """Line numbers (1-based) inside Rust items marked #[cfg(test)]."""
+    lines = bare.split("\n")
+    skip = set()
+    k = 0
+    while k < len(lines):
+        if re.match(r"\s*#\[cfg\(test\)\]", lines[k]):
+            depth, started, j = 0, False, k
+            while j < len(lines):
+                skip.add(j + 1)
+                rest = lines[j].split("#[cfg(test)]", 1)[1] if j == k else lines[j]
+                for ch in rest:
+                    if ch == "{":
+                        depth, started = depth + 1, True
+                    elif ch == "}":
+                        depth -= 1
+                if started and depth <= 0 or not started and rest.rstrip().endswith(";"):
+                    break
+                j += 1
+            k = j + 1
+        else:
+            k += 1
+    return skip
+
+
+def hits(path, rel):
+    with open(path, encoding="utf-8", errors="replace") as f:
+        text = f.read()
+    rust = path.endswith(".rs")
+    code, bare = strip(text, rust)
+    skip = test_lines(bare) if rust else set()
+    original = text.split("\n")
+    for no, line in enumerate(code.split("\n"), 1):
+        if no in skip:
+            continue
+        found = any(p.search(line) for p in (HEX, NAMED, BYTES))
+        for m in CALL.finditer(line):
+            args = [a.strip() for a in m.group(1).split(",")]
+            if len(args) < 4 or not re.fullmatch(r"0(?:\.0*)?", args[-1]):
+                found = True
+        if found:
+            yield f"{rel}:{no}: {original[no - 1].strip()}"
+
+
+def main():
+    root = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(__file__), ".."))
+    allow = {}
+    allow_file = os.path.join(root, "tools", "theme-colours-allow.txt")
+    if os.path.exists(allow_file):
+        with open(allow_file, encoding="utf-8") as f:
+            for no, line in enumerate(f, 1):
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                path, sep, reason = line.partition(":")
+                if not sep or not reason.strip():
+                    print(f"tools/theme-colours-allow.txt:{no}: needs path:reason: {line}")
+                    return 1
+                allow[path.strip()] = reason.strip()
+    found = []
+    for top in ("crates", "live"):
+        for d, dirs, files in os.walk(os.path.join(root, top)):
+            dirs[:] = sorted(x for x in dirs if x not in ("target", "tests") and not x.startswith("."))
+            for name in sorted(files):
+                if not name.endswith((".rs", ".c", ".h")):
+                    continue
+                path = os.path.join(d, name)
+                rel = os.path.relpath(path, root)
+                if rel not in allow:
+                    found.extend(hits(path, rel))
+    for h in found:
+        print(h)
+    missing = [p for p in allow if not os.path.exists(os.path.join(root, p))]
+    for p in missing:
+        print(f"tools/theme-colours-allow.txt: {p} does not exist")
+    if found:
+        print(f"{len(found)} colour literal(s) outside the theme: read them from the theme module, "
+              "or add `path:reason` to tools/theme-colours-allow.txt")
+    return 1 if found or missing else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

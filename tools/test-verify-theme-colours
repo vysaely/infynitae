@@ -1,0 +1,65 @@
+#!/bin/sh
+# tools/test-verify-theme-colours: tools/verify-theme-colours on a stand-in tree. A colour literal
+# outside the allowlist fails with its file and line; the same in an allowlisted theme module passes;
+# one in a comment or under #[cfg(test)] passes; an allowlist line without a reason fails. Run from
+# the repository root.
+set -eu
+REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
+TMP=$(mktemp -d "/tmp/infynitae-test-theme-colours.XXXXXX")
+trap 'rm -rf "$TMP"' EXIT INT TERM
+fail=0
+check() { if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1: expected $3, got $2"; fail=1; fi; }
+run() { out=$(python3 "$REPO_DIR/tools/verify-theme-colours" "$TMP") && code=0 || code=$?; }
+
+mkdir -p "$TMP/tools" "$TMP/crates/demo/src" "$TMP/live/edge-apps/src"
+echo "live/edge-apps/src/theme.rs:theme module" > "$TMP/tools/theme-colours-allow.txt"
+printf 'fn f() {\n    let c = Color::rgb(1.0, 0.0, 0.0);\n}\n' > "$TMP/crates/demo/src/paint.rs"
+run
+check "a colour outside the allowlist fails" "$code" "1"
+check "and is named by file and line" "$(echo "$out" | grep -c '^crates/demo/src/paint.rs:2: let c = Color::rgb(1.0, 0.0, 0.0);$')" "1"
+
+mv "$TMP/crates/demo/src/paint.rs" "$TMP/live/edge-apps/src/theme.rs"
+run
+check "the same colour in the allowlisted theme module passes" "$code" "0"
+
+cat > "$TMP/crates/demo/src/paint.rs" <<'EOF'
+// the old border was Color::rgb(1.0, 0.0, 0.0) and "#ff0000"
+fn f(t: &Theme) {
+    cr.set_source_rgba(0.0, 0.0, 0.0, 0.0);
+    draw::set(cr, t.accent);
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn red() {
+        assert_eq!(parse("#ff0000"), Some([0xff, 0x00, 0x00]));
+    }
+}
+EOF
+run
+check "comments, a clear (alpha 0) and #[cfg(test)] items pass" "$code" "0"
+
+printf 'fn g() {}\nfn h() { cr.set_source_rgb(0.2, 0.6, 0.9); }\n' >> "$TMP/crates/demo/src/paint.rs"
+run
+check "a colour after the test module still fails" "$code" "1"
+check "and is named by its line" "$(echo "$out" | grep -c '^crates/demo/src/paint.rs:15: ')" "1"
+
+printf 'static const char *c = "#7aa2f7";\n' > "$TMP/live/edge-apps/src/x.c"
+rm "$TMP/crates/demo/src/paint.rs"
+run
+check "a hex colour in C fails" "$(echo "$out" | grep -c '^live/edge-apps/src/x.c:1: ')" "1"
+
+rm "$TMP/live/edge-apps/src/x.c"
+: > "$TMP/live/edge-apps/src/theme.rs"
+run
+check "a tree without colours passes" "$code" "0"
+rm "$TMP/live/edge-apps/src/theme.rs"
+run
+check "an allowlisted file that is gone fails" "$(echo "$out" | grep -c 'theme.rs does not exist')" "1"
+echo "live/edge-apps/src/theme.rs" > "$TMP/tools/theme-colours-allow.txt"
+run
+check "an allowlist line without a reason fails" "$code" "1"
+check "and says what it needs" "$(echo "$out" | grep -c 'needs path:reason')" "1"
+
+exit "$fail"
