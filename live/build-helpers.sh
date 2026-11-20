@@ -83,6 +83,8 @@ sh "$LIVE/edge-pick" "$BIN" || FAILED="$FAILED infynitae-edge"
 build infynitae-record-stream "wayland-client" \
     "$LIVE/record/infynitae-record-stream.c" "$LIVE/record/wlr-screencopy-protocol.c" -- -pthread -lrt
 build_rust infynitae-shot "$LIVE/shot-rs"
+# the Wayland socket of a sandboxed Windows program (live/windows-run)
+build_rust infynitae-sandbox-socket "$LIVE/sandbox-socket"
 
 if [ -n "$FAILED" ]; then
     echo "[build-helpers] Not built:$FAILED" >&2

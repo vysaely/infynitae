@@ -163,6 +163,28 @@ jobs:
           name: infynitae-shot
           path: live/shot-rs/target/debug/infynitae-shot
 
+  # The sandbox socket (live/sandbox-socket): its own crate; its test runs a real session of the
+  # workspace with the helper as built (t1_trust, ignored without INFYNITAE_SANDBOX_SOCKET).
+  sandbox-socket:
+    name: Sandbox socket (Rust)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends $NATIVE_DEPS
+      - name: Toolchain pinned by rust-toolchain.toml
+        run: |
+          channel=$(python3 -c 'import tomllib; print(tomllib.load(open("rust-toolchain.toml", "rb"))["toolchain"]["channel"])')
+          rustup toolchain install "$channel" --profile minimal --component rustfmt,clippy
+      - uses: Swatinem/rust-cache@v2.7.8
+        with:
+          workspaces: |
+            live/sandbox-socket
+            .
+      - run: cd live/sandbox-socket && cargo fmt -- --check
+      - run: cd live/sandbox-socket && cargo clippy --locked --all-targets -- -D warnings
+      - run: cd live/sandbox-socket && cargo build --locked
+      - run: INFYNITAE_SANDBOX_SOCKET="$PWD/live/sandbox-socket/target/debug/infynitae-sandbox-socket" cargo test --locked -p infynitae-backend-headless --test t1_trust -- --ignored
+
   # The edge from apps (docs/EDGE_APPS.md): its own crate in live/edge-apps
   edge-apps:
     name: Edge (apps)
