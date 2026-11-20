@@ -49,6 +49,9 @@ Turn on:
   --replay-buffer      keep the last minutes of the screen, saved with Super+Alt+C
   --gaming             32-bit graphics drivers for Steam, Wine and 32-bit games (~400 MB);
                        later: infynitae-drivers --gaming. Automatic when Steam or Wine is installed
+  --foreign-apps       Windows programs (.exe, .msi) and Android apps (.apk), each in a sandbox
+                       (umu-launcher, bubblewrap, waydroid; turns on --gaming). Android needs
+                       `sudo waydroid init` once afterwards: it downloads Android (~1 GB)
 
 Startup:
   --no-autologin       log in on tty1 instead of booting to the lock screen
@@ -62,6 +65,9 @@ AUTOLOGIN=true
 TIMEZONE=""
 REPLAY_BUFFER=false
 GAMING=false
+FOREIGN_APPS=false
+# the file handlers take .exe and .apk files from another app only when the menu asked
+FOREIGN_DEFAULTS=false
 TERMINAL_PKG=true
 BLUETOOTH=true
 POWER_PROFILES=true
@@ -83,6 +89,8 @@ for arg in "$@"; do
         --no-autologin) AUTOLOGIN=false ;;
         --replay-buffer) REPLAY_BUFFER=true ;;
         --gaming) GAMING=true ;;
+        # umu-launcher is in [multilib], which --gaming turns on; Wine needs the 32-bit drivers
+        --foreign-apps) FOREIGN_APPS=true GAMING=true ;;
         --timezone=*) TIMEZONE="${arg#--timezone=}" ;;
         --defaults) ;;
         -h | --help) usage; exit 0 ;;
@@ -190,7 +198,7 @@ fi
 mkdir -p "$INFY_STATE"
 LOG="$INFY_STATE/install.log"
 exec > >(tee -a "$LOG") 2>&1
-echo "==> $(date '+%F %T') Infynitae install${SKIP:+, leaving out: $SKIP}$([ "$GAMING" = true ] && echo ', gaming')"
+echo "==> $(date '+%F %T') Infynitae install${SKIP:+, leaving out: $SKIP}$([ "$GAMING" = true ] && echo ', gaming')$([ "$FOREIGN_APPS" = true ] && echo ', Windows and Android programs')"
 trap 'echo "==> The install stopped (install.sh line $LINENO). Log: $LOG" >&2' ERR
 
 [ "${SYSTEM_UPDATED:-false}" = true ] || update_system
@@ -237,6 +245,7 @@ install_programs "$INSTALL_DIR"
 install_system_files "$INSTALL_DIR"
 install_config "$INSTALL_DIR"
 install_default_apps
+[ "$FOREIGN_APPS" = true ] && install_foreign_apps "$INSTALL_DIR"
 if [ -n "$TIMEZONE" ]; then
     set_timezone "$TIMEZONE" || true
 elif timezone_unset; then
@@ -268,6 +277,10 @@ echo "==> Infynitae is installed. Reboot, then $START_HOW."
 echo "    Update:      infynitae-update"
 echo "    Config:      ~/.config/infynitae/config"
 echo "    Install log: $LOG"
+if [ "$FOREIGN_APPS" = true ] && ! waydroid_ready; then
+    echo "    Android apps: once, sudo waydroid init (downloads Android, ~1 GB),"
+    echo "                 then sudo systemctl enable --now waydroid-container"
+fi
 if [ "$AUTOLOGIN_ON" = true ]; then
     echo "    Text login instead: sudo ~/infynitae/live/setup-autologin.sh --off"
 fi

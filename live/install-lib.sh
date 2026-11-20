@@ -115,15 +115,16 @@ is_skipped() {
 }
 load_install_choices() {
     # an install from before these were saved: nothing added that it may have left out
-    SKIP="" BLUETOOTH=false POWER_PROFILES=false TERMINAL_PKG=false
+    SKIP="" BLUETOOTH=false POWER_PROFILES=false TERMINAL_PKG=false FOREIGN_APPS=false
     # shellcheck disable=SC1090
     [ -f "$INSTALL_CHOICES" ] && . "$INSTALL_CHOICES"
     return 0
 }
 save_install_choices() {
     mkdir -p "$INFY_STATE"
-    printf 'SKIP="%s"\nBLUETOOTH=%s\nPOWER_PROFILES=%s\nTERMINAL_PKG=%s\n' "${SKIP:-}" \
-        "${BLUETOOTH:-false}" "${POWER_PROFILES:-false}" "${TERMINAL_PKG:-false}" > "$INSTALL_CHOICES"
+    printf 'SKIP="%s"\nBLUETOOTH=%s\nPOWER_PROFILES=%s\nTERMINAL_PKG=%s\nFOREIGN_APPS=%s\n' "${SKIP:-}" \
+        "${BLUETOOTH:-false}" "${POWER_PROFILES:-false}" "${TERMINAL_PKG:-false}" \
+        "${FOREIGN_APPS:-false}" > "$INSTALL_CHOICES"
 }
 
 # The hardware parts: chosen, and the hardware is there. Asked again at each update, so an
@@ -135,6 +136,14 @@ want_bluetooth() {
 want_power_profiles() {
     [ "${POWER_PROFILES:-false}" = true ] && ls -d /sys/class/power_supply/BAT* >/dev/null 2>&1 \
         && ! pacman -Qi tlp >/dev/null 2>&1
+}
+# Windows and Android programs (docs/SECURITY.md); umu-launcher is in [multilib]
+want_foreign_apps() {
+    [ "${FOREIGN_APPS:-false}" = true ]
+}
+# `sudo waydroid init` has run: it makes this folder (Waydroid's tools/actions/initializer.py)
+waydroid_ready() {
+    [ -d /var/lib/waydroid/rootfs ]
 }
 # a terminal for Super+Q, when there is none
 want_terminal() {
@@ -156,6 +165,14 @@ wanted_pkgs() {
     want_terminal && echo alacritty
     want_bluetooth && missing_pkgs bluez bluez-utils
     want_power_profiles && missing_pkgs power-profiles-daemon
+    if want_foreign_apps; then
+        missing_pkgs bubblewrap waydroid
+        if grep -q '^\[multilib\]' /etc/pacman.conf 2>/dev/null; then
+            missing_pkgs umu-launcher
+        else
+            warn "umu-launcher is in [multilib], which is off: Windows programs need it (infynitae-drivers --gaming turns it on)"
+        fi
+    fi
     # the compiler through rustup: the source pins its version (rust-toolchain.toml), which
     # Arch's own rust package ignores; rustup replaces it
     missing_pkgs rustup
@@ -258,6 +275,8 @@ live/infynitae-xkill infynitae-xkill
 live/infynitae-sleep-lock infynitae-sleep-lock
 live/infynitae-automount infynitae-automount
 live/infynitae-format-drive infynitae-format-drive
+live/windows-run infynitae-windows-run
+live/android-run infynitae-android-run
 LIST
     # xwayland-satellite with our patch; a failed build keeps the copy already installed
     sh "$src/live/build-satellite.sh" "$src" "$bin"

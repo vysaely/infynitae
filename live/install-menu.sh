@@ -47,13 +47,24 @@ part_label() {
         power-profiles) echo "Power modes (power-profiles-daemon)" ;;
         gaming) echo "Gaming: 32-bit drivers for Steam, Wine (~400 MB)" ;;
         replay-buffer) echo "Replay buffer: save the last minutes" ;;
+        foreign-apps) echo "Windows and Android programs, in a sandbox" ;;
     esac
 }
 
-# The menus; they set SKIP, TERMINAL_PKG, BLUETOOTH, POWER_PROFILES, GAMING, REPLAY_BUFFER and
-# AUTOLOGIN as the options would. Cancel ends the install before anything changed.
+# The app a desktop entry id names (its Name=), for the question about file types.
+app_name() {
+    local dir f
+    for dir in "${XDG_DATA_HOME:-$HOME/.local/share}" $(echo "${XDG_DATA_DIRS:-/usr/local/share:/usr/share}" | tr ':' ' '); do
+        f="$dir/applications/$1"
+        [ -f "$f" ] && { sed -n 's/^Name=//p' "$f" | head -n 1; return; }
+    done
+    echo "$1"
+}
+
+# The menus; they set SKIP, TERMINAL_PKG, BLUETOOTH, POWER_PROFILES, GAMING, REPLAY_BUFFER,
+# FOREIGN_APPS, FOREIGN_DEFAULTS and AUTOLOGIN as the options would. Cancel ends the install before anything changed.
 install_menu() {
-    local items=() group chosen status startup
+    local items=() group chosen status startup others android_line=""
     menu_size
 
     whiptail --title "Infynitae" --yes-button "Next" --no-button "Cancel" --yesno \
@@ -80,6 +91,7 @@ Next: what to install. Nothing is changed before the last screen." "$MENU_H" "$M
     if pacman -Qq steam wine wine-staging lutris 2>/dev/null | grep -q .; then status=ON; else status=OFF; fi
     items+=(gaming "$(part_label gaming)" "$status")
     items+=(replay-buffer "$(part_label replay-buffer)" OFF)
+    items+=(foreign-apps "$(part_label foreign-apps)" OFF)
 
     chosen=$(whiptail --title "Parts to install" --separate-output --ok-button "Next" \
         --cancel-button "Cancel" --checklist "Space ticks a part, Enter goes on." \
@@ -97,6 +109,23 @@ Next: what to install. Nothing is changed before the last screen." "$MENU_H" "$M
     has power-profiles || POWER_PROFILES=false
     has gaming && GAMING=true
     has replay-buffer && REPLAY_BUFFER=true
+    if has foreign-apps; then
+        # umu-launcher is in [multilib], which gaming turns on; Wine needs the 32-bit drivers
+        FOREIGN_APPS=true GAMING=true
+        others=$(foreign_other_defaults "$INSTALL_DIR" | cut -f2 | sort -u \
+            | while read -r id; do app_name "$id"; done | paste -sd, | sed 's/,/, /g')
+        if [ -n "$others" ]; then
+            whiptail --title "Windows and Android files" --yes-button "Change" --no-button "Keep" \
+                --defaultno --yesno \
+"Some .exe, .msi or .apk files open with $others now.
+
+Change: they open in Infynitae's sandbox instead.
+Keep: they still open with $others; \"Open with\" offers the sandbox." "$MENU_H" "$MENU_W" \
+                && FOREIGN_DEFAULTS=true
+        fi
+        android_line="
+Android:  needs sudo waydroid init once afterwards (downloads ~1 GB)"
+    fi
     # the replay buffer records with the recorder: it stays, and the summary says so
     if [ "$REPLAY_BUFFER" = true ] && is_skipped recorder; then
         SKIP=$(printf '%s\n' $SKIP | grep -vx recorder | tr '\n' ' ')
@@ -132,7 +161,7 @@ Time:     $TIMEZONE"
     whiptail --title "Ready to install" --yes-button "Install" --no-button "Cancel" --yesno \
 "Parts:    $(printf '%s\n' "$chosen" | while read -r p; do [ -n "$p" ] && printf '%s, ' "$p"; done | sed 's/, $//')
 Left out: ${SKIP:-nothing}
-Startup:  $startup$tz_line
+Startup:  $startup$tz_line$android_line
 
 The system is updated first, then Infynitae is built from source (a few minutes, longer on a slow machine). It then runs by itself; the log is in ~/.local/state/infynitae/install.log." \
         "$MENU_H" "$MENU_W" \

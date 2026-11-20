@@ -125,6 +125,7 @@ fi
 # 7. the config (yours is never overwritten)
 install_config "$REPO_DIR"
 install_default_apps
+want_foreign_apps && install_foreign_apps "$REPO_DIR"
 
 # 8. a running session: restart the helpers in place (windows stay open)
 if pgrep -x infynitae >/dev/null 2>&1; then

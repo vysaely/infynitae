@@ -281,4 +281,22 @@ else
     fail=1
 fi
 
+# 9. The part "Windows and Android programs": its packages only when chosen, and the choice kept
+# for infynitae-update. pacman is a stand-in that has nothing installed.
+mkdir -p "$TMP/nopacman"
+printf '#!/bin/sh\nexit 1\n' > "$TMP/nopacman/pacman"
+chmod +x "$TMP/nopacman/pacman"
+foreign_pkgs() {
+    PATH="$TMP/nopacman:$PATH" FOREIGN_APPS="$1" bash -c '. "'"$REPO_DIR"'/live/install-lib.sh"; wanted_pkgs' 2>/dev/null \
+        | grep -x 'bubblewrap\|waydroid' | tr '\n' ' '
+}
+check "chosen: bubblewrap and waydroid are wanted" "$(foreign_pkgs true)" "bubblewrap waydroid "
+check "not chosen: neither is" "$(foreign_pkgs false)" ""
+check "the choice is saved and read back" "$(XDG_STATE_HOME="$TMP/state" bash -c '
+    . "'"$REPO_DIR"'/live/install-lib.sh"
+    FOREIGN_APPS=true save_install_choices
+    FOREIGN_APPS=""
+    load_install_choices
+    echo "$FOREIGN_APPS"')" true
+
 exit $fail
