@@ -100,6 +100,21 @@ lock screen that does not confirm in time holds the sleep back as long as logind
   newer, `CLIPBOARD_STATE`) and cliphist honour that mark; if yours do not, turn the history off
   if you copy passwords.
 
+## Drives named in /etc/fstab
+
+Drives named by Roman numeral (docs/DRIVES.md) are lines in `/etc/fstab`, written by
+`/usr/local/lib/infynitae-drive-name` as root. The rule `/etc/polkit-1/rules.d/50-infynitae-drive-names.rules`
+allows two things without a password, only for a session that is local and active (the person at
+the computer, not SSH or another seat):
+
+- running that one program through pkexec. It takes a UUID, a numeral, a filesystem type and a
+  kind, checks each against a fixed list or character set, writes only between its two marker
+  lines and refuses a UUID or a numeral that a line outside them has.
+- udisks' `filesystem-fstab` action: mounting and unmounting an fstab line marked `x-udisks-auth`
+  (those of the block). Without the rule udisks asks for the administrator password. With it, a
+  partition inside the PC that got a numeral mounts without the password that udisks asks before
+  mounting a system disk.
+
 ## Updates
 
 `infynitae-update` pulls the source with git, only forward, then installs some of its files as
