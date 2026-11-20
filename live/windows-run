@@ -82,8 +82,15 @@ sandbox_args() {
     else
         # read-only for the program: umu's lock files and the runtime's scratch folder go to a
         # tmpfs that is gone when the program ends
-        SANDBOX+=(--overlay-src "$WINDOWS_RUNTIME" --tmp-overlay "$WINDOWS_RUNTIME"
-            --bind "$WINDOWS_SHARED" "$WINDOWS_SHARED")
+        # bubblewrap before 0.10 has no overlays (Ubuntu 24.04 ships 0.9): the runtime is then
+        # read-only, as safe; umu's lock files fail there, so the summary says to update bubblewrap
+        if bwrap --help 2>&1 | grep -q -- --overlay-src; then
+            SANDBOX+=(--overlay-src "$WINDOWS_RUNTIME" --tmp-overlay "$WINDOWS_RUNTIME")
+        else
+            SANDBOX+=(--ro-bind "$WINDOWS_RUNTIME" "$WINDOWS_RUNTIME")
+            echo "infynitae-windows-run: bubblewrap $(bwrap --version 2>/dev/null | cut -d' ' -f2) has no overlays: the Proton runtime is read-only; update bubblewrap (0.10 or newer) if the program fails to start" >&2
+        fi
+        SANDBOX+=(--bind "$WINDOWS_SHARED" "$WINDOWS_SHARED")
     fi
     [ -n "$PROTON" ] && SANDBOX+=(--ro-bind "$PROTON" "$PROTON")
     SANDBOX+=(--bind "$PREFIX" "$PREFIX")
