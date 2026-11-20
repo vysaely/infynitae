@@ -79,6 +79,9 @@ jobs:
       - run: sh tools/test-session
       - run: sh tools/test-install-lib
       - run: sh tools/test-log-caps
+      # Ubuntu 24.04 lets AppArmor refuse unprivileged user namespaces, which bwrap needs: the
+      # sandbox checks run bwrap for real, so they get them (Arch, the target, allows them)
+      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - run: bash tools/test-windows-run
       - run: bash tools/test-android-run
 
