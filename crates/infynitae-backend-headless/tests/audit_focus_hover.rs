@@ -115,6 +115,9 @@ fn helper_smithay_active(ls: &Lockstep, elem_id: ElementId) -> bool {
 #[test]
 fn held_super_releases_pointer_lock_in_windowed_game() {
     let mut ls = Lockstep::new(Some(a_1080()));
+    // the config's defaults (FREE_CURSOR_ON_SUPER, FOCUS_ON_OPEN), read at login
+    ls.state.core_mut().set_free_cursor_on_super(true);
+    ls.state.core_mut().set_focus_on_open(true);
     let qh = ls.qh.clone();
     let g_idx = ls.probe.toplevel(&qh, "GAME", (800, 600), 0);
     adv(&mut ls);
@@ -191,6 +194,9 @@ fn held_super_releases_pointer_lock_in_windowed_game() {
 #[test]
 fn captcha_window_from_game_gets_focus_and_frees_pointer_then_restores_lock_on_close() {
     let mut ls = Lockstep::new(Some(a_1080()));
+    // the config's defaults (FREE_CURSOR_ON_SUPER, FOCUS_ON_OPEN), read at login
+    ls.state.core_mut().set_free_cursor_on_super(true);
+    ls.state.core_mut().set_focus_on_open(true);
     let qh = ls.qh.clone();
     let g_idx = ls.probe.toplevel(&qh, "GAME", (800, 600), 0);
     ls.probe.surfaces[g_idx]
@@ -295,6 +301,9 @@ fn captcha_window_from_game_gets_focus_and_frees_pointer_then_restores_lock_on_c
 #[test]
 fn captcha_window_from_fullscreen_game_gets_focus_and_frees_pointer_then_restores_lock_on_close() {
     let mut ls = Lockstep::new(Some(a_1080()));
+    // the config's defaults (FREE_CURSOR_ON_SUPER, FOCUS_ON_OPEN), read at login
+    ls.state.core_mut().set_free_cursor_on_super(true);
+    ls.state.core_mut().set_focus_on_open(true);
     let qh = ls.qh.clone();
     let g_idx = ls.probe.toplevel(&qh, "GAME", (1920, 1080), 0);
     ls.probe.surfaces[g_idx]
