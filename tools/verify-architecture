@@ -56,10 +56,11 @@ AUTHORIZED_P3_SHA256 = {
     "src/backend/egl/context.rs": "2084d54ebb1fb89af92d44ca111e2a5aff887fbacfac5129804e16cd09fc3009",
 }
 AUTHORIZED_P2_SHA256 = {
-    "src/backend/drm/surface/atomic.rs": "a1b5233a114976d192508fb2fd1c50618360d55aef8d8dc1fd3b5342e0d2cf68",
+    "src/backend/drm/surface/atomic.rs": "fd9d123b16be5a1e409911517cf6303f8ccb25ef713f58c13be288ea608718d7",
     "src/backend/drm/surface/legacy.rs": "e437ae93290cef7c2c01f3698bfa38a6c06aa88d28aa354a9bc0efa5837fd7c7",
-    "src/backend/drm/surface/mod.rs": "b6f4b5dd7b61c6c281051d645d881af4b9c1249255016ce63b47c20639acbd40",
-    "src/backend/drm/compositor/mod.rs": "ddca98ca5e6ad057cfb1c1b989c080aa4751a789e8be7ee2e51112d272c6933d",
+    "src/backend/drm/surface/mod.rs": "291f9d7544ff5f8c726968fc4a4dc3052534c924db2a7fd8e49d42c1b8f31ace",
+    "src/backend/drm/mod.rs": "eb3b0602826b0d9b71897e524a85c0f7600dd38af081fd8063505dbfcc89d892",
+    "src/backend/drm/compositor/mod.rs": "87fe97f873f38c7a0b0114db4f5915a78cd55e19f5e0623d066a8c07c091fe68",
 }
 AUTHORIZED_P5_SHA256 = {
     "src/backend/drm/surface/gbm.rs": "ae26bfd82ed67a16dd8be4f9e3a5b5678d6016b16ad8ca2c917953cd45ab8553",

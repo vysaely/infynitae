@@ -1,6 +1,458 @@
+--- a/src/backend/drm/compositor/mod.rs
++++ b/src/backend/drm/compositor/mod.rs
+@@ -748,12 +748,38 @@
+         supports_fencing: bool,
+         allow_partial_update: bool,
+         event: bool,
++        async_flip: bool,
+     ) -> Result<(), crate::backend::drm::error::Error> {
+         debug_assert!(!self.planes.iter().any(|(_, state)| state.needs_test));
+-        surface.page_flip(
+-            self.build_planes(surface, supports_fencing, allow_partial_update),
+-            event,
+-        )
++        if async_flip {
++            let plane = self.build_async_primary_plane(surface);
++            surface.page_flip_async(plane, event)
++        } else {
++            let planes = self.build_planes(surface, supports_fencing, allow_partial_update);
++            surface.page_flip(planes, event)
++        }
++    }
++
++    fn build_async_primary_plane<'a>(
++        &'a mut self,
++        surface: &'a DrmSurface,
++    ) -> impl IntoIterator<Item = super::PlaneState<'a>> {
++        let primary = surface.plane();
++        self.planes
++            .iter()
++            .filter(move |(handle, _)| *handle == primary)
++            .map(move |(handle, state)| super::surface::PlaneState {
++                handle: *handle,
++                config: state.config.as_ref().map(|config| super::PlaneConfig {
++                    src: config.properties.src,
++                    dst: config.properties.dst,
++                    alpha: config.properties.alpha,
++                    transform: config.properties.transform,
++                    damage_clips: None,
++                    fb: *config.buffer.as_ref(),
++                    fence: None,
++                }),
++            })
+     }
+ 
+     #[profiling::function]
+@@ -987,6 +1013,65 @@
+     Partial,
+ }
+ 
++enum AsyncEligibility {
++    Eligible,
++    SyncTransition,
++    Refused(String),
++}
++
++fn check_async_eligibility<B: Buffer, F: Framebuffer>(
++    next: &FrameState<B, F>,
++    previous: &FrameState<B, F>,
++    primary: plane::Handle,
++    planes: &Planes,
++    allow_partial_update: bool,
++) -> AsyncEligibility {
++    if !allow_partial_update {
++        return AsyncEligibility::SyncTransition;
++    }
++    for (handle, state) in &next.planes {
++        if *handle == primary {
++            continue;
++        }
++        if !state.skip {
++            if state.config.is_some() {
++                let role = if planes.cursor.iter().any(|p| p.handle == *handle) {
++                    "cursor"
++                } else {
++                    "overlay"
++                };
++                return AsyncEligibility::Refused(format!(
++                    "{role} plane {handle:?} property CRTC_ID/FB_ID"
++                ));
++            }
++            return AsyncEligibility::SyncTransition;
++        }
++    }
++    let Some(next_primary) = next.plane_state(primary) else {
++        return AsyncEligibility::SyncTransition;
++    };
++    let Some(next_cfg) = next_primary.config.as_ref() else {
++        return AsyncEligibility::Refused(format!("primary plane {primary:?} property FB_ID=0"));
++    };
++    if let Some((sync, _)) = next_cfg.sync.as_ref() {
++        if !sync.is_reached() {
++            return AsyncEligibility::SyncTransition;
++        }
++    }
++    let Some(prev_cfg) = previous.plane_state(primary).and_then(|s| s.config.as_ref()) else {
++        return AsyncEligibility::SyncTransition;
++    };
++    if !prev_cfg.is_compatible(next_cfg)
++        || !matches!(
++            (&prev_cfg.buffer.buffer, &next_cfg.buffer.buffer),
++            (ScanoutBuffer::Wayland(_), ScanoutBuffer::Wayland(_))
++        )
++    {
++        return AsyncEligibility::SyncTransition;
++    }
++    AsyncEligibility::Eligible
++}
++
+ struct PreparedFrame<A: Allocator, F: ExportFramebuffer<<A as Allocator>::Buffer>> {
+     frame: CompositorFrameState<A, F>,
+     kind: PreparedFrameKind,
+@@ -1060,6 +1145,8 @@
+     primary_plane_damage_bag: DamageBag<i32, BufferCoords>,
+     supports_fencing: bool,
+     reset_pending: bool,
++    async_flip: bool,
++    async_flip_refusal: Option<String>,
+     signaled_fence: Option<Arc<OwnedFd>>,
+ 
+     framebuffer_exporter: F,
+@@ -1246,6 +1333,8 @@
+                         primary_plane_damage_bag: DamageBag::new(4),
+                         primary_is_opaque: is_opaque,
+                         reset_pending: true,
++                        async_flip: false,
++                        async_flip_refusal: None,
+                         signaled_fence,
+                         current_frame,
+                         pending_frame: None,
+@@ -1428,6 +1517,8 @@
+             primary_plane_damage_bag: DamageBag::new(4),
+             primary_is_opaque: is_opaque,
+             reset_pending: true,
++            async_flip: false,
++            async_flip_refusal: None,
+             signaled_fence,
+             current_frame,
+             pending_frame: None,
+@@ -2511,6 +2602,25 @@
+         self.handle_flip(prepared_frame, None, flip)
+     }
+ 
++    /// Whether the next frames flip without waiting for the vblank: they show at once and may
++    /// tear. A flip the kernel refuses that way is made as usual, and turns this off.
++    pub fn set_async_flip(&mut self, async_flip: bool) {
++        self.async_flip = async_flip;
++        if !async_flip {
++            self.async_flip_refusal = None;
++        }
++    }
++
++    /// Whether frames flip without waiting for the vblank ([`set_async_flip`](Self::set_async_flip)).
++    pub fn async_flip(&self) -> bool {
++        self.async_flip
++    }
++
++    /// Plane and property reason the last requested async flip was refused or deferred, if any.
++    pub fn take_async_flip_refusal(&mut self) -> Option<String> {
++        self.async_flip_refusal.take()
++    }
++
+     /// Re-evaluates the current state of the crtc and forces calls to [`render_frame`](DrmCompositor::render_frame)
+     /// to return `false` for [`RenderFrameResult::is_empty`] until a frame is queued with [`queue_frame`](DrmCompositor::queue_frame).
+     ///
+@@ -2538,10 +2648,70 @@
+             prepared_frame
+                 .frame
+                 .commit(&self.surface, self.supports_fencing, allow_partial_update, true)
++        } else if self.async_flip {
++            let primary = self.surface.plane();
++            let eligibility = check_async_eligibility(
++                &prepared_frame.frame,
++                &self.current_frame,
++                primary,
++                &self.planes,
++                allow_partial_update,
++            );
++            match eligibility {
++                AsyncEligibility::Eligible => {
++                    let flip = prepared_frame.frame.page_flip(
++                        &self.surface,
++                        self.supports_fencing,
++                        allow_partial_update,
++                        true,
++                        true,
++                    );
++                    if let Err(err) = &flip {
++                        let msg = format!("primary plane {primary:?} [FB_ID]: {err}");
++                        warn!("Async page flip refused ({}), flipping on the vblank", msg);
++                        self.async_flip_refusal = Some(msg);
++                        self.async_flip = false;
++                        prepared_frame.frame.page_flip(
++                            &self.surface,
++                            self.supports_fencing,
++                            allow_partial_update,
++                            true,
++                            false,
++                        )
++                    } else {
++                        self.async_flip_refusal = None;
++                        flip
++                    }
++                }
++                AsyncEligibility::SyncTransition => {
++                    // Single transition frame (e.g. clearing cursor/overlay plane or applying
++                    // changed primary geometry/format/fence): settle synchronously without
++                    // turning off async_flip or logging a refusal so the next frame tears.
++                    prepared_frame.frame.page_flip(
++                        &self.surface,
++                        self.supports_fencing,
++                        allow_partial_update,
++                        true,
++                        false,
++                    )
++                }
++                AsyncEligibility::Refused(reason) => {
++                    warn!("Async page flip refused ({}), flipping on the vblank", reason);
++                    self.async_flip_refusal = Some(reason);
++                    self.async_flip = false;
++                    prepared_frame.frame.page_flip(
++                        &self.surface,
++                        self.supports_fencing,
++                        allow_partial_update,
++                        true,
++                        false,
++                    )
++                }
++            }
+         } else {
+             prepared_frame
+                 .frame
+-                .page_flip(&self.surface, self.supports_fencing, allow_partial_update, true)
++                .page_flip(&self.surface, self.supports_fencing, allow_partial_update, true, false)
+         };
+ 
+         self.handle_flip(prepared_frame, Some(user_data), flip)
+--- a/src/backend/drm/mod.rs
++++ b/src/backend/drm/mod.rs
+@@ -98,7 +98,10 @@
+ use indexmap::IndexSet;
+ #[cfg(feature = "backend_gbm")]
+ pub use surface::gbm::{Error as GbmBufferedSurfaceError, GbmBufferedSurface};
+-pub use surface::{DrmSurface, PlaneConfig, PlaneDamageClips, PlaneState, VrrSupport};
++pub use surface::{
++    build_async_flip_commit, AsyncFlipCommit, AsyncFlipCommitError, AsyncFlipPlaneProps, AsyncFlipPropValue,
++    DrmSurface, PlaneConfig, PlaneDamageClips, PlaneState, VrrSupport,
++};
+ 
+ use drm::{
+     control::{crtc, framebuffer, plane, Device as ControlDevice, PlaneType},
 --- a/src/backend/drm/surface/atomic.rs
 +++ b/src/backend/drm/surface/atomic.rs
-@@ -858,6 +858,25 @@
+@@ -36,6 +36,174 @@
+ 
+ use super::{PlaneConfig, PlaneState, VrrSupport};
+ 
++/// Property value written by an atomic asynchronous page flip (`DRM_MODE_PAGE_FLIP_ASYNC`).
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum AsyncFlipPropValue {
++    /// Framebuffer handle assigned to `FB_ID`.
++    Framebuffer(framebuffer::Handle),
++}
++
++/// Primary-plane geometry, transform, format-independent state that must match the active plane
++/// before an async flip can change only `FB_ID`.
++#[derive(Debug, Clone, Copy, PartialEq)]
++pub struct AsyncFlipPlaneProps {
++    /// Source rectangle in buffer coordinates.
++    pub src: Rectangle<f64, crate::utils::Buffer>,
++    /// Destination rectangle in output physical coordinates.
++    pub dst: Rectangle<i32, crate::utils::Physical>,
++    /// Buffer transform (`rotation`).
++    pub transform: Transform,
++    /// Plane alpha.
++    pub alpha: f32,
++}
++
++impl AsyncFlipPlaneProps {
++    /// Capture comparable plane properties from a [`PlaneConfig`].
++    pub fn from_config(config: &PlaneConfig<'_>) -> Self {
++        Self {
++            src: config.src,
++            dst: config.dst,
++            transform: config.transform,
++            alpha: config.alpha,
++        }
++    }
++}
++
++/// Minimal atomic commit contents for an asynchronous page flip.
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub struct AsyncFlipCommit {
++    /// Primary plane handle updated by the commit.
++    pub plane: plane::Handle,
++    /// New framebuffer handle for `FB_ID`.
++    pub fb: framebuffer::Handle,
++    /// Exact `(property_name, value)` pairs added to the atomic request.
++    pub properties: Vec<(&'static str, AsyncFlipPropValue)>,
++}
++
++/// Reason an atomic async page flip commit could not be reduced to a safe `FB_ID`-only flip.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum AsyncFlipCommitError {
++    /// Primary plane was omitted from `planes`.
++    MissingPrimaryPlane {
++        /// Primary plane handle expected.
++        primary: plane::Handle,
++    },
++    /// Primary plane appeared more than once in `planes`.
++    DuplicatePrimaryPlane {
++        /// Primary plane handle duplicated.
++        primary: plane::Handle,
++    },
++    /// Primary plane had `config: None` (disabling the primary plane requires a sync commit).
++    PrimaryPlaneDisabled {
++        /// Primary plane handle.
++        plane: plane::Handle,
++    },
++    /// A non-primary (cursor or overlay) plane was included in the async commit.
++    NonPrimaryPlane {
++        /// Non-primary plane handle.
++        plane: plane::Handle,
++    },
++    /// A property on the primary plane other than `FB_ID` changed or cannot flip asynchronously.
++    PropertyChanged {
++        /// Plane handle.
++        plane: plane::Handle,
++        /// Property name (`SRC`, `CRTC_RECT`, `rotation`, `alpha`, `IN_FENCE_FD`).
++        property: &'static str,
++    },
++}
++
++impl std::fmt::Display for AsyncFlipCommitError {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        match self {
++            Self::MissingPrimaryPlane { primary } => {
++                write!(f, "missing primary plane {primary:?}")
++            }
++            Self::DuplicatePrimaryPlane { primary } => {
++                write!(f, "duplicate primary plane {primary:?}")
++            }
++            Self::PrimaryPlaneDisabled { plane } => {
++                write!(f, "primary plane {plane:?} has no framebuffer (FB_ID=0)")
++            }
++            Self::NonPrimaryPlane { plane } => {
++                write!(f, "non-primary plane {plane:?} included in async flip")
++            }
++            Self::PropertyChanged { plane, property } => {
++                write!(f, "plane {plane:?} property {property} changed")
++            }
++        }
++    }
++}
++
++/// Plan the minimal atomic async page-flip commit for `planes`.
++///
++/// Linux `drm_atomic_uapi.c` / `amdgpu_dm` reject async commits with `EINVAL` when CRTC
++/// properties (`ACTIVE`, `VRR_ENABLED`), non-primary planes (cursor/overlay updates or resets),
++/// or primary plane properties beyond `FB_ID` change. `FB_DAMAGE_CLIPS` is omitted because an
++/// async flip presents the entire new buffer immediately; geometry, transform, alpha, and
++/// explicit unsignaled fence (`IN_FENCE_FD`) changes return [`AsyncFlipCommitError`] so the
++/// caller commits them on vblank instead.
++pub fn build_async_flip_commit<'a>(
++    primary: plane::Handle,
++    previous_primary: Option<&AsyncFlipPlaneProps>,
++    planes: &[PlaneState<'a>],
++) -> Result<AsyncFlipCommit, AsyncFlipCommitError> {
++    let mut primary_fb = None;
++    for state in planes {
++        if state.handle != primary {
++            return Err(AsyncFlipCommitError::NonPrimaryPlane { plane: state.handle });
++        }
++        if primary_fb.is_some() {
++            return Err(AsyncFlipCommitError::DuplicatePrimaryPlane { primary });
++        }
++        let Some(config) = state.config.as_ref() else {
++            return Err(AsyncFlipCommitError::PrimaryPlaneDisabled {
++                plane: state.handle,
++            });
++        };
++        if let Some(prev) = previous_primary {
++            if config.src != prev.src {
++                return Err(AsyncFlipCommitError::PropertyChanged {
++                    plane: primary,
++                    property: "SRC",
++                });
++            }
++            if config.dst != prev.dst {
++                return Err(AsyncFlipCommitError::PropertyChanged {
++                    plane: primary,
++                    property: "CRTC_RECT",
++                });
++            }
++            if config.transform != prev.transform {
++                return Err(AsyncFlipCommitError::PropertyChanged {
++                    plane: primary,
++                    property: "rotation",
++                });
++            }
++            if config.alpha != prev.alpha {
++                return Err(AsyncFlipCommitError::PropertyChanged {
++                    plane: primary,
++                    property: "alpha",
++                });
++            }
++        }
++        if config.fence.is_some() {
++            return Err(AsyncFlipCommitError::PropertyChanged {
++                plane: primary,
++                property: "IN_FENCE_FD",
++            });
++        }
++        primary_fb = Some(config.fb);
++    }
++    let Some(fb) = primary_fb else {
++        return Err(AsyncFlipCommitError::MissingPrimaryPlane { primary });
++    };
++    Ok(AsyncFlipCommit {
++        plane: primary,
++        fb,
++        properties: vec![("FB_ID", AsyncFlipPropValue::Framebuffer(fb))],
++    })
++}
++
+ #[derive(Debug, Clone)]
+ pub struct State {
+     pub active: bool,
+@@ -168,6 +336,7 @@
+     crtc: crtc::Handle,
+     plane: plane::Handle,
+     used_planes: Mutex<HashSet<plane::Handle>>,
++    last_primary_props: Mutex<Option<AsyncFlipPlaneProps>>,
+     prop_mapping: Arc<RwLock<PropMapping>>,
+     state: RwLock<State>,
+     pending: RwLock<State>,
+@@ -215,6 +384,7 @@
+             crtc,
+             plane,
+             used_planes: Mutex::new(HashSet::new()),
++            last_primary_props: Mutex::new(None),
+             prop_mapping,
+             state: RwLock::new(state),
+             pending: RwLock::new(pending),
+@@ -845,6 +1015,10 @@
+                 } else {
+                     used_planes.remove(&plane.handle);
+                 }
++                if plane.handle == self.plane {
++                    *self.last_primary_props.lock().unwrap() =
++                        plane.config.as_ref().map(AsyncFlipPlaneProps::from_config);
++                }
+             }
+         }
+ 
+@@ -858,6 +1032,25 @@
          planes: impl IntoIterator<Item = PlaneState<'a>>,
          event: bool,
      ) -> Result<(), Error> {
@@ -26,7 +478,48 @@
          if !self.active.load(Ordering::SeqCst) {
              return Err(Error::DeviceInactive);
          }
-@@ -881,16 +900,17 @@
+@@ -867,33 +1060,56 @@
+ 
+         // page flips work just like commits with fewer parameters..
+         let prop_mapping = self.prop_mapping.read().unwrap();
+-        let req = AtomicRequest::build_request(
+-            &prop_mapping,
+-            self.crtc,
+-            None,
+-            self.state.read().unwrap().vrr,
+-            [],
+-            [],
+-            &*planes,
+-        )?;
++        let req = if async_flip {
++            let prev_primary = *self.last_primary_props.lock().unwrap();
++            let commit_plan =
++                build_async_flip_commit(self.plane, prev_primary.as_ref(), &planes).map_err(|err| {
++                    warn!("Async page flip skipped before ioctl: {}", err);
++                    match err {
++                        AsyncFlipCommitError::MissingPrimaryPlane { .. }
++                        | AsyncFlipCommitError::DuplicatePrimaryPlane { .. } => Error::NoPlane,
++                        AsyncFlipCommitError::PrimaryPlaneDisabled { plane } => Error::NoFramebuffer(plane),
++                        AsyncFlipCommitError::NonPrimaryPlane { plane }
++                        | AsyncFlipCommitError::PropertyChanged { plane, .. } => {
++                            Error::UnsupportedPlaneConfiguration(plane)
++                        }
++                    }
++                })?;
++            AtomicRequest::from_async_flip_commit(&prop_mapping, &commit_plan)?
++        } else {
++            AtomicRequest::build_request(
++                &prop_mapping,
++                self.crtc,
++                None,
++                self.state.read().unwrap().vrr,
++                [],
++                [],
++                &*planes,
++            )?
++        };
+ 
+         // .. and without `AtomicCommitFlags::AllowModeset`.
          // If we would set anything here, that would require a modeset, this would fail,
          // indicating a problem in our assumptions.
          trace!(?planes, "Queueing page flip: {:?}", req);
@@ -51,7 +544,113 @@
 +            .atomic_commit(flags, req.build()?)
              .map_err(|source| {
                  Error::Access(AccessError {
-                     errmsg: "Page flip commit failed",
+-                    errmsg: "Page flip commit failed",
++                    errmsg: if async_flip {
++                        "Async page flip commit failed (plane primary [FB_ID])"
++                    } else {
++                        "Page flip commit failed"
++                    },
+                     dev: self.fd.dev_path(),
+                     source,
+                 })
+@@ -906,6 +1122,10 @@
+                 } else {
+                     used_planes.remove(&plane.handle);
+                 }
++                if !async_flip && plane.handle == self.plane {
++                    *self.last_primary_props.lock().unwrap() =
++                        plane.config.as_ref().map(AsyncFlipPlaneProps::from_config);
++                }
+             }
+         }
+ 
+@@ -939,6 +1159,9 @@
+ 
+         if result.is_ok() {
+             self.used_planes.lock().unwrap().remove(&plane);
++            if plane == self.plane {
++                *self.last_primary_props.lock().unwrap() = None;
++            }
+         }
+ 
+         result
+@@ -982,6 +1205,7 @@
+         if res.is_ok() {
+             self.used_planes.lock().unwrap().clear();
+             self.state.write().unwrap().clear();
++            *self.last_primary_props.lock().unwrap() = None;
+         }
+ 
+         res
+@@ -996,6 +1220,7 @@
+         } else {
+             State::current_state(&*self.fd, self.crtc, &mut self.prop_mapping.write().unwrap())?
+         };
++        *self.last_primary_props.lock().unwrap() = None;
+         Ok(())
+     }
+ 
+@@ -1309,6 +1534,16 @@
+         Ok(())
+     }
+ 
++    fn set_plane_async_fb(
++        &mut self,
++        plane: plane::Handle,
++        fb: framebuffer::Handle,
++    ) -> Result<(), Error> {
++        let plane_props = self.plane_props.entry(plane).or_default();
++        plane_props.insert("FB_ID", property::Value::Framebuffer(Some(fb)));
++        Ok(())
++    }
++
+     fn build(&self) -> Result<AtomicModeReq, Error> {
+         let mut req = AtomicModeReq::new();
+ 
+@@ -1606,12 +1841,43 @@
+         Ok(())
+     }
+ 
++    fn set_plane_async_fb(
++        &mut self,
++        plane: plane::Handle,
++        fb: framebuffer::Handle,
++    ) -> Result<(), Error> {
++        self.request.add_property(
++            plane,
++            self.mapping.plane_prop_handle(plane, "FB_ID")?,
++            property::Value::Framebuffer(Some(fb)),
++        );
++        Ok(())
++    }
++
+     fn build(&self) -> Result<AtomicModeReq, Error> {
+         Ok(self.request.clone())
+     }
+ }
+ 
+ impl<'a> AtomicRequest<'a> {
++    fn from_async_flip_commit(
++        mapping: &'a PropMapping,
++        commit: &AsyncFlipCommit,
++    ) -> Result<AtomicRequest<'a>, Error> {
++        let mut req = AtomicRequest::new(mapping);
++        for &(name, value) in &commit.properties {
++            match (name, value) {
++                ("FB_ID", AsyncFlipPropValue::Framebuffer(fb)) => {
++                    req.set_plane_async_fb(commit.plane, fb)?;
++                }
++                _ => {
++                    return Err(Error::UnsupportedPlaneConfiguration(commit.plane));
++                }
++            }
++        }
++        Ok(req)
++    }
++
+     fn build_request(
+         mapping: &'a PropMapping,
+         crtc: crtc::Handle,
 --- a/src/backend/drm/surface/legacy.rs
 +++ b/src/backend/drm/surface/legacy.rs
 @@ -334,6 +334,15 @@
@@ -83,10 +682,21 @@
          )
 --- a/src/backend/drm/surface/mod.rs
 +++ b/src/backend/drm/surface/mod.rs
-@@ -439,6 +439,24 @@
+@@ -19,6 +19,9 @@
+ use crate::utils::DevPath;
+ use crate::utils::{Buffer, Physical, Point, Rectangle, Transform};
+ use atomic::AtomicDrmSurface;
++pub use atomic::{
++    build_async_flip_commit, AsyncFlipCommit, AsyncFlipCommitError, AsyncFlipPlaneProps, AsyncFlipPropValue,
++};
+ use legacy::LegacyDrmSurface;
+ 
+ /// An open crtc + plane combination that can be used for scan-out
+@@ -438,6 +441,24 @@
+             }
          }
      }
- 
++
 +    /// [`page_flip`](Self::page_flip) without waiting for the vblank: the new frame shows at once
 +    /// and may tear (`DRM_MODE_PAGE_FLIP_ASYNC`). The kernel refuses it for anything but a change
 +    /// of the primary plane's buffer, and on drivers without support.
@@ -104,100 +714,6 @@
 +            }
 +        }
 +    }
-+
+ 
      /// Returns a set of available planes for this surface
      pub fn planes(&self) -> &Planes {
-         &self.planes
---- a/src/backend/drm/compositor/mod.rs
-+++ b/src/backend/drm/compositor/mod.rs
-@@ -748,12 +748,15 @@
-         supports_fencing: bool,
-         allow_partial_update: bool,
-         event: bool,
-+        async_flip: bool,
-     ) -> Result<(), crate::backend::drm::error::Error> {
-         debug_assert!(!self.planes.iter().any(|(_, state)| state.needs_test));
--        surface.page_flip(
--            self.build_planes(surface, supports_fencing, allow_partial_update),
--            event,
--        )
-+        let planes = self.build_planes(surface, supports_fencing, allow_partial_update);
-+        if async_flip {
-+            surface.page_flip_async(planes, event)
-+        } else {
-+            surface.page_flip(planes, event)
-+        }
-     }
- 
-     #[profiling::function]
-@@ -1060,6 +1063,7 @@
-     primary_plane_damage_bag: DamageBag<i32, BufferCoords>,
-     supports_fencing: bool,
-     reset_pending: bool,
-+    async_flip: bool,
-     signaled_fence: Option<Arc<OwnedFd>>,
- 
-     framebuffer_exporter: F,
-@@ -1246,6 +1250,7 @@
-                         primary_plane_damage_bag: DamageBag::new(4),
-                         primary_is_opaque: is_opaque,
-                         reset_pending: true,
-+            async_flip: false,
-                         signaled_fence,
-                         current_frame,
-                         pending_frame: None,
-@@ -1428,6 +1433,7 @@
-             primary_plane_damage_bag: DamageBag::new(4),
-             primary_is_opaque: is_opaque,
-             reset_pending: true,
-+            async_flip: false,
-             signaled_fence,
-             current_frame,
-             pending_frame: None,
-@@ -2511,6 +2517,17 @@
-         self.handle_flip(prepared_frame, None, flip)
-     }
- 
-+    /// Whether the next frames flip without waiting for the vblank: they show at once and may
-+    /// tear. A flip the kernel refuses that way is made as usual, and turns this off.
-+    pub fn set_async_flip(&mut self, async_flip: bool) {
-+        self.async_flip = async_flip;
-+    }
-+
-+    /// Whether frames flip without waiting for the vblank ([`set_async_flip`](Self::set_async_flip)).
-+    pub fn async_flip(&self) -> bool {
-+        self.async_flip
-+    }
-+
-     /// Re-evaluates the current state of the crtc and forces calls to [`render_frame`](DrmCompositor::render_frame)
-     /// to return `false` for [`RenderFrameResult::is_empty`] until a frame is queued with [`queue_frame`](DrmCompositor::queue_frame).
-     ///
-@@ -2538,10 +2555,27 @@
-             prepared_frame
-                 .frame
-                 .commit(&self.surface, self.supports_fencing, allow_partial_update, true)
-+        } else if self.async_flip {
-+            let flip = prepared_frame.frame.page_flip(
-+                &self.surface,
-+                self.supports_fencing,
-+                allow_partial_update,
-+                true,
-+                true,
-+            );
-+            if let Err(err) = &flip {
-+                warn!("Async page flip refused, flipping on the vblank: {}", err);
-+                self.async_flip = false;
-+                prepared_frame
-+                    .frame
-+                    .page_flip(&self.surface, self.supports_fencing, allow_partial_update, true, false)
-+            } else {
-+                flip
-+            }
-         } else {
-             prepared_frame
-                 .frame
--                .page_flip(&self.surface, self.supports_fencing, allow_partial_update, true)
-+                .page_flip(&self.surface, self.supports_fencing, allow_partial_update, true, false)
-         };
- 
-         self.handle_flip(prepared_frame, Some(user_data), flip)
