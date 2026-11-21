@@ -217,6 +217,28 @@ tick, it posts "Closed <app> - RAM was full". Tested against sample sysfs trees,
 and stubbed installer/btrfs runs (`tools/test-disk-guard`, `tools/test-disk-fix`,
 `tools/test-install-lib`); not yet run in a real outage.
 
+## Settings that needed a restart (2026-11-21)
+
+Every key that was tagged `[restart]` in `config/config`, or sat in its "Displays & sharpness"
+section, and what it needs now. `[save]` is the console backend's check of the file every 250 ms;
+`[reload]` is Super+Shift+Backspace (`infynitae-reload`).
+
+| Key | Was | Now | How, or why not |
+|---|---|---|---|
+| `XKB_DEFAULT_LAYOUT`, `XKB_DEFAULT_OPTIONS` | restart | save | The seat's keymap is built again and sent to every app; apps and actions started later get the new names. An emptied line goes back to the layout the compositor started with, which is the system's only when the config had none at start. |
+| `OUTPUT_SCALE`, `OUTPUT_<NAME>_SCALE` | restart | save | Each screen takes its new scale and the screens are placed side by side again, the way a display tool's change is carried out. A position set with `wlr-randr` is kept until a scale, the order or the layout changes. |
+| `OUTPUT_ORDER`, `OUTPUT_LAYOUT` | restart | save | The screens are placed again in the new order. Names are matched on the kernel's name (`DP-1`), not the second form the start also accepts. An emptied `OUTPUT_ORDER` keeps the order there is; a changed `OUTPUT_LAYOUT` turns it round. |
+| `VRR_ENABLED` | restart | save | Every screen takes the new mode, display tools are told. Console backend only; no test runs it (it needs a real screen). |
+| `VIRTUAL_SCREEN` | restart | save | The virtual screen is added or removed at once. Console backend only; no test runs it. |
+| `SCALING_FILTER`, `MAX_APP_SCALE`, `ZOOM_SHARPEN` | save | save | Already read on save; their lines said so inside a `[restart]` section. |
+| `OSK` | restart (the section) | reload | The compositor already read it on save. A removed line now goes back to `auto`. squeekboard, without which a tap opens nothing, was started only at login; a reload starts it when `OSK` is not off. |
+| `START_TERMINAL`, `START_LOCKED` | restart | at login | They only do something when a session starts. |
+| `BATTERY_LIMIT` | restart (the section) | restart | The settings card and the control menu apply it at once; an edit of the file applies when the session starts (`session.sh`). Not made live: a reload part that runs `battery-limit` would do it. |
+| `AUTO_ROTATE` | restart (the section) | restart | The `autorotate` helper starts with the session. Not made live: a reload part that starts or stops it would do it. |
+| `OUTPUT_<NAME>_MODE`, `_RATE`, `_TRANSFORM` | restart | restart | `wlr-randr` changes them while running; a mode set from the config on reload was not built. |
+| `XWAYLAND` | restart | restart | The X display and its cookie are reserved at start and every app gets them as `DISPLAY`. Turning it on needs a display no running app knows; off needs the backends to stop the on-demand start (a listening socket in their event loop) and to wait for the last X11 window. Not safe to change here. |
+| `REMOTE_DESKTOP` | restart | restart | It picks the portal backends (`live/env.sh` writes `infynitae-portals.conf` at each session start). xdg-desktop-portal reads that file only when it starts, and restarting it ends every app's portal sessions (screen shares, file dialogs). |
+
 ## Missing
 
 - HDR, accessibility and screen readers.
