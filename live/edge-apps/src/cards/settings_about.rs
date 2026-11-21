@@ -54,8 +54,6 @@ const HIT_LOAD_ITEM_BASE: u32 = 100;
 /// (and `BATTERY_LIMIT` runs `battery-limit`; `SCALING_FILTER`, `MAX_APP_SCALE`, `ZOOM_SHARPEN`
 /// reload live on `[save]`).
 const RESTART_KEYS: &[&str] = &[
-    "XKB_DEFAULT_LAYOUT",
-    "XKB_DEFAULT_OPTIONS",
     "OUTPUT_ORDER",
     "OUTPUT_LAYOUT",
     "OUTPUT_SCALE",
@@ -1552,7 +1550,7 @@ mod tests {
         std::fs::write(dir.join("meminfo"), "MemTotal: 16777216 kB\n").unwrap();
         std::fs::write(
             dir.join("settings-changes"),
-            "900\tOUTPUT_SCALE\t1\n1000\tXKB_DEFAULT_LAYOUT\tus\n1050\tROUNDING\t8\n",
+            "900\tOUTPUT_SCALE\t1\n1000\tXWAYLAND\tfalse\n1050\tROUNDING\t8\n",
         )
         .unwrap();
         let sock = dir.join("wayland-0");
@@ -1590,8 +1588,8 @@ mod tests {
                 old: "8".into(),
             })
         );
-        // 900 < compositor start (1000), so only XKB_DEFAULT_LAYOUT is flagged.
-        assert_eq!(info.restart_keys, vec!["XKB_DEFAULT_LAYOUT"]);
+        // 900 < compositor start (1000), so only XWAYLAND is flagged.
+        assert_eq!(info.restart_keys, vec!["XWAYLAND"]);
     }
 
     #[test]
@@ -1654,6 +1652,8 @@ mod tests {
         assert!(!is_restart_key("SCALING_FILTER"));
         assert!(!is_restart_key("MAX_APP_SCALE"));
         assert!(!is_restart_key("ZOOM_SHARPEN"));
+        assert!(!is_restart_key("XKB_DEFAULT_LAYOUT"));
+        assert!(!is_restart_key("XKB_DEFAULT_OPTIONS"));
     }
 
     #[test]

@@ -239,7 +239,7 @@ lists; whether night light re-reads the temperature while on. Brightness stays i
 
 | Row | Control | Key | Values | After |
 |---|---|---|---|---|
-| Layouts | Text | `XKB_DEFAULT_LAYOUT` | "us,de"; empty: the system's | restart |
+| Layouts | Text | `XKB_DEFAULT_LAYOUT` | "us,de"; empty: the system's | save |
 | Repeat starts after | Slide 150-600 ms, step 10 | `KEYBOARD_REPEAT_DELAY` | | save |
 | Repeat speed | Slide 10-60 per second | `KEYBOARD_REPEAT_RATE` | | save |
 | Pointer speed | Slide -1.0 to 1.0, step 0.05 | `MOUSE_ACCEL_SPEED` | | save |
@@ -248,7 +248,7 @@ lists; whether night light re-reads the temperature while on. Brightness stays i
 | Scroll follows the fingers | Switch | `TOUCHPAD_NATURAL_SCROLL` | | save |
 | Canvas touchpad gestures | Switch | `TOUCHPAD_GESTURES` | | save |
 | M Super frees a captured pointer | Switch | `SUPER_FREES_CURSOR` | | save |
-| M Switch layouts with | Pick | `XKB_DEFAULT_OPTIONS` | None `""`, Alt+Shift `grp:alt_shift_toggle`, Super+Space `grp:win_space_toggle`, Caps Lock `grp:caps_toggle`; a value with other options shows "Set in the file" and is not changed | restart |
+| M Switch layouts with | Pick | `XKB_DEFAULT_OPTIONS` | None `""`, Alt+Shift `grp:alt_shift_toggle`, Super+Space `grp:win_space_toggle`, Caps Lock `grp:caps_toggle`; a value with other options shows "Set in the file" and is not changed | save |
 | M Keys heard by X11 apps | Pick | `XWAYLAND_KEYS` | None `off`, Modifiers, Shortcuts, All | save |
 
 Hidden: the three touchpad rows unless a device in `/proc/bus/input/devices` has "Touchpad" in its

@@ -24,13 +24,13 @@
 # ═══ Keyboard & mouse ═════════════════════════════════════════════════════════════ [save] ═══
 
 XKB_DEFAULT_LAYOUT=""
-    # Keyboard layout [restart]
+    # Keyboard layout
     # default: ""
     #   ""        the system's layout
     #    "us"     one layout · "us,de" several (switch with XKB_DEFAULT_OPTIONS)
 
 XKB_DEFAULT_OPTIONS=""
-    # Keyboard options [restart]
+    # Keyboard options
     # default: ""
     #   ""        none
     #    e.g. "grp:alt_shift_toggle,caps:swapescape"
