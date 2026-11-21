@@ -11,6 +11,9 @@
 //!   saved app goes to the next saved place of that app, in order; then the cameras go back.
 //! - `check`: exit 0 when the saved session has a window whose app can be launched (a desktop
 //!   file whose command is installed), 1 otherwise.
+//!
+//! `SESSION_RESTORE=restart`: `restore` and `check` take only a snapshot written during this boot
+//! (its `boot_id`), so apps come back after the compositor restarts but not after the PC does.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -211,7 +214,10 @@ pub fn session_of(reply: &Value) -> Option<Value> {
 pub fn save_snapshot(path: &Path, ipc: &mut impl Ipc, id: u64, last: &mut Option<String>) -> bool {
     let reply = ipc.request(req(id, "snapshot", []));
     match session_of(&reply) {
-        Some(session) => {
+        Some(mut session) => {
+            if let (Value::Obj(members), Some(id)) = (&mut session, boot_id()) {
+                members.push(("boot_id".to_string(), Value::Str(id)));
+            }
             let text = session.to_json();
             if last.as_deref() == Some(&text) {
                 return true;
@@ -799,21 +805,70 @@ pub fn restorable(session: &Path, apps_dirs: &[PathBuf]) -> bool {
         .any(|a| app_command(a, apps_dirs).is_some_and(|cmd| installed(&cmd[0])))
 }
 
-fn session_restore_from(env_val: Option<&str>, config_content: Option<&str>) -> bool {
+/// `SESSION_RESTORE`: `false` saves nothing, `restart` reopens apps only after a compositor
+/// restart in the same boot, anything else (`true`) after every login.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mode {
+    Off,
+    Restart,
+    Always,
+}
+
+fn mode_of(val: &str) -> Mode {
+    if val.trim().eq_ignore_ascii_case("restart") {
+        Mode::Restart
+    } else if infynitae_wayland::parse_bool(val) == Some(false) {
+        Mode::Off
+    } else {
+        Mode::Always
+    }
+}
+
+fn session_restore_from(env_val: Option<&str>, config_content: Option<&str>) -> Mode {
     if let Some(val) = env_val {
-        return infynitae_wayland::parse_bool(val) != Some(false);
+        return mode_of(val);
     }
     if let Some(content) = config_content {
         for (k, v) in content.lines().filter_map(infynitae_wayland::config_line) {
             if k.trim() == "SESSION_RESTORE" {
-                return infynitae_wayland::parse_bool(&v) != Some(false);
+                return mode_of(&v);
             }
         }
     }
-    true
+    Mode::Always
 }
 
-fn session_restore_enabled() -> bool {
+/// This boot's id: the kernel makes a new one at every boot. `None` where it cannot be read.
+fn boot_id() -> Option<String> {
+    let id = std::fs::read_to_string("/proc/sys/kernel/random/boot_id").ok()?;
+    let id = id.trim();
+    (!id.is_empty()).then(|| id.to_string())
+}
+
+/// The snapshot at `session` may be brought back. In [`Mode::Restart`] only one written during
+/// this boot (`boot`): one from another boot, or without an id (saved before ids were, or when
+/// this boot's id cannot be read), is from before a reboot and is removed, so the next login
+/// starts with no apps reopened.
+pub fn may_restore(session: &Path, mode: Mode, boot: Option<&str>) -> bool {
+    if mode != Mode::Restart {
+        return true;
+    }
+    let Ok(text) = std::fs::read_to_string(session) else {
+        return false;
+    };
+    let data = json::parse(&text).ok();
+    let saved = data
+        .as_ref()
+        .and_then(|d| d.get("boot_id"))
+        .and_then(Value::as_str);
+    if boot.is_some() && saved == boot {
+        return true;
+    }
+    let _ = std::fs::remove_file(session);
+    false
+}
+
+fn session_restore_mode() -> Mode {
     let env_val = std::env::var("SESSION_RESTORE").ok();
     let config_content = if env_val.is_none() {
         std::env::var("HOME").ok().and_then(|home| {
@@ -829,7 +884,7 @@ fn session_restore_enabled() -> bool {
 pub fn run(args: &[String]) -> ExitCode {
     match args.first().map(String::as_str) {
         Some("watch") => {
-            if !session_restore_enabled() {
+            if session_restore_mode() == Mode::Off {
                 let _ = std::fs::remove_file(session_path());
                 return ExitCode::SUCCESS;
             }
@@ -843,7 +898,7 @@ pub fn run(args: &[String]) -> ExitCode {
             let mut unanswered = 0;
             loop {
                 std::thread::sleep(WATCH_INTERVAL);
-                if !session_restore_enabled() {
+                if session_restore_mode() == Mode::Off {
                     let _ = std::fs::remove_file(session_path());
                     return ExitCode::SUCCESS;
                 }
@@ -860,7 +915,7 @@ pub fn run(args: &[String]) -> ExitCode {
         }
         Some("save") => {
             let path = args.get(1).map_or_else(session_path, PathBuf::from);
-            if args.get(1).is_none() && !session_restore_enabled() {
+            if args.get(1).is_none() && session_restore_mode() == Mode::Off {
                 let _ = std::fs::remove_file(&path);
                 return ExitCode::SUCCESS;
             }
@@ -873,6 +928,17 @@ pub fn run(args: &[String]) -> ExitCode {
             }
         }
         Some("restore") => {
+            if !may_restore(
+                &session_path(),
+                session_restore_mode(),
+                boot_id().as_deref(),
+            ) {
+                log(
+                    &log_path(),
+                    "SESSION_RESTORE is restart and no session was saved during this boot",
+                );
+                return ExitCode::SUCCESS;
+            }
             restore(
                 &session_path(),
                 &default_apps_dirs(),
@@ -885,7 +951,9 @@ pub fn run(args: &[String]) -> ExitCode {
         }
         Some("check") => {
             let path = args.get(1).map_or_else(session_path, PathBuf::from);
-            if restorable(&path, &default_apps_dirs()) {
+            if may_restore(&path, session_restore_mode(), boot_id().as_deref())
+                && restorable(&path, &default_apps_dirs())
+            {
                 ExitCode::SUCCESS
             } else {
                 ExitCode::FAILURE
@@ -1521,22 +1589,122 @@ mod tests {
 
     #[test]
     fn session_restore_from_respects_env_and_config_bool_tokens() {
-        assert!(session_restore_from(None, None));
-        assert!(!session_restore_from(
-            Some("off"),
-            Some("SESSION_RESTORE=1")
-        ));
-        assert!(session_restore_from(Some("yes"), Some("SESSION_RESTORE=0")));
-        assert!(!session_restore_from(None, Some("SESSION_RESTORE=NO\n")));
-        assert!(session_restore_from(None, Some("OTHER=1\n")));
+        assert_eq!(session_restore_from(None, None), Mode::Always);
+        assert_eq!(
+            session_restore_from(Some("off"), Some("SESSION_RESTORE=1")),
+            Mode::Off
+        );
+        assert_eq!(
+            session_restore_from(Some("yes"), Some("SESSION_RESTORE=0")),
+            Mode::Always
+        );
+        assert_eq!(
+            session_restore_from(None, Some("SESSION_RESTORE=NO\n")),
+            Mode::Off
+        );
+        assert_eq!(session_restore_from(None, Some("OTHER=1\n")), Mode::Always);
+        assert_eq!(
+            session_restore_from(None, Some("SESSION_RESTORE=\"restart\"\n")),
+            Mode::Restart
+        );
+        assert_eq!(session_restore_from(Some("Restart"), None), Mode::Restart);
+    }
+
+    /// A session with one window of an app that has a desktop file; whether it came back is
+    /// whether that app was launched.
+    fn launched_after(mode: Mode, saved_boot: Option<&str>, boot: Option<&str>) -> (bool, bool) {
+        let d = tmp(&format!("boot-{mode:?}-{saved_boot:?}-{boot:?}"));
+        let apps = d.join("apps");
+        std::fs::create_dir_all(&apps).unwrap();
+        desktop(&apps, "demo-app", "Name=Demo\nExec=sh -c true\n");
+        let file = d.join("session.json");
+        let id = saved_boot.map_or(String::new(), |b| format!(r#","boot_id":"{b}""#));
+        std::fs::write(
+            &file,
+            format!(
+                r#"{{"windows":[{{"app_id":"demo-app","anchor":[0,0],"size":[100,100]}}],"outputs":[]{id}}}"#
+            ),
+        )
+        .unwrap();
+        let mut launched = false;
+        if may_restore(&file, mode, boot) {
+            let mut ipc = Fake {
+                calls: vec![],
+                reply: |_: &Value| {
+                    json::parse(r#"{"ok":true,"snapshot":{"elements":[]}}"#).unwrap()
+                },
+            };
+            restore(
+                &file,
+                std::slice::from_ref(&apps),
+                &mut ipc,
+                &mut |_, _| launched = true,
+                &d.join("restore.log"),
+                quick(),
+            );
+        }
+        let kept = file.exists();
+        let _ = std::fs::remove_dir_all(&d);
+        (launched, kept)
+    }
+
+    #[test]
+    fn restart_mode_restores_only_a_snapshot_from_this_boot() {
+        assert_eq!(
+            launched_after(Mode::Restart, Some("boot-a"), Some("boot-a")),
+            (true, true)
+        );
+        // after a reboot: nothing comes back and the old snapshot is gone
+        assert_eq!(
+            launched_after(Mode::Restart, Some("boot-a"), Some("boot-b")),
+            (false, false)
+        );
+        // a snapshot saved before ids were: from before a reboot in restart mode
+        assert_eq!(
+            launched_after(Mode::Restart, None, Some("boot-a")),
+            (false, false)
+        );
+        // this boot's id unknown: treated as a reboot
+        assert_eq!(
+            launched_after(Mode::Restart, Some("boot-a"), None),
+            (false, false)
+        );
+        // true: every snapshot, with an id or without
+        assert_eq!(
+            launched_after(Mode::Always, None, Some("boot-a")),
+            (true, true)
+        );
+        assert_eq!(
+            launched_after(Mode::Always, Some("boot-a"), Some("boot-b")),
+            (true, true)
+        );
+    }
+
+    #[test]
+    fn a_snapshot_records_this_boot() {
+        let d = tmp("boot-id");
+        let file = d.join("session.json");
+        let mut ipc = Fake {
+            calls: vec![],
+            reply: |_: &Value| {
+                json::parse(r#"{"ok":true,"snapshot":{"elements":[],"outputs":[]}}"#).unwrap()
+            },
+        };
+        assert!(save_snapshot(&file, &mut ipc, 1, &mut None));
+        let boot = boot_id().expect("/proc/sys/kernel/random/boot_id");
+        assert!(may_restore(&file, Mode::Restart, Some(&boot)));
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]
     #[ignore = "AUDIT_CONFIG: SESSION_RESTORE uses first-wins instead of shell last-wins"]
     fn audit_config_session_restore_last_line_wins() {
-        assert!(session_restore_from(
-            None,
-            Some("SESSION_RESTORE=\"false\"\nSESSION_RESTORE=\"true\"\n"),
-        ));
+        assert_eq!(
+            session_restore_from(
+                None,
+                Some("SESSION_RESTORE=\"false\"\nSESSION_RESTORE=\"true\"\n"),
+            ),
+            Mode::Always
+        );
     }
 }
