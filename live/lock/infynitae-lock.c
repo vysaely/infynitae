@@ -291,10 +291,10 @@ static void trigger_auth(LockApp *app) {
     if (app->auth_state == AUTH_STATE_VERIFYING || app->pam_thread_active) return;
     if (app->password_len == 0) return;
 
-    app->auth_state = AUTH_STATE_VERIFYING;
-
     PamWorkerData *data = malloc(sizeof(PamWorkerData));
+    // no memory: the state stays as it was, so the next Enter tries again
     if (!data) return;
+    app->auth_state = AUTH_STATE_VERIFYING;
     // kept out of swap while it holds the password (best effort: RLIMIT_MEMLOCK may refuse)
     (void)mlock(data, sizeof(*data));
 

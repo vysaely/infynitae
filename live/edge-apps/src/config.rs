@@ -506,17 +506,36 @@ pub fn writable(value: &str) -> bool {
         .all(|c| c.is_ascii_alphanumeric() || " +:_@,.-".contains(c))
 }
 
-/// A config value without its quotes and what follows them (the C edge's config_text).
+/// A config value as the shell reads it: quoted parts joined (`'O'\''Reilly'` is `O'Reilly`,
+/// as `settings.sh` writes an apostrophe), up to the first blank outside quotes.
 pub fn value_text(v: &str) -> String {
-    let v = v.trim_end_matches(['\n', '\r']);
-    if let Some(rest) = v.strip_prefix('"') {
-        rest.split('"').next().unwrap_or("").to_string()
-    } else if let Some(rest) = v.strip_prefix('\'') {
-        // settings.sh writes KEY='value'
-        rest.split('\'').next().unwrap_or("").to_string()
-    } else {
-        v.split_whitespace().next().unwrap_or("").to_string()
+    let mut out = String::new();
+    let mut it = v.trim_end_matches(['\n', '\r']).chars();
+    while let Some(c) = it.next() {
+        match c {
+            '\'' => out.extend(it.by_ref().take_while(|&c| c != '\'')),
+            '"' => {
+                while let Some(c) = it.next() {
+                    match c {
+                        '"' => break,
+                        '\\' => match it.next() {
+                            Some(n @ ('"' | '\\' | '$' | '`')) => out.push(n),
+                            Some(n) => {
+                                out.push('\\');
+                                out.push(n);
+                            }
+                            None => out.push('\\'),
+                        },
+                        c => out.push(c),
+                    }
+                }
+            }
+            '\\' => out.extend(it.next()),
+            ' ' | '\t' => break,
+            c => out.push(c),
+        }
     }
+    out
 }
 
 /// What the edge reads from the config.
@@ -631,6 +650,7 @@ impl Config {
         let mut lines: Vec<(String, String)> = Vec::new();
         for raw in text.lines() {
             let p = raw.trim_start_matches([' ', '\t']);
+            let p = p.strip_prefix("export ").map_or(p, |r| r.trim_start());
             let Some((key, v)) = p.split_once('=') else {
                 continue;
             };
@@ -969,7 +989,25 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "AUDIT_CONFIG: value_text truncates settings.sh single-quote escapes ('\\'\\'')"]
+    fn value_text_reads_values_as_the_shell_does() {
+        assert_eq!(value_text("\"a b\" # note"), "a b");
+        assert_eq!(value_text("'a b'  # note"), "a b");
+        assert_eq!(value_text("plain more"), "plain");
+        assert_eq!(value_text("\"say \\\"hi\\\"\""), "say \"hi\"");
+        assert_eq!(value_text("'it'\\''s'"), "it's");
+        assert_eq!(value_text("\"\""), "");
+        assert_eq!(value_text("#7aa2f7 # note"), "#7aa2f7");
+    }
+
+    #[test]
+    fn an_exported_line_counts() {
+        assert_eq!(
+            Config::from_text("export FAVORITES=\"kitty firefox\"\n").favorites,
+            "kitty firefox"
+        );
+    }
+
+    #[test]
     fn audit_config_edge_value_text_decodes_escaped_single_quote() {
         assert_eq!(value_text("'O'\\''Reilly'"), "O'Reilly");
     }
