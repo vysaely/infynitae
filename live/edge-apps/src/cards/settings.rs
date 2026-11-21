@@ -754,8 +754,10 @@ const H_DEV: u32 = 10;
 pub struct BluetoothCard {
     pub data: Option<BluetoothData>,
     pub list: List,
-    /// a search was asked: found devices are listed with Pair
+    /// a search was asked: found devices remain listed with Pair
     pub searching: bool,
+    /// the background scan command is running
+    pub scanning: bool,
 }
 
 impl BluetoothCard {
@@ -887,7 +889,7 @@ impl Card for BluetoothCard {
                 );
                 y += ui::LIST_ROW_H;
             }
-            let find = if self.searching {
+            let find = if self.scanning {
                 "Looking for devices nearby"
             } else {
                 "Find new devices"
@@ -917,8 +919,12 @@ impl Card for BluetoothCard {
         match (*hit, *button) {
             (H_SWITCH, Button::Left) => {
                 d.powered = !d.powered;
+                if !d.powered {
+                    self.searching = false;
+                    self.scanning = false;
+                }
                 out.push(Action::Run(format!(
-                    "bluetoothctl power {} >/dev/null 2>&1",
+                    "bluetoothctl power {} >&2",
                     if d.powered { "on" } else { "off" }
                 )));
                 true
@@ -927,10 +933,11 @@ impl Card for BluetoothCard {
                 self.list.toggle();
                 true
             }
-            (H_FIND, Button::Left) if d.powered => {
+            (H_FIND, Button::Left) if d.powered && !self.scanning => {
                 self.searching = true;
-                out.push(Action::Run(
-                    "bluetoothctl --timeout 15 scan on >/dev/null 2>&1".into(),
+                self.scanning = true;
+                out.push(Action::RunBackground(
+                    "bluetoothctl --timeout 15 scan on >&2".into(),
                 ));
                 true
             }
@@ -940,13 +947,13 @@ impl Card for BluetoothCard {
                 };
                 let mac = sq(&dev.mac);
                 out.push(Action::Run(if dev.connected {
-                    format!("bluetoothctl disconnect {mac} >/dev/null 2>&1")
+                    format!("bluetoothctl disconnect {mac} >&2")
                 } else if dev.paired {
-                    format!("bluetoothctl connect {mac} >/dev/null 2>&1")
+                    format!("bluetoothctl connect {mac} >&2")
                 } else {
                     format!(
-                        "bluetoothctl pair {mac} >/dev/null 2>&1 && bluetoothctl trust {mac} >/dev/null 2>&1 \
-                         && bluetoothctl connect {mac} >/dev/null 2>&1"
+                        "bluetoothctl pair {mac} >&2 && bluetoothctl trust {mac} >&2 \
+                         && bluetoothctl connect {mac} >&2"
                     )
                 }));
                 true
@@ -1555,6 +1562,86 @@ pub(crate) mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn bluetooth_scan_runs_outside_queue_and_stops_concurrent_scans() {
+        let th = crate::theme::Theme::from_config(&crate::config::Config::from_text(""));
+        let cx = test_cx(&th);
+        let mut c = BluetoothCard::default();
+        c.apply(
+            "bluetooth",
+            &parse_bluetooth(
+                "Controller 00:11:22:33:44:55\n\tPowered: yes\n---\n\
+                 Device AA:BB:CC:DD:EE:FF Speaker\n---\n---\n\
+                 Device AA:BB:CC:DD:EE:FF Speaker\nDevice 11:22:33:44:55:66 Phone\n",
+            ) as &dyn Any,
+        );
+        let mut out = Vec::new();
+        assert!(c.event(
+            &Event::Press {
+                hit: H_FIND,
+                button: Button::Left,
+                at: (0.0, 0.0),
+            },
+            &cx,
+            &mut out
+        ));
+        assert_eq!(
+            out,
+            vec![Action::RunBackground(
+                "bluetoothctl --timeout 15 scan on >&2".into()
+            )]
+        );
+        assert!(c.searching && c.scanning);
+
+        let mut out2 = Vec::new();
+        c.event(
+            &Event::Press {
+                hit: H_FIND,
+                button: Button::Left,
+                at: (0.0, 0.0),
+            },
+            &cx,
+            &mut out2,
+        );
+        assert!(
+            out2.is_empty(),
+            "second Find while scan is active must not start another scan, got: {out2:?}"
+        );
+
+        let mut pair_out = Vec::new();
+        assert!(c.event(
+            &Event::Press {
+                hit: H_DEV + 1,
+                button: Button::Left,
+                at: (0.0, 0.0),
+            },
+            &cx,
+            &mut pair_out
+        ));
+        assert_eq!(
+            pair_out,
+            vec![Action::Run(
+                "bluetoothctl pair '11:22:33:44:55:66' >&2 && bluetoothctl trust '11:22:33:44:55:66' >&2 && bluetoothctl connect '11:22:33:44:55:66' >&2".into()
+            )]
+        );
+
+        let mut power_out = Vec::new();
+        c.event(
+            &Event::Press {
+                hit: H_SWITCH,
+                button: Button::Left,
+                at: (0.0, 0.0),
+            },
+            &cx,
+            &mut power_out,
+        );
+        assert_eq!(
+            power_out,
+            vec![Action::Run("bluetoothctl power off >&2".into())]
+        );
+        assert!(!c.searching && !c.scanning);
     }
 
     pub fn test_cx(th: &crate::theme::Theme) -> Cx<'_> {

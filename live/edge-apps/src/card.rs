@@ -309,6 +309,8 @@ pub fn scroll_rows(
 pub enum Action {
     /// sh -c, off the UI thread, one at a time per card
     Run(String),
+    /// sh -c, off the UI thread, in its own process outside the card's queue
+    RunBackground(String),
     /// an app by id: its Exec line
     Launch(String),
     /// "steam://rungameid/730", a folder
