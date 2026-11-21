@@ -445,23 +445,38 @@ fn saved_profile<'a>(ssid: &str, saved: &'a [SavedWifi]) -> Option<&'a str> {
         .map(|s| s.name.as_str())
 }
 
+fn add_and_up_sh(ssid_arg: &str, title_arg: &str, hidden: bool) -> String {
+    let extra = if hidden { " wifi.hidden yes" } else { "" };
+    format!(
+        "pw=$(infynitae-edge ask --text --secret {title_arg}) || exit 0; \
+         add_out=$(nmcli connection add type wifi con-name {ssid_arg} ssid {ssid_arg}{extra} wifi-sec.key-mgmt wpa-psk) || {{ rc=$?; unset pw; exit $rc; }}; \
+         uuid=$(printf '%s\\n' \"$add_out\" | sed -n 's/.*(\\([0-9a-fA-F]\\{{8\\}}-[0-9a-fA-F]\\{{4\\}}-[0-9a-fA-F]\\{{4\\}}-[0-9a-fA-F]\\{{4\\}}-[0-9a-fA-F]\\{{12\\}}\\)).*/\\1/p' | head -n 1); \
+         if [ -n \"$uuid\" ]; then \
+             printf '802-11-wireless-security.psk:%s\\n' \"$pw\" | nmcli connection up uuid \"$uuid\" passwd-file /dev/stdin >/dev/null; \
+             rc=$?; \
+             [ $rc -eq 0 ] || nmcli connection delete uuid \"$uuid\" >/dev/null 2>&1; \
+         else \
+             printf '802-11-wireless-security.psk:%s\\n' \"$pw\" | nmcli connection up id {ssid_arg} passwd-file /dev/stdin >/dev/null; \
+             rc=$?; \
+             [ $rc -eq 0 ] || nmcli connection delete id {ssid_arg} >/dev/null 2>&1; \
+         fi; \
+         unset pw; exit $rc"
+    )
+}
+
 /// The command that joins `n`: a saved network by its connection profile; an open one at once; a new
 /// secured one after the password is asked in the edge's own card, handed to nmcli on its standard
-/// input (never on a command line, where other programs could read it).
+/// input (never on a command line, where other programs could read it). If bringing up a newly
+/// added secured profile fails, the profile is deleted so the next click asks again.
 pub fn join_command(n: &Wlan, saved: &[SavedWifi]) -> String {
     let ssid = sq(&n.ssid);
     if let Some(profile) = saved_profile(&n.ssid, saved) {
-        format!("nmcli connection up id {} >/dev/null 2>&1", sq(profile))
+        format!("nmcli connection up id {} >/dev/null", sq(profile))
     } else if !n.secure {
-        format!("nmcli dev wifi connect {ssid} >/dev/null 2>&1")
+        format!("nmcli dev wifi connect {ssid} >/dev/null")
     } else {
         let title = sq(&format!("Password for {}", n.ssid));
-        format!(
-            "pw=$(infynitae-edge ask --text --secret {title}) || exit 0; \
-             nmcli connection add type wifi con-name {ssid} ssid {ssid} wifi-sec.key-mgmt wpa-psk >/dev/null 2>&1 \
-             && printf '802-11-wireless-security.psk:%s\\n' \"$pw\" | nmcli connection up id {ssid} passwd-file /dev/stdin >/dev/null 2>&1; \
-             unset pw"
-        )
+        add_and_up_sh(&ssid, &title, false)
     }
 }
 
@@ -596,7 +611,7 @@ impl Card for NetworkCard {
             (H_SWITCH, Button::Left) if d.wifi_device => {
                 d.radio_on = !d.radio_on;
                 out.push(Action::Run(format!(
-                    "nmcli radio wifi {} >/dev/null 2>&1",
+                    "nmcli radio wifi {} >/dev/null",
                     if d.radio_on { "on" } else { "off" }
                 )));
                 true
@@ -612,20 +627,16 @@ impl Card for NetworkCard {
                 true
             }
             (H_HIDDEN, Button::Left) => {
-                out.push(Action::Run(
+                out.push(Action::Run(format!(
                     "ssid=$(infynitae-edge ask --text 'Name of the hidden network') || exit 0; \
-                     [ -n \"$ssid\" ] || exit 0; \
-                     pw=$(infynitae-edge ask --text --secret \"Password for $ssid\") || exit 0; \
-                     nmcli connection add type wifi con-name \"$ssid\" ssid \"$ssid\" wifi.hidden yes wifi-sec.key-mgmt wpa-psk >/dev/null 2>&1 \
-                     && printf '802-11-wireless-security.psk:%s\\n' \"$pw\" | nmcli connection up id \"$ssid\" passwd-file /dev/stdin >/dev/null 2>&1; \
-                     unset pw"
-                        .into(),
-                ));
+                     [ -n \"$ssid\" ] || exit 0; {}",
+                    add_and_up_sh("\"$ssid\"", "\"Password for $ssid\"", true)
+                )));
                 true
             }
             (H_SEARCH, Button::Left) => {
                 out.push(Action::Run(
-                    "nmcli dev wifi list --rescan yes >/dev/null 2>&1".into(),
+                    "nmcli dev wifi list --rescan yes >/dev/null".into(),
                 ));
                 true
             }
@@ -637,7 +648,7 @@ impl Card for NetworkCard {
                 if n.joined {
                     let profile = saved_profile(&n.ssid, &d.saved).unwrap_or(&n.ssid);
                     out.push(Action::Run(format!(
-                        "nmcli connection down id {} >/dev/null 2>&1",
+                        "nmcli connection down id {} >/dev/null",
                         sq(profile)
                     )));
                 } else {
@@ -1180,7 +1191,7 @@ pub(crate) mod tests {
         };
         assert_eq!(
             join_command(&open, &[]),
-            "nmcli dev wifi connect 'Cafe' >/dev/null 2>&1"
+            "nmcli dev wifi connect 'Cafe' >/dev/null"
         );
         let saved = Wlan {
             ssid: "Home's".into(),
@@ -1196,7 +1207,7 @@ pub(crate) mod tests {
                     ssid: "Home's".into(),
                 }]
             ),
-            "nmcli connection up id 'Home'\\''s' >/dev/null 2>&1"
+            "nmcli connection up id 'Home'\\''s' >/dev/null"
         );
         let new = join_command(
             &Wlan {
@@ -1328,7 +1339,7 @@ pub(crate) mod tests {
         assert_eq!(
             out,
             vec![Action::Run(
-                "nmcli dev wifi connect 'Cafe' >/dev/null 2>&1".into()
+                "nmcli dev wifi connect 'Cafe' >/dev/null".into()
             )]
         );
     }
@@ -1427,9 +1438,123 @@ pub(crate) mod tests {
         assert_eq!(
             out,
             vec![Action::Run(
-                "nmcli connection down id 'Home 1' >/dev/null 2>&1".into()
+                "nmcli connection down id 'Home 1' >/dev/null".into()
             )]
         );
+    }
+
+    #[test]
+    fn failed_secured_wifi_up_deletes_added_profile_and_keeps_exit_status_and_stderr() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!(
+            "infynitae-settings-bug5-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let log_path = dir.join("nmcli.log");
+
+        let ask_stub = dir.join("infynitae-edge");
+        std::fs::write(&ask_stub, "#!/bin/sh\necho 'wrongpass'\n").unwrap();
+        std::fs::set_permissions(&ask_stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let nmcli_stub = dir.join("nmcli");
+        std::fs::write(
+            &nmcli_stub,
+            format!(
+                "#!/bin/sh\n\
+                 printf '%s\\n' \"$*\" >> {}\n\
+                 case \"$1 $2\" in\n\
+                   'connection add')\n\
+                     if [ \"${{STUB_NO_UUID:-}}\" != 1 ]; then\n\
+                       echo \"Connection 'CafeSec' (a12040fc-e4b7-334f-a005-e345eda332ce) successfully added.\"\n\
+                     fi\n\
+                     exit 0\n\
+                     ;;\n\
+                   'connection up')\n\
+                     if [ \"${{STUB_UP_OK:-}}\" = 1 ]; then exit 0; fi\n\
+                     echo 'Error: Connection activation failed: Secrets were required, but not provided.' >&2\n\
+                     exit 4\n\
+                     ;;\n\
+                   'connection delete')\n\
+                     exit 0\n\
+                     ;;\n\
+                 esac\n",
+                sq(log_path.to_str().unwrap())
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&nmcli_stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let cmd = join_command(
+            &Wlan {
+                ssid: "CafeSec".into(),
+                signal: 70,
+                secure: true,
+                joined: false,
+            },
+            &[],
+        );
+        let old_path = std::env::var("PATH").unwrap_or_default();
+        let new_path = format!("{}:{old_path}", dir.display());
+
+        // 1. Failing up with UUID deletes by UUID, exits 4, and keeps stderr.
+        let out = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(&cmd)
+            .env("PATH", &new_path)
+            .output()
+            .unwrap();
+        let log = std::fs::read_to_string(&log_path).unwrap_or_default();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(4), "log:\n{log}");
+        assert!(
+            stderr.contains("Secrets were required"),
+            "expected stderr preserved, got: {stderr:?}"
+        );
+        assert!(
+            log.lines()
+                .any(|l| l == "connection delete uuid a12040fc-e4b7-334f-a005-e345eda332ce"),
+            "expected newly added profile to be deleted on failed up, log:\n{log}"
+        );
+
+        // 2. Failing up without UUID in stdout falls back to deleting by id.
+        let _ = std::fs::write(&log_path, "");
+        let out2 = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(&cmd)
+            .env("PATH", &new_path)
+            .env("STUB_NO_UUID", "1")
+            .output()
+            .unwrap();
+        let log2 = std::fs::read_to_string(&log_path).unwrap_or_default();
+        assert_eq!(out2.status.code(), Some(4));
+        assert!(
+            log2.lines().any(|l| l == "connection delete id CafeSec"),
+            "expected id fallback delete, log:\n{log2}"
+        );
+
+        // 3. Successful up keeps the profile (no delete) and exits 0.
+        let _ = std::fs::write(&log_path, "");
+        let out3 = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(&cmd)
+            .env("PATH", &new_path)
+            .env("STUB_UP_OK", "1")
+            .output()
+            .unwrap();
+        let log3 = std::fs::read_to_string(&log_path).unwrap_or_default();
+        assert_eq!(out3.status.code(), Some(0));
+        assert!(
+            !log3.contains("connection delete"),
+            "successful up must keep profile, log:\n{log3}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     pub fn test_cx(th: &crate::theme::Theme) -> Cx<'_> {
