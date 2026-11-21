@@ -14,6 +14,9 @@ env:
   CARGO_TERM_COLOR: never
   # smithay =0.7.0 links xkbcommon and pixman-1; the DRM backend needs udev, libinput, libseat, gbm, drm, wayland.
   NATIVE_DEPS: libxkbcommon-dev libpixman-1-dev libudev-dev libinput-dev libseat-dev libgbm-dev libdrm-dev libwayland-dev
+  # Pinned cargo-machete binary release (<1 s install vs building from source); --with-metadata resolves crates like cairo-rs whose lib name is cairo.
+  CARGO_MACHETE_URL: https://github.com/bnjbvr/cargo-machete/releases/download/v0.10.1/cargo-machete-v0.10.1-x86_64-unknown-linux-musl.tar.gz
+  CARGO_MACHETE_SHA256: 785d381985140ffa172246d82089adeb7f2eb9c774d961c48f77a4494023afb5
 
 jobs:
   # OB-36: the documentation checker, the knowledge checker and their seeded negative controls.
@@ -137,6 +140,13 @@ jobs:
           workspaces: live/edge-rs
       - run: cd live/edge-rs && cargo fmt -- --check
       - run: cd live/edge-rs && cargo clippy --locked --all-targets -- -D warnings
+      - name: Unused dependencies (cargo-machete)
+        run: |
+          mkdir -p "$RUNNER_TEMP/machete"
+          curl -fsSL "$CARGO_MACHETE_URL" -o "$RUNNER_TEMP/machete.tar.gz"
+          echo "$CARGO_MACHETE_SHA256  $RUNNER_TEMP/machete.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/machete.tar.gz" --strip-components=1 -C "$RUNNER_TEMP/machete"
+          PATH="$RUNNER_TEMP/machete:$PATH" cargo machete --with-metadata live/edge-rs
       - run: cd live/edge-rs && cargo test --locked
       - run: sh tools/test-edge-rs
       # the edge itself, to render and try a change without building it on the owner's PC
@@ -163,6 +173,13 @@ jobs:
           workspaces: live/shot-rs
       - run: cd live/shot-rs && cargo fmt -- --check
       - run: cd live/shot-rs && cargo clippy --locked --all-targets -- -D warnings
+      - name: Unused dependencies (cargo-machete)
+        run: |
+          mkdir -p "$RUNNER_TEMP/machete"
+          curl -fsSL "$CARGO_MACHETE_URL" -o "$RUNNER_TEMP/machete.tar.gz"
+          echo "$CARGO_MACHETE_SHA256  $RUNNER_TEMP/machete.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/machete.tar.gz" --strip-components=1 -C "$RUNNER_TEMP/machete"
+          PATH="$RUNNER_TEMP/machete:$PATH" cargo machete --with-metadata live/shot-rs
       - run: cd live/shot-rs && cargo test --locked
       - run: cd live/shot-rs && cargo build --locked
       - uses: actions/upload-artifact@v4
@@ -189,6 +206,13 @@ jobs:
             .
       - run: cd live/sandbox-socket && cargo fmt -- --check
       - run: cd live/sandbox-socket && cargo clippy --locked --all-targets -- -D warnings
+      - name: Unused dependencies (cargo-machete)
+        run: |
+          mkdir -p "$RUNNER_TEMP/machete"
+          curl -fsSL "$CARGO_MACHETE_URL" -o "$RUNNER_TEMP/machete.tar.gz"
+          echo "$CARGO_MACHETE_SHA256  $RUNNER_TEMP/machete.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/machete.tar.gz" --strip-components=1 -C "$RUNNER_TEMP/machete"
+          PATH="$RUNNER_TEMP/machete:$PATH" cargo machete --with-metadata live/sandbox-socket
       - run: cd live/sandbox-socket && cargo build --locked
       - run: INFYNITAE_SANDBOX_SOCKET="$PWD/live/sandbox-socket/target/debug/infynitae-sandbox-socket" cargo test --locked -p infynitae-backend-headless --test t1_trust -- --ignored
 
@@ -208,6 +232,13 @@ jobs:
           workspaces: live/edge-apps
       - run: cd live/edge-apps && cargo fmt -- --check
       - run: cd live/edge-apps && cargo clippy --locked --all-targets -- -D warnings
+      - name: Unused dependencies (cargo-machete)
+        run: |
+          mkdir -p "$RUNNER_TEMP/machete"
+          curl -fsSL "$CARGO_MACHETE_URL" -o "$RUNNER_TEMP/machete.tar.gz"
+          echo "$CARGO_MACHETE_SHA256  $RUNNER_TEMP/machete.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/machete.tar.gz" --strip-components=1 -C "$RUNNER_TEMP/machete"
+          PATH="$RUNNER_TEMP/machete:$PATH" cargo machete --with-metadata live/edge-apps
       - run: cd live/edge-apps && cargo test --locked
       - run: cd live/edge-apps && cargo build --locked
       - uses: actions/upload-artifact@v4
@@ -253,6 +284,13 @@ jobs:
       - run: cargo build --workspace --locked
       - run: cargo test --workspace --locked
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Unused dependencies (cargo-machete)
+        run: |
+          mkdir -p "$RUNNER_TEMP/machete"
+          curl -fsSL "$CARGO_MACHETE_URL" -o "$RUNNER_TEMP/machete.tar.gz"
+          echo "$CARGO_MACHETE_SHA256  $RUNNER_TEMP/machete.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/machete.tar.gz" --strip-components=1 -C "$RUNNER_TEMP/machete"
+          PATH="$RUNNER_TEMP/machete:$PATH" cargo machete --with-metadata crates enforcement
 
   # Seeded behavioural defects must fail the product tests. The longest check (it re-runs the suite
   # per defect), so it runs on main, pull requests and nightly, not on every branch push.
