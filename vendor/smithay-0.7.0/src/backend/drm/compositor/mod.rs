@@ -751,12 +751,35 @@ impl<B: Buffer, F: Framebuffer> FrameState<B, F> {
         async_flip: bool,
     ) -> Result<(), crate::backend::drm::error::Error> {
         debug_assert!(!self.planes.iter().any(|(_, state)| state.needs_test));
-        let planes = self.build_planes(surface, supports_fencing, allow_partial_update);
         if async_flip {
-            surface.page_flip_async(planes, event)
+            let plane = self.build_async_primary_plane(surface);
+            surface.page_flip_async(plane, event)
         } else {
+            let planes = self.build_planes(surface, supports_fencing, allow_partial_update);
             surface.page_flip(planes, event)
         }
+    }
+
+    fn build_async_primary_plane<'a>(
+        &'a mut self,
+        surface: &'a DrmSurface,
+    ) -> impl IntoIterator<Item = super::PlaneState<'a>> {
+        let primary = surface.plane();
+        self.planes
+            .iter()
+            .filter(move |(handle, _)| *handle == primary)
+            .map(move |(handle, state)| super::surface::PlaneState {
+                handle: *handle,
+                config: state.config.as_ref().map(|config| super::PlaneConfig {
+                    src: config.properties.src,
+                    dst: config.properties.dst,
+                    alpha: config.properties.alpha,
+                    transform: config.properties.transform,
+                    damage_clips: None,
+                    fb: *config.buffer.as_ref(),
+                    fence: None,
+                }),
+            })
     }
 
     #[profiling::function]
@@ -990,6 +1013,65 @@ enum PreparedFrameKind {
     Partial,
 }
 
+enum AsyncEligibility {
+    Eligible,
+    SyncTransition,
+    Refused(String),
+}
+
+fn check_async_eligibility<B: Buffer, F: Framebuffer>(
+    next: &FrameState<B, F>,
+    previous: &FrameState<B, F>,
+    primary: plane::Handle,
+    planes: &Planes,
+    allow_partial_update: bool,
+) -> AsyncEligibility {
+    if !allow_partial_update {
+        return AsyncEligibility::SyncTransition;
+    }
+    for (handle, state) in &next.planes {
+        if *handle == primary {
+            continue;
+        }
+        if !state.skip {
+            if state.config.is_some() {
+                let role = if planes.cursor.iter().any(|p| p.handle == *handle) {
+                    "cursor"
+                } else {
+                    "overlay"
+                };
+                return AsyncEligibility::Refused(format!(
+                    "{role} plane {handle:?} property CRTC_ID/FB_ID"
+                ));
+            }
+            return AsyncEligibility::SyncTransition;
+        }
+    }
+    let Some(next_primary) = next.plane_state(primary) else {
+        return AsyncEligibility::SyncTransition;
+    };
+    let Some(next_cfg) = next_primary.config.as_ref() else {
+        return AsyncEligibility::Refused(format!("primary plane {primary:?} property FB_ID=0"));
+    };
+    if let Some((sync, _)) = next_cfg.sync.as_ref() {
+        if !sync.is_reached() {
+            return AsyncEligibility::SyncTransition;
+        }
+    }
+    let Some(prev_cfg) = previous.plane_state(primary).and_then(|s| s.config.as_ref()) else {
+        return AsyncEligibility::SyncTransition;
+    };
+    if !prev_cfg.is_compatible(next_cfg)
+        || !matches!(
+            (&prev_cfg.buffer.buffer, &next_cfg.buffer.buffer),
+            (ScanoutBuffer::Wayland(_), ScanoutBuffer::Wayland(_))
+        )
+    {
+        return AsyncEligibility::SyncTransition;
+    }
+    AsyncEligibility::Eligible
+}
+
 struct PreparedFrame<A: Allocator, F: ExportFramebuffer<<A as Allocator>::Buffer>> {
     frame: CompositorFrameState<A, F>,
     kind: PreparedFrameKind,
@@ -1064,6 +1146,7 @@ where
     supports_fencing: bool,
     reset_pending: bool,
     async_flip: bool,
+    async_flip_refusal: Option<String>,
     signaled_fence: Option<Arc<OwnedFd>>,
 
     framebuffer_exporter: F,
@@ -1250,7 +1333,8 @@ where
                         primary_plane_damage_bag: DamageBag::new(4),
                         primary_is_opaque: is_opaque,
                         reset_pending: true,
-            async_flip: false,
+                        async_flip: false,
+                        async_flip_refusal: None,
                         signaled_fence,
                         current_frame,
                         pending_frame: None,
@@ -1434,6 +1518,7 @@ where
             primary_is_opaque: is_opaque,
             reset_pending: true,
             async_flip: false,
+            async_flip_refusal: None,
             signaled_fence,
             current_frame,
             pending_frame: None,
@@ -2521,11 +2606,19 @@ where
     /// tear. A flip the kernel refuses that way is made as usual, and turns this off.
     pub fn set_async_flip(&mut self, async_flip: bool) {
         self.async_flip = async_flip;
+        if !async_flip {
+            self.async_flip_refusal = None;
+        }
     }
 
     /// Whether frames flip without waiting for the vblank ([`set_async_flip`](Self::set_async_flip)).
     pub fn async_flip(&self) -> bool {
         self.async_flip
+    }
+
+    /// Plane and property reason the last requested async flip was refused or deferred, if any.
+    pub fn take_async_flip_refusal(&mut self) -> Option<String> {
+        self.async_flip_refusal.take()
     }
 
     /// Re-evaluates the current state of the crtc and forces calls to [`render_frame`](DrmCompositor::render_frame)
@@ -2556,21 +2649,64 @@ where
                 .frame
                 .commit(&self.surface, self.supports_fencing, allow_partial_update, true)
         } else if self.async_flip {
-            let flip = prepared_frame.frame.page_flip(
-                &self.surface,
-                self.supports_fencing,
+            let primary = self.surface.plane();
+            let eligibility = check_async_eligibility(
+                &prepared_frame.frame,
+                &self.current_frame,
+                primary,
+                &self.planes,
                 allow_partial_update,
-                true,
-                true,
             );
-            if let Err(err) = &flip {
-                warn!("Async page flip refused, flipping on the vblank: {}", err);
-                self.async_flip = false;
-                prepared_frame
-                    .frame
-                    .page_flip(&self.surface, self.supports_fencing, allow_partial_update, true, false)
-            } else {
-                flip
+            match eligibility {
+                AsyncEligibility::Eligible => {
+                    let flip = prepared_frame.frame.page_flip(
+                        &self.surface,
+                        self.supports_fencing,
+                        allow_partial_update,
+                        true,
+                        true,
+                    );
+                    if let Err(err) = &flip {
+                        let msg = format!("primary plane {primary:?} [FB_ID]: {err}");
+                        warn!("Async page flip refused ({}), flipping on the vblank", msg);
+                        self.async_flip_refusal = Some(msg);
+                        self.async_flip = false;
+                        prepared_frame.frame.page_flip(
+                            &self.surface,
+                            self.supports_fencing,
+                            allow_partial_update,
+                            true,
+                            false,
+                        )
+                    } else {
+                        self.async_flip_refusal = None;
+                        flip
+                    }
+                }
+                AsyncEligibility::SyncTransition => {
+                    // Single transition frame (e.g. clearing cursor/overlay plane or applying
+                    // changed primary geometry/format/fence): settle synchronously without
+                    // turning off async_flip or logging a refusal so the next frame tears.
+                    prepared_frame.frame.page_flip(
+                        &self.surface,
+                        self.supports_fencing,
+                        allow_partial_update,
+                        true,
+                        false,
+                    )
+                }
+                AsyncEligibility::Refused(reason) => {
+                    warn!("Async page flip refused ({}), flipping on the vblank", reason);
+                    self.async_flip_refusal = Some(reason);
+                    self.async_flip = false;
+                    prepared_frame.frame.page_flip(
+                        &self.surface,
+                        self.supports_fencing,
+                        allow_partial_update,
+                        true,
+                        false,
+                    )
+                }
             }
         } else {
             prepared_frame

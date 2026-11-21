@@ -146,11 +146,15 @@ These pass the test suite but have not run on a real screen or device yet:
 - **Screen sharing only on change:** a remote desktop or a screen share gets a frame when the
   screen changed since its last one, sending only changed areas; a still screen costs nothing.
 - **Tearing for games** (`TEARING`, Super+Shift+O; Super+Shift+T too): a fullscreen window
-  shown directly flips each frame at once (an async page flip) when its app asks
-  (`tearing-control-v1`, a Vulkan or OpenGL game with vsync off; presentation hints apply on the
-  next surface commit, and destroying the control object restores vsync on the next commit) or after Super+Shift+O on it (X11 games, which cannot ask). A
-  driver that refuses gets the usual flip. In the test suite; this GPU (amdgpu) reports support,
-  not yet seen in a game.
+  shown directly flips each frame at once (an atomic async page flip writing only the primary
+  plane's `FB_ID`) when `TEARING="always"` (the default), its app asks (`tearing-control-v1`;
+  hints apply on the next surface commit and destroying the object restores vsync on the next
+  commit), or after Super+Shift+O on it (X11 games, which cannot ask). Visible unlocked cursors
+  (menus) and active overlay planes stay on vblank cleanly; pointer-locked tearing fullscreen
+  windows suppress the cursor so the cursor plane stays free, transition frames sync once before
+  async flips start, and driver or plane refusals log the plane and property once per game. In the
+  unit and headless test suite (policy, cursor suppression, and pure async commit builder); `amdgpu`
+  supports async flips here, not yet re-tested in a live game after the atomic-commit fix.
 - **Game mode** (`GAME_MODE`, `--no-gamemode`): a fullscreen window, or one filling the screen
   that tears (with `TEARING="always"` any, a maximised browser too), shown directly or not, is
   registered with Feral's gamemode (full CPU speed) until it has been off screen for 5 s

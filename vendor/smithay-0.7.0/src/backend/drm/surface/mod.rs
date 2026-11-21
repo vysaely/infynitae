@@ -19,6 +19,9 @@ use super::{
 use crate::utils::DevPath;
 use crate::utils::{Buffer, Physical, Point, Rectangle, Transform};
 use atomic::AtomicDrmSurface;
+pub use atomic::{
+    build_async_flip_commit, AsyncFlipCommit, AsyncFlipCommitError, AsyncFlipPlaneProps, AsyncFlipPropValue,
+};
 use legacy::LegacyDrmSurface;
 
 /// An open crtc + plane combination that can be used for scan-out

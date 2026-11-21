@@ -36,6 +36,174 @@ use tracing::{debug, info, info_span, instrument, trace, warn};
 
 use super::{PlaneConfig, PlaneState, VrrSupport};
 
+/// Property value written by an atomic asynchronous page flip (`DRM_MODE_PAGE_FLIP_ASYNC`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AsyncFlipPropValue {
+    /// Framebuffer handle assigned to `FB_ID`.
+    Framebuffer(framebuffer::Handle),
+}
+
+/// Primary-plane geometry, transform, format-independent state that must match the active plane
+/// before an async flip can change only `FB_ID`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AsyncFlipPlaneProps {
+    /// Source rectangle in buffer coordinates.
+    pub src: Rectangle<f64, crate::utils::Buffer>,
+    /// Destination rectangle in output physical coordinates.
+    pub dst: Rectangle<i32, crate::utils::Physical>,
+    /// Buffer transform (`rotation`).
+    pub transform: Transform,
+    /// Plane alpha.
+    pub alpha: f32,
+}
+
+impl AsyncFlipPlaneProps {
+    /// Capture comparable plane properties from a [`PlaneConfig`].
+    pub fn from_config(config: &PlaneConfig<'_>) -> Self {
+        Self {
+            src: config.src,
+            dst: config.dst,
+            transform: config.transform,
+            alpha: config.alpha,
+        }
+    }
+}
+
+/// Minimal atomic commit contents for an asynchronous page flip.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AsyncFlipCommit {
+    /// Primary plane handle updated by the commit.
+    pub plane: plane::Handle,
+    /// New framebuffer handle for `FB_ID`.
+    pub fb: framebuffer::Handle,
+    /// Exact `(property_name, value)` pairs added to the atomic request.
+    pub properties: Vec<(&'static str, AsyncFlipPropValue)>,
+}
+
+/// Reason an atomic async page flip commit could not be reduced to a safe `FB_ID`-only flip.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AsyncFlipCommitError {
+    /// Primary plane was omitted from `planes`.
+    MissingPrimaryPlane {
+        /// Primary plane handle expected.
+        primary: plane::Handle,
+    },
+    /// Primary plane appeared more than once in `planes`.
+    DuplicatePrimaryPlane {
+        /// Primary plane handle duplicated.
+        primary: plane::Handle,
+    },
+    /// Primary plane had `config: None` (disabling the primary plane requires a sync commit).
+    PrimaryPlaneDisabled {
+        /// Primary plane handle.
+        plane: plane::Handle,
+    },
+    /// A non-primary (cursor or overlay) plane was included in the async commit.
+    NonPrimaryPlane {
+        /// Non-primary plane handle.
+        plane: plane::Handle,
+    },
+    /// A property on the primary plane other than `FB_ID` changed or cannot flip asynchronously.
+    PropertyChanged {
+        /// Plane handle.
+        plane: plane::Handle,
+        /// Property name (`SRC`, `CRTC_RECT`, `rotation`, `alpha`, `IN_FENCE_FD`).
+        property: &'static str,
+    },
+}
+
+impl std::fmt::Display for AsyncFlipCommitError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingPrimaryPlane { primary } => {
+                write!(f, "missing primary plane {primary:?}")
+            }
+            Self::DuplicatePrimaryPlane { primary } => {
+                write!(f, "duplicate primary plane {primary:?}")
+            }
+            Self::PrimaryPlaneDisabled { plane } => {
+                write!(f, "primary plane {plane:?} has no framebuffer (FB_ID=0)")
+            }
+            Self::NonPrimaryPlane { plane } => {
+                write!(f, "non-primary plane {plane:?} included in async flip")
+            }
+            Self::PropertyChanged { plane, property } => {
+                write!(f, "plane {plane:?} property {property} changed")
+            }
+        }
+    }
+}
+
+/// Plan the minimal atomic async page-flip commit for `planes`.
+///
+/// Linux `drm_atomic_uapi.c` / `amdgpu_dm` reject async commits with `EINVAL` when CRTC
+/// properties (`ACTIVE`, `VRR_ENABLED`), non-primary planes (cursor/overlay updates or resets),
+/// or primary plane properties beyond `FB_ID` change. `FB_DAMAGE_CLIPS` is omitted because an
+/// async flip presents the entire new buffer immediately; geometry, transform, alpha, and
+/// explicit unsignaled fence (`IN_FENCE_FD`) changes return [`AsyncFlipCommitError`] so the
+/// caller commits them on vblank instead.
+pub fn build_async_flip_commit<'a>(
+    primary: plane::Handle,
+    previous_primary: Option<&AsyncFlipPlaneProps>,
+    planes: &[PlaneState<'a>],
+) -> Result<AsyncFlipCommit, AsyncFlipCommitError> {
+    let mut primary_fb = None;
+    for state in planes {
+        if state.handle != primary {
+            return Err(AsyncFlipCommitError::NonPrimaryPlane { plane: state.handle });
+        }
+        if primary_fb.is_some() {
+            return Err(AsyncFlipCommitError::DuplicatePrimaryPlane { primary });
+        }
+        let Some(config) = state.config.as_ref() else {
+            return Err(AsyncFlipCommitError::PrimaryPlaneDisabled {
+                plane: state.handle,
+            });
+        };
+        if let Some(prev) = previous_primary {
+            if config.src != prev.src {
+                return Err(AsyncFlipCommitError::PropertyChanged {
+                    plane: primary,
+                    property: "SRC",
+                });
+            }
+            if config.dst != prev.dst {
+                return Err(AsyncFlipCommitError::PropertyChanged {
+                    plane: primary,
+                    property: "CRTC_RECT",
+                });
+            }
+            if config.transform != prev.transform {
+                return Err(AsyncFlipCommitError::PropertyChanged {
+                    plane: primary,
+                    property: "rotation",
+                });
+            }
+            if config.alpha != prev.alpha {
+                return Err(AsyncFlipCommitError::PropertyChanged {
+                    plane: primary,
+                    property: "alpha",
+                });
+            }
+        }
+        if config.fence.is_some() {
+            return Err(AsyncFlipCommitError::PropertyChanged {
+                plane: primary,
+                property: "IN_FENCE_FD",
+            });
+        }
+        primary_fb = Some(config.fb);
+    }
+    let Some(fb) = primary_fb else {
+        return Err(AsyncFlipCommitError::MissingPrimaryPlane { primary });
+    };
+    Ok(AsyncFlipCommit {
+        plane: primary,
+        fb,
+        properties: vec![("FB_ID", AsyncFlipPropValue::Framebuffer(fb))],
+    })
+}
+
 #[derive(Debug, Clone)]
 pub struct State {
     pub active: bool,
@@ -168,6 +336,7 @@ pub struct AtomicDrmSurface {
     crtc: crtc::Handle,
     plane: plane::Handle,
     used_planes: Mutex<HashSet<plane::Handle>>,
+    last_primary_props: Mutex<Option<AsyncFlipPlaneProps>>,
     prop_mapping: Arc<RwLock<PropMapping>>,
     state: RwLock<State>,
     pending: RwLock<State>,
@@ -215,6 +384,7 @@ impl AtomicDrmSurface {
             crtc,
             plane,
             used_planes: Mutex::new(HashSet::new()),
+            last_primary_props: Mutex::new(None),
             prop_mapping,
             state: RwLock::new(state),
             pending: RwLock::new(pending),
@@ -845,6 +1015,10 @@ impl AtomicDrmSurface {
                 } else {
                     used_planes.remove(&plane.handle);
                 }
+                if plane.handle == self.plane {
+                    *self.last_primary_props.lock().unwrap() =
+                        plane.config.as_ref().map(AsyncFlipPlaneProps::from_config);
+                }
             }
         }
 
@@ -886,15 +1060,33 @@ impl AtomicDrmSurface {
 
         // page flips work just like commits with fewer parameters..
         let prop_mapping = self.prop_mapping.read().unwrap();
-        let req = AtomicRequest::build_request(
-            &prop_mapping,
-            self.crtc,
-            None,
-            self.state.read().unwrap().vrr,
-            [],
-            [],
-            &*planes,
-        )?;
+        let req = if async_flip {
+            let prev_primary = *self.last_primary_props.lock().unwrap();
+            let commit_plan =
+                build_async_flip_commit(self.plane, prev_primary.as_ref(), &planes).map_err(|err| {
+                    warn!("Async page flip skipped before ioctl: {}", err);
+                    match err {
+                        AsyncFlipCommitError::MissingPrimaryPlane { .. }
+                        | AsyncFlipCommitError::DuplicatePrimaryPlane { .. } => Error::NoPlane,
+                        AsyncFlipCommitError::PrimaryPlaneDisabled { plane } => Error::NoFramebuffer(plane),
+                        AsyncFlipCommitError::NonPrimaryPlane { plane }
+                        | AsyncFlipCommitError::PropertyChanged { plane, .. } => {
+                            Error::UnsupportedPlaneConfiguration(plane)
+                        }
+                    }
+                })?;
+            AtomicRequest::from_async_flip_commit(&prop_mapping, &commit_plan)?
+        } else {
+            AtomicRequest::build_request(
+                &prop_mapping,
+                self.crtc,
+                None,
+                self.state.read().unwrap().vrr,
+                [],
+                [],
+                &*planes,
+            )?
+        };
 
         // .. and without `AtomicCommitFlags::AllowModeset`.
         // If we would set anything here, that would require a modeset, this would fail,
@@ -913,7 +1105,11 @@ impl AtomicDrmSurface {
             .atomic_commit(flags, req.build()?)
             .map_err(|source| {
                 Error::Access(AccessError {
-                    errmsg: "Page flip commit failed",
+                    errmsg: if async_flip {
+                        "Async page flip commit failed (plane primary [FB_ID])"
+                    } else {
+                        "Page flip commit failed"
+                    },
                     dev: self.fd.dev_path(),
                     source,
                 })
@@ -925,6 +1121,10 @@ impl AtomicDrmSurface {
                     used_planes.insert(plane.handle);
                 } else {
                     used_planes.remove(&plane.handle);
+                }
+                if !async_flip && plane.handle == self.plane {
+                    *self.last_primary_props.lock().unwrap() =
+                        plane.config.as_ref().map(AsyncFlipPlaneProps::from_config);
                 }
             }
         }
@@ -959,6 +1159,9 @@ impl AtomicDrmSurface {
 
         if result.is_ok() {
             self.used_planes.lock().unwrap().remove(&plane);
+            if plane == self.plane {
+                *self.last_primary_props.lock().unwrap() = None;
+            }
         }
 
         result
@@ -1002,6 +1205,7 @@ impl AtomicDrmSurface {
         if res.is_ok() {
             self.used_planes.lock().unwrap().clear();
             self.state.write().unwrap().clear();
+            *self.last_primary_props.lock().unwrap() = None;
         }
 
         res
@@ -1016,6 +1220,7 @@ impl AtomicDrmSurface {
         } else {
             State::current_state(&*self.fd, self.crtc, &mut self.prop_mapping.write().unwrap())?
         };
+        *self.last_primary_props.lock().unwrap() = None;
         Ok(())
     }
 
@@ -1329,6 +1534,16 @@ impl<'a> AtomicRequest<'a> {
         Ok(())
     }
 
+    fn set_plane_async_fb(
+        &mut self,
+        plane: plane::Handle,
+        fb: framebuffer::Handle,
+    ) -> Result<(), Error> {
+        let plane_props = self.plane_props.entry(plane).or_default();
+        plane_props.insert("FB_ID", property::Value::Framebuffer(Some(fb)));
+        Ok(())
+    }
+
     fn build(&self) -> Result<AtomicModeReq, Error> {
         let mut req = AtomicModeReq::new();
 
@@ -1626,12 +1841,43 @@ impl<'a> AtomicRequest<'a> {
         Ok(())
     }
 
+    fn set_plane_async_fb(
+        &mut self,
+        plane: plane::Handle,
+        fb: framebuffer::Handle,
+    ) -> Result<(), Error> {
+        self.request.add_property(
+            plane,
+            self.mapping.plane_prop_handle(plane, "FB_ID")?,
+            property::Value::Framebuffer(Some(fb)),
+        );
+        Ok(())
+    }
+
     fn build(&self) -> Result<AtomicModeReq, Error> {
         Ok(self.request.clone())
     }
 }
 
 impl<'a> AtomicRequest<'a> {
+    fn from_async_flip_commit(
+        mapping: &'a PropMapping,
+        commit: &AsyncFlipCommit,
+    ) -> Result<AtomicRequest<'a>, Error> {
+        let mut req = AtomicRequest::new(mapping);
+        for &(name, value) in &commit.properties {
+            match (name, value) {
+                ("FB_ID", AsyncFlipPropValue::Framebuffer(fb)) => {
+                    req.set_plane_async_fb(commit.plane, fb)?;
+                }
+                _ => {
+                    return Err(Error::UnsupportedPlaneConfiguration(commit.plane));
+                }
+            }
+        }
+        Ok(req)
+    }
+
     fn build_request(
         mapping: &'a PropMapping,
         crtc: crtc::Handle,

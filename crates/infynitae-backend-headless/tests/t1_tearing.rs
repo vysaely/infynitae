@@ -270,3 +270,62 @@ fn tearing_always_needs_no_ask() {
     assert!(t.ls.state.toggle_tearing(id), "and on again");
     assert!(t.ls.state.tears(o));
 }
+
+#[test]
+fn locked_pointer_on_tearing_fullscreen_window_omits_cursor_element() {
+    use infynitae_backend_headless::pointer_motion;
+    use infynitae_wayland::convert;
+    use smithay::backend::renderer::pixman::PixmanRenderer;
+
+    let mut t = T::always();
+    t.ls.state.set_console_target();
+    let o = t.ls.output();
+    let qh = t.ls.qh.clone();
+    let (w, id) = t.map("fps game");
+    t.fullscreen(w, true);
+    t.paint(w);
+    pointer_motion(
+        &mut t.ls.state,
+        &mut t.ls.input,
+        (1.0, 1.0),
+        (1.0, 1.0),
+        1000,
+    )
+    .expect("motion");
+    t.adv();
+    assert!(t.ls.state.tears(o));
+    assert!(!t.ls.state.cursor_is_hidden_on(o));
+    assert!(!t.ls.state.pointer_locked_on(o));
+
+    let mut renderer = PixmanRenderer::new().expect("pixman");
+    let (menu_elements, _) =
+        convert::output_elements(&mut t.ls.state, &mut renderer, o).expect("menu elements");
+    assert!(
+        menu_elements.len() > 1,
+        "unlocked visible pointer on fullscreen window includes cursor elements: got {}",
+        menu_elements.len()
+    );
+
+    t.ls.probe.lock_pointer(&qh, w, false);
+    t.adv();
+    assert!(t.ls.state.core().constraint().is_some());
+    assert!(t.ls.state.pointer_locked_on(o));
+
+    let (locked_elements, _) =
+        convert::output_elements(&mut t.ls.state, &mut renderer, o).expect("locked elements");
+    assert_eq!(
+        locked_elements.len(),
+        1,
+        "locked pointer while fullscreen game tears must omit cursor elements (got {} elements)",
+        locked_elements.len()
+    );
+
+    // Turning tearing off restores the cursor cleanly even before lock ends.
+    assert!(!t.ls.state.toggle_tearing(id));
+    let (vsync_elements, _) =
+        convert::output_elements(&mut t.ls.state, &mut renderer, o).expect("vsync elements");
+    assert!(
+        vsync_elements.len() > 1,
+        "cursor returns when tearing is toggled off"
+    );
+}
