@@ -758,15 +758,43 @@ impl Shell {
             Side::Left => (MARGIN, along),
             Side::Right => (w - tw - MARGIN, along),
         };
+        // More than one column: the first column stays at the edge the panel is anchored to
+        // (a bottom-right panel keeps its first column at the right, the rest go inwards), and a
+        // shorter column lines up with the anchored end (bottom), not floating at the top.
+        let to_right = match p.side {
+            Side::Right => true,
+            Side::Left => false,
+            _ => p.align > 0,
+        };
+        let to_bottom = match p.side {
+            Side::Bottom => true,
+            Side::Top => false,
+            _ => p.align > 0,
+        };
+        let mut col_h = vec![0.0f64; cols];
+        for (rh, c) in heights.iter().zip(&col_of) {
+            if col_h[*c] > 0.0 {
+                col_h[*c] += GAP + strip;
+            }
+            col_h[*c] += rh;
+        }
         let mut out = Vec::new();
+        let mut col = usize::MAX;
         let mut y = strip;
-        let mut col = 0usize;
         for ((row, rh), c) in rows.iter().zip(&heights).zip(&col_of) {
             if *c != col {
                 col = *c;
                 y = strip;
+                if cols > 1 && to_bottom {
+                    y += (content_h - col_h[col]).max(0.0);
+                }
             }
-            let x0 = col as f64 * (pw + GAP);
+            let slot = if cols > 1 && to_right {
+                cols - 1 - col
+            } else {
+                col
+            };
+            let x0 = slot as f64 * (pw + GAP);
             if row.len() == 2 {
                 let half = (pw - GAP) / 2.0;
                 out.push((row[0].0, (x0, y, half, row[0].1)));
@@ -3709,6 +3737,27 @@ mod tests {
         assert!(rects
             .iter()
             .all(|(_, r)| r.1 + r.3 <= pbox.3 + 0.5 && r.0 + r.2 <= pbox.2 + 0.5));
+        // bottom right: the first card stays in the column at the right edge, the cards that did
+        // not fit go to a column on its left, and each column ends at the panel's bottom
+        let first = rects[0].1;
+        assert!(
+            rects.iter().all(|(_, r)| r.0 <= first.0),
+            "the first column is the rightmost"
+        );
+        let mut xs: Vec<f64> = rects.iter().map(|(_, r)| r.0).collect();
+        xs.dedup();
+        for x in xs {
+            let bottom = rects
+                .iter()
+                .filter(|(_, r)| r.0 == x)
+                .map(|(_, r)| r.1 + r.3)
+                .fold(0.0f64, f64::max);
+            assert!(
+                (bottom - pbox.3).abs() < 0.5,
+                "column at {x} ends at {bottom}, the panel at {}",
+                pbox.3
+            );
+        }
         // too narrow for two columns: one column that scrolls, as before
         let (narrow, rects_n, _) = sh.layout_local(idx, 600.0, h);
         assert!(rects_n.iter().all(|(_, r)| r.0 == 0.0) && narrow.2 <= 600.0);
@@ -3744,9 +3793,10 @@ mod tests {
         let pbox = sh.draw_on(out, &cr, 1280.0, 400.0).unwrap();
         let (_, local_rects, content_h) = sh.layout_local(idx, 1280.0, 400.0);
         assert!(content_h <= 400.0 - 2.0 * MARGIN);
-        assert_eq!(local_rects[0].1 .0, 0.0);
-        assert_eq!(local_rects[1].1 .0, 0.0);
-        assert_eq!(local_rects[2].1 .0, 380.0 + GAP);
+        // top right: column 1 at the right edge, column 2 on its left
+        assert_eq!(local_rects[0].1 .0, 380.0 + GAP);
+        assert_eq!(local_rects[1].1 .0, 380.0 + GAP);
+        assert_eq!(local_rects[2].1 .0, 0.0);
 
         let order = sh.hit_order();
         let col1_count = order.iter().take_while(|(ci, _, _)| *ci < 2).count();
@@ -3762,7 +3812,7 @@ mod tests {
             .find(|(c, h, _)| *c == ci1 && *h == hit1)
             .unwrap()
             .2;
-        assert!(r1.0 < pbox.0 + 380.0);
+        assert!(r1.0 >= pbox.0 + 380.0 + GAP);
 
         // Next Down crosses to the first hit of column 2 (windows/list).
         assert!(sh.key(Key::Down));
@@ -3773,7 +3823,7 @@ mod tests {
             .find(|(c, h, _)| *c == ci2 && *h == hit2)
             .unwrap()
             .2;
-        assert!(r2.0 >= pbox.0 + 380.0 + GAP);
+        assert!(r2.0 < pbox.0 + 380.0);
         assert!(r2.0 + r2.2 <= pbox.0 + pbox.2 && r2.1 >= pbox.1 && r2.1 + r2.3 <= pbox.1 + pbox.3);
 
         // Enter on a window row in column 2 focuses it and starts the closing fade with the same columns.
@@ -3839,10 +3889,11 @@ mod tests {
         let frames = sh.frame_hits(Some(out));
         let (_, col2_card_r, col2_hits) = frames
             .iter()
-            .find(|(_, r, _)| r.0 >= pbox.0 + 380.0)
+            .find(|(_, r, _)| r.0 < pbox.0 + 380.0)
             .expect("column 2 card in per-output frame");
-        assert!((col2_card_r.0 - (pbox.0 + 380.0 + GAP)).abs() < 0.5);
-        assert!(col2_card_r.0 + col2_card_r.2 <= lw - MARGIN + 0.5);
+        // bottom right: column 2 is the left one
+        assert!((col2_card_r.0 - pbox.0).abs() < 0.5);
+        assert!(col2_card_r.0 + col2_card_r.2 <= pbox.0 + 380.0 + 0.5);
         let win_hit = col2_hits
             .list
             .iter()
