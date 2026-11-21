@@ -1051,8 +1051,12 @@ impl Core {
         if target.is_some_and(|id| self.hidden_by_presentation(id)) {
             return Ok(Vec::new());
         }
+        let had_constraint = self.constraint.is_some();
         let mut fx = self.focus.set_focus_at(self.input.clock.now_us(), target);
         fx.extend(self.reconcile_constraints());
+        if had_constraint && self.constraint.is_none() {
+            self.true_position_into(&mut fx);
+        }
         Ok(fx)
     }
 

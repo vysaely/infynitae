@@ -188,6 +188,224 @@ fn held_super_releases_pointer_lock_in_windowed_game() {
     adv(&mut ls);
 }
 
+#[test]
+fn captcha_window_from_game_gets_focus_and_frees_pointer_then_restores_lock_on_close() {
+    let mut ls = Lockstep::new(Some(a_1080()));
+    let qh = ls.qh.clone();
+    let g_idx = ls.probe.toplevel(&qh, "GAME", (800, 600), 0);
+    ls.probe.surfaces[g_idx]
+        .toplevel
+        .as_ref()
+        .unwrap()
+        .set_app_id("space.bigrat.mocktail".into());
+    adv(&mut ls);
+    ls.probe.draw(&qh, g_idx);
+    adv(&mut ls);
+    let game_id = ls.state.elements().last().expect("game element");
+    set_focus(&mut ls.state, &mut ls.input, Some(game_id)).unwrap();
+    adv(&mut ls);
+
+    // Pointer on GAME
+    pointer_motion(
+        &mut ls.state,
+        &mut ls.input,
+        (100.0, 100.0),
+        (100.0, 100.0),
+        1000,
+    )
+    .unwrap();
+    adv(&mut ls);
+
+    // Request persistent pointer lock on GAME
+    ls.probe.lock_pointer(&qh, g_idx, false);
+    adv(&mut ls);
+    assert!(
+        helper_smithay_active(&ls, game_id),
+        "precondition: pointer lock active on GAME"
+    );
+    assert_eq!(ls.probe.kb.active.as_deref(), Some("GAME"));
+
+    // Game process opens captcha window (second toplevel from same client connection)
+    let c_idx = ls.probe.toplevel(&qh, "CAPTCHA", (400, 300), 0);
+    ls.probe.surfaces[c_idx]
+        .toplevel
+        .as_ref()
+        .unwrap()
+        .set_app_id("org.mocktail.WebViewHelper".into());
+    adv(&mut ls);
+    ls.probe.draw(&qh, c_idx);
+    adv(&mut ls);
+    let captcha_id = ls
+        .state
+        .elements()
+        .into_iter()
+        .find(|&id| id != game_id)
+        .expect("captcha element");
+
+    // Compositor policy: captcha window is from same client as game, so it is not held
+    // and is shown over the game via show_opened
+    assert!(ls.state.is_same_client(captcha_id, game_id));
+    assert!(
+        !ls.state.open_focus_held(captcha_id, false),
+        "captcha window must not be held by focus priority"
+    );
+    let fx = ls
+        .state
+        .core_mut()
+        .show_opened(&mut ls.input, captcha_id)
+        .unwrap();
+    ls.state.apply(&fx);
+    adv(&mut ls);
+
+    // Captcha window must get keyboard focus
+    assert_eq!(
+        ls.probe.kb.active.as_deref(),
+        Some("CAPTCHA"),
+        "captcha window must receive keyboard focus on open"
+    );
+
+    // Pointer lock on GAME must be deactivated (free pointer)
+    assert!(
+        !helper_smithay_active(&ls, game_id),
+        "pointer lock must be deactivated while captcha window is open"
+    );
+    assert!(
+        ls.probe.ptr.iter().any(|s| s == "unlocked"),
+        "client must receive unlocked event for game surface when captcha opens"
+    );
+
+    // Close captcha window
+    ls.probe.destroy_toplevel(c_idx);
+    adv(&mut ls);
+
+    // Focus must return to GAME
+    assert_eq!(
+        ls.probe.kb.active.as_deref(),
+        Some("GAME"),
+        "keyboard focus must return to GAME after captcha closes"
+    );
+
+    // Pointer lock must come back to GAME
+    assert!(
+        helper_smithay_active(&ls, game_id),
+        "pointer lock must reactivate on GAME after captcha closes"
+    );
+}
+
+#[test]
+fn captcha_window_from_fullscreen_game_gets_focus_and_frees_pointer_then_restores_lock_on_close() {
+    let mut ls = Lockstep::new(Some(a_1080()));
+    let qh = ls.qh.clone();
+    let g_idx = ls.probe.toplevel(&qh, "GAME", (1920, 1080), 0);
+    ls.probe.surfaces[g_idx]
+        .toplevel
+        .as_ref()
+        .unwrap()
+        .set_app_id("space.bigrat.mocktail".into());
+    ls.probe.surfaces[g_idx]
+        .toplevel
+        .as_ref()
+        .unwrap()
+        .set_fullscreen(None);
+    adv(&mut ls);
+    ls.probe.draw(&qh, g_idx);
+    adv(&mut ls);
+    let game_id = ls.state.elements().last().expect("game element");
+    set_focus(&mut ls.state, &mut ls.input, Some(game_id)).unwrap();
+    adv(&mut ls);
+    assert!(
+        ls.state.core().fullscreen_of(game_id).is_some(),
+        "precondition: GAME is fullscreen"
+    );
+
+    // Pointer on GAME
+    pointer_motion(
+        &mut ls.state,
+        &mut ls.input,
+        (100.0, 100.0),
+        (100.0, 100.0),
+        1000,
+    )
+    .unwrap();
+    adv(&mut ls);
+
+    // Request persistent pointer lock on GAME
+    ls.probe.lock_pointer(&qh, g_idx, false);
+    adv(&mut ls);
+    assert!(
+        helper_smithay_active(&ls, game_id),
+        "precondition: pointer lock active on fullscreen GAME"
+    );
+    assert_eq!(ls.probe.kb.active.as_deref(), Some("GAME"));
+
+    // Game process opens captcha window (second toplevel from same client connection)
+    let c_idx = ls.probe.toplevel(&qh, "CAPTCHA", (400, 300), 0);
+    ls.probe.surfaces[c_idx]
+        .toplevel
+        .as_ref()
+        .unwrap()
+        .set_app_id("org.mocktail.WebViewHelper".into());
+    adv(&mut ls);
+    ls.probe.draw(&qh, c_idx);
+    adv(&mut ls);
+    let captcha_id = ls
+        .state
+        .elements()
+        .into_iter()
+        .find(|&id| id != game_id)
+        .expect("captcha element");
+
+    // Compositor policy: captcha window is from same client as fullscreen game,
+    // so it is NOT held by fullscreen priority and is shown over the game via show_opened
+    assert!(ls.state.is_same_client(captcha_id, game_id));
+    assert!(
+        !ls.state.open_focus_held(captcha_id, false),
+        "captcha window must not be held by fullscreen focus priority"
+    );
+    let fx = ls
+        .state
+        .core_mut()
+        .show_opened(&mut ls.input, captcha_id)
+        .unwrap();
+    ls.state.apply(&fx);
+    adv(&mut ls);
+
+    // Captcha window must get keyboard focus
+    assert_eq!(
+        ls.probe.kb.active.as_deref(),
+        Some("CAPTCHA"),
+        "captcha window must receive keyboard focus over fullscreen game"
+    );
+
+    // Pointer lock on GAME must be deactivated (free pointer)
+    assert!(
+        !helper_smithay_active(&ls, game_id),
+        "pointer lock must be deactivated while captcha window is open"
+    );
+    assert!(
+        ls.probe.ptr.iter().any(|s| s == "unlocked"),
+        "client must receive unlocked event for game surface when captcha opens"
+    );
+
+    // Close captcha window
+    ls.probe.destroy_toplevel(c_idx);
+    adv(&mut ls);
+
+    // Focus must return to GAME
+    assert_eq!(
+        ls.probe.kb.active.as_deref(),
+        Some("GAME"),
+        "keyboard focus must return to fullscreen GAME after captcha closes"
+    );
+
+    // Pointer lock must come back to GAME
+    assert!(
+        helper_smithay_active(&ls, game_id),
+        "pointer lock must reactivate on fullscreen GAME after captcha closes"
+    );
+}
+
+
 
 #[test]
 fn roblox_stepped_aside_flips_keyboard_focus_between_game_and_other_while_button_held() {

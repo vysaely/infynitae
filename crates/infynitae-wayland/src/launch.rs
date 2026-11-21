@@ -163,6 +163,21 @@ impl WaylandState {
         u32::try_from(creds.pid).ok()
     }
 
+    /// Whether `a` and `b` belong to the same client connection or client process.
+    pub fn is_same_client(&self, a: ElementId, b: ElementId) -> bool {
+        let (Some(sa), Some(sb)) = (self.window_surface(a), self.window_surface(b)) else {
+            return false;
+        };
+        let (Some(ca), Some(cb)) = (sa.client(), sb.client()) else {
+            return false;
+        };
+        ca.id() == cb.id()
+            || self
+                .client_pid(a)
+                .zip(self.client_pid(b))
+                .is_some_and(|(pa, pb)| pa == pb)
+    }
+
     /// Whether the user opened the new window `element` (module docs), given when they last
     /// typed or clicked.
     pub fn opened_by_user(&mut self, element: ElementId, last_input: Instant) -> bool {
@@ -236,7 +251,9 @@ impl WaylandState {
         }
         let focused = self.core.focus().target().filter(|f| *f != element);
         focused.is_some_and(|f| {
-            self.core.fullscreen_of(f).is_some() && self.core.toplevel_parent(element) != Some(f)
+            self.core.fullscreen_of(f).is_some()
+                && self.core.toplevel_parent(element) != Some(f)
+                && !self.is_same_client(element, f)
         })
     }
 
