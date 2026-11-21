@@ -3,7 +3,7 @@
 //! drawn while closed, toplevel list from the compositor, signals and request files, worker
 //! threads for sources, detached actions, and the `org.freedesktop.Notifications` strip.
 
-use crate::card::{Action, Button, Data, Source, Window};
+use crate::card::{Action, Button, CommandResult, Data, Source, Window};
 use crate::paths::runtime_path;
 use crate::shell::{OutputId, Shell, ARRIVE_LIFT};
 use smithay_client_toolkit::{
@@ -63,7 +63,7 @@ use smithay_client_toolkit::{
         Shm, ShmHandler,
     },
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -494,6 +494,8 @@ enum Fetched {
     Source(&'static str, &'static str, Data, Box<dyn Source>),
     /// One-off result from `Action::Run` after a card command finishes.
     Data(&'static str, &'static str, Data),
+    /// Exit status and bounded last stderr line from a card's shell command.
+    CommandDone(String, CommandResult),
     /// Installed apps re-read on a worker thread along with the folder mtimes statted before the
     /// read started.
     Apps(Vec<crate::app::App>, Vec<Option<std::time::SystemTime>>),
@@ -736,6 +738,118 @@ fn spawn_apps_worker(
     }
 }
 
+/// Per-card queue for `Action::Run`: runs one command at a time and keeps distinct waiting
+/// commands in FIFO order; an identical waiting command replaces its existing waiting copy.
+#[derive(Default)]
+struct CommandQueue {
+    active: HashMap<String, VecDeque<String>>,
+}
+
+impl CommandQueue {
+    /// Enqueues `cmd` for `card`. Returns `true` when the caller must start the worker.
+    fn enqueue(&mut self, card: &str, cmd: String) -> bool {
+        if let Some(waiting) = self.active.get_mut(card) {
+            if let Some(slot) = waiting.iter_mut().find(|w| *w == &cmd) {
+                *slot = cmd;
+            } else {
+                waiting.push_back(cmd);
+            }
+            false
+        } else {
+            self.active.insert(card.to_string(), VecDeque::new());
+            true
+        }
+    }
+
+    fn pop_next(&mut self, card: &str) -> Option<String> {
+        let waiting = self.active.get_mut(card)?;
+        match waiting.pop_front() {
+            Some(next) => Some(next),
+            None => {
+                self.active.remove(card);
+                None
+            }
+        }
+    }
+
+    #[cfg(test)]
+    fn set_busy(&mut self, card: &str) {
+        self.active.entry(card.to_string()).or_default();
+    }
+
+    #[cfg(test)]
+    fn waiting(&self, card: &str) -> Vec<String> {
+        self.active
+            .get(card)
+            .map(|q| q.iter().cloned().collect())
+            .unwrap_or_default()
+    }
+}
+
+fn run_queued_with<F>(
+    queued: &std::sync::Mutex<CommandQueue>,
+    card: &str,
+    first: String,
+    mut run: F,
+) where
+    F: FnMut(&str),
+{
+    let mut cmd = first;
+    loop {
+        run(&cmd);
+        let mut q = queued.lock().unwrap_or_else(|p| p.into_inner());
+        match q.pop_next(card) {
+            Some(next) => cmd = next,
+            None => break,
+        }
+    }
+}
+
+fn run_sh_result_exec(cmd: &str) -> CommandResult {
+    match Command::new("sh")
+        .arg("-c")
+        .arg(cmd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+    {
+        Ok(out) => CommandResult {
+            command: cmd.to_string(),
+            status: out.status.code(),
+            stderr_line: crate::card::last_stderr_line(&out.stderr),
+        },
+        Err(e) => {
+            eprintln!("infynitae-edge-apps: run {cmd}: {e}");
+            CommandResult {
+                command: cmd.to_string(),
+                status: None,
+                stderr_line: crate::card::last_stderr_line(e.to_string().as_bytes()),
+            }
+        }
+    }
+}
+
+fn run_sh_result(cmd: &str) -> CommandResult {
+    // a test never runs it from run_actions: it would change the machine's settings
+    #[cfg(test)]
+    return CommandResult {
+        command: cmd.to_string(),
+        status: Some(0),
+        stderr_line: String::new(),
+    };
+    #[cfg(not(test))]
+    run_sh_result_exec(cmd)
+}
+
+fn refresh_sources(tx: &Sender<Fetched>, prov: &'static str, keys: &[&'static str]) {
+    for &key in keys {
+        if let Some(mut src) = crate::provider::by_id(prov).and_then(|p| p.source(key)) {
+            let _ = tx.send(Fetched::Data(prov, key, src.fetch()));
+        }
+    }
+}
+
 struct App {
     registry_state: RegistryState,
     seat_state: SeatState,
@@ -774,8 +888,8 @@ struct App {
     app_refresh: AppRefresh,
     /// one long-lived worker thread per active source while its panel is open
     workers: HashMap<SourceId, SourceWorker>,
-    /// cards with a command running, and the latest one waiting after it
-    queued: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, Option<String>>>>,
+    /// cards with a command running, and distinct commands waiting in order
+    queued: std::sync::Arc<std::sync::Mutex<CommandQueue>>,
     /// tests: the commands the actions asked for, in order, recorded when asked (the worker does
     /// not run them in tests: they would change the machine's settings; and its exit, which
     /// empties `queued`, does not race a test's check)
@@ -1077,6 +1191,20 @@ impl App {
         }
     }
 
+    fn redraw_open_outputs(&mut self) {
+        if self.shell.open.is_none() {
+            return;
+        }
+        for os in &mut self.outputs {
+            if self.shell.visible_on(os.id) {
+                os.dirty = true;
+                os.render_if_needed(&self.qh, &self.shell);
+                // a card that grew or shrank: the input region follows
+                os.set_input_region(&self.compositor, &self.shell);
+            }
+        }
+    }
+
     fn fetch_timeout(&self, now: Instant) -> Option<Duration> {
         self.shell.open?;
         let sources = self.shell.sources();
@@ -1095,51 +1223,34 @@ impl App {
                 Action::Run(cmd) => {
                     #[cfg(test)]
                     self.ran.push(cmd.clone());
-                    // one command at a time per card, the latest waiting one next: a slider dragged
-                    // sends many levels, and run in no order an older one could land last
-                    let mut q = self.queued.lock().unwrap_or_else(|p| p.into_inner());
-                    if let Some(waiting) = q.get_mut(&card) {
-                        *waiting = Some(cmd);
+                    let start = self
+                        .queued
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .enqueue(&card, cmd.clone());
+                    if !start {
                         continue;
                     }
-                    q.insert(card.clone(), None);
-                    drop(q);
                     let (tx, queued) = (self.fetch_tx.clone(), self.queued.clone());
                     let keys: Vec<&'static str> = keys.to_vec();
                     std::thread::spawn(move || {
-                        let mut cmd = cmd;
-                        loop {
-                            // a test never runs it: it would change the machine's settings
-                            #[cfg(test)]
-                            let _ = &cmd;
-                            #[cfg(not(test))]
-                            if let Err(e) = Command::new("sh")
-                                .arg("-c")
-                                .arg(&cmd)
-                                .stdin(Stdio::null())
-                                .stdout(Stdio::null())
-                                .stderr(Stdio::null())
-                                .status()
-                            {
-                                eprintln!("infynitae-edge-apps: run {cmd}: {e}");
-                            }
-                            let mut q = queued.lock().unwrap_or_else(|p| p.into_inner());
-                            match q.get_mut(&card).and_then(Option::take) {
-                                Some(next) => cmd = next,
-                                None => {
-                                    q.remove(&card);
-                                    break;
-                                }
-                            }
-                        }
+                        run_queued_with(&queued, &card, cmd, |c| {
+                            let res = run_sh_result(c);
+                            let _ = tx.send(Fetched::CommandDone(card.clone(), res));
+                        });
                         // what the commands changed, shown at once
-                        for key in keys {
-                            if let Some(mut src) =
-                                crate::provider::by_id(prov).and_then(|p| p.source(key))
-                            {
-                                let _ = tx.send(Fetched::Data(prov, key, src.fetch()));
-                            }
-                        }
+                        refresh_sources(&tx, prov, &keys);
+                    });
+                }
+                Action::RunBackground(cmd) => {
+                    #[cfg(test)]
+                    self.ran.push(cmd.clone());
+                    let tx = self.fetch_tx.clone();
+                    let keys: Vec<&'static str> = keys.to_vec();
+                    std::thread::spawn(move || {
+                        let res = run_sh_result(&cmd);
+                        let _ = tx.send(Fetched::CommandDone(card, res));
+                        refresh_sources(&tx, prov, &keys);
                     });
                 }
                 Action::Launch(id) => {
@@ -2288,19 +2399,18 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
                     }
                     return;
                 }
+                channel::Event::Msg(Fetched::CommandDone(card, res)) => {
+                    if app.shell.command_done(&card, &res, Instant::now()) {
+                        app.redraw_open_outputs();
+                    }
+                    return;
+                }
                 _ => return,
             };
             let changed = app.shell.apply(prov, key, data.as_ref());
             let reloaded = app.reload_config();
-            if (changed || reloaded) && app.shell.open.is_some() {
-                for os in &mut app.outputs {
-                    if app.shell.visible_on(os.id) {
-                        os.dirty = true;
-                        os.render_if_needed(&app.qh, &app.shell);
-                        // a card that grew or shrank: the input region follows
-                        os.set_input_region(&app.compositor, &app.shell);
-                    }
-                }
+            if changed || reloaded {
+                app.redraw_open_outputs();
             }
         })
         .map_err(|e| e.to_string())?;
@@ -2468,6 +2578,19 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
                 app.sync_popups();
             }
             if let Some(d) = app.shell.notify.next_deadline() {
+                let rem = d
+                    .saturating_duration_since(now)
+                    .max(Duration::from_millis(5));
+                timeout = Some(timeout.map_or(rem, |t| t.min(rem)));
+            }
+        }
+        // transient card error messages clear cleanly without a 165 Hz tick loop
+        if app.shell.card_deadline().is_some() {
+            let now = Instant::now();
+            if app.shell.expire_cards(now) {
+                app.redraw_open_outputs();
+            }
+            if let Some(d) = app.shell.card_deadline() {
                 let rem = d
                     .saturating_duration_since(now)
                     .max(Duration::from_millis(5));
@@ -4834,5 +4957,154 @@ mod tests {
         eq_no.roundtrip(&mut app_no).unwrap();
         eq_no.roundtrip(&mut app_no).unwrap();
         assert!(mock_no.state.lock().unwrap().cursor_shapes.is_empty());
+    }
+
+    #[test]
+    fn per_card_queue_keeps_distinct_waiting_commands_in_order() {
+        let (_mock, conn) = MockWayland::start(
+            vec![MockOutputSpec {
+                width: 1280,
+                height: 800,
+                scale: 1,
+                fractional_120: 120,
+            }],
+            false,
+        );
+        let sh = Shell::new(crate::config::Config::from_text(""), Vec::new());
+        let (fetch_tx, _fetch_rx) = channel::channel::<Fetched>();
+        let (mut app, _eq) = init_app(&conn, sh, fetch_tx).unwrap();
+
+        // Simulate an active worker for this card so follow-up commands wait in the queue.
+        app.queued.lock().unwrap().set_busy("settings/bluetooth");
+        app.shell.actions.push((
+            Action::Run("bluetoothctl pair A".into()),
+            "settings/bluetooth".into(),
+            "settings",
+            &[],
+        ));
+        app.shell.actions.push((
+            Action::Run("bluetoothctl connect B".into()),
+            "settings/bluetooth".into(),
+            "settings",
+            &[],
+        ));
+        // A duplicate of an already waiting command replaces its waiting copy without changing order.
+        app.shell.actions.push((
+            Action::Run("bluetoothctl pair A".into()),
+            "settings/bluetooth".into(),
+            "settings",
+            &[],
+        ));
+        // Background actions bypass the per-card queue.
+        app.shell.actions.push((
+            Action::RunBackground("bluetoothctl --timeout 15 scan on >&2".into()),
+            "settings/bluetooth".into(),
+            "settings",
+            &[],
+        ));
+        app.run_actions();
+
+        assert_eq!(
+            app.queued.lock().unwrap().waiting("settings/bluetooth"),
+            vec![
+                "bluetoothctl pair A".to_string(),
+                "bluetoothctl connect B".to_string(),
+            ]
+        );
+        assert!(
+            app.ran
+                .contains(&"bluetoothctl --timeout 15 scan on >&2".to_string()),
+            "background scan should still run when dispatched: {:?}",
+            app.ran
+        );
+
+        // Drain via run_queued_with to verify sequential FIFO execution and background independence.
+        let q = std::sync::Arc::new(std::sync::Mutex::new(CommandQueue::default()));
+        assert!(q.lock().unwrap().enqueue("card", "first".into()));
+        assert!(!q.lock().unwrap().enqueue("card", "second".into()));
+        assert!(!q.lock().unwrap().enqueue("card", "third".into()));
+        assert!(!q.lock().unwrap().enqueue("card", "second".into()));
+        // Re-sending the currently running command queues a new run after waiting ones.
+        assert!(!q.lock().unwrap().enqueue("card", "first".into()));
+
+        let (gate_tx, gate_rx) = std::sync::mpsc::channel();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (log_tx, log_rx) = std::sync::mpsc::channel();
+        let q_worker = q.clone();
+        let log_q = log_tx.clone();
+        let worker = std::thread::spawn(move || {
+            run_queued_with(&q_worker, "card", "first".into(), |c| {
+                if c == "first" && started_tx.send(()).is_ok() {
+                    let _ = gate_rx.recv();
+                }
+                let _ = log_q.send(c.to_string());
+            });
+        });
+
+        started_rx.recv().unwrap();
+        // While the queue worker is blocked on "first", an outside background run completes first.
+        log_tx.send("scan".to_string()).unwrap();
+        gate_tx.send(()).unwrap();
+        gate_tx.send(()).unwrap();
+        worker.join().unwrap();
+
+        let executed: Vec<String> = log_rx.try_iter().collect();
+        assert_eq!(executed, vec!["scan", "first", "second", "third", "first"]);
+    }
+
+    #[test]
+    fn command_runner_keeps_exit_status_last_stderr_line_and_delivers_command_done() {
+        let long_err = run_sh_result_exec(
+            "printf 'ignored first line\\n\\033[31m%s\\033[0m\\n\\n' \"$(printf 'e%.0s' $(seq 1 250))\" >&2; exit 4",
+        );
+        assert_eq!(long_err.status, Some(4));
+        assert_eq!(long_err.stderr_line.len(), crate::card::MAX_STDERR_BYTES);
+        assert!(long_err.stderr_line.chars().all(|c| c == 'e'));
+
+        let ok = run_sh_result_exec("echo noise; echo ok >&2");
+        assert_eq!(ok.status, Some(0));
+        assert_eq!(ok.stderr_line, "ok");
+
+        // Run a real queued worker with two commands and verify CommandDone messages arrive in order.
+        let q = std::sync::Arc::new(std::sync::Mutex::new(CommandQueue::default()));
+        let cmd1 = "echo 'Error: Connection activation failed: Secrets were required, but not provided.' >&2; exit 4";
+        let cmd2 = "true";
+        assert!(q.lock().unwrap().enqueue("settings/network", cmd1.into()));
+        assert!(!q.lock().unwrap().enqueue("settings/network", cmd2.into()));
+
+        let (tx, rx) = channel::channel::<Fetched>();
+        let q_w = q.clone();
+        std::thread::spawn(move || {
+            run_queued_with(&q_w, "settings/network", cmd1.into(), |c| {
+                let res = run_sh_result_exec(c);
+                let _ = tx.send(Fetched::CommandDone("settings/network".into(), res));
+            });
+        });
+
+        let mut results = Vec::new();
+        while results.len() < 2 {
+            if let Ok(Fetched::CommandDone(card, res)) = rx.recv() {
+                assert_eq!(card, "settings/network");
+                results.push(res);
+            }
+        }
+        assert_eq!(results[0].status, Some(4));
+        assert_eq!(
+            results[0].stderr_line,
+            "Error: Connection activation failed: Secrets were required, but not provided."
+        );
+        assert_eq!(results[1].status, Some(0));
+
+        let mut sh = Shell::new(
+            crate::config::Config::from_text(
+                "PANEL_CONTROL=\"SUPER+A top right 380 settings/network\"\n",
+            ),
+            Vec::new(),
+        );
+        let now = Instant::now();
+        assert!(sh.command_done("settings/network", &results[0], now));
+        assert!(sh.card_deadline().is_some());
+        assert!(sh.command_done("settings/network", &results[1], now));
+        assert_eq!(sh.card_deadline(), None);
     }
 }

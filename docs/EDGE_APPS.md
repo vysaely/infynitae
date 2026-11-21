@@ -223,8 +223,10 @@ pub trait Source: Send {
   key and redraws when one returns true. This is today's `spawn_fetch` and `fetch_rx`
   (`modules/mod.rs:159`, `wayland.rs:2021` in `run_loop`) with typed data in place of command output keyed
   by a string.
-- After a command a card asked for (`Action::Run`) ends, the core fetches that card's sources again at
-  once, as signal K does today (`wayland.rs:1216-1226`).
+- After a command a card asked for (`Action::Run` queued FIFO per card with identical waiting
+  duplicates collapsed, or `Action::RunBackground` in its own process outside the queue) ends, the
+  core sends its exit status and last non-empty stderr line (stripped of CR/ANSI escapes and capped
+  at 200 bytes) to `Card::command_done` and fetches that card's sources again (`wayland.rs`).
 - Test data: `INFYNITAE_EDGE_RENDER_DATA` keeps working. A source that runs a command goes through
   `card::run_sh(key, cmd)` (today's `modules/mod.rs:125`), which returns the fixture's value for `key`
   when that variable is set. A source that reads files takes its root folder as a field, so a test points
@@ -291,6 +293,12 @@ pub trait Card {
 
     /// Moves its animations on by `dt_ms`. True while one is still running.
     fn tick(&mut self, _dt_ms: f64) -> bool { false }
+    /// Called when an `Action::Run` or `Action::RunBackground` from this card ends.
+    fn command_done(&mut self, _res: &CommandResult, _now: std::time::Instant) -> bool { false }
+    /// Next instant when transient command feedback expires.
+    fn next_deadline(&self) -> Option<std::time::Instant> { None }
+    /// Clears expired transient feedback at `now`. True when what the card shows changed.
+    fn expire(&mut self, _now: std::time::Instant) -> bool { false }
 }
 ```
 
@@ -331,7 +339,8 @@ pub enum Event<'a> {
 
 /// What a card asks the core to do. Cards never start a process or touch a window themselves.
 pub enum Action {
-    Run(String),                    // sh -c, off the UI thread, one at a time per card (mod.rs:191)
+    Run(String),                    // sh -c, off the UI thread, queued FIFO per card
+    RunBackground(String),          // sh -c, off the UI thread, outside the card's queue
     Launch(String),                 // an app by id: its Exec line, noted in the recent apps (apps.rs:1130)
     OpenUri(String),                // "steam://rungameid/730", a folder
     Focus(u32), CloseWindow(u32),   // a window from cx.windows
@@ -537,10 +546,20 @@ Kept as in `live/edge-rs/src/wayland.rs`, which was measured and fixed over seve
    - Network, S: one row (icon by state, "Network", state: "Wired", the Wi-Fi network's name, "Not
      connected", "Off"), the switch (Wi-Fi radio), More. M: the list always open. The list: the joined
      network first, the others by signal with a lock where secured, "Hidden network", "Search again".
+     Saved profiles match by `802-11-wireless.ssid` and bring up/down by profile name; a failed
+     first `nmcli connection up` on a newly added secured or hidden profile deletes that profile so
+     the next click prompts again. Failed commands show one plain `theme.alert` line under the row
+     ("Wrong password" when `nmcli` reports missing/bad secrets, or "<action>: <stderr line>") until
+     the next success or 10 s.
      On a PC with no Wi-Fi device (the owner's: `wifi:unavailable`) the switch and More are not shown.
    - Bluetooth, S: row, switch, More. The list: paired devices (connected first), "Find new devices"
-     (scans 15 s, found ones with Pair, then "Pairing", then connected or the failure in words).
-   - Power mode: the choice of the modes `powerprofilesctl list` gives.
+     (`bluetoothctl --timeout 15 scan on` via `Action::RunBackground` outside the card's command
+     queue so pair and connect clicks start immediately; found devices show Pair, and the row shows
+     command failures such as "Pairing failed: <stderr line>" in `theme.alert` until the next
+     success or 10 s). `bluetoothctl` commands redirect stdout to stderr because `bluetoothctl` prints
+     failure messages on stdout.
+   - Power mode: the choice of the modes `powerprofilesctl list` gives, showing non-zero failures
+     under its note until the next success or 10 s.
 4. `sound/volume` (`volume.rs`, the outputs and per-app levels of `child.rs:204-320`), `settings/quick`
    (do not disturb, night light, keyboard layout, screen keys, replay; `switches.rs`), `notifications/list`
    with the server (`origin/feat/edge-notify`), `settings/session` (`session.rs`).

@@ -3,8 +3,8 @@
 //! `bluetoothctl` and `powerprofilesctl`.
 
 use crate::card::{
-    has_render_data, render_value, run_cmd, run_sh, Action, Button, Card, Cx, Data, Event, Hits,
-    Rect, Source, Status,
+    has_render_data, render_value, run_cmd, run_sh, Action, Button, Card, CommandResult, Cx, Data,
+    Event, Hits, Rect, Source, Status,
 };
 use crate::provider::{CardKind, Claim, Listed, Provider, Size};
 use crate::ui::{self, Icon, List, Row};
@@ -182,6 +182,12 @@ pub struct Wlan {
     pub joined: bool,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SavedWifi {
+    pub name: String,
+    pub ssid: String,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct NetworkData {
     /// NetworkManager answered
@@ -192,8 +198,8 @@ pub struct NetworkData {
     pub wired: bool,
     /// the networks in reach, the joined one first, then by signal
     pub networks: Vec<Wlan>,
-    /// the saved connections' names (a saved network joins without a password)
-    pub saved: Vec<String>,
+    /// the saved Wi-Fi connections' profile names and 802-11-wireless.ssid values
+    pub saved: Vec<SavedWifi>,
 }
 
 impl NetworkData {
@@ -251,7 +257,8 @@ pub fn nmcli_fields(line: &str) -> Vec<String> {
 }
 
 /// Reads the network source's output: sections apart by "---": the radio, the devices
-/// (TYPE:STATE), the networks (IN-USE:SIGNAL:SECURITY:SSID), the saved connections (NAME:TYPE).
+/// (TYPE:STATE), the networks (IN-USE:SIGNAL:SECURITY:SSID), the saved connections (NAME:TYPE),
+/// and the saved Wi-Fi profile details (`connection.id:...` and `802-11-wireless.ssid:...`).
 pub fn parse_network(out: &str) -> NetworkData {
     let parts = sections(out);
     let sec = |i: usize| parts.get(i).map(String::as_str).unwrap_or("");
@@ -294,13 +301,49 @@ pub fn parse_network(out: &str) -> NetworkData {
     }
     d.networks
         .sort_by(|a, b| b.joined.cmp(&a.joined).then(b.signal.cmp(&a.signal)));
-    for l in sec(3).lines() {
-        let f = nmcli_fields(l.trim());
-        if f.len() >= 2 && f[1] == "802-11-wireless" {
-            d.saved.push(f[0].clone());
+    let mut cur_id: Option<String> = None;
+    let mut cur_ssid: Option<String> = None;
+    let flush = |saved: &mut Vec<SavedWifi>, id: &mut Option<String>, ssid: &mut Option<String>| {
+        if let (Some(name), Some(s)) = (id.take(), ssid.take()) {
+            if !name.is_empty() && !s.is_empty() {
+                saved.push(SavedWifi { name, ssid: s });
+            }
+        } else {
+            *id = None;
+            *ssid = None;
+        }
+    };
+    for l in sec(4).lines() {
+        let t = l.trim_end_matches('\r');
+        if t.trim().is_empty() {
+            flush(&mut d.saved, &mut cur_id, &mut cur_ssid);
+            continue;
+        }
+        if let Some(v) = t.strip_prefix("connection.id:") {
+            if cur_id.is_some() {
+                flush(&mut d.saved, &mut cur_id, &mut cur_ssid);
+            }
+            cur_id = Some(v.to_string());
+        } else if let Some(v) = t.strip_prefix("802-11-wireless.ssid:") {
+            if cur_ssid.is_some() {
+                flush(&mut d.saved, &mut cur_id, &mut cur_ssid);
+            }
+            cur_ssid = Some(v.to_string());
         }
     }
+    flush(&mut d.saved, &mut cur_id, &mut cur_ssid);
     d
+}
+
+fn wireless_connection_names(conn_out: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    for l in conn_out.lines() {
+        let f = nmcli_fields(l.trim());
+        if f.len() >= 2 && f[1] == "802-11-wireless" && !f[0].is_empty() && !names.contains(&f[0]) {
+            names.push(f[0].clone());
+        }
+    }
+    names
 }
 
 pub fn fetch_network_with(mut run: impl FnMut(&[&str]) -> String) -> NetworkData {
@@ -314,6 +357,7 @@ pub fn fetch_network_with(mut run: impl FnMut(&[&str]) -> String) -> NetworkData
     });
     let mut wifi_out = String::new();
     let mut conn_out = String::new();
+    let mut ssid_out = String::new();
     let radio = if has_wifi {
         wifi_out = run(&[
             "nmcli",
@@ -327,12 +371,28 @@ pub fn fetch_network_with(mut run: impl FnMut(&[&str]) -> String) -> NetworkData
             "no",
         ]);
         conn_out = run(&["nmcli", "-t", "-f", "NAME,TYPE", "connection", "show"]);
+        let wifi_names = wireless_connection_names(&conn_out);
+        if !wifi_names.is_empty() {
+            let mut args = vec![
+                "nmcli",
+                "-t",
+                "-f",
+                "connection.id,802-11-wireless.ssid",
+                "connection",
+                "show",
+            ];
+            for name in &wifi_names {
+                args.push("id");
+                args.push(name.as_str());
+            }
+            ssid_out = run(&args);
+        }
         "enabled"
     } else {
         "disabled"
     };
     parse_network(&format!(
-        "{radio}\n---\n{dev_out}\n---\n{wifi_out}\n---\n{conn_out}"
+        "{radio}\n---\n{dev_out}\n---\n{wifi_out}\n---\n{conn_out}\n---\n{ssid_out}"
     ))
 }
 
@@ -361,6 +421,7 @@ const H_NET: u32 = 10;
 pub struct NetworkCard {
     pub data: Option<NetworkData>,
     pub list: List,
+    pub error: ui::CardError,
 }
 
 impl NetworkCard {
@@ -377,24 +438,69 @@ impl NetworkCard {
     }
 }
 
-/// The command that joins `n`: a saved network by its connection; an open one at once; a new
+fn saved_profile<'a>(ssid: &str, saved: &'a [SavedWifi]) -> Option<&'a str> {
+    saved
+        .iter()
+        .find(|s| s.ssid == ssid && s.name == ssid)
+        .or_else(|| saved.iter().find(|s| s.ssid == ssid))
+        .map(|s| s.name.as_str())
+}
+
+fn add_and_up_sh(ssid_arg: &str, title_arg: &str, hidden: bool) -> String {
+    let extra = if hidden { " wifi.hidden yes" } else { "" };
+    format!(
+        "pw=$(infynitae-edge ask --text --secret {title_arg}) || exit 0; \
+         add_out=$(nmcli connection add type wifi con-name {ssid_arg} ssid {ssid_arg}{extra} wifi-sec.key-mgmt wpa-psk) || {{ rc=$?; unset pw; exit $rc; }}; \
+         uuid=$(printf '%s\\n' \"$add_out\" | sed -n 's/.*(\\([0-9a-fA-F]\\{{8\\}}-[0-9a-fA-F]\\{{4\\}}-[0-9a-fA-F]\\{{4\\}}-[0-9a-fA-F]\\{{4\\}}-[0-9a-fA-F]\\{{12\\}}\\)).*/\\1/p' | head -n 1); \
+         if [ -n \"$uuid\" ]; then \
+             printf '802-11-wireless-security.psk:%s\\n' \"$pw\" | nmcli connection up uuid \"$uuid\" passwd-file /dev/stdin >/dev/null; \
+             rc=$?; \
+             [ $rc -eq 0 ] || nmcli connection delete uuid \"$uuid\" >/dev/null 2>&1; \
+         else \
+             printf '802-11-wireless-security.psk:%s\\n' \"$pw\" | nmcli connection up id {ssid_arg} passwd-file /dev/stdin >/dev/null; \
+             rc=$?; \
+             [ $rc -eq 0 ] || nmcli connection delete id {ssid_arg} >/dev/null 2>&1; \
+         fi; \
+         unset pw; exit $rc"
+    )
+}
+
+/// The command that joins `n`: a saved network by its connection profile; an open one at once; a new
 /// secured one after the password is asked in the edge's own card, handed to nmcli on its standard
-/// input (never on a command line, where other programs could read it).
-pub fn join_command(n: &Wlan, saved: &[String]) -> String {
+/// input (never on a command line, where other programs could read it). If bringing up a newly
+/// added secured profile fails, the profile is deleted so the next click asks again.
+pub fn join_command(n: &Wlan, saved: &[SavedWifi]) -> String {
     let ssid = sq(&n.ssid);
-    if saved.contains(&n.ssid) {
-        format!("nmcli connection up id {ssid} >/dev/null 2>&1")
+    if let Some(profile) = saved_profile(&n.ssid, saved) {
+        format!("nmcli connection up id {} >/dev/null", sq(profile))
     } else if !n.secure {
-        format!("nmcli dev wifi connect {ssid} >/dev/null 2>&1")
+        format!("nmcli dev wifi connect {ssid} >/dev/null")
     } else {
         let title = sq(&format!("Password for {}", n.ssid));
-        format!(
-            "pw=$(infynitae-edge ask --text --secret {title}) || exit 0; \
-             nmcli connection add type wifi con-name {ssid} ssid {ssid} wifi-sec.key-mgmt wpa-psk >/dev/null 2>&1 \
-             && printf '802-11-wireless-security.psk:%s\\n' \"$pw\" | nmcli connection up id {ssid} passwd-file /dev/stdin >/dev/null 2>&1; \
-             unset pw"
-        )
+        add_and_up_sh(&ssid, &title, false)
     }
+}
+
+fn network_error_message(res: &CommandResult) -> String {
+    let lower = res.stderr_line.to_ascii_lowercase();
+    if lower.contains("secrets were required")
+        || lower.contains("wrong password")
+        || lower.contains("bad password")
+        || lower.contains("invalid password")
+        || lower.contains("no secrets")
+    {
+        return "Wrong password".into();
+    }
+    let prefix = if res.command.contains("radio wifi") {
+        "Wi-Fi switch failed"
+    } else if res.command.contains("rescan") {
+        "Scan failed"
+    } else if res.command.contains("connection down") {
+        "Disconnect failed"
+    } else {
+        "Could not join"
+    };
+    ui::command_error(prefix, &res.stderr_line)
 }
 
 impl Card for NetworkCard {
@@ -414,7 +520,7 @@ impl Card for NetworkCard {
         }
     }
     fn height(&self, cx: &Cx, _: f64) -> f64 {
-        let mut h = ui::ROW_H;
+        let mut h = ui::ROW_H + self.error.height();
         if self.has_list() {
             h += if cx.size == Size::M {
                 self.rows() as f64 * ui::LIST_ROW_H + 8.0
@@ -428,17 +534,15 @@ impl Card for NetworkCard {
         let Some(d) = &self.data else { return };
         let (word, detail, on) = d.state();
         let open = self.list_open(cx);
-        let (row_r, list_r) = if !self.has_list() {
-            (body, (0.0, 0.0, 0.0, 0.0))
-        } else if cx.size == Size::M {
-            let lh = body.3 - ui::ROW_H;
-            (
-                (body.0, body.1, body.2, ui::ROW_H),
-                (body.0, body.1 + ui::ROW_H, body.2, lh),
-            )
-        } else {
-            self.list.split(body, self.rows(), cx.list_above)
-        };
+        let (row_r, err_r, list_r) = ui::split_row_error_list(
+            &self.list,
+            body,
+            self.has_list(),
+            cx.size,
+            self.rows(),
+            cx.list_above,
+            self.error.message.is_some(),
+        );
         let right = if self.has_list() {
             30.0 + 8.0 + ui::MORE_W + 4.0
         } else {
@@ -464,6 +568,9 @@ impl Card for NetworkCard {
             if cx.size != Size::M {
                 ui::more(cr, cx, hits, H_MORE, row_r, x_right - 30.0 - 8.0, lit, open);
             }
+        }
+        if let (Some(er), Some(msg)) = (err_r, &self.error.message) {
+            ui::error_line(cr, cx, er, msg);
         }
         if list_r.3 > 1.0 {
             cr.save().ok();
@@ -528,7 +635,7 @@ impl Card for NetworkCard {
             (H_SWITCH, Button::Left) if d.wifi_device => {
                 d.radio_on = !d.radio_on;
                 out.push(Action::Run(format!(
-                    "nmcli radio wifi {} >/dev/null 2>&1",
+                    "nmcli radio wifi {} >/dev/null",
                     if d.radio_on { "on" } else { "off" }
                 )));
                 true
@@ -544,20 +651,16 @@ impl Card for NetworkCard {
                 true
             }
             (H_HIDDEN, Button::Left) => {
-                out.push(Action::Run(
+                out.push(Action::Run(format!(
                     "ssid=$(infynitae-edge ask --text 'Name of the hidden network') || exit 0; \
-                     [ -n \"$ssid\" ] || exit 0; \
-                     pw=$(infynitae-edge ask --text --secret \"Password for $ssid\") || exit 0; \
-                     nmcli connection add type wifi con-name \"$ssid\" ssid \"$ssid\" wifi.hidden yes wifi-sec.key-mgmt wpa-psk >/dev/null 2>&1 \
-                     && printf '802-11-wireless-security.psk:%s\\n' \"$pw\" | nmcli connection up id \"$ssid\" passwd-file /dev/stdin >/dev/null 2>&1; \
-                     unset pw"
-                        .into(),
-                ));
+                     [ -n \"$ssid\" ] || exit 0; {}",
+                    add_and_up_sh("\"$ssid\"", "\"Password for $ssid\"", true)
+                )));
                 true
             }
             (H_SEARCH, Button::Left) => {
                 out.push(Action::Run(
-                    "nmcli dev wifi list --rescan yes >/dev/null 2>&1".into(),
+                    "nmcli dev wifi list --rescan yes >/dev/null".into(),
                 ));
                 true
             }
@@ -567,9 +670,10 @@ impl Card for NetworkCard {
                     return false;
                 };
                 if n.joined {
+                    let profile = saved_profile(&n.ssid, &d.saved).unwrap_or(&n.ssid);
                     out.push(Action::Run(format!(
-                        "nmcli connection down id {} >/dev/null 2>&1",
-                        sq(&n.ssid)
+                        "nmcli connection down id {} >/dev/null",
+                        sq(profile)
                     )));
                 } else {
                     out.push(Action::Run(join_command(&n, &d.saved)));
@@ -585,6 +689,19 @@ impl Card for NetworkCard {
     fn show_list(&mut self) {
         self.list.open = true;
         self.list.settle();
+    }
+    fn command_done(&mut self, res: &CommandResult, now: std::time::Instant) -> bool {
+        if res.status == Some(0) {
+            self.error.clear()
+        } else {
+            self.error.set(network_error_message(res), now)
+        }
+    }
+    fn next_deadline(&self) -> Option<std::time::Instant> {
+        self.error.until
+    }
+    fn expire(&mut self, now: std::time::Instant) -> bool {
+        self.error.expire(now)
     }
 }
 
@@ -674,8 +791,28 @@ const H_DEV: u32 = 10;
 pub struct BluetoothCard {
     pub data: Option<BluetoothData>,
     pub list: List,
-    /// a search was asked: found devices are listed with Pair
+    /// a search was asked: found devices remain listed with Pair
     pub searching: bool,
+    /// the background scan command is running
+    pub scanning: bool,
+    pub error: ui::CardError,
+}
+
+fn bluetooth_error_message(res: &CommandResult) -> String {
+    let prefix = if res.command.contains("pair ") {
+        "Pairing failed"
+    } else if res.command.contains("connect ") && !res.command.contains("disconnect ") {
+        "Connection failed"
+    } else if res.command.contains("disconnect ") {
+        "Disconnect failed"
+    } else if res.command.contains("scan on") {
+        "Scan failed"
+    } else if res.command.contains("power ") {
+        "Bluetooth switch failed"
+    } else {
+        "Bluetooth failed"
+    };
+    ui::command_error(prefix, &res.stderr_line)
 }
 
 impl BluetoothCard {
@@ -711,6 +848,7 @@ impl Card for BluetoothCard {
     }
     fn height(&self, cx: &Cx, _: f64) -> f64 {
         ui::ROW_H
+            + self.error.height()
             + if cx.size == Size::M {
                 self.rows() as f64 * ui::LIST_ROW_H + 8.0
             } else {
@@ -740,14 +878,15 @@ impl Card for BluetoothCard {
         } else {
             ("No device connected".to_string(), format!("{saved} saved"))
         };
-        let (row_r, list_r) = if cx.size == Size::M {
-            (
-                (body.0, body.1, body.2, ui::ROW_H),
-                (body.0, body.1 + ui::ROW_H, body.2, body.3 - ui::ROW_H),
-            )
-        } else {
-            self.list.split(body, self.rows(), cx.list_above)
-        };
+        let (row_r, err_r, list_r) = ui::split_row_error_list(
+            &self.list,
+            body,
+            true,
+            cx.size,
+            self.rows(),
+            cx.list_above,
+            self.error.message.is_some(),
+        );
         let lit = ui::row(
             cr,
             cx,
@@ -780,6 +919,9 @@ impl Card for BluetoothCard {
                 self.list.open,
             );
         }
+        if let (Some(er), Some(msg)) = (err_r, &self.error.message) {
+            ui::error_line(cr, cx, er, msg);
+        }
         if list_r.3 > 1.0 {
             cr.save().ok();
             cr.rectangle(list_r.0, list_r.1, list_r.2, list_r.3);
@@ -807,7 +949,7 @@ impl Card for BluetoothCard {
                 );
                 y += ui::LIST_ROW_H;
             }
-            let find = if self.searching {
+            let find = if self.scanning {
                 "Looking for devices nearby"
             } else {
                 "Find new devices"
@@ -837,8 +979,12 @@ impl Card for BluetoothCard {
         match (*hit, *button) {
             (H_SWITCH, Button::Left) => {
                 d.powered = !d.powered;
+                if !d.powered {
+                    self.searching = false;
+                    self.scanning = false;
+                }
                 out.push(Action::Run(format!(
-                    "bluetoothctl power {} >/dev/null 2>&1",
+                    "bluetoothctl power {} >&2",
                     if d.powered { "on" } else { "off" }
                 )));
                 true
@@ -847,10 +993,11 @@ impl Card for BluetoothCard {
                 self.list.toggle();
                 true
             }
-            (H_FIND, Button::Left) if d.powered => {
+            (H_FIND, Button::Left) if d.powered && !self.scanning => {
                 self.searching = true;
-                out.push(Action::Run(
-                    "bluetoothctl --timeout 15 scan on >/dev/null 2>&1".into(),
+                self.scanning = true;
+                out.push(Action::RunBackground(
+                    "bluetoothctl --timeout 15 scan on >&2".into(),
                 ));
                 true
             }
@@ -860,13 +1007,13 @@ impl Card for BluetoothCard {
                 };
                 let mac = sq(&dev.mac);
                 out.push(Action::Run(if dev.connected {
-                    format!("bluetoothctl disconnect {mac} >/dev/null 2>&1")
+                    format!("bluetoothctl disconnect {mac} >&2")
                 } else if dev.paired {
-                    format!("bluetoothctl connect {mac} >/dev/null 2>&1")
+                    format!("bluetoothctl connect {mac} >&2")
                 } else {
                     format!(
-                        "bluetoothctl pair {mac} >/dev/null 2>&1 && bluetoothctl trust {mac} >/dev/null 2>&1 \
-                         && bluetoothctl connect {mac} >/dev/null 2>&1"
+                        "bluetoothctl pair {mac} >&2 && bluetoothctl trust {mac} >&2 \
+                         && bluetoothctl connect {mac} >&2"
                     )
                 }));
                 true
@@ -880,6 +1027,25 @@ impl Card for BluetoothCard {
     fn show_list(&mut self) {
         self.list.open = true;
         self.list.settle();
+    }
+    fn command_done(&mut self, res: &CommandResult, now: std::time::Instant) -> bool {
+        let mut changed = false;
+        if res.command.contains(" scan on") && self.scanning {
+            self.scanning = false;
+            changed = true;
+        }
+        changed
+            | if res.status == Some(0) {
+                self.error.clear()
+            } else {
+                self.error.set(bluetooth_error_message(res), now)
+            }
+    }
+    fn next_deadline(&self) -> Option<std::time::Instant> {
+        self.error.until
+    }
+    fn expire(&mut self, now: std::time::Instant) -> bool {
+        self.error.expire(now)
     }
 }
 
@@ -954,6 +1120,7 @@ impl Source for PowerSource {
 #[derive(Default)]
 pub struct PowerCard {
     pub data: Option<PowerData>,
+    pub error: ui::CardError,
 }
 
 impl Card for PowerCard {
@@ -973,7 +1140,7 @@ impl Card for PowerCard {
         }
     }
     fn height(&self, _: &Cx, _: f64) -> f64 {
-        34.0 + 8.0 + 16.0
+        34.0 + 8.0 + 16.0 + self.error.height()
     }
     fn draw(&self, cr: &Context, cx: &Cx, body: Rect, hits: &mut Hits) {
         let Some(d) = &self.data else { return };
@@ -1004,6 +1171,14 @@ impl Card for PowerCard {
                 text: mode_says(&d.active),
             },
         );
+        if let Some(msg) = &self.error.message {
+            ui::error_line(
+                cr,
+                cx,
+                (body.0, body.1 + 34.0 + 8.0 + 16.0, body.2, ui::ERROR_H),
+                msg,
+            );
+        }
     }
     fn event(&mut self, ev: &Event, _: &Cx, out: &mut Vec<Action>) -> bool {
         let Some(d) = &mut self.data else {
@@ -1040,6 +1215,22 @@ impl Card for PowerCard {
         d.active = mode;
         true
     }
+    fn command_done(&mut self, res: &CommandResult, now: std::time::Instant) -> bool {
+        if res.status == Some(0) {
+            self.error.clear()
+        } else {
+            self.error.set(
+                ui::command_error("Power mode failed", &res.stderr_line),
+                now,
+            )
+        }
+    }
+    fn next_deadline(&self) -> Option<std::time::Instant> {
+        self.error.until
+    }
+    fn expire(&mut self, now: std::time::Instant) -> bool {
+        self.error.expire(now)
+    }
 }
 
 #[cfg(test)]
@@ -1051,7 +1242,8 @@ pub(crate) mod tests {
         let d = parse_network(
             "enabled\n---\nethernet:connected\nwifi:disconnected\nloopback:connected (externally)\n---\n\
              *:72:WPA2:Home\\:Net\n :40::Cafe Free\n :81:WPA1 WPA2:Neighbour 5G\n :20:WPA2:Home\\:Net\n---\n\
-             Home\\:Net:802-11-wireless\nWired connection 1:802-3-ethernet\n",
+             Home\\:Net:802-11-wireless\nWired connection 1:802-3-ethernet\n---\n\
+             connection.id:Home:Net\n802-11-wireless.ssid:Home:Net\n",
         );
         assert!(d.service && d.wifi_device && d.radio_on && d.wired);
         assert_eq!(
@@ -1063,7 +1255,13 @@ pub(crate) mod tests {
             "joined first, then by signal; a name seen twice once"
         );
         assert!(d.networks[0].secure && !d.networks[2].secure);
-        assert_eq!(d.saved, vec!["Home:Net"]);
+        assert_eq!(
+            d.saved,
+            vec![SavedWifi {
+                name: "Home:Net".into(),
+                ssid: "Home:Net".into(),
+            }]
+        );
         assert_eq!(d.state(), ("Wired".into(), "Cable connected".into(), true));
         assert_eq!(d.icon(), Icon::Wired);
     }
@@ -1104,7 +1302,7 @@ pub(crate) mod tests {
         };
         assert_eq!(
             join_command(&open, &[]),
-            "nmcli dev wifi connect 'Cafe' >/dev/null 2>&1"
+            "nmcli dev wifi connect 'Cafe' >/dev/null"
         );
         let saved = Wlan {
             ssid: "Home's".into(),
@@ -1113,8 +1311,14 @@ pub(crate) mod tests {
             joined: false,
         };
         assert_eq!(
-            join_command(&saved, &["Home's".into()]),
-            "nmcli connection up id 'Home'\\''s' >/dev/null 2>&1"
+            join_command(
+                &saved,
+                &[SavedWifi {
+                    name: "Home's".into(),
+                    ssid: "Home's".into(),
+                }]
+            ),
+            "nmcli connection up id 'Home'\\''s' >/dev/null"
         );
         let new = join_command(
             &Wlan {
@@ -1160,7 +1364,10 @@ pub(crate) mod tests {
         let d = parse_power("  performance:\n    CpuDriver:\tamd_pstate\n\n* balanced:\n    CpuDriver:\tamd_pstate\n\n  power-saver:\n    Degraded:  no\n");
         assert_eq!(d.modes, vec!["power-saver", "balanced", "performance"]);
         assert_eq!(d.active, "balanced");
-        let mut c = PowerCard { data: Some(d) };
+        let mut c = PowerCard {
+            data: Some(d),
+            ..Default::default()
+        };
         let th = crate::theme::Theme::from_config(&crate::config::Config::from_text(""));
         let cx = test_cx(&th);
         let mut out = Vec::new();
@@ -1199,7 +1406,8 @@ pub(crate) mod tests {
         );
         assert_eq!(
             PowerCard {
-                data: Some(PowerData::default())
+                data: Some(PowerData::default()),
+                ..Default::default()
             }
             .status(&cx),
             Status::Missing("This PC has no power modes".into())
@@ -1246,7 +1454,7 @@ pub(crate) mod tests {
         assert_eq!(
             out,
             vec![Action::Run(
-                "nmcli dev wifi connect 'Cafe' >/dev/null 2>&1".into()
+                "nmcli dev wifi connect 'Cafe' >/dev/null".into()
             )]
         );
     }
@@ -1267,19 +1475,567 @@ pub(crate) mod tests {
             match args.get(3).copied() {
                 Some("TYPE,STATE") => "wifi:connected\n".into(),
                 Some("IN-USE,SIGNAL,SECURITY,SSID") => "*:70:WPA2:Home\n".into(),
-                Some("NAME,TYPE") => "Home:802-11-wireless\n".into(),
+                Some("NAME,TYPE") => "Home:802-11-wireless\nWork 1:802-11-wireless\n".into(),
+                Some("connection.id,802-11-wireless.ssid") => {
+                    "connection.id:Home\n802-11-wireless.ssid:Home\n\n\
+                     connection.id:Work 1\n802-11-wireless.ssid:Work\n"
+                        .into()
+                }
                 _ => String::new(),
             }
         });
         assert_eq!(
             calls.len(),
-            3,
-            "active Wi-Fi uses 3 direct nmcli calls, 0 sh"
+            4,
+            "active Wi-Fi uses 4 direct nmcli calls regardless of saved profile count, 0 sh"
         );
         assert!(calls
             .iter()
             .all(|c| c.first().map(String::as_str) == Some("nmcli")));
-        assert!(wifi.wifi_device && wifi.radio_on && wifi.saved == vec!["Home"]);
+        assert!(
+            wifi.wifi_device
+                && wifi.radio_on
+                && wifi.saved
+                    == vec![
+                        SavedWifi {
+                            name: "Home".into(),
+                            ssid: "Home".into(),
+                        },
+                        SavedWifi {
+                            name: "Work 1".into(),
+                            ssid: "Work".into(),
+                        },
+                    ]
+        );
+    }
+
+    #[test]
+    fn saved_networks_match_wireless_ssid_not_profile_name() {
+        let mut calls: Vec<Vec<String>> = Vec::new();
+        let data = fetch_network_with(|args| {
+            calls.push(args.iter().map(|s| s.to_string()).collect());
+            match args.get(3).copied() {
+                Some("TYPE,STATE") => "wifi:disconnected\n".into(),
+                Some("IN-USE,SIGNAL,SECURITY,SSID") => "*:80:WPA2:Home\n :40:WPA2:Home 1\n".into(),
+                Some("NAME,TYPE") => "Home 1:802-11-wireless\n".into(),
+                Some("connection.id,802-11-wireless.ssid") => {
+                    "connection.id:Home 1\n802-11-wireless.ssid:Home\n".into()
+                }
+                _ => String::new(),
+            }
+        });
+        let home = data.networks.iter().find(|n| n.ssid == "Home").unwrap();
+        let decoy = data.networks.iter().find(|n| n.ssid == "Home 1").unwrap();
+        assert!(
+            join_command(home, &data.saved).starts_with("nmcli connection up id 'Home 1'"),
+            "saved profile 'Home 1' with ssid 'Home' should bring up 'Home 1', got: {}",
+            join_command(home, &data.saved)
+        );
+        assert!(
+            join_command(decoy, &data.saved).contains("ask --text --secret"),
+            "unrelated SSID 'Home 1' must not match profile named 'Home 1', got: {}",
+            join_command(decoy, &data.saved)
+        );
+        let mut card = NetworkCard::default();
+        card.apply("network", &data as &dyn Any);
+        let th = crate::theme::Theme::from_config(&crate::config::Config::from_text(""));
+        let cx = test_cx(&th);
+        let mut out = Vec::new();
+        card.event(
+            &Event::Press {
+                hit: H_NET,
+                button: Button::Left,
+                at: (0.0, 0.0),
+            },
+            &cx,
+            &mut out,
+        );
+        assert_eq!(
+            out,
+            vec![Action::Run(
+                "nmcli connection down id 'Home 1' >/dev/null".into()
+            )]
+        );
+    }
+
+    #[test]
+    fn failed_secured_wifi_up_deletes_added_profile_and_keeps_exit_status_and_stderr() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!(
+            "infynitae-settings-bug5-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let log_path = dir.join("nmcli.log");
+
+        let ask_stub = dir.join("infynitae-edge");
+        std::fs::write(&ask_stub, "#!/bin/sh\necho 'wrongpass'\n").unwrap();
+        std::fs::set_permissions(&ask_stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let nmcli_stub = dir.join("nmcli");
+        std::fs::write(
+            &nmcli_stub,
+            format!(
+                "#!/bin/sh\n\
+                 printf '%s\\n' \"$*\" >> {}\n\
+                 case \"$1 $2\" in\n\
+                   'connection add')\n\
+                     if [ \"${{STUB_NO_UUID:-}}\" != 1 ]; then\n\
+                       echo \"Connection 'CafeSec' (a12040fc-e4b7-334f-a005-e345eda332ce) successfully added.\"\n\
+                     fi\n\
+                     exit 0\n\
+                     ;;\n\
+                   'connection up')\n\
+                     if [ \"${{STUB_UP_OK:-}}\" = 1 ]; then exit 0; fi\n\
+                     echo 'Error: Connection activation failed: Secrets were required, but not provided.' >&2\n\
+                     exit 4\n\
+                     ;;\n\
+                   'connection delete')\n\
+                     exit 0\n\
+                     ;;\n\
+                 esac\n",
+                sq(log_path.to_str().unwrap())
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&nmcli_stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let cmd = join_command(
+            &Wlan {
+                ssid: "CafeSec".into(),
+                signal: 70,
+                secure: true,
+                joined: false,
+            },
+            &[],
+        );
+        let old_path = std::env::var("PATH").unwrap_or_default();
+        let new_path = format!("{}:{old_path}", dir.display());
+
+        // 1. Failing up with UUID deletes by UUID, exits 4, and keeps stderr.
+        let out = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(&cmd)
+            .env("PATH", &new_path)
+            .output()
+            .unwrap();
+        let log = std::fs::read_to_string(&log_path).unwrap_or_default();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(4), "log:\n{log}");
+        assert!(
+            stderr.contains("Secrets were required"),
+            "expected stderr preserved, got: {stderr:?}"
+        );
+        assert!(
+            log.lines()
+                .any(|l| l == "connection delete uuid a12040fc-e4b7-334f-a005-e345eda332ce"),
+            "expected newly added profile to be deleted on failed up, log:\n{log}"
+        );
+
+        // 2. Failing up without UUID in stdout falls back to deleting by id.
+        let _ = std::fs::write(&log_path, "");
+        let out2 = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(&cmd)
+            .env("PATH", &new_path)
+            .env("STUB_NO_UUID", "1")
+            .output()
+            .unwrap();
+        let log2 = std::fs::read_to_string(&log_path).unwrap_or_default();
+        assert_eq!(out2.status.code(), Some(4));
+        assert!(
+            log2.lines().any(|l| l == "connection delete id CafeSec"),
+            "expected id fallback delete, log:\n{log2}"
+        );
+
+        // 3. Successful up keeps the profile (no delete) and exits 0.
+        let _ = std::fs::write(&log_path, "");
+        let out3 = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(&cmd)
+            .env("PATH", &new_path)
+            .env("STUB_UP_OK", "1")
+            .output()
+            .unwrap();
+        let log3 = std::fs::read_to_string(&log_path).unwrap_or_default();
+        assert_eq!(out3.status.code(), Some(0));
+        assert!(
+            !log3.contains("connection delete"),
+            "successful up must keep profile, log:\n{log3}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn bluetooth_scan_runs_outside_queue_and_stops_concurrent_scans() {
+        let th = crate::theme::Theme::from_config(&crate::config::Config::from_text(""));
+        let cx = test_cx(&th);
+        let mut c = BluetoothCard::default();
+        c.apply(
+            "bluetooth",
+            &parse_bluetooth(
+                "Controller 00:11:22:33:44:55\n\tPowered: yes\n---\n\
+                 Device AA:BB:CC:DD:EE:FF Speaker\n---\n---\n\
+                 Device AA:BB:CC:DD:EE:FF Speaker\nDevice 11:22:33:44:55:66 Phone\n",
+            ) as &dyn Any,
+        );
+        let mut out = Vec::new();
+        assert!(c.event(
+            &Event::Press {
+                hit: H_FIND,
+                button: Button::Left,
+                at: (0.0, 0.0),
+            },
+            &cx,
+            &mut out
+        ));
+        assert_eq!(
+            out,
+            vec![Action::RunBackground(
+                "bluetoothctl --timeout 15 scan on >&2".into()
+            )]
+        );
+        assert!(c.searching && c.scanning);
+
+        let mut out2 = Vec::new();
+        c.event(
+            &Event::Press {
+                hit: H_FIND,
+                button: Button::Left,
+                at: (0.0, 0.0),
+            },
+            &cx,
+            &mut out2,
+        );
+        assert!(
+            out2.is_empty(),
+            "second Find while scan is active must not start another scan, got: {out2:?}"
+        );
+
+        let mut pair_out = Vec::new();
+        assert!(c.event(
+            &Event::Press {
+                hit: H_DEV + 1,
+                button: Button::Left,
+                at: (0.0, 0.0),
+            },
+            &cx,
+            &mut pair_out
+        ));
+        assert_eq!(
+            pair_out,
+            vec![Action::Run(
+                "bluetoothctl pair '11:22:33:44:55:66' >&2 && bluetoothctl trust '11:22:33:44:55:66' >&2 && bluetoothctl connect '11:22:33:44:55:66' >&2".into()
+            )]
+        );
+
+        let mut power_out = Vec::new();
+        c.event(
+            &Event::Press {
+                hit: H_SWITCH,
+                button: Button::Left,
+                at: (0.0, 0.0),
+            },
+            &cx,
+            &mut power_out,
+        );
+        assert_eq!(
+            power_out,
+            vec![Action::Run("bluetoothctl power off >&2".into())]
+        );
+        assert!(!c.searching && !c.scanning);
+    }
+
+    fn count_alert_red_pixels(card: &dyn Card, cx: &Cx, w: f64, y0: usize, y1: usize) -> usize {
+        let h = card.height(cx, w).ceil() as i32;
+        let mut surf = cairo::ImageSurface::create(cairo::Format::ARgb32, w as i32, h).unwrap();
+        {
+            let cr = Context::new(&surf).unwrap();
+            crate::draw::grey_text_edges(&cr);
+            let mut hits = Hits::new(None, None);
+            card.draw(&cr, cx, (0.0, 0.0, w, card.height(cx, w)), &mut hits);
+        }
+        surf.flush();
+        let stride = surf.stride() as usize;
+        let data = surf.data().unwrap();
+        let mut alert_px = 0usize;
+        for y in y0..y1.min(h as usize) {
+            for x in 0..(w as usize) {
+                let off = y * stride + x * 4;
+                let (b, _, r, a) = (data[off], data[off + 1], data[off + 2], data[off + 3]);
+                if a > 40 && r > b + 20 {
+                    alert_px += 1;
+                }
+            }
+        }
+        alert_px
+    }
+
+    #[test]
+    fn network_card_shows_wrong_password_and_stderr_error_then_clears_and_expires() {
+        use std::time::{Duration, Instant};
+
+        let th = crate::theme::Theme::from_config(&crate::config::Config::from_text(""));
+        assert!(th.alert.0 > th.alert.2);
+        let cx = test_cx(&th);
+        let mut c = NetworkCard::default();
+        c.apply(
+            "network",
+            &parse_network("enabled\n---\nwifi:disconnected\n---\n :80:WPA2:CafeSec\n---\n")
+                as &dyn Any,
+        );
+        let base_h = c.height(&cx, 300.0);
+        let t0 = Instant::now();
+
+        // 1. nmcli secrets failure maps to "Wrong password" and adds the alert line under the row.
+        assert!(c.command_done(
+            &CommandResult {
+                command: "nmcli connection up id 'CafeSec' >/dev/null".into(),
+                status: Some(4),
+                stderr_line:
+                    "Error: Connection activation failed: Secrets were required, but not provided."
+                        .into(),
+            },
+            t0,
+        ));
+        assert_eq!(c.error.message.as_deref(), Some("Wrong password"));
+        assert_eq!(c.height(&cx, 300.0), base_h + ui::ERROR_H);
+        assert!(
+            count_alert_red_pixels(
+                &c,
+                &cx,
+                300.0,
+                ui::ROW_H as usize,
+                (ui::ROW_H + ui::ERROR_H) as usize
+            ) > 10,
+            "expected alert-coloured error line under the closed network row"
+        );
+
+        // Panel closing does not wipe an active command error (important while `ask` closes panels).
+        c.panel_closed();
+        assert_eq!(c.height(&cx, 300.0), base_h + ui::ERROR_H);
+
+        // 2. With the list open (both below and above), height grows by ERROR_H and draws cleanly.
+        c.show_list();
+        let list_only_h = c.height(&cx, 300.0) - ui::ERROR_H;
+        assert!(
+            count_alert_red_pixels(
+                &c,
+                &cx,
+                300.0,
+                ui::ROW_H as usize,
+                (ui::ROW_H + ui::ERROR_H) as usize
+            ) > 10
+        );
+        let mut cx_above = test_cx(&th);
+        cx_above.list_above = true;
+        let err_top_above = (c.height(&cx_above, 300.0) - ui::ERROR_H) as usize;
+        assert!(
+            count_alert_red_pixels(
+                &c,
+                &cx_above,
+                300.0,
+                err_top_above,
+                err_top_above + ui::ERROR_H as usize
+            ) > 10
+        );
+        let mut cx_m = test_cx(&th);
+        cx_m.size = Size::M;
+        assert_eq!(
+            c.height(&cx_m, 300.0),
+            ui::ROW_H + ui::ERROR_H + c.rows() as f64 * ui::LIST_ROW_H + 8.0
+        );
+
+        // 3. Generic stderr error shows "Could not join: <stderr line>".
+        assert!(c.command_done(
+            &CommandResult {
+                command: "nmcli dev wifi connect 'OpenNet' >/dev/null".into(),
+                status: Some(10),
+                stderr_line: "Error: No network with SSID 'OpenNet' found.".into(),
+            },
+            t0 + Duration::from_secs(1),
+        ));
+        assert_eq!(
+            c.error.message.as_deref(),
+            Some("Could not join: Error: No network with SSID 'OpenNet' found.")
+        );
+        assert_eq!(c.height(&cx, 300.0), list_only_h + ui::ERROR_H);
+
+        // 4. Next success clears it.
+        assert!(c.command_done(
+            &CommandResult {
+                command: "nmcli connection up id 'CafeSec' >/dev/null".into(),
+                status: Some(0),
+                stderr_line: String::new(),
+            },
+            t0 + Duration::from_secs(2),
+        ));
+        assert_eq!(c.error.message, None);
+        assert_eq!(c.height(&cx, 300.0), list_only_h);
+
+        // 5. Expiry clears after ERROR_TTL.
+        let t1 = t0 + Duration::from_secs(3);
+        assert!(c.command_done(
+            &CommandResult {
+                command: "nmcli connection up id 'CafeSec' >/dev/null".into(),
+                status: Some(4),
+                stderr_line: "wrong password".into(),
+            },
+            t1,
+        ));
+        assert_eq!(c.error.message.as_deref(), Some("Wrong password"));
+        assert_eq!(c.next_deadline(), Some(t1 + ui::ERROR_TTL));
+        assert!(!c.expire(t1 + ui::ERROR_TTL - Duration::from_millis(1)));
+        assert!(c.expire(t1 + ui::ERROR_TTL));
+        assert_eq!(c.error.message, None);
+        assert_eq!(c.next_deadline(), None);
+        assert_eq!(c.height(&cx, 300.0), list_only_h);
+    }
+
+    #[test]
+    fn bluetooth_card_shows_pairing_error_clears_scanning_and_expires() {
+        use std::time::{Duration, Instant};
+
+        let th = crate::theme::Theme::from_config(&crate::config::Config::from_text(""));
+        let cx = test_cx(&th);
+        let mut c = BluetoothCard::default();
+        c.apply(
+            "bluetooth",
+            &parse_bluetooth(
+                "Controller 00:11:22:33:44:55\n\tPowered: yes\n---\n\
+                 Device AA:BB:CC:DD:EE:FF Speaker\n---\n---\n\
+                 Device AA:BB:CC:DD:EE:FF Speaker\nDevice 11:22:33:44:55:66 Phone\n",
+            ) as &dyn Any,
+        );
+        let mut out = Vec::new();
+        c.event(
+            &Event::Press {
+                hit: H_FIND,
+                button: Button::Left,
+                at: (0.0, 0.0),
+            },
+            &cx,
+            &mut out,
+        );
+        assert!(c.scanning && c.searching);
+
+        // Scan ends with status 0: scanning indicator clears while discovered devices remain shown.
+        let t0 = Instant::now();
+        assert!(c.command_done(
+            &CommandResult {
+                command: "bluetoothctl --timeout 15 scan on >&2".into(),
+                status: Some(0),
+                stderr_line: String::new(),
+            },
+            t0,
+        ));
+        assert!(!c.scanning && c.searching);
+
+        // Pairing failure keeps "Pairing failed: <stderr line>" under the row in alert colour.
+        let base_h = c.height(&cx, 300.0);
+        assert!(c.command_done(
+            &CommandResult {
+                command: "bluetoothctl pair '11:22:33:44:55:66' >&2 && bluetoothctl trust '11:22:33:44:55:66' >&2 && bluetoothctl connect '11:22:33:44:55:66' >&2".into(),
+                status: Some(1),
+                stderr_line: "Failed to pair: org.bluez.Error.AuthenticationFailed".into(),
+            },
+            t0,
+        ));
+        assert_eq!(
+            c.error.message.as_deref(),
+            Some("Pairing failed: Failed to pair: org.bluez.Error.AuthenticationFailed")
+        );
+        assert_eq!(c.height(&cx, 300.0), base_h + ui::ERROR_H);
+        assert!(
+            count_alert_red_pixels(
+                &c,
+                &cx,
+                300.0,
+                ui::ROW_H as usize,
+                (ui::ROW_H + ui::ERROR_H) as usize
+            ) > 10
+        );
+
+        // Next success clears it.
+        assert!(c.command_done(
+            &CommandResult {
+                command: "bluetoothctl connect 'AA:BB:CC:DD:EE:FF' >&2".into(),
+                status: Some(0),
+                stderr_line: String::new(),
+            },
+            t0 + Duration::from_secs(1),
+        ));
+        assert_eq!(c.error.message, None);
+        assert_eq!(c.height(&cx, 300.0), base_h);
+
+        // Connect failure expires after ERROR_TTL.
+        let t1 = t0 + Duration::from_secs(2);
+        assert!(c.command_done(
+            &CommandResult {
+                command: "bluetoothctl connect 'AA:BB:CC:DD:EE:FF' >&2".into(),
+                status: Some(1),
+                stderr_line: "Failed to connect: br-connection-page-timeout".into(),
+            },
+            t1,
+        ));
+        assert_eq!(
+            c.error.message.as_deref(),
+            Some("Connection failed: Failed to connect: br-connection-page-timeout")
+        );
+        assert_eq!(c.height(&cx, 300.0), base_h + ui::ERROR_H);
+        assert!(c.expire(t1 + ui::ERROR_TTL));
+        assert_eq!(c.error.message, None);
+        assert_eq!(c.height(&cx, 300.0), base_h);
+    }
+
+    #[test]
+    fn power_card_shows_error_then_clears() {
+        use std::time::{Duration, Instant};
+
+        let th = crate::theme::Theme::from_config(&crate::config::Config::from_text(""));
+        let cx = test_cx(&th);
+        let mut c = PowerCard {
+            data: Some(parse_power(
+                "  performance:\n\n* balanced:\n\n  power-saver:\n",
+            )),
+            ..Default::default()
+        };
+        let base_h = c.height(&cx, 300.0);
+        let t0 = Instant::now();
+        assert!(c.command_done(
+            &CommandResult {
+                command: "powerprofilesctl set 'performance' >/dev/null 2>&1".into(),
+                status: Some(2),
+                stderr_line: String::new(),
+            },
+            t0,
+        ));
+        assert_eq!(c.error.message.as_deref(), Some("Power mode failed"));
+        assert_eq!(c.height(&cx, 300.0), base_h + ui::ERROR_H);
+        assert!(
+            count_alert_red_pixels(
+                &c,
+                &cx,
+                300.0,
+                base_h as usize,
+                (base_h + ui::ERROR_H) as usize
+            ) > 10
+        );
+        assert!(c.command_done(
+            &CommandResult {
+                command: "powerprofilesctl set 'balanced' >/dev/null 2>&1".into(),
+                status: Some(0),
+                stderr_line: String::new(),
+            },
+            t0 + Duration::from_secs(1),
+        ));
+        assert_eq!(c.height(&cx, 300.0), base_h);
     }
 
     pub fn test_cx(th: &crate::theme::Theme) -> Cx<'_> {
