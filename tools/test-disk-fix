@@ -1,0 +1,175 @@
+#!/bin/sh
+# tools/test-disk-fix: tests live/infynitae-disk-fix against a fake root (INFYNITAE_DISK_FIX_ROOT),
+# never root, never /etc or real /.
+set -eu
+
+REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
+HELPER="$REPO_DIR/live/infynitae-disk-fix"
+[ -x "$HELPER" ] || { echo "FAIL: $HELPER not found or not executable" >&2; exit 1; }
+if [ "$(id -u)" = 0 ]; then
+    echo "FAIL: run this test as a user, not root" >&2
+    exit 1
+fi
+
+TMP=$(mktemp -d "/tmp/infynitae-test-disk-fix.XXXXXX")
+trap 'rm -rf "$TMP"' EXIT INT TERM
+ROOT="$TMP/root"
+mkdir -p "$ROOT/bin" "$ROOT/run/lock"
+CALLS="$TMP/calls"
+STATE="$TMP/state"
+
+cat > "$ROOT/bin/findmnt" <<'EOF'
+#!/bin/sh
+echo "${FAKE_FSTYPE:-btrfs}"
+EOF
+chmod +x "$ROOT/bin/findmnt"
+
+cat > "$ROOT/bin/btrfs" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$CALLS"
+case "$1 $2" in
+    "device usage")
+        cat "$STATE/dev_usage"
+        ;;
+    "filesystem usage")
+        cat "$STATE/fs_usage"
+        ;;
+    "filesystem resize")
+        case "$3" in
+            *:max)
+                cat "$STATE/dev_usage_after_max" > "$STATE/dev_usage"
+                ;;
+            *:-4G)
+                cat "$STATE/dev_usage_after_4g" > "$STATE/dev_usage" 2>/dev/null || true
+                ;;
+        esac
+        ;;
+    "balance start")
+        if [ -f "$STATE/dev_usage_after_bal" ]; then
+            cat "$STATE/dev_usage_after_bal" > "$STATE/dev_usage"
+        fi
+        exit "${FAKE_BAL_EXIT:-0}"
+        ;;
+esac
+EOF
+chmod +x "$ROOT/bin/btrfs"
+
+fail=0
+check() {
+    if [ "$2" = "$3" ]; then
+        echo "ok   $1"
+    else
+        echo "FAIL $1: expected [$3], got [$2]" >&2
+        fail=1
+    fi
+}
+
+run_fix() {
+    : > "$CALLS"
+    CALLS="$CALLS" STATE="$STATE" INFYNITAE_DISK_FIX_ROOT="$ROOT" "$@" "$HELPER"
+}
+
+# 1. Refuses any arguments, refuses without INFYNITAE_DISK_FIX_ROOT, refuses /
+out=$("$HELPER" 2>&1 || true)
+case "$out" in *"as root"*) check "refuses unprivileged without test root" ok ok ;; *) check "refuses unprivileged without test root" "$out" "*as root*" ;; esac
+
+out=$(INFYNITAE_DISK_FIX_ROOT=/ "$HELPER" 2>&1 || true)
+case "$out" in *"cannot be /"*) check "refuses / as test root" ok ok ;; *) check "refuses / as test root" "$out" "*cannot be /*" ;; esac
+
+out=$(INFYNITAE_DISK_FIX_ROOT="$ROOT" "$HELPER" extra 2>&1 || true)
+case "$out" in *"no arguments"*) check "refuses arguments" ok ok ;; *) check "refuses arguments" "$out" "*no arguments*" ;; esac
+
+# 2. Refuses non-btrfs root
+out=$(FAKE_FSTYPE=ext4 INFYNITAE_DISK_FIX_ROOT="$ROOT" "$HELPER" 2>&1 || true)
+case "$out" in *"not btrfs"*) check "refuses non-btrfs root" ok ok ;; *) check "refuses non-btrfs root" "$out" "*not btrfs*" ;; esac
+
+# 3. Full recovery: has 4 GiB slack, balance brings unallocated to 25 GiB -> releases, balances, shrinks back
+mkdir -p "$STATE"
+cat > "$STATE/dev_usage" <<'EOF'
+/dev/nvme0n1p3, ID: 1
+   Device size:          430313577984
+   Device slack:         4294970880
+   Unallocated:             1048576
+EOF
+cat > "$STATE/dev_usage_after_max" <<'EOF'
+/dev/nvme0n1p3, ID: 1
+   Device size:          430313577984
+   Device slack:               3584
+   Unallocated:          4296015872
+EOF
+cat > "$STATE/dev_usage_after_bal" <<'EOF'
+/dev/nvme0n1p3, ID: 1
+   Device size:          430313577984
+   Device slack:               3584
+   Unallocated:         26843545600
+EOF
+cat > "$STATE/dev_usage_after_4g" <<'EOF'
+/dev/nvme0n1p3, ID: 1
+   Device size:          430313577984
+   Device slack:         4294970880
+   Unallocated:         22548578304
+EOF
+
+out=$(run_fix)
+check "recovery prints reserve=restored" "$out" "reserve=restored"
+want_calls="device usage -b /
+filesystem resize 1:max /
+balance start -dusage=30 -dlimit=10 /
+device usage -b /
+filesystem resize 1:-4G /"
+check "recovery runs exact sequence without -musage" "$(cat "$CALLS")" "$want_calls"
+
+# 4. Low space after balance (10 GiB <= 20 GiB): keeps reserve released
+cat > "$STATE/dev_usage" <<'EOF'
+/dev/nvme0n1p3, ID: 1
+   Device size:          430313577984
+   Device slack:         4294970880
+   Unallocated:             1048576
+EOF
+cat > "$STATE/dev_usage_after_bal" <<'EOF'
+/dev/nvme0n1p3, ID: 1
+   Device size:          430313577984
+   Device slack:               3584
+   Unallocated:         10737418240
+EOF
+
+out=$(run_fix)
+check "low unallocated keeps reserve released" "$out" "reserve=released"
+has_4g=$(grep -c ':-4G' "$CALLS" || true)
+check "does not shrink -4G when unallocated <= 20 GiB" "$has_4g" "0"
+
+# 5. Exactly 20 GiB (21474836480) does not shrink back (requires > 20 GiB)
+cat > "$STATE/dev_usage" <<'EOF'
+/dev/nvme0n1p3, ID: 1
+   Device size:          430313577984
+   Device slack:               3584
+   Unallocated:             1048576
+EOF
+cat > "$STATE/dev_usage_after_bal" <<'EOF'
+/dev/nvme0n1p3, ID: 1
+   Device size:          430313577984
+   Device slack:               3584
+   Unallocated:         21474836480
+EOF
+
+out=$(run_fix)
+check "exact 20 GiB boundary does not shrink" "$out" "reserve=released"
+has_max=$(grep -c ':max' "$CALLS" || true)
+check "no resize max when initial slack < 1 MiB" "$has_max" "0"
+
+# 6. Balance failure returns non-zero and skips shrink
+if out=$(FAKE_BAL_EXIT=1 run_fix 2>&1); then
+    check "balance failure exits non-zero" ok fail
+else
+    check "balance failure exits non-zero" ok ok
+fi
+has_4g=$(grep -c ':-4G' "$CALLS" || true)
+check "balance failure does not shrink" "$has_4g" "0"
+
+# 7. Polkit rule matches /usr/local/lib/infynitae-disk-fix for local active only
+has_local=$(grep -c 'subject.local' "$REPO_DIR/live/50-infynitae-disk-fix.rules" || true)
+has_prog=$(grep -c '/usr/local/lib/infynitae-disk-fix' "$REPO_DIR/live/50-infynitae-disk-fix.rules" || true)
+check "polkit rule checks subject.local" "$has_local" "1"
+check "polkit rule matches /usr/local/lib/infynitae-disk-fix" "$has_prog" "1"
+
+exit $fail

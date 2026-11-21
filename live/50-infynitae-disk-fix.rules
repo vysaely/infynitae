@@ -1,0 +1,15 @@
+// Root btrfs metadata cleanup (live/infynitae-disk-guard), for the person at the machine and
+// nobody else (a session that is local and active): running infynitae-disk-fix as root without a
+// password. It takes no arguments and only releases the 4 GiB reserve, balances up to 10 low-use
+// data chunks (-dusage=30 -dlimit=10 /), and restores the reserve if unallocated > 20 GiB.
+// Install (root): install -m 644 live/50-infynitae-disk-fix.rules /etc/polkit-1/rules.d/
+polkit.addRule(function (action, subject) {
+    if (!subject.local || !subject.active) {
+        return polkit.Result.NOT_HANDLED;
+    }
+    if (action.id == "org.freedesktop.policykit.exec" &&
+        action.lookup("program") == "/usr/local/lib/infynitae-disk-fix") {
+        return polkit.Result.YES;
+    }
+    return polkit.Result.NOT_HANDLED;
+});
