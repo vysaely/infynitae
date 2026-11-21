@@ -48,6 +48,13 @@ part_label() {
         gaming) echo "Gaming: 32-bit drivers for Steam, Wine (~400 MB)" ;;
         replay-buffer) echo "Replay buffer: save the last minutes" ;;
         foreign-apps) echo "Windows and Android programs, in a sandbox" ;;
+        disk-guard)
+            if [ "$(findmnt -no FSTYPE / 2>/dev/null)" = btrfs ]; then
+                echo "Btrfs disk guard (reclaim, balance, 4 GiB reserve)"
+            else
+                echo "Out-of-memory alerts (when systemd-oomd closes an app)"
+            fi
+            ;;
     esac
 }
 
@@ -62,7 +69,7 @@ app_name() {
 }
 
 # The menus; they set SKIP, TERMINAL_PKG, BLUETOOTH, POWER_PROFILES, GAMING, REPLAY_BUFFER,
-# FOREIGN_APPS, FOREIGN_DEFAULTS and AUTOLOGIN as the options would. Cancel ends the install before anything changed.
+# FOREIGN_APPS, FOREIGN_DEFAULTS, DISK_GUARD and AUTOLOGIN as the options would. Cancel ends the install before anything changed.
 install_menu() {
     local items=() group chosen status startup others android_line=""
     menu_size
@@ -92,6 +99,7 @@ Next: what to install. Nothing is changed before the last screen." "$MENU_H" "$M
     items+=(gaming "$(part_label gaming)" "$status")
     items+=(replay-buffer "$(part_label replay-buffer)" OFF)
     items+=(foreign-apps "$(part_label foreign-apps)" ON)
+    items+=(disk-guard "$(part_label disk-guard)" ON)
 
     chosen=$(whiptail --title "Parts to install" --separate-output --ok-button "Next" \
         --cancel-button "Cancel" --checklist "Space ticks a part, Enter goes on." \
@@ -109,6 +117,7 @@ Next: what to install. Nothing is changed before the last screen." "$MENU_H" "$M
     has power-profiles || POWER_PROFILES=false
     has gaming && GAMING=true
     has replay-buffer && REPLAY_BUFFER=true
+    has disk-guard || DISK_GUARD=false
     if has foreign-apps; then
         # umu-launcher is in [multilib], which gaming turns on; Wine needs the 32-bit drivers
         FOREIGN_APPS=true GAMING=true

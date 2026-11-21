@@ -1,0 +1,293 @@
+#!/bin/sh
+# infynitae-disk-guard: guards a btrfs root against metadata-full ENOSPC and notifies on
+# systemd-oomd kills. Run every 60 s by infynitae-disk-guard.timer.
+#   INFYNITAE_DISK_GUARD_MOUNTINFO: mounts file instead of /proc/self/mountinfo (tests)
+#   INFYNITAE_DISK_GUARD_BTRFS: sysfs btrfs dir instead of /sys/fs/btrfs (tests)
+#   INFYNITAE_DISK_GUARD_SYSFS: single sysfs UUID dir to check directly (tests)
+#   INFYNITAE_DISK_GUARD_FIX: helper run instead of pkexec /usr/local/lib/infynitae-disk-fix (tests)
+#   INFYNITAE_DISK_GUARD_OOMD_SOCKET: socket checked for running oomd (tests)
+#   INFYNITAE_DISK_GUARD_JOURNALCTL: command run instead of journalctl (tests)
+set -u
+export LC_ALL=C
+
+plain() {
+    printf '%s' "$1" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g'
+}
+
+notify() {
+    command -v notify-send >/dev/null 2>&1 || return 0
+    urg="$1"
+    title=$(plain "$2")
+    body="${3:-}"
+    if [ -n "$body" ]; then
+        notify-send -a Infynitae -u "$urg" "$title" "$(plain "$body")" 2>/dev/null || true
+    else
+        notify-send -a Infynitae -u "$urg" "$title" 2>/dev/null || true
+    fi
+}
+
+set_now_stamp() {
+    # bash (/bin/sh on Arch) provides EPOCHREALTIME with zero forks; POSIX sh falls back to date.
+    # shellcheck disable=SC3028
+    if [ -n "${EPOCHREALTIME:-}" ]; then
+        # shellcheck disable=SC3028
+        now="@$EPOCHREALTIME"
+    else
+        now=$(date "+@%s.%N" 2>/dev/null || date "+@%s")
+        case "$now" in
+            *[!0-9@.]*) now=$(date "+@%s") ;;
+        esac
+    fi
+}
+
+is_uint() {
+    case "$1" in
+        '' | *[!0-9]*) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
+find_root_btrfs_dir() {
+    bdir=""
+    if [ -n "${INFYNITAE_DISK_GUARD_SYSFS:-}" ]; then
+        [ -d "$INFYNITAE_DISK_GUARD_SYSFS" ] && bdir="$INFYNITAE_DISK_GUARD_SYSFS"
+        return 0
+    fi
+    mountinfo="${INFYNITAE_DISK_GUARD_MOUNTINFO:-/proc/self/mountinfo}"
+    [ -r "$mountinfo" ] || return 0
+    root_line=""
+    while IFS=" " read -r _ _ _ _ mp rest; do
+        if [ "$mp" = "/" ]; then
+            case "$rest" in
+                *" - rootfs "*) ;;
+                *)
+                    root_line="$rest"
+                    break
+                    ;;
+            esac
+        fi
+    done < "$mountinfo"
+    [ -n "$root_line" ] || return 0
+    after_dash="${root_line#* - }"
+    root_fs="${after_dash%% *}"
+    [ "$root_fs" = "btrfs" ] || return 0
+    after_fs="${after_dash#* }"
+    root_dev="${after_fs%% *}"
+
+    btrfs_root="${INFYNITAE_DISK_GUARD_BTRFS:-/sys/fs/btrfs}"
+    [ -d "$btrfs_root" ] || return 0
+    dev_base="${root_dev##*/}"
+    for p in "$btrfs_root"/*/devices/"$dev_base"; do
+        if [ -e "$p" ]; then
+            bdir="${p%/devices/*}"
+            return 0
+        fi
+    done
+    if [ -L "$root_dev" ]; then
+        real_dev=$(readlink -f "$root_dev" 2>/dev/null || true)
+        dev_base="${real_dev##*/}"
+        for p in "$btrfs_root"/*/devices/"$dev_base"; do
+            if [ -e "$p" ]; then
+                bdir="${p%/devices/*}"
+                return 0
+            fi
+        done
+    fi
+    if [ -z "${INFYNITAE_DISK_GUARD_MOUNTINFO:-}" ] && command -v findmnt >/dev/null 2>&1; then
+        uuid=$(findmnt -no UUID / 2>/dev/null || true)
+        if [ -n "$uuid" ] && [ -d "$btrfs_root/$uuid" ]; then
+            bdir="$btrfs_root/$uuid"
+        fi
+    fi
+}
+
+btrfs_needs_fix() {
+    bdir="$1"
+    dev_bytes=0
+    dev_count=0
+    for s in "$bdir"/devices/*/size; do
+        [ -r "$s" ] || continue
+        read -r sect < "$s" || return 1
+        is_uint "$sect" || return 1
+        dev_bytes=$((dev_bytes + sect * 512))
+        dev_count=$((dev_count + 1))
+    done
+    [ "$dev_count" -gt 0 ] || return 1
+
+    read -r d_tot < "$bdir/allocation/data/disk_total" || return 1
+    read -r m_tot < "$bdir/allocation/metadata/disk_total" || return 1
+    read -r s_tot < "$bdir/allocation/system/disk_total" || return 1
+    read -r chunk < "$bdir/allocation/data/chunk_size" || return 1
+    read -r m_bytes < "$bdir/allocation/metadata/total_bytes" || return 1
+    read -r m_used < "$bdir/allocation/metadata/bytes_used" || return 1
+    read -r rsv < "$bdir/allocation/global_rsv_size" || return 1
+    for v in "$d_tot" "$m_tot" "$s_tot" "$chunk" "$m_bytes" "$m_used" "$rsv"; do
+        is_uint "$v" || return 1
+    done
+
+    unalloc=$((dev_bytes - d_tot - m_tot - s_tot))
+    m_free=$((m_bytes - m_used - rsv))
+    two_chunks=$((2 * chunk))
+
+    # On a small drive (chunk_size 1 GiB) with a 4 GiB reserve, devices/*/size still holds the
+    # partition size. Check statfs on single-device single-data mounts only when within 5 GiB of
+    # triggering, so healthy ticks fork nothing.
+    if [ -z "${INFYNITAE_DISK_GUARD_SYSFS:-}" ] && [ -z "${INFYNITAE_DISK_GUARD_MOUNTINFO:-}" ] \
+        && [ "$dev_count" -eq 1 ] && [ "$unalloc" -ge "$two_chunks" ] \
+        && [ "$unalloc" -lt $((two_chunks + 5368709120)) ]; then
+        read -r d_logical < "$bdir/allocation/data/total_bytes" 2>/dev/null || d_logical=""
+        if [ "$d_logical" = "$d_tot" ] && command -v stat >/dev/null 2>&1; then
+            if fs_stat=$(stat -f -c '%S %b' / 2>/dev/null); then
+                fs_bsize="${fs_stat%% *}"
+                fs_blocks="${fs_stat##* }"
+                if is_uint "$fs_bsize" && is_uint "$fs_blocks" && [ "$fs_bsize" -gt 0 ]; then
+                    fs_bytes=$((fs_bsize * fs_blocks))
+                    [ "$fs_bytes" -lt "$dev_bytes" ] && unalloc=$((fs_bytes - d_tot - m_tot - s_tot))
+                fi
+            fi
+        fi
+    fi
+
+    # 256 MiB = 268435456 bytes
+    [ "$unalloc" -lt "$two_chunks" ] && [ "$m_free" -lt 268435456 ]
+}
+
+oomd_app_name() {
+    name="${1##*/}"
+    name="${name%.scope}"
+    name="${name%.service}"
+    name="${name%.slice}"
+    case "$name" in
+        app-flatpak-*) name="${name#app-flatpak-}" ;;
+        app-gnome-*) name="${name#app-gnome-}" ;;
+        app-kde-*) name="${name#app-kde-}" ;;
+        app-*) name="${name#app-}" ;;
+    esac
+    name="${name%@*}"
+    # Strip trailing -<pid>, -<pid>-<n>, or -<hex_id> (with at least one digit) added by scope launchers.
+    i=0
+    while [ "$i" -lt 2 ]; do
+        i=$((i + 1))
+        tail="${name##*-}"
+        [ "$tail" != "$name" ] || break
+        case "$tail" in
+            '' | *[!0-9]*)
+                case "$tail" in
+                    [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*)
+                        case "$tail" in
+                            *[!0-9a-f]*) ;;
+                            *[0-9]*) name="${name%-*}" ;;
+                        esac
+                        ;;
+                esac
+                ;;
+            *) name="${name%-*}" ;;
+        esac
+    done
+    case "$name" in
+        *'x2d'*) name=$(printf '%s' "$name" | sed 's/\\x2d/-/g') ;;
+    esac
+    case "$name" in
+        *.*.*) name="${name##*.}" ;;
+    esac
+    [ -n "$name" ] || name="an app"
+    printf '%s' "$name"
+}
+
+notify_oom_kills() {
+    seen=" "
+    while IFS= read -r line; do
+        cg=""
+        case "$line" in
+            "Marked "*" for killing due to "*)
+                cg="${line#Marked }"
+                cg="${cg%% for killing due to *}"
+                ;;
+            "Killed "*" due to "*)
+                cg="${line#Killed }"
+                cg="${cg%% due to *}"
+                ;;
+            *": systemd-oomd killed "*)
+                cg="${line%%: systemd-oomd killed *}"
+                ;;
+        esac
+        [ -n "$cg" ] || continue
+        app=$(oomd_app_name "$cg")
+        case "$seen" in
+            *" $app "*) continue ;;
+        esac
+        seen="$seen$app "
+        notify critical "Closed $app - RAM was full"
+    done < "$1"
+}
+
+run_dir="${XDG_RUNTIME_DIR:-/tmp}/infynitae"
+find_root_btrfs_dir
+if [ -n "$bdir" ] && btrfs_needs_fix "$bdir"; then
+    [ -d "$run_dir" ] || mkdir -p "$run_dir"
+    fix_ts_file="$run_dir/disk-guard.fix-ts"
+    set_now_stamp
+    now_sec="${now#@}"
+    now_sec="${now_sec%%.*}"
+    cooldown_active=0
+    if [ -r "$fix_ts_file" ]; then
+        read -r last_fix < "$fix_ts_file" || last_fix=""
+        if is_uint "$last_fix" && [ $((now_sec - last_fix)) -lt 1800 ]; then
+            cooldown_active=1
+        fi
+    fi
+    if [ "$cooldown_active" -eq 0 ]; then
+        printf '%s\n' "$now_sec" > "$fix_ts_file"
+        fix_helper="${INFYNITAE_DISK_GUARD_FIX:-/usr/local/lib/infynitae-disk-fix}"
+        fix_rc=0
+        fix_out=""
+        if [ ! -x "$fix_helper" ]; then
+            fix_rc=127
+        elif [ -n "${INFYNITAE_DISK_GUARD_FIX:-}" ]; then
+            fix_out=$("$fix_helper" 2>&1) || fix_rc=$?
+        elif command -v pkexec >/dev/null 2>&1; then
+            fix_out=$(pkexec --disable-internal-agent "$fix_helper" 2>&1 </dev/null) || fix_rc=$?
+        else
+            fix_rc=127
+        fi
+        if [ "$fix_rc" -eq 0 ]; then
+            case "$fix_out" in
+                *reserve=restored*)
+                    notify normal "Root drive was nearly full" \
+                        "Cleaned up space on / and kept the 4 GiB reserve."
+                    ;;
+                *)
+                    notify critical "Root drive is low on space" \
+                        "Used the 4 GiB reserve to keep / writable. Free up disk space soon."
+                    ;;
+            esac
+        else
+            notify critical "Root drive metadata is nearly full" \
+                "Automatic cleanup could not run. Free up disk space on /."
+        fi
+    fi
+fi
+
+oomd_sock="${INFYNITAE_DISK_GUARD_OOMD_SOCKET:-/run/systemd/oom/io.systemd.ManagedOOM}"
+if [ -S "$oomd_sock" ] || [ -n "${INFYNITAE_DISK_GUARD_JOURNALCTL:-}" ]; then
+    jcmd="${INFYNITAE_DISK_GUARD_JOURNALCTL:-journalctl}"
+    if command -v "$jcmd" >/dev/null 2>&1; then
+        [ -d "$run_dir" ] || mkdir -p "$run_dir"
+        since_file="$run_dir/disk-guard.since"
+        out_file="$run_dir/disk-guard.oom"
+        if [ -r "$since_file" ]; then
+            read -r since < "$since_file" || since="-65s"
+            [ -n "$since" ] || since="-65s"
+        else
+            since="-65s"
+        fi
+        set_now_stamp
+        if ! "$jcmd" _SYSTEMD_UNIT=systemd-oomd.service --since "$since" -q --no-pager -o cat > "$out_file" 2>/dev/null; then
+            "$jcmd" --user -t systemd --since "$since" -q --no-pager -o cat > "$out_file" 2>/dev/null || : > "$out_file"
+        fi
+        printf '%s\n' "$now" > "$since_file"
+        if [ -s "$out_file" ]; then
+            notify_oom_kills "$out_file"
+        fi
+    fi
+fi

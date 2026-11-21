@@ -1,0 +1,118 @@
+#!/bin/sh
+# infynitae-disk-fix: root helper for infynitae-disk-guard (takes no arguments).
+# Releases the 4 GiB reserve on /, runs a light data balance (-dusage=30 -dlimit=10 /, never
+# -musage), and shrinks the reserve back if unallocated space is then > 20 GiB.
+# Installed to /usr/local/lib/infynitae-disk-fix with live/50-infynitae-disk-fix.rules so the
+# active local user can run it through pkexec without a password.
+#   INFYNITAE_DISK_FIX_ROOT: a folder standing for / (its bin/btrfs, bin/findmnt, run/lock);
+#   read only when not run as root (tests)
+set -u
+export LC_ALL=C
+umask 022
+
+fail() {
+    printf 'infynitae-disk-fix: %s\n' "$*" >&2
+    exit 1
+}
+
+[ "$#" -eq 0 ] || fail "takes no arguments"
+
+if [ "$(id -u)" = 0 ]; then
+    ROOT=""
+    BTRFS=btrfs
+    FINDMNT=findmnt
+else
+    [ -n "${INFYNITAE_DISK_FIX_ROOT:-}" ] || fail "run it as root, through pkexec"
+    ROOT=$(cd "$INFYNITAE_DISK_FIX_ROOT" 2>/dev/null && pwd -P) \
+        || fail "no folder $INFYNITAE_DISK_FIX_ROOT"
+    [ "$ROOT" != / ] || fail "INFYNITAE_DISK_FIX_ROOT cannot be /"
+    BTRFS="$ROOT/bin/btrfs"
+    FINDMNT="$ROOT/bin/findmnt"
+fi
+LOCK="$ROOT/run/lock/infynitae-disk-fix.lock"
+
+fstype=$("$FINDMNT" -no FSTYPE / 2>/dev/null || true)
+[ "$fstype" = btrfs ] || fail "/ is not btrfs (${fstype:-unknown})"
+
+mkdir -p "${LOCK%/*}" || fail "cannot make ${LOCK%/*}"
+exec 8> "$LOCK" || fail "cannot open $LOCK"
+flock 8 || fail "cannot lock $LOCK"
+
+# Prints "<devid> <slack_bytes> <unallocated_bytes_or_NA>" per device on /.
+read_devices() {
+    dev_out=$("$BTRFS" device usage -b / 2>&1) || return 1
+    parsed=$(printf '%s\n' "$dev_out" | awk '
+        /, ID: [0-9]+$/ {
+            if (id != "") print id, slack + 0, unalloc
+            id = $NF; slack = 0; unalloc = "NA"
+            next
+        }
+        /^[[:space:]]*Device slack:/ { slack = $NF; next }
+        /^[[:space:]]*Unallocated:/ { unalloc = ($NF == "N/A" ? "NA" : $NF); next }
+        END {
+            if (id != "") print id, slack + 0, unalloc
+        }')
+    [ -n "$parsed" ] || return 1
+    printf '%s\n' "$parsed"
+}
+
+overall_unallocated() {
+    "$BTRFS" filesystem usage -b / 2>/dev/null \
+        | awk '/^[[:space:]]*Device unallocated:/ { print $NF; exit }'
+}
+
+# 1 MiB minimum slack so few-KiB sector alignment slack is not resized; 4 GiB reserve threshold
+# allows 4 MiB alignment rounding; 20 GiB = 20 * 1024^3.
+MIN_SLACK=1048576
+GIB_4_RESERVE=4290772992
+GIB_20=21474836480
+
+devs=$(read_devices) || fail "could not read btrfs device usage for /"
+while read -r devid slack _; do
+    [ -n "$devid" ] || continue
+    if [ "$slack" -ge "$MIN_SLACK" ] 2>/dev/null; then
+        if ! out=$("$BTRFS" filesystem resize "${devid}:max" / 2>&1); then
+            fail "could not release reserve on devid $devid: $out"
+        fi
+    fi
+done <<EOF
+$devs
+EOF
+
+if ! out=$("$BTRFS" balance start -dusage=30 -dlimit=10 / 2>&1); then
+    fail "balance failed: $out"
+fi
+
+devs=$(read_devices) || fail "could not re-read btrfs device usage after balance"
+dev_count=$(printf '%s\n' "$devs" | grep -c .)
+fs_unalloc=""
+reserve=released
+restored=0
+kept=0
+while read -r devid slack unalloc; do
+    [ -n "$devid" ] || continue
+    if [ "$unalloc" = "NA" ] && [ "$dev_count" -eq 1 ]; then
+        [ -n "$fs_unalloc" ] || fs_unalloc=$(overall_unallocated)
+        unalloc="${fs_unalloc:-0}"
+    fi
+    case "$unalloc" in
+        '' | *[!0-9]*) unalloc=0 ;;
+    esac
+    if [ "$slack" -ge "$GIB_4_RESERVE" ] 2>/dev/null; then
+        kept=1
+    elif [ "$unalloc" -gt "$GIB_20" ] 2>/dev/null; then
+        if out=$("$BTRFS" filesystem resize "${devid}:-4G" / 2>&1); then
+            restored=1
+        else
+            printf 'infynitae-disk-fix: could not restore 4 GiB reserve on devid %s: %s\n' \
+                "$devid" "$out" >&2
+        fi
+    fi
+done <<EOF
+$devs
+EOF
+
+if [ "$restored" = 1 ] || [ "$kept" = 1 ]; then
+    reserve=restored
+fi
+printf 'reserve=%s\n' "$reserve"

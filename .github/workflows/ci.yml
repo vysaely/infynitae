@@ -47,6 +47,8 @@ jobs:
       - run: sh live/build-helpers.sh "$PWD" "$RUNNER_TEMP/bin"
       - run: sh tools/test-automount
       - run: sh tools/test-drive-name
+      - run: sh tools/test-disk-fix
+      - run: sh tools/test-disk-guard
       - run: sh tools/test-format-drive
       - run: sh tools/test-sleep-lock
       - run: sh tools/test-recorder-backend

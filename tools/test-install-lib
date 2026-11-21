@@ -299,4 +299,150 @@ check "the choice is saved and read back" "$(XDG_STATE_HOME="$TMP/state" bash -c
     load_install_choices
     echo "$FOREIGN_APPS"')" true
 
+# 10. Disk guard install (install_disk_guard / install_btrfs_guard): non-btrfs no-op vs btrfs
+DG_BIN="$TMP/dg-bin"
+mkdir -p "$DG_BIN"
+cat > "$DG_BIN/sudo" <<'EOF'
+#!/bin/sh
+echo "sudo $*" >> "$DG_LOG"
+"$@"
+EOF
+cat > "$DG_BIN/install" <<'EOF'
+#!/bin/sh
+echo "install $*" >> "$DG_LOG"
+EOF
+cat > "$DG_BIN/findmnt" <<'EOF'
+#!/bin/sh
+echo "${DG_FSTYPE:-btrfs}"
+EOF
+cat > "$DG_BIN/systemctl" <<'EOF'
+#!/bin/sh
+echo "systemctl $*" >> "$DG_LOG"
+cmd="$1"
+[ "$cmd" = "--user" ] && cmd="$2"
+case "$cmd" in
+    cat) exit "${DG_SYSTEMCTL_CAT_EXIT:-0}" ;;
+    is-enabled|is-active) exit "${DG_UNIT_ACTIVE_EXIT:-1}" ;;
+    *) exit 0 ;;
+esac
+EOF
+cat > "$DG_BIN/systemd-tmpfiles" <<'EOF'
+#!/bin/sh
+echo "systemd-tmpfiles $*" >> "$DG_LOG"
+EOF
+cat > "$DG_BIN/btrfs" <<'EOF'
+#!/bin/sh
+echo "btrfs $*" >> "$DG_LOG"
+case "$1 $2" in
+    "device usage")
+        printf '/dev/nvme0n1p1, ID: 1\n   Device size:          107374182400\n   Device slack:         %s\n   Unallocated:          %s\n' \
+            "${DG_SLACK:-0}" "${DG_UNALLOC:-32212254720}"
+        ;;
+    "filesystem usage")
+        printf '    Device unallocated:\t\t%s\n' "${DG_UNALLOC:-32212254720}"
+        ;;
+esac
+EOF
+chmod +x "$DG_BIN"/*
+
+run_dg() {
+    dg_home="$TMP/dg-home-$1"
+    rm -rf "$dg_home"
+    mkdir -p "$dg_home"
+    DG_LOG="$TMP/dg-$1.log"
+    DG_OUT="$TMP/dg-$1.out"
+    : > "$DG_LOG"
+    : > "$DG_OUT"
+    shift
+    # Use /usr/bin:/bin after DG_BIN so cmp is the real system cmp (not STUB_DIR/cmp)
+    PATH="$DG_BIN:/usr/bin:/bin" HOME="$dg_home" DG_LOG="$DG_LOG" "$@" \
+        bash -c '. "'"$REPO_DIR"'/live/install-lib.sh"; '"$DG_CALL" > "$DG_OUT" 2>&1
+}
+
+# 10a. Non-btrfs root: install_btrfs_guard is a no-op; install_disk_guard installs only the user timer
+DG_CALL='install_btrfs_guard "'"$REPO_DIR"'"' run_dg ext4-only env DG_FSTYPE=ext4
+check "non-btrfs root: install_btrfs_guard is a complete no-op" "$(cat "$TMP/dg-ext4-only.log")" ""
+
+DG_CALL='install_disk_guard "'"$REPO_DIR"'"' run_dg ext4 env DG_FSTYPE=ext4
+check "non-btrfs root: no oomd rule installed or oomd enabled" \
+    "$(grep -c 'oomd' "$TMP/dg-ext4.log" || true)" "0"
+check "non-btrfs root: user timer enabled" \
+    "$(grep -c '^systemctl --user enable --now infynitae-disk-guard\.timer$' "$TMP/dg-ext4.log" || true)" "1"
+check "non-btrfs root: no btrfs files or resize" \
+    "$(grep -cE 'btrfs|infynitae-disk-fix' "$TMP/dg-ext4.log" || true)" "0"
+
+# 10b. Btrfs root with >= 20 GiB unallocated (30 GiB) and no reserve: installs everything and shrinks 4G
+mkdir -p "$TMP/empty-sysfs"
+DG_CALL='install_disk_guard "'"$REPO_DIR"'"' run_dg btrfs-ok env \
+    DG_FSTYPE=btrfs DG_SLACK=3584 DG_UNALLOC=32212254720 INFYNITAE_DISK_GUARD_BTRFS="$TMP/empty-sysfs"
+check "btrfs root: tmpfiles conf installed" \
+    "$(grep -c '^install -D -m 644 .*/etc/tmpfiles\.d/btrfs-reclaim\.conf$' "$TMP/dg-btrfs-ok.log" || true)" "1"
+check "btrfs root: tmpfiles applied" \
+    "$(grep -c '^systemd-tmpfiles --create /etc/tmpfiles\.d/btrfs-reclaim\.conf$' "$TMP/dg-btrfs-ok.log" || true)" "1"
+check "btrfs root: balance service and timer installed" \
+    "$(grep -c '^install -D -m 644 .*/etc/systemd/system/btrfs-balance-light\.' "$TMP/dg-btrfs-ok.log" || true)" "2"
+check "btrfs root: balance and scrub timers enabled" \
+    "$(grep -cE '^systemctl enable --now (btrfs-balance-light|btrfs-scrub@-)\.timer$' "$TMP/dg-btrfs-ok.log" || true)" "2"
+check "btrfs root: infynitae-disk-fix installed with 755" \
+    "$(grep -c '^install -D -m 755 .*infynitae-disk-fix /usr/local/lib/infynitae-disk-fix$' "$TMP/dg-btrfs-ok.log" || true)" "1"
+check "btrfs root: polkit rule installed with 644" \
+    "$(grep -c '^install -D -m 644 .*50-infynitae-disk-fix.rules /etc/polkit-1/rules.d/50-infynitae-disk-fix.rules$' "$TMP/dg-btrfs-ok.log" || true)" "1"
+check "btrfs root: 4 GiB reserve created when unallocated >= 20 GiB" \
+    "$(grep -c '^btrfs filesystem resize 1:-4G /$' "$TMP/dg-btrfs-ok.log" || true)" "1"
+
+# 10c. Btrfs root with < 20 GiB unallocated (12 GiB): skips reserve and says so
+DG_CALL='install_disk_guard "'"$REPO_DIR"'"' run_dg btrfs-small env \
+    DG_FSTYPE=btrfs DG_SLACK=0 DG_UNALLOC=12884901888 INFYNITAE_DISK_GUARD_BTRFS="$TMP/empty-sysfs"
+check "btrfs small root: skips 4 GiB resize" \
+    "$(grep -c 'btrfs filesystem resize' "$TMP/dg-btrfs-small.log" || true)" "0"
+check "btrfs small root: explains why reserve skipped" \
+    "$(grep -c 'less than 20 GiB unallocated' "$TMP/dg-btrfs-small.out" || true)" "1"
+
+# 10d. Btrfs root already having 4 GiB reserve (idempotent): does not shrink again
+DG_CALL='install_disk_guard "'"$REPO_DIR"'"' run_dg btrfs-idem env \
+    DG_FSTYPE=btrfs DG_SLACK=4294970880 DG_UNALLOC=159693934592 INFYNITAE_DISK_GUARD_BTRFS="$TMP/empty-sysfs"
+check "btrfs existing reserve: does not resize again" \
+    "$(grep -c 'btrfs filesystem resize' "$TMP/dg-btrfs-idem.log" || true)" "0"
+check "btrfs existing reserve: reports already set" \
+    "$(grep -c 'reserve is already set' "$TMP/dg-btrfs-idem.out" || true)" "1"
+
+# 10e. Dry-run never invokes sudo or writes user units
+DG_CALL='install_disk_guard "'"$REPO_DIR"'" --dry-run' run_dg dry-ext4 env DG_FSTYPE=ext4
+check "dry-run on ext4 calls no sudo" \
+    "$(grep -c '^sudo ' "$TMP/dg-dry-ext4.log" || true)" "0"
+check "dry-run writes no user units" \
+    "$([ -e "$TMP/dg-home-dry-ext4/.config/systemd/user/infynitae-disk-guard.timer" ] && echo yes || echo no)" "no"
+
+# 10f. DISK_GUARD=false skips install_disk_guard and persists across save/load; legacy defaults true
+DG_CALL='DISK_GUARD=false install_disk_guard "'"$REPO_DIR"'"' run_dg disabled env DG_FSTYPE=btrfs
+check "DISK_GUARD=false skips all actions" "$(cat "$TMP/dg-disabled.log")" ""
+
+check "DISK_GUARD=false saved and read back" "$(XDG_STATE_HOME="$TMP/dg-state" bash -c '
+    . "'"$REPO_DIR"'/live/install-lib.sh"
+    DISK_GUARD=false save_install_choices
+    DISK_GUARD=""
+    load_install_choices
+    echo "$DISK_GUARD"')" "false"
+
+mkdir -p "$TMP/dg-legacy-state/infynitae"
+printf 'SKIP=""\nFOREIGN_APPS=false\n' > "$TMP/dg-legacy-state/infynitae/install-choices"
+check "legacy install-choices defaults DISK_GUARD to true" "$(XDG_STATE_HOME="$TMP/dg-legacy-state" bash -c '
+    . "'"$REPO_DIR"'/live/install-lib.sh"
+    load_install_choices
+    echo "$DISK_GUARD"')" "true"
+
+# 10g. Idempotency: when units are active/enabled and sysfs reclaim is 1, no enable or resize runs
+mkdir -p "$TMP/sysfs-reclaim-on/uuid1/allocation/data"
+printf '1\n' > "$TMP/sysfs-reclaim-on/uuid1/allocation/data/dynamic_reclaim"
+printf '1\n' > "$TMP/sysfs-reclaim-on/uuid1/allocation/data/periodic_reclaim"
+DG_CALL='install_disk_guard "'"$REPO_DIR"'"' run_dg btrfs-active env \
+    DG_FSTYPE=btrfs DG_SLACK=4294970880 DG_UNALLOC=159693934592 DG_UNIT_ACTIVE_EXIT=0 \
+    INFYNITAE_DISK_GUARD_BTRFS="$TMP/sysfs-reclaim-on"
+check "idempotent run does not re-enable active timers" \
+    "$(grep -cE '^systemctl (--user )?enable ' "$TMP/dg-btrfs-active.log" || true)" "0"
+
+# 10h. install.sh --help documents --no-disk-guard
+check "install.sh --help lists --no-disk-guard" \
+    "$("$REPO_DIR/install.sh" --help | grep -c -- '--no-disk-guard' || true)" "1"
+
 exit $fail

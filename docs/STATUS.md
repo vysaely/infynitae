@@ -198,6 +198,25 @@ These pass the test suite but have not run on a real screen or device yet:
   not yet with a real app.
 - **The session scripts and the C helpers** have the least test coverage of anything here.
 
+## Root drive and memory guard
+
+On a btrfs root (`--no-disk-guard` skips it), the installer sets up dynamic and periodic data
+chunk reclaim (`/etc/tmpfiles.d/btrfs-reclaim.conf`), a weekly light data balance
+(`btrfs balance start -dusage=30 -dlimit=10 /`, never `-musage`), monthly `btrfs-scrub@-.timer`,
+and a 4 GiB emergency reserve below the partition when at least 20 GiB is unallocated. It adds no
+`systemd-oomd` rules: a swap-kill rule on `-.slice` closed the whole desktop session (compositor
+and every app) on the owner PC on 2026-11-21, because the session scope was the largest swap user.
+
+The user timer `infynitae-disk-guard.timer` runs `live/infynitae-disk-guard` every 60 s (~4 ms
+per tick on this PC). When root unallocated space drops below twice the data chunk size and
+metadata free space drops below 256 MiB, it runs `/usr/local/lib/infynitae-disk-fix` via `pkexec`
+(passwordless for local active sessions in `/etc/polkit-1/rules.d/50-infynitae-disk-fix.rules`)
+to release the reserve, run the light balance, and shrink the reserve back when more than 20 GiB
+remains unallocated, posting one notification. When `systemd-oomd` kills a cgroup since the last
+tick, it posts "Closed <app> - RAM was full". Tested against sample sysfs trees, fake journals,
+and stubbed installer/btrfs runs (`tools/test-disk-guard`, `tools/test-disk-fix`,
+`tools/test-install-lib`); not yet run in a real outage.
+
 ## Missing
 
 - HDR, accessibility and screen readers.

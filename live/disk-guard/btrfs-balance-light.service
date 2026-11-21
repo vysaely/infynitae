@@ -1,0 +1,9 @@
+[Unit]
+Description=Light btrfs data balance on /
+ConditionPathIsMountPoint=/
+
+[Service]
+Type=oneshot
+Nice=19
+IOSchedulingClass=idle
+ExecStart=/usr/bin/btrfs balance start -dusage=30 -dlimit=10 /

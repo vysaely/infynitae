@@ -1,0 +1,10 @@
+[Unit]
+Description=Weekly light btrfs data balance on /
+
+[Timer]
+OnCalendar=weekly
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

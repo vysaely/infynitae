@@ -115,16 +115,16 @@ is_skipped() {
 }
 load_install_choices() {
     # an install from before these were saved: nothing added that it may have left out
-    SKIP="" BLUETOOTH=false POWER_PROFILES=false TERMINAL_PKG=false FOREIGN_APPS=false
+    SKIP="" BLUETOOTH=false POWER_PROFILES=false TERMINAL_PKG=false FOREIGN_APPS=false DISK_GUARD=true
     # shellcheck disable=SC1090
     [ -f "$INSTALL_CHOICES" ] && . "$INSTALL_CHOICES"
     return 0
 }
 save_install_choices() {
     mkdir -p "$INFY_STATE"
-    printf 'SKIP="%s"\nBLUETOOTH=%s\nPOWER_PROFILES=%s\nTERMINAL_PKG=%s\nFOREIGN_APPS=%s\n' "${SKIP:-}" \
+    printf 'SKIP="%s"\nBLUETOOTH=%s\nPOWER_PROFILES=%s\nTERMINAL_PKG=%s\nFOREIGN_APPS=%s\nDISK_GUARD=%s\n' "${SKIP:-}" \
         "${BLUETOOTH:-false}" "${POWER_PROFILES:-false}" "${TERMINAL_PKG:-false}" \
-        "${FOREIGN_APPS:-false}" > "$INSTALL_CHOICES"
+        "${FOREIGN_APPS:-false}" "${DISK_GUARD:-true}" > "$INSTALL_CHOICES"
 }
 
 # The hardware parts: chosen, and the hardware is there. Asked again at each update, so an
@@ -172,6 +172,9 @@ wanted_pkgs() {
         else
             warn "umu-launcher is in [multilib], which is off: Windows programs need it (infynitae-drivers --gaming turns it on)"
         fi
+    fi
+    if [ "${DISK_GUARD:-true}" = true ] && [ "$(findmnt -no FSTYPE / 2>/dev/null)" = btrfs ]; then
+        missing_pkgs btrfs-progs
     fi
     # the compiler through rustup: the source pins its version (rust-toolchain.toml), which
     # Arch's own rust package ignores; rustup replaces it
@@ -275,6 +278,7 @@ live/infynitae-xkill infynitae-xkill
 live/infynitae-sleep-lock infynitae-sleep-lock
 live/infynitae-automount infynitae-automount
 live/infynitae-format-drive infynitae-format-drive
+live/infynitae-disk-guard infynitae-disk-guard
 live/windows-run infynitae-windows-run
 live/android-run infynitae-android-run
 LIST
@@ -310,6 +314,151 @@ install_speed_settings() {
     # background memory compaction causes latency spikes and stutter under memory pressure
     install_root_file "$src/live/99-infynitae-memory.conf" /etc/sysctl.d/99-infynitae-memory.conf 644
     sudo sysctl -p /etc/sysctl.d/99-infynitae-memory.conf || true
+}
+
+# Btrfs root protection: dynamic/periodic chunk reclaim, weekly light data balance (never
+# -musage), monthly scrub, 4 GiB emergency reserve (>= 20 GiB unallocated), and the root helper
+# + polkit rule. No-op on non-btrfs roots.
+install_btrfs_guard() {
+    local src="$1" dry="${2:-false}" fstype reload_sys=false reclaim_needed=false f
+    local btrfs_sys dev_out fs_unalloc dev_lines dev_count devid slack unalloc
+    fstype=$(findmnt -no FSTYPE / 2>/dev/null || true)
+    [ "$fstype" = btrfs ] || return 0
+
+    btrfs_sys="${INFYNITAE_DISK_GUARD_BTRFS:-/sys/fs/btrfs}"
+    for f in "$btrfs_sys"/*/allocation/data/dynamic_reclaim "$btrfs_sys"/*/allocation/data/periodic_reclaim; do
+        [ -r "$f" ] || continue
+        if [ "$(cat "$f" 2>/dev/null)" != 1 ]; then
+            reclaim_needed=true
+            break
+        fi
+    done
+
+    if [ "$dry" = true ]; then
+        cmp -s "$src/live/disk-guard/btrfs-reclaim.conf" /etc/tmpfiles.d/btrfs-reclaim.conf 2>/dev/null \
+            || echo "==> [Dry-run] would install /etc/tmpfiles.d/btrfs-reclaim.conf"
+        [ "$reclaim_needed" = true ] && echo "==> [Dry-run] would apply /etc/tmpfiles.d/btrfs-reclaim.conf"
+        cmp -s "$src/live/disk-guard/btrfs-balance-light.service" /etc/systemd/system/btrfs-balance-light.service 2>/dev/null \
+            || echo "==> [Dry-run] would install /etc/systemd/system/btrfs-balance-light.service"
+        cmp -s "$src/live/disk-guard/btrfs-balance-light.timer" /etc/systemd/system/btrfs-balance-light.timer 2>/dev/null \
+            || echo "==> [Dry-run] would install /etc/systemd/system/btrfs-balance-light.timer"
+        systemctl is-enabled --quiet btrfs-balance-light.timer 2>/dev/null \
+            || echo "==> [Dry-run] would enable btrfs-balance-light.timer"
+        if systemctl cat btrfs-scrub@.timer >/dev/null 2>&1 \
+            && ! systemctl is-enabled --quiet btrfs-scrub@-.timer 2>/dev/null; then
+            echo "==> [Dry-run] would enable btrfs-scrub@-.timer"
+        fi
+        cmp -s "$src/live/infynitae-disk-fix" /usr/local/lib/infynitae-disk-fix 2>/dev/null \
+            || echo "==> [Dry-run] would install /usr/local/lib/infynitae-disk-fix"
+        cmp -s "$src/live/50-infynitae-disk-fix.rules" /etc/polkit-1/rules.d/50-infynitae-disk-fix.rules 2>/dev/null \
+            || echo "==> [Dry-run] would install /etc/polkit-1/rules.d/50-infynitae-disk-fix.rules"
+    else
+        if ! cmp -s "$src/live/disk-guard/btrfs-reclaim.conf" /etc/tmpfiles.d/btrfs-reclaim.conf 2>/dev/null; then
+            install_root_file "$src/live/disk-guard/btrfs-reclaim.conf" /etc/tmpfiles.d/btrfs-reclaim.conf 644
+            reclaim_needed=true
+        fi
+        if [ "$reclaim_needed" = true ]; then
+            sudo systemd-tmpfiles --create /etc/tmpfiles.d/btrfs-reclaim.conf 2>/dev/null || true
+        fi
+        if ! cmp -s "$src/live/disk-guard/btrfs-balance-light.service" /etc/systemd/system/btrfs-balance-light.service 2>/dev/null; then
+            install_root_file "$src/live/disk-guard/btrfs-balance-light.service" \
+                /etc/systemd/system/btrfs-balance-light.service 644
+            reload_sys=true
+        fi
+        if ! cmp -s "$src/live/disk-guard/btrfs-balance-light.timer" /etc/systemd/system/btrfs-balance-light.timer 2>/dev/null; then
+            install_root_file "$src/live/disk-guard/btrfs-balance-light.timer" \
+                /etc/systemd/system/btrfs-balance-light.timer 644
+            reload_sys=true
+        fi
+        [ "$reload_sys" = true ] && { sudo systemctl daemon-reload 2>/dev/null || true; }
+        if ! systemctl is-enabled --quiet btrfs-balance-light.timer 2>/dev/null; then
+            sudo systemctl enable --now btrfs-balance-light.timer \
+                || warn "Could not enable btrfs-balance-light.timer"
+        fi
+        if systemctl cat btrfs-scrub@.timer >/dev/null 2>&1 \
+            && ! systemctl is-enabled --quiet btrfs-scrub@-.timer 2>/dev/null; then
+            sudo systemctl enable --now btrfs-scrub@-.timer \
+                || warn "Could not enable btrfs-scrub@-.timer"
+        fi
+        install_root_file "$src/live/infynitae-disk-fix" /usr/local/lib/infynitae-disk-fix 755
+        install_root_file "$src/live/50-infynitae-disk-fix.rules" \
+            /etc/polkit-1/rules.d/50-infynitae-disk-fix.rules 644
+    fi
+
+    command -v btrfs >/dev/null 2>&1 || return 0
+    if [ "$dry" = true ]; then
+        dev_out=$(btrfs device usage -b / 2>/dev/null || true)
+    else
+        dev_out=$(sudo btrfs device usage -b / 2>/dev/null || true)
+    fi
+    dev_lines=$(printf '%s\n' "$dev_out" | awk '
+        /, ID: [0-9]+$/ { if (id != "") print id, slack + 0, unalloc; id = $NF; slack = 0; unalloc = "NA"; next }
+        /^[[:space:]]*Device slack:/ { slack = $NF; next }
+        /^[[:space:]]*Unallocated:/ { unalloc = ($NF == "N/A" ? "NA" : $NF); next }
+        END { if (id != "") print id, slack + 0, unalloc }')
+    [ -n "$dev_lines" ] || return 0
+    dev_count=$(printf '%s\n' "$dev_lines" | grep -c .)
+    fs_unalloc=""
+    while read -r devid slack unalloc; do
+        [ -n "$devid" ] || continue
+        if [ "$unalloc" = "NA" ] && [ "$dev_count" -eq 1 ]; then
+            [ -n "$fs_unalloc" ] || fs_unalloc=$(btrfs filesystem usage -b / 2>/dev/null \
+                | awk '/^[[:space:]]*Device unallocated:/ { print $NF; exit }')
+            unalloc="${fs_unalloc:-0}"
+        fi
+        case "$unalloc" in '' | *[!0-9]*) unalloc=0 ;; esac
+        if [ "$slack" -ge 4290772992 ] 2>/dev/null; then
+            echo "==> Root btrfs 4 GiB reserve is already set (devid $devid)"
+        elif [ "$unalloc" -ge 21474836480 ] 2>/dev/null; then
+            if [ "$dry" = true ]; then
+                echo "==> [Dry-run] would reserve 4 GiB below root btrfs (devid $devid)"
+            elif sudo btrfs filesystem resize "${devid}:-4G" /; then
+                echo "==> Reserved 4 GiB below root btrfs (devid $devid)"
+            else
+                warn "Could not reserve 4 GiB on root btrfs (devid $devid)"
+            fi
+        else
+            echo "==> Root btrfs has less than 20 GiB unallocated ($((unalloc / 1073741824)) GiB): skipping 4 GiB reserve"
+        fi
+    done <<EOF
+$dev_lines
+EOF
+}
+
+# Disk guard: the 60 s user timer everywhere (it also reports apps a running systemd-oomd closed),
+# plus btrfs root setup on btrfs roots. No oomd rules are installed: a swap-kill rule on -.slice
+# closed a whole desktop session (compositor and all apps) on the owner PC on 2026-11-21. Pass --dry-run as $2 to preview without changing files.
+install_disk_guard() {
+    local src="$1" dry=false reload_user=false udir
+    [ "${2:-}" = "--dry-run" ] && dry=true
+    [ "${DISK_GUARD:-true}" = true ] || return 0
+
+    udir="$HOME/.config/systemd/user"
+    if [ "$dry" = true ]; then
+        cmp -s "$src/live/disk-guard/infynitae-disk-guard.service" "$udir/infynitae-disk-guard.service" 2>/dev/null \
+            || echo "==> [Dry-run] would install $udir/infynitae-disk-guard.service"
+        cmp -s "$src/live/disk-guard/infynitae-disk-guard.timer" "$udir/infynitae-disk-guard.timer" 2>/dev/null \
+            || echo "==> [Dry-run] would install $udir/infynitae-disk-guard.timer"
+        systemctl --user is-enabled --quiet infynitae-disk-guard.timer 2>/dev/null \
+            || echo "==> [Dry-run] would enable user infynitae-disk-guard.timer"
+    else
+        mkdir -p "$udir"
+        if ! cmp -s "$src/live/disk-guard/infynitae-disk-guard.service" "$udir/infynitae-disk-guard.service" 2>/dev/null; then
+            install -m 644 "$src/live/disk-guard/infynitae-disk-guard.service" "$udir/infynitae-disk-guard.service"
+            reload_user=true
+        fi
+        if ! cmp -s "$src/live/disk-guard/infynitae-disk-guard.timer" "$udir/infynitae-disk-guard.timer" 2>/dev/null; then
+            install -m 644 "$src/live/disk-guard/infynitae-disk-guard.timer" "$udir/infynitae-disk-guard.timer"
+            reload_user=true
+        fi
+        [ "$reload_user" = true ] && { systemctl --user daemon-reload 2>/dev/null || true; }
+        if ! systemctl --user is-enabled --quiet infynitae-disk-guard.timer 2>/dev/null \
+            || ! systemctl --user is-active --quiet infynitae-disk-guard.timer 2>/dev/null; then
+            systemctl --user enable --now infynitae-disk-guard.timer 2>/dev/null || true
+        fi
+    fi
+
+    install_btrfs_guard "$src" "$dry"
 }
 
 # What outside the home folder Infynitae needs, for this machine.
@@ -409,6 +558,7 @@ GUARD
     systemctl --user enable --now infynitae-shutdown-guard.service 2>/dev/null || true
     sh "$src/live/setup-autologin.sh" --autostart >/dev/null 2>&1 || true
     install_speed_settings "$src"
+    install_disk_guard "$src"
 }
 
 # The parts' own apps open their files: folders in Thunar (not a terminal that also says it opens
