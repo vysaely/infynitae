@@ -43,6 +43,7 @@ Leave out a part:
   --no-thermal         Intel's thermal manager on Intel laptops (thermald)
   --no-viewers         apps for videos and music (celluloid), pictures (ristretto) and text
                        (mousepad)
+  --no-disk-guard      btrfs cleanup/reserve and systemd-oomd alerts
   --minimal            all of the above
 
 Turn on:
@@ -71,6 +72,7 @@ FOREIGN_DEFAULTS=false
 TERMINAL_PKG=true
 BLUETOOTH=true
 POWER_PROFILES=true
+DISK_GUARD=true
 SKIP=""
 # menus: a person at a terminal, who gave no options
 MENU=false
@@ -83,6 +85,7 @@ for arg in "$@"; do
         --no-terminal) TERMINAL_PKG=false ;;
         --no-bluetooth) BLUETOOTH=false ;;
         --no-power-profiles) POWER_PROFILES=false ;;
+        --no-disk-guard) DISK_GUARD=false ;;
         --minimal)
             SKIP="notifications keyring automount clipboard fonts recorder autorotate files osk gamemode realtime thermal viewers"
             TERMINAL_PKG=false BLUETOOTH=false POWER_PROFILES=false ;;
