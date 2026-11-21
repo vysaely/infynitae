@@ -560,9 +560,14 @@ Kept as in `live/edge-rs/src/wayland.rs`, which was measured and fixed over seve
      failure messages on stdout.
    - Power mode: the choice of the modes `powerprofilesctl list` gives, showing non-zero failures
      under its note until the next success or 10 s.
-4. `sound/volume` (`volume.rs`, the outputs and per-app levels of `child.rs:204-320`), `settings/quick`
+4. `sound/volume` (`volume.rs`, the outputs, mic and per-app levels of `child.rs:204-320`), `settings/quick`
    (do not disturb, night light, keyboard layout, screen keys, replay; `switches.rs`), `notifications/list`
    with the server (`origin/feat/edge-notify`), `settings/session` (`session.rs`).
+   - Sound (`cards/sound.rs`), M: Volume slider and mute button, Brightness slider when available, Output
+     row with fold-out sink list when `pactl` reports multiple sinks (`set-default-sink` plus
+     `move-sink-input` on playing streams; plain `Output:` line for one sink), Microphone switch and slider
+     for `@DEFAULT_SOURCE@` when a non-monitor source exists, and one row per playing `sink-input` with
+     Mute/Unmute and slider (hidden when nothing plays).
 5. `apps/*`, `windows/list`, `clipboard/history`, `calendar/clock`: today's modules moved onto the card
    trait so the four built-in panels work. Edit mode with "Add a card" by app.
 6. `simple.rs` (the brief is below; it is small and the core's "Add a card" needs it).
