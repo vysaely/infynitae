@@ -320,13 +320,9 @@ struct Screen {
     tearing_retry_at: Option<std::time::Instant>,
     /// Whether the session log last said tearing was on.
     tearing_logged: bool,
-    /// The cursor as the last frame showed it (element, its commit, where): tearing waits only on a frame
-    /// that changes it.
-    last_cursor: Option<(
-        smithay::backend::renderer::element::Id,
-        smithay::backend::renderer::utils::CommitCounter,
-        smithay::utils::Rectangle<i32, smithay::utils::Physical>,
-    )>,
+    /// Current fullscreen game window (`exclusive_window`) and refusal reasons already logged for it.
+    last_tearing_game: Option<infynitae_core::stage::ElementId>,
+    tearing_refusals_logged: Vec<String>,
     /// The monitor and driver support VRR on this connector.
     vrr_supported: bool,
     /// VRR is on now.
@@ -1127,7 +1123,8 @@ fn connect_screen(
         tearing_refused: 0,
         tearing_retry_at: None,
         tearing_logged: false,
-        last_cursor: None,
+        last_tearing_game: None,
+        tearing_refusals_logged: Vec::new(),
         vrr_supported,
         vrr_on,
         vrr_mode: f.vrr,
@@ -2297,12 +2294,73 @@ fn sync_scaling_filter(data: &mut LoopData) {
     }
 }
 
-/// Async page flips refused in a row before a screen stops trying (until its window stops
-/// tearing): an occasional refusal (the cursor moved in the same frame) is not the driver
-/// lacking support.
+/// Async page flips refused in a row by the kernel before a screen pauses tearing until
+/// [`TEARING_RETRY`] or the window stops tearing.
 const TEARING_REFUSALS: u32 = 60;
-/// How long frames just wait for the refresh after that many refusals, before trying again.
+/// How long frames wait for the refresh after repeated kernel refusals, before trying again.
 const TEARING_RETRY: Duration = Duration::from_secs(5);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TearingPolicyInput {
+    pub direct_scanout: bool,
+    pub tears_requested: bool,
+    pub overlay_planes: usize,
+    pub cursor_plane_in_use: bool,
+    pub pointer_hidden: bool,
+    pub pointer_locked: bool,
+    pub driver_in_cooldown: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TearingRefusal {
+    NotEligible,
+    DriverCooldown,
+    OverlayPlanesInUse(usize),
+    CursorPlaneInUse,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TearingPolicyDecision {
+    Allow,
+    Refuse(TearingRefusal),
+}
+
+pub(crate) fn evaluate_tearing_policy(input: TearingPolicyInput) -> TearingPolicyDecision {
+    if !input.direct_scanout || !input.tears_requested {
+        return TearingPolicyDecision::Refuse(TearingRefusal::NotEligible);
+    }
+    if input.driver_in_cooldown {
+        return TearingPolicyDecision::Refuse(TearingRefusal::DriverCooldown);
+    }
+    if input.overlay_planes > 0 {
+        return TearingPolicyDecision::Refuse(TearingRefusal::OverlayPlanesInUse(
+            input.overlay_planes,
+        ));
+    }
+    if input.cursor_plane_in_use && !(input.pointer_hidden || input.pointer_locked) {
+        return TearingPolicyDecision::Refuse(TearingRefusal::CursorPlaneInUse);
+    }
+    TearingPolicyDecision::Allow
+}
+
+fn record_tearing_refusal_once<G: PartialEq>(
+    last_game: &mut Option<G>,
+    logged: &mut Vec<String>,
+    game: Option<G>,
+    detail: String,
+) -> bool {
+    if let Some(w) = game
+        && last_game.as_ref() != Some(&w)
+    {
+        *last_game = Some(w);
+        logged.clear();
+    }
+    if logged.contains(&detail) {
+        return false;
+    }
+    logged.push(detail);
+    true
+}
 
 /// One frame on every screen that is not waiting for its vblank. A screen whose frame changed
 /// nothing completes its frame callbacks now; a queued one at its vblank.
@@ -2388,7 +2446,10 @@ fn render(data: &mut LoopData, turn: &mut TurnClock) {
             } else {
                 data.state.frame_guard_percent
             });
-            let may_tear = data.state.tears(id) && s.tearing_refused < TEARING_REFUSALS;
+            let cursor_off_plane =
+                data.state.cursor_is_hidden_on(id) || data.state.pointer_locked_on(id);
+            let may_tear =
+                data.state.tears(id) && cursor_off_plane && s.tearing_refused < TEARING_REFUSALS;
             let immediate = may_tear || (s.vrr_on && data.state.exclusive_window(id).is_some());
             // a glide is drawn where it is when the frame is shown; a frame that tears or runs
             // under VRR is shown as soon as it is done
@@ -2577,23 +2638,38 @@ fn render(data: &mut LoopData, turn: &mut TurnClock) {
                     result.overlay_elements.len(),
                     result.cursor_element.is_some(),
                 );
+                // Check for a kernel async refusal emitted asynchronously during frame_submitted().
+                if let Some(detail) = s.compositor.take_async_flip_refusal() {
+                    s.tearing_refused = s.tearing_refused.saturating_add(1);
+                    let game = data.state.exclusive_window(id);
+                    if record_tearing_refusal_once(
+                        &mut s.last_tearing_game,
+                        &mut s.tearing_refusals_logged,
+                        game,
+                        detail.clone(),
+                    ) {
+                        log_line!("[infynitae] Tearing refused on screen {id:?}: {detail}");
+                    }
+                    if s.tearing_refused == TEARING_REFUSALS {
+                        s.tearing_retry_at = Some(std::time::Instant::now() + TEARING_RETRY);
+                        log_line!(
+                            "[infynitae] Tearing refused {TEARING_REFUSALS} times in a row on screen {id:?}: frames wait for the refresh, trying again in {} s",
+                            TEARING_RETRY.as_secs()
+                        );
+                    }
+                }
                 // tearing: a scanned-out frame of a window that tears flips at once (async)
+                // when overlays are unused and no visible unlocked cursor sits on the cursor plane.
                 let tears_now = data.state.tears(id);
-                // not on a frame that changes the cursor: the kernel refuses an async flip that moves
-                // it, so with a menu or the Steam overlay open every flip was refused, then waited
-                // (owner, 2026-11-05: CS2's overlay lagged in fullscreen only). A cursor that stays as
-                // it was (a game showing one) no longer stops tearing (review 2026-11-11)
-                let cursor_now = result.cursor_element.map(|e| {
-                    use smithay::backend::renderer::element::Element;
-                    (
-                        e.id().clone(),
-                        e.current_commit(),
-                        e.geometry(smithay::utils::Scale::from(k)),
-                    )
-                });
-                let cursor_changed = cursor_now != s.last_cursor;
-                s.last_cursor = cursor_now;
-                let wants_tearing = scanout && tears_now && !cursor_changed;
+                let pointer_hidden = data.state.cursor_is_hidden_on(id);
+                let pointer_locked = data.state.pointer_locked_on(id);
+                let game = data.state.exclusive_window(id);
+                if let Some(w) = game
+                    && Some(w) != s.last_tearing_game
+                {
+                    s.last_tearing_game = Some(w);
+                    s.tearing_refusals_logged.clear();
+                }
                 // a composited frame says nothing of the driver; only a window that stops
                 // tearing, or the wait's end, starts the count again
                 if !tears_now
@@ -2603,10 +2679,39 @@ fn render(data: &mut LoopData, turn: &mut TurnClock) {
                     s.tearing_refused = 0;
                     s.tearing_retry_at = None;
                 }
-                let tear = wants_tearing && s.tearing_refused < TEARING_REFUSALS;
-                // said on a real change: not for the single frames a moving cursor waits (they
-                // were logged on and off at every mouse move, about once a frame)
-                let tearing_state = scanout && tears_now && s.tearing_refused < TEARING_REFUSALS;
+                let decision = evaluate_tearing_policy(TearingPolicyInput {
+                    direct_scanout: scanout,
+                    tears_requested: tears_now,
+                    overlay_planes: overlays,
+                    cursor_plane_in_use: cursor,
+                    pointer_hidden,
+                    pointer_locked,
+                    driver_in_cooldown: s.tearing_refused >= TEARING_REFUSALS,
+                });
+                let tear = decision == TearingPolicyDecision::Allow;
+                if let TearingPolicyDecision::Refuse(refusal) = decision {
+                    let detail = match refusal {
+                        TearingRefusal::OverlayPlanesInUse(n) => {
+                            Some(format!("{n} overlay plane(s) in use (keeping vblank)"))
+                        }
+                        TearingRefusal::CursorPlaneInUse => Some(
+                            "cursor plane in use (visible unlocked pointer; keeping vblank)"
+                                .to_string(),
+                        ),
+                        TearingRefusal::NotEligible | TearingRefusal::DriverCooldown => None,
+                    };
+                    if let Some(detail) = detail
+                        && record_tearing_refusal_once(
+                            &mut s.last_tearing_game,
+                            &mut s.tearing_refusals_logged,
+                            game,
+                            detail.clone(),
+                        )
+                    {
+                        log_line!("[infynitae] Tearing refused on screen {id:?}: {detail}");
+                    }
+                }
+                let tearing_state = tear;
                 if tearing_state != s.tearing_logged {
                     s.tearing_logged = tearing_state;
                     log_line!(
@@ -2624,19 +2729,15 @@ fn render(data: &mut LoopData, turn: &mut TurnClock) {
                     s.latency.drawn(submitted);
                 }
                 if tear {
-                    if s.compositor.async_flip() {
-                        s.tearing_refused = 0;
-                    } else {
-                        // this frame waited for the refresh; the next one tries again
-                        s.tearing_refused += 1;
-                        // the kernel accepts an async flip that changes only the primary plane's buffer: say
-                        // what else this frame had, once per run of refusals (review 2026-11-11, 3: amdgpu's
-                        // EINVAL is unexplained; overlay planes in use are the first suspect)
-                        if s.tearing_refused == 1 {
-                            log_line!(
-                                "[infynitae] Tearing refused on screen {id:?}: {overlays} overlay plane(s) in use, cursor plane {}",
-                                if cursor { "in use" } else { "free" }
-                            );
+                    if let Some(detail) = s.compositor.take_async_flip_refusal() {
+                        s.tearing_refused = s.tearing_refused.saturating_add(1);
+                        if record_tearing_refusal_once(
+                            &mut s.last_tearing_game,
+                            &mut s.tearing_refusals_logged,
+                            game,
+                            detail.clone(),
+                        ) {
+                            log_line!("[infynitae] Tearing refused on screen {id:?}: {detail}");
                         }
                         if s.tearing_refused == TEARING_REFUSALS {
                             s.tearing_retry_at = Some(std::time::Instant::now() + TEARING_RETRY);
@@ -2645,6 +2746,8 @@ fn render(data: &mut LoopData, turn: &mut TurnClock) {
                                 TEARING_RETRY.as_secs()
                             );
                         }
+                    } else if s.compositor.async_flip() {
+                        s.tearing_refused = 0;
                     }
                 }
                 match queued {
@@ -5784,5 +5887,242 @@ mod tests {
         // R270 at 1.0x scale: panel (1920, 0) -> view (0, 0).
         let r270 = touch_point_to_output_logical((1920.0, 0.0), phys, Transform::R270, 1.0);
         assert!(r270.0.abs() < 1e-6 && r270.1.abs() < 1e-6, "r270={r270:?}");
+    }
+
+    #[test]
+    fn tearing_policy_allows_hidden_and_locked_pointer_but_refuses_visible_pointer_and_overlays() {
+        use super::{
+            TearingPolicyDecision, TearingPolicyInput, TearingRefusal, evaluate_tearing_policy,
+        };
+
+        let base = TearingPolicyInput {
+            direct_scanout: true,
+            tears_requested: true,
+            overlay_planes: 0,
+            cursor_plane_in_use: false,
+            pointer_hidden: false,
+            pointer_locked: false,
+            driver_in_cooldown: false,
+        };
+
+        assert_eq!(
+            evaluate_tearing_policy(TearingPolicyInput {
+                pointer_hidden: true,
+                ..base
+            }),
+            TearingPolicyDecision::Allow
+        );
+
+        assert_eq!(
+            evaluate_tearing_policy(TearingPolicyInput {
+                pointer_locked: true,
+                cursor_plane_in_use: true,
+                ..base
+            }),
+            TearingPolicyDecision::Allow,
+            "locked pointer allows tearing"
+        );
+
+        assert_eq!(
+            evaluate_tearing_policy(TearingPolicyInput {
+                cursor_plane_in_use: true,
+                ..base
+            }),
+            TearingPolicyDecision::Refuse(TearingRefusal::CursorPlaneInUse),
+            "visible unlocked pointer on cursor plane stays on vblank"
+        );
+
+        assert_eq!(
+            evaluate_tearing_policy(TearingPolicyInput {
+                overlay_planes: 1,
+                pointer_hidden: true,
+                ..base
+            }),
+            TearingPolicyDecision::Refuse(TearingRefusal::OverlayPlanesInUse(1)),
+            "overlay plane in use stays on vblank"
+        );
+
+        assert_eq!(
+            evaluate_tearing_policy(TearingPolicyInput {
+                driver_in_cooldown: true,
+                pointer_hidden: true,
+                ..base
+            }),
+            TearingPolicyDecision::Refuse(TearingRefusal::DriverCooldown)
+        );
+    }
+
+    #[test]
+    fn record_tearing_refusal_once_logs_once_per_game_and_resets_on_new_game() {
+        use super::record_tearing_refusal_once;
+
+        let mut last_game = None;
+        let mut logged = Vec::new();
+        let game1 = Some(1u64);
+        let game2 = Some(2u64);
+
+        assert!(record_tearing_refusal_once(
+            &mut last_game,
+            &mut logged,
+            game1,
+            "cursor plane in use".to_string()
+        ));
+        assert!(!record_tearing_refusal_once(
+            &mut last_game,
+            &mut logged,
+            game1,
+            "cursor plane in use".to_string()
+        ));
+        assert!(record_tearing_refusal_once(
+            &mut last_game,
+            &mut logged,
+            game1,
+            "1 overlay plane(s) in use".to_string()
+        ));
+        assert!(record_tearing_refusal_once(
+            &mut last_game,
+            &mut logged,
+            game2,
+            "cursor plane in use".to_string()
+        ));
+    }
+
+    #[test]
+    fn async_flip_commit_builder_emits_only_primary_fb_id_and_rejects_other_planes_or_props() {
+        use smithay::backend::drm::{
+            AsyncFlipCommit, AsyncFlipCommitError, AsyncFlipPlaneProps, AsyncFlipPropValue,
+            PlaneConfig, PlaneState, build_async_flip_commit,
+        };
+        use smithay::reexports::drm::control::{framebuffer, plane, property};
+        use smithay::utils::{Buffer, Physical, Rectangle, Transform};
+        use std::num::NonZeroU32;
+
+        let primary = plane::Handle::from(NonZeroU32::new(10).unwrap());
+        let cursor = plane::Handle::from(NonZeroU32::new(11).unwrap());
+        let overlay = plane::Handle::from(NonZeroU32::new(12).unwrap());
+        let fb = framebuffer::Handle::from(NonZeroU32::new(42).unwrap());
+
+        let base_cfg = PlaneConfig {
+            src: Rectangle::<f64, Buffer>::from_size((1920.0, 1080.0).into()),
+            dst: Rectangle::<i32, Physical>::from_size((1920, 1080).into()),
+            transform: Transform::Normal,
+            alpha: 1.0,
+            damage_clips: Some(property::Value::Blob(999)),
+            fb,
+            fence: None,
+        };
+        let prev = AsyncFlipPlaneProps::from_config(&base_cfg);
+
+        let plan = build_async_flip_commit(
+            primary,
+            Some(&prev),
+            &[PlaneState {
+                handle: primary,
+                config: Some(base_cfg.clone()),
+            }],
+        )
+        .expect("primary-only compatible flip succeeds");
+        assert_eq!(
+            plan,
+            AsyncFlipCommit {
+                plane: primary,
+                fb,
+                properties: vec![("FB_ID", AsyncFlipPropValue::Framebuffer(fb))],
+            }
+        );
+
+        assert_eq!(
+            build_async_flip_commit(
+                primary,
+                Some(&prev),
+                &[
+                    PlaneState {
+                        handle: primary,
+                        config: Some(base_cfg.clone()),
+                    },
+                    PlaneState {
+                        handle: cursor,
+                        config: None,
+                    },
+                ],
+            ),
+            Err(AsyncFlipCommitError::NonPrimaryPlane { plane: cursor })
+        );
+
+        assert_eq!(
+            build_async_flip_commit(
+                primary,
+                Some(&prev),
+                &[
+                    PlaneState {
+                        handle: primary,
+                        config: Some(base_cfg.clone()),
+                    },
+                    PlaneState {
+                        handle: overlay,
+                        config: Some(base_cfg.clone()),
+                    },
+                ],
+            ),
+            Err(AsyncFlipCommitError::NonPrimaryPlane { plane: overlay })
+        );
+
+        let mut moved = base_cfg.clone();
+        moved.dst.loc.x = 1;
+        assert_eq!(
+            build_async_flip_commit(
+                primary,
+                Some(&prev),
+                &[PlaneState {
+                    handle: primary,
+                    config: Some(moved),
+                }],
+            ),
+            Err(AsyncFlipCommitError::PropertyChanged {
+                plane: primary,
+                property: "CRTC_RECT",
+            })
+        );
+
+        let mut rotated = base_cfg.clone();
+        rotated.transform = Transform::_90;
+        assert_eq!(
+            build_async_flip_commit(
+                primary,
+                Some(&prev),
+                &[PlaneState {
+                    handle: primary,
+                    config: Some(rotated),
+                }],
+            ),
+            Err(AsyncFlipCommitError::PropertyChanged {
+                plane: primary,
+                property: "rotation",
+            })
+        );
+
+        let pipe = std::os::unix::net::UnixStream::pair().expect("pipe");
+        use std::os::fd::AsFd;
+        let mut fenced = base_cfg.clone();
+        fenced.fence = Some(pipe.0.as_fd());
+        assert_eq!(
+            build_async_flip_commit(
+                primary,
+                Some(&prev),
+                &[PlaneState {
+                    handle: primary,
+                    config: Some(fenced),
+                }],
+            ),
+            Err(AsyncFlipCommitError::PropertyChanged {
+                plane: primary,
+                property: "IN_FENCE_FD",
+            })
+        );
+
+        assert_eq!(
+            build_async_flip_commit(primary, Some(&prev), &[]),
+            Err(AsyncFlipCommitError::MissingPrimaryPlane { primary })
+        );
     }
 }
