@@ -352,6 +352,7 @@ file has the explanation beside each).
 | Row | Control | Key | Values | After |
 |---|---|---|---|---|
 | Replay keeps the last | Pick | `REPLAY_BUFFER_MINUTES` | 2, 5, 10, 20, 30 minutes | Reload(`recorder`) |
+| M Replay kept in | Pick | `REPLAY_STORAGE` | Memory `ram`, The clips folder `disk` | Reload(`recorder`) |
 | Sound recorded | Pick | `RECORD_AUDIO` | The PC `desktop`, The microphone `mic`, Both, None | Reload(`recorder`) |
 | Frames per second | Pick | `RECORD_FPS` | 30, 60, 120 | Reload(`recorder`) |
 | Freeze the screen while picking a region | Switch | `FREEZE_SCREENSHOT` | | use |
