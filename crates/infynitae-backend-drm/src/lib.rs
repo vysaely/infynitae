@@ -2072,7 +2072,8 @@ pub fn run_console_with(
                     .focus()
                     .target()
                     .is_some_and(|f| data.state.is_same_client(new_id, f));
-                let shown = user || data.state.core().toplevel_parent(new_id).is_some() || same_client;
+                let shown =
+                    user || data.state.core().toplevel_parent(new_id).is_some() || same_client;
                 let core = data.state.core_mut();
                 let result = if shown {
                     core.show_opened(&mut data.input_port, new_id)

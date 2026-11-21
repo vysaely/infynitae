@@ -405,8 +405,6 @@ fn captcha_window_from_fullscreen_game_gets_focus_and_frees_pointer_then_restore
     );
 }
 
-
-
 #[test]
 fn roblox_stepped_aside_flips_keyboard_focus_between_game_and_other_while_button_held() {
     let mut ls = Lockstep::new(Some(a_1080()));

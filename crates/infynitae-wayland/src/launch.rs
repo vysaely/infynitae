@@ -163,7 +163,9 @@ impl WaylandState {
         u32::try_from(creds.pid).ok()
     }
 
-    /// Whether `a` and `b` belong to the same client connection or client process.
+    /// Whether the new window `a` comes from the app of `b`: the same client connection, the same
+    /// process, or a process `b`'s process started. The last is how apps run a helper with its own
+    /// connection, such as a sign-in or captcha window started by a game.
     pub fn is_same_client(&self, a: ElementId, b: ElementId) -> bool {
         let (Some(sa), Some(sb)) = (self.window_surface(a), self.window_surface(b)) else {
             return false;
@@ -175,7 +177,13 @@ impl WaylandState {
             || self
                 .client_pid(a)
                 .zip(self.client_pid(b))
-                .is_some_and(|(pa, pb)| pa == pb)
+                .is_some_and(|(pa, pb)| {
+                    pa == pb
+                        || i32::try_from(pa).is_ok_and(|pa| {
+                            crate::ownership::stat_of(pa)
+                                .is_some_and(|(_, ppid)| u32::try_from(ppid) == Ok(pb))
+                        })
+                })
     }
 
     /// Whether the user opened the new window `element` (module docs), given when they last
