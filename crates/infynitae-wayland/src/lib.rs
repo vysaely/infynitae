@@ -944,6 +944,7 @@ impl WaylandState {
         }
         state.desk_start();
         state.note_keyboard_layout();
+        state.core.set_free_cursor_on_super(true);
         state
     }
 

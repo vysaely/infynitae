@@ -12,8 +12,12 @@ use std::time::Duration;
 
 use common::input::*;
 use common::{Lockstep, Probe};
-use infynitae_backend_headless::{pointer_button, pointer_motion, set_focus};
+use infynitae_backend_headless::{keyboard_key, pointer_button, pointer_motion, set_focus};
+use infynitae_core::input::keys::KEY_LEFTMETA;
+use infynitae_core::stage::ElementId;
 use infynitae_wayland::ClientState;
+use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface as ServerSurface;
+use smithay::wayland::pointer_constraints::with_pointer_constraint;
 use wayland_client::protocol::wl_registry::WlRegistry;
 use wayland_client::{Connection, EventQueue, QueueHandle};
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::Layer;
@@ -91,6 +95,99 @@ fn adv(ls: &mut Lockstep) {
     let t = ls.now + Duration::from_micros(16_667);
     ls.run_until(t);
 }
+
+fn helper_server_surface(ls: &Lockstep, elem_id: ElementId) -> ServerSurface {
+    ls.state
+        .window(elem_id)
+        .expect("window")
+        .toplevel()
+        .expect("toplevel")
+        .wl_surface()
+        .clone()
+}
+
+fn helper_smithay_active(ls: &Lockstep, elem_id: ElementId) -> bool {
+    let root = helper_server_surface(ls, elem_id);
+    let ptr = ls.state.seat().get_pointer().expect("seat pointer");
+    with_pointer_constraint(&root, &ptr, |c| c.map(|c| c.is_active()).unwrap_or(false))
+}
+
+#[test]
+fn held_super_releases_pointer_lock_in_windowed_game() {
+    let mut ls = Lockstep::new(Some(a_1080()));
+    let qh = ls.qh.clone();
+    let g_idx = ls.probe.toplevel(&qh, "GAME", (800, 600), 0);
+    adv(&mut ls);
+    ls.probe.draw(&qh, g_idx);
+    adv(&mut ls);
+    let game_id = ls.state.elements().last().expect("game element");
+    set_focus(&mut ls.state, &mut ls.input, Some(game_id)).unwrap();
+    adv(&mut ls);
+
+    // Pointer on GAME
+    pointer_motion(
+        &mut ls.state,
+        &mut ls.input,
+        (100.0, 100.0),
+        (100.0, 100.0),
+        1000,
+    )
+    .unwrap();
+    adv(&mut ls);
+
+    // Request persistent pointer lock
+    ls.probe.lock_pointer(&qh, g_idx, false);
+    adv(&mut ls);
+
+    assert!(
+        helper_smithay_active(&ls, game_id),
+        "precondition: pointer lock is active on GAME"
+    );
+
+    // Hold Super (KEY_LEFTMETA)
+    keyboard_key(&mut ls.state, &mut ls.input, KEY_LEFTMETA, true, 2000).unwrap();
+    adv(&mut ls);
+
+    assert!(
+        !helper_smithay_active(&ls, game_id),
+        "held Super must release pointer lock in windowed game"
+    );
+
+    // Release Super
+    keyboard_key(&mut ls.state, &mut ls.input, KEY_LEFTMETA, false, 3000).unwrap();
+    adv(&mut ls);
+
+    assert!(
+        helper_smithay_active(&ls, game_id),
+        "releasing Super re-locks in windowed game"
+    );
+
+    // Fullscreen control: in fullscreen, Super must NOT release the pointer lock
+    ls.probe.surfaces[g_idx]
+        .toplevel
+        .as_ref()
+        .unwrap()
+        .set_fullscreen(None);
+    adv(&mut ls);
+    ls.probe.surfaces[g_idx].size = (1920, 1080);
+    ls.probe.draw(&qh, g_idx);
+    adv(&mut ls);
+    let out = ls.output();
+    assert_eq!(ls.state.core().presentation(out), Some(game_id));
+    assert!(helper_smithay_active(&ls, game_id));
+
+    // Hold Super in fullscreen
+    keyboard_key(&mut ls.state, &mut ls.input, KEY_LEFTMETA, true, 4000).unwrap();
+    adv(&mut ls);
+
+    assert!(
+        helper_smithay_active(&ls, game_id),
+        "held Super must NOT release pointer lock in fullscreen game"
+    );
+    keyboard_key(&mut ls.state, &mut ls.input, KEY_LEFTMETA, false, 5000).unwrap();
+    adv(&mut ls);
+}
+
 
 #[test]
 fn roblox_stepped_aside_flips_keyboard_focus_between_game_and_other_while_button_held() {
