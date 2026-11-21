@@ -182,6 +182,12 @@ pub struct Wlan {
     pub joined: bool,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SavedWifi {
+    pub name: String,
+    pub ssid: String,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct NetworkData {
     /// NetworkManager answered
@@ -192,8 +198,8 @@ pub struct NetworkData {
     pub wired: bool,
     /// the networks in reach, the joined one first, then by signal
     pub networks: Vec<Wlan>,
-    /// the saved connections' names (a saved network joins without a password)
-    pub saved: Vec<String>,
+    /// the saved Wi-Fi connections' profile names and 802-11-wireless.ssid values
+    pub saved: Vec<SavedWifi>,
 }
 
 impl NetworkData {
@@ -251,7 +257,8 @@ pub fn nmcli_fields(line: &str) -> Vec<String> {
 }
 
 /// Reads the network source's output: sections apart by "---": the radio, the devices
-/// (TYPE:STATE), the networks (IN-USE:SIGNAL:SECURITY:SSID), the saved connections (NAME:TYPE).
+/// (TYPE:STATE), the networks (IN-USE:SIGNAL:SECURITY:SSID), the saved connections (NAME:TYPE),
+/// and the saved Wi-Fi profile details (`connection.id:...` and `802-11-wireless.ssid:...`).
 pub fn parse_network(out: &str) -> NetworkData {
     let parts = sections(out);
     let sec = |i: usize| parts.get(i).map(String::as_str).unwrap_or("");
@@ -294,13 +301,49 @@ pub fn parse_network(out: &str) -> NetworkData {
     }
     d.networks
         .sort_by(|a, b| b.joined.cmp(&a.joined).then(b.signal.cmp(&a.signal)));
-    for l in sec(3).lines() {
-        let f = nmcli_fields(l.trim());
-        if f.len() >= 2 && f[1] == "802-11-wireless" {
-            d.saved.push(f[0].clone());
+    let mut cur_id: Option<String> = None;
+    let mut cur_ssid: Option<String> = None;
+    let flush = |saved: &mut Vec<SavedWifi>, id: &mut Option<String>, ssid: &mut Option<String>| {
+        if let (Some(name), Some(s)) = (id.take(), ssid.take()) {
+            if !name.is_empty() && !s.is_empty() {
+                saved.push(SavedWifi { name, ssid: s });
+            }
+        } else {
+            *id = None;
+            *ssid = None;
+        }
+    };
+    for l in sec(4).lines() {
+        let t = l.trim_end_matches('\r');
+        if t.trim().is_empty() {
+            flush(&mut d.saved, &mut cur_id, &mut cur_ssid);
+            continue;
+        }
+        if let Some(v) = t.strip_prefix("connection.id:") {
+            if cur_id.is_some() {
+                flush(&mut d.saved, &mut cur_id, &mut cur_ssid);
+            }
+            cur_id = Some(v.to_string());
+        } else if let Some(v) = t.strip_prefix("802-11-wireless.ssid:") {
+            if cur_ssid.is_some() {
+                flush(&mut d.saved, &mut cur_id, &mut cur_ssid);
+            }
+            cur_ssid = Some(v.to_string());
         }
     }
+    flush(&mut d.saved, &mut cur_id, &mut cur_ssid);
     d
+}
+
+fn wireless_connection_names(conn_out: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    for l in conn_out.lines() {
+        let f = nmcli_fields(l.trim());
+        if f.len() >= 2 && f[1] == "802-11-wireless" && !f[0].is_empty() && !names.contains(&f[0]) {
+            names.push(f[0].clone());
+        }
+    }
+    names
 }
 
 pub fn fetch_network_with(mut run: impl FnMut(&[&str]) -> String) -> NetworkData {
@@ -314,6 +357,7 @@ pub fn fetch_network_with(mut run: impl FnMut(&[&str]) -> String) -> NetworkData
     });
     let mut wifi_out = String::new();
     let mut conn_out = String::new();
+    let mut ssid_out = String::new();
     let radio = if has_wifi {
         wifi_out = run(&[
             "nmcli",
@@ -327,12 +371,28 @@ pub fn fetch_network_with(mut run: impl FnMut(&[&str]) -> String) -> NetworkData
             "no",
         ]);
         conn_out = run(&["nmcli", "-t", "-f", "NAME,TYPE", "connection", "show"]);
+        let wifi_names = wireless_connection_names(&conn_out);
+        if !wifi_names.is_empty() {
+            let mut args = vec![
+                "nmcli",
+                "-t",
+                "-f",
+                "connection.id,802-11-wireless.ssid",
+                "connection",
+                "show",
+            ];
+            for name in &wifi_names {
+                args.push("id");
+                args.push(name.as_str());
+            }
+            ssid_out = run(&args);
+        }
         "enabled"
     } else {
         "disabled"
     };
     parse_network(&format!(
-        "{radio}\n---\n{dev_out}\n---\n{wifi_out}\n---\n{conn_out}"
+        "{radio}\n---\n{dev_out}\n---\n{wifi_out}\n---\n{conn_out}\n---\n{ssid_out}"
     ))
 }
 
@@ -377,13 +437,21 @@ impl NetworkCard {
     }
 }
 
-/// The command that joins `n`: a saved network by its connection; an open one at once; a new
+fn saved_profile<'a>(ssid: &str, saved: &'a [SavedWifi]) -> Option<&'a str> {
+    saved
+        .iter()
+        .find(|s| s.ssid == ssid && s.name == ssid)
+        .or_else(|| saved.iter().find(|s| s.ssid == ssid))
+        .map(|s| s.name.as_str())
+}
+
+/// The command that joins `n`: a saved network by its connection profile; an open one at once; a new
 /// secured one after the password is asked in the edge's own card, handed to nmcli on its standard
 /// input (never on a command line, where other programs could read it).
-pub fn join_command(n: &Wlan, saved: &[String]) -> String {
+pub fn join_command(n: &Wlan, saved: &[SavedWifi]) -> String {
     let ssid = sq(&n.ssid);
-    if saved.contains(&n.ssid) {
-        format!("nmcli connection up id {ssid} >/dev/null 2>&1")
+    if let Some(profile) = saved_profile(&n.ssid, saved) {
+        format!("nmcli connection up id {} >/dev/null 2>&1", sq(profile))
     } else if !n.secure {
         format!("nmcli dev wifi connect {ssid} >/dev/null 2>&1")
     } else {
@@ -567,9 +635,10 @@ impl Card for NetworkCard {
                     return false;
                 };
                 if n.joined {
+                    let profile = saved_profile(&n.ssid, &d.saved).unwrap_or(&n.ssid);
                     out.push(Action::Run(format!(
                         "nmcli connection down id {} >/dev/null 2>&1",
-                        sq(&n.ssid)
+                        sq(profile)
                     )));
                 } else {
                     out.push(Action::Run(join_command(&n, &d.saved)));
@@ -1051,7 +1120,8 @@ pub(crate) mod tests {
         let d = parse_network(
             "enabled\n---\nethernet:connected\nwifi:disconnected\nloopback:connected (externally)\n---\n\
              *:72:WPA2:Home\\:Net\n :40::Cafe Free\n :81:WPA1 WPA2:Neighbour 5G\n :20:WPA2:Home\\:Net\n---\n\
-             Home\\:Net:802-11-wireless\nWired connection 1:802-3-ethernet\n",
+             Home\\:Net:802-11-wireless\nWired connection 1:802-3-ethernet\n---\n\
+             connection.id:Home:Net\n802-11-wireless.ssid:Home:Net\n",
         );
         assert!(d.service && d.wifi_device && d.radio_on && d.wired);
         assert_eq!(
@@ -1063,7 +1133,13 @@ pub(crate) mod tests {
             "joined first, then by signal; a name seen twice once"
         );
         assert!(d.networks[0].secure && !d.networks[2].secure);
-        assert_eq!(d.saved, vec!["Home:Net"]);
+        assert_eq!(
+            d.saved,
+            vec![SavedWifi {
+                name: "Home:Net".into(),
+                ssid: "Home:Net".into(),
+            }]
+        );
         assert_eq!(d.state(), ("Wired".into(), "Cable connected".into(), true));
         assert_eq!(d.icon(), Icon::Wired);
     }
@@ -1113,7 +1189,13 @@ pub(crate) mod tests {
             joined: false,
         };
         assert_eq!(
-            join_command(&saved, &["Home's".into()]),
+            join_command(
+                &saved,
+                &[SavedWifi {
+                    name: "Home's".into(),
+                    ssid: "Home's".into(),
+                }]
+            ),
             "nmcli connection up id 'Home'\\''s' >/dev/null 2>&1"
         );
         let new = join_command(
@@ -1267,19 +1349,87 @@ pub(crate) mod tests {
             match args.get(3).copied() {
                 Some("TYPE,STATE") => "wifi:connected\n".into(),
                 Some("IN-USE,SIGNAL,SECURITY,SSID") => "*:70:WPA2:Home\n".into(),
-                Some("NAME,TYPE") => "Home:802-11-wireless\n".into(),
+                Some("NAME,TYPE") => "Home:802-11-wireless\nWork 1:802-11-wireless\n".into(),
+                Some("connection.id,802-11-wireless.ssid") => {
+                    "connection.id:Home\n802-11-wireless.ssid:Home\n\n\
+                     connection.id:Work 1\n802-11-wireless.ssid:Work\n"
+                        .into()
+                }
                 _ => String::new(),
             }
         });
         assert_eq!(
             calls.len(),
-            3,
-            "active Wi-Fi uses 3 direct nmcli calls, 0 sh"
+            4,
+            "active Wi-Fi uses 4 direct nmcli calls regardless of saved profile count, 0 sh"
         );
         assert!(calls
             .iter()
             .all(|c| c.first().map(String::as_str) == Some("nmcli")));
-        assert!(wifi.wifi_device && wifi.radio_on && wifi.saved == vec!["Home"]);
+        assert!(
+            wifi.wifi_device
+                && wifi.radio_on
+                && wifi.saved
+                    == vec![
+                        SavedWifi {
+                            name: "Home".into(),
+                            ssid: "Home".into(),
+                        },
+                        SavedWifi {
+                            name: "Work 1".into(),
+                            ssid: "Work".into(),
+                        },
+                    ]
+        );
+    }
+
+    #[test]
+    fn saved_networks_match_wireless_ssid_not_profile_name() {
+        let mut calls: Vec<Vec<String>> = Vec::new();
+        let data = fetch_network_with(|args| {
+            calls.push(args.iter().map(|s| s.to_string()).collect());
+            match args.get(3).copied() {
+                Some("TYPE,STATE") => "wifi:disconnected\n".into(),
+                Some("IN-USE,SIGNAL,SECURITY,SSID") => "*:80:WPA2:Home\n :40:WPA2:Home 1\n".into(),
+                Some("NAME,TYPE") => "Home 1:802-11-wireless\n".into(),
+                Some("connection.id,802-11-wireless.ssid") => {
+                    "connection.id:Home 1\n802-11-wireless.ssid:Home\n".into()
+                }
+                _ => String::new(),
+            }
+        });
+        let home = data.networks.iter().find(|n| n.ssid == "Home").unwrap();
+        let decoy = data.networks.iter().find(|n| n.ssid == "Home 1").unwrap();
+        assert!(
+            join_command(home, &data.saved).starts_with("nmcli connection up id 'Home 1'"),
+            "saved profile 'Home 1' with ssid 'Home' should bring up 'Home 1', got: {}",
+            join_command(home, &data.saved)
+        );
+        assert!(
+            join_command(decoy, &data.saved).contains("ask --text --secret"),
+            "unrelated SSID 'Home 1' must not match profile named 'Home 1', got: {}",
+            join_command(decoy, &data.saved)
+        );
+        let mut card = NetworkCard::default();
+        card.apply("network", &data as &dyn Any);
+        let th = crate::theme::Theme::from_config(&crate::config::Config::from_text(""));
+        let cx = test_cx(&th);
+        let mut out = Vec::new();
+        card.event(
+            &Event::Press {
+                hit: H_NET,
+                button: Button::Left,
+                at: (0.0, 0.0),
+            },
+            &cx,
+            &mut out,
+        );
+        assert_eq!(
+            out,
+            vec![Action::Run(
+                "nmcli connection down id 'Home 1' >/dev/null 2>&1".into()
+            )]
+        );
     }
 
     pub fn test_cx(th: &crate::theme::Theme) -> Cx<'_> {
