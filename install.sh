@@ -43,7 +43,7 @@ Leave out a part:
   --no-thermal         Intel's thermal manager on Intel laptops (thermald)
   --no-viewers         apps for videos and music (celluloid), pictures (ristretto) and text
                        (mousepad)
-  --no-disk-guard      btrfs cleanup/reserve and systemd-oomd alerts
+  --no-disk-guard      btrfs cleanup/reserve and alerts when systemd-oomd closes an app
   --minimal            all of the above
 
 Turn on:

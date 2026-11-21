@@ -203,9 +203,9 @@ These pass the test suite but have not run on a real screen or device yet:
 On a btrfs root (`--no-disk-guard` skips it), the installer sets up dynamic and periodic data
 chunk reclaim (`/etc/tmpfiles.d/btrfs-reclaim.conf`), a weekly light data balance
 (`btrfs balance start -dusage=30 -dlimit=10 /`, never `-musage`), monthly `btrfs-scrub@-.timer`,
-and a 4 GiB emergency reserve below the partition when at least 20 GiB is unallocated. When
-`systemd-oomd` is present, it also adds memory-pressure (`user@.service`, 60%) and swap-kill
-(`-.slice`) drop-ins.
+and a 4 GiB emergency reserve below the partition when at least 20 GiB is unallocated. It adds no
+`systemd-oomd` rules: a swap-kill rule on `-.slice` closed the whole desktop session (compositor
+and every app) on the owner PC on 2026-11-21, because the session scope was the largest swap user.
 
 The user timer `infynitae-disk-guard.timer` runs `live/infynitae-disk-guard` every 60 s (~4 ms
 per tick on this PC). When root unallocated space drops below twice the data chunk size and

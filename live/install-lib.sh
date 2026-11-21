@@ -425,10 +425,11 @@ $dev_lines
 EOF
 }
 
-# Disk and memory guards: systemd-oomd drop-ins and 60 s user timer everywhere, plus btrfs root
-# setup on btrfs roots. Pass --dry-run as $2 to preview without changing files.
+# Disk guard: the 60 s user timer everywhere (it also reports apps a running systemd-oomd closed),
+# plus btrfs root setup on btrfs roots. No oomd rules are installed: a swap-kill rule on -.slice
+# closed a whole desktop session (compositor and all apps) on the owner PC on 2026-11-21. Pass --dry-run as $2 to preview without changing files.
 install_disk_guard() {
-    local src="$1" dry=false reload_sys=false reload_user=false udir
+    local src="$1" dry=false reload_user=false udir
     [ "${2:-}" = "--dry-run" ] && dry=true
     [ "${DISK_GUARD:-true}" = true ] || return 0
 
@@ -454,33 +455,6 @@ install_disk_guard() {
         if ! systemctl --user is-enabled --quiet infynitae-disk-guard.timer 2>/dev/null \
             || ! systemctl --user is-active --quiet infynitae-disk-guard.timer 2>/dev/null; then
             systemctl --user enable --now infynitae-disk-guard.timer 2>/dev/null || true
-        fi
-    fi
-
-    if systemctl cat systemd-oomd.service >/dev/null 2>&1; then
-        if [ "$dry" = true ]; then
-            cmp -s "$src/live/disk-guard/oomd-user.conf" /etc/systemd/system/user@.service.d/oomd.conf 2>/dev/null \
-                || echo "==> [Dry-run] would install /etc/systemd/system/user@.service.d/oomd.conf"
-            cmp -s "$src/live/disk-guard/oomd-slice.conf" /etc/systemd/system/-.slice.d/oomd.conf 2>/dev/null \
-                || echo "==> [Dry-run] would install /etc/systemd/system/-.slice.d/oomd.conf"
-            if ! systemctl is-enabled --quiet systemd-oomd.service 2>/dev/null \
-                || ! systemctl is-active --quiet systemd-oomd.service 2>/dev/null; then
-                echo "==> [Dry-run] would enable systemd-oomd.service"
-            fi
-        else
-            if ! cmp -s "$src/live/disk-guard/oomd-user.conf" /etc/systemd/system/user@.service.d/oomd.conf 2>/dev/null; then
-                install_root_file "$src/live/disk-guard/oomd-user.conf" /etc/systemd/system/user@.service.d/oomd.conf 644
-                reload_sys=true
-            fi
-            if ! cmp -s "$src/live/disk-guard/oomd-slice.conf" /etc/systemd/system/-.slice.d/oomd.conf 2>/dev/null; then
-                install_root_file "$src/live/disk-guard/oomd-slice.conf" /etc/systemd/system/-.slice.d/oomd.conf 644
-                reload_sys=true
-            fi
-            [ "$reload_sys" = true ] && { sudo systemctl daemon-reload 2>/dev/null || true; }
-            if ! systemctl is-enabled --quiet systemd-oomd.service 2>/dev/null \
-                || ! systemctl is-active --quiet systemd-oomd.service 2>/dev/null; then
-                sudo systemctl enable --now systemd-oomd.service || warn "Could not enable systemd-oomd.service"
-            fi
         fi
     fi
 

@@ -50,9 +50,9 @@ part_label() {
         foreign-apps) echo "Windows and Android programs, in a sandbox" ;;
         disk-guard)
             if [ "$(findmnt -no FSTYPE / 2>/dev/null)" = btrfs ]; then
-                echo "Btrfs disk guard (reclaim, balance, 4 GiB reserve, OOM)"
+                echo "Btrfs disk guard (reclaim, balance, 4 GiB reserve)"
             else
-                echo "Out-of-memory guard (systemd-oomd alerts)"
+                echo "Out-of-memory alerts (when systemd-oomd closes an app)"
             fi
             ;;
     esac

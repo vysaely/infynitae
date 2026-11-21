@@ -359,17 +359,13 @@ run_dg() {
         bash -c '. "'"$REPO_DIR"'/live/install-lib.sh"; '"$DG_CALL" > "$DG_OUT" 2>&1
 }
 
-# 10a. Non-btrfs root: install_btrfs_guard is a no-op; install_disk_guard installs only oomd + user timer
+# 10a. Non-btrfs root: install_btrfs_guard is a no-op; install_disk_guard installs only the user timer
 DG_CALL='install_btrfs_guard "'"$REPO_DIR"'"' run_dg ext4-only env DG_FSTYPE=ext4
 check "non-btrfs root: install_btrfs_guard is a complete no-op" "$(cat "$TMP/dg-ext4-only.log")" ""
 
 DG_CALL='install_disk_guard "'"$REPO_DIR"'"' run_dg ext4 env DG_FSTYPE=ext4
-check "non-btrfs root: oomd user drop-in installed" \
-    "$(grep -c '^install -D -m 644 .*/etc/systemd/system/user@\.service\.d/oomd\.conf$' "$TMP/dg-ext4.log" || true)" "1"
-check "non-btrfs root: oomd slice drop-in installed" \
-    "$(grep -c '^install -D -m 644 .*/etc/systemd/system/-\.slice\.d/oomd\.conf$' "$TMP/dg-ext4.log" || true)" "1"
-check "non-btrfs root: systemd-oomd enabled" \
-    "$(grep -c '^systemctl enable --now systemd-oomd\.service$' "$TMP/dg-ext4.log" || true)" "1"
+check "non-btrfs root: no oomd rule installed or oomd enabled" \
+    "$(grep -c 'oomd' "$TMP/dg-ext4.log" || true)" "0"
 check "non-btrfs root: user timer enabled" \
     "$(grep -c '^systemctl --user enable --now infynitae-disk-guard\.timer$' "$TMP/dg-ext4.log" || true)" "1"
 check "non-btrfs root: no btrfs files or resize" \
@@ -442,7 +438,7 @@ printf '1\n' > "$TMP/sysfs-reclaim-on/uuid1/allocation/data/periodic_reclaim"
 DG_CALL='install_disk_guard "'"$REPO_DIR"'"' run_dg btrfs-active env \
     DG_FSTYPE=btrfs DG_SLACK=4294970880 DG_UNALLOC=159693934592 DG_UNIT_ACTIVE_EXIT=0 \
     INFYNITAE_DISK_GUARD_BTRFS="$TMP/sysfs-reclaim-on"
-check "idempotent run does not re-enable active timers or oomd" \
+check "idempotent run does not re-enable active timers" \
     "$(grep -cE '^systemctl (--user )?enable ' "$TMP/dg-btrfs-active.log" || true)" "0"
 
 # 10h. install.sh --help documents --no-disk-guard
