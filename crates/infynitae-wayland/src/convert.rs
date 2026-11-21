@@ -794,7 +794,10 @@ where
     let layers = state.core.layer_frame(output);
     let mut elements = Vec::new();
     mark_phase(&mut mark, "frame list");
-    if include_cursor {
+    // A fullscreen tearing game with a locked pointer owns raw mouse deltas; leave any stale
+    // unhidden cursor off the cursor plane so direct scanout can flip asynchronously.
+    let draw_cursor = include_cursor && !(state.tears(output) && state.pointer_locked_on(output));
+    if draw_cursor {
         cursor_elements(state, renderer, output, view.k, &mut elements)
             .map_err(RenderOutputError::Renderer)?;
     }

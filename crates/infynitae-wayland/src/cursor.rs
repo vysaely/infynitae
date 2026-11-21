@@ -511,6 +511,63 @@ impl WaylandState {
         &self.cursor
     }
 
+    /// Whether no cursor image is shown on `output` (hidden, `"none"`, uncommitted surface, or
+    /// the pointer is on another output).
+    pub fn cursor_is_hidden_on(&self, output: infynitae_core::output::OutputId) -> bool {
+        let default_status = CursorImageStatus::default_named();
+        let status = match self.tablet_cursor(output) {
+            crate::pointer::TabletCursor::OnOutput { status, .. } => {
+                status.unwrap_or(&default_status)
+            }
+            crate::pointer::TabletCursor::OnOtherOutput => return true,
+            crate::pointer::TabletCursor::Inactive => {
+                let infynitae_core::pointer::PointerState::Located { output: o, .. } =
+                    self.core.pointer()
+                else {
+                    return true;
+                };
+                if o != output {
+                    return true;
+                }
+                &self.cursor
+            }
+        };
+        match status {
+            CursorImageStatus::Hidden => true,
+            CursorImageStatus::Named(icon) if icon.name() == "none" => true,
+            CursorImageStatus::Surface(surface) if surface.is_alive() => {
+                let has_view = smithay::wayland::compositor::with_states(surface, |states| {
+                    states
+                        .data_map
+                        .get::<smithay::backend::renderer::utils::RendererSurfaceStateUserData>()
+                        .and_then(|d| d.lock().ok().map(|d| d.view().is_some()))
+                        .unwrap_or(false)
+                });
+                !has_view
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether a pointer lock (`zwp_pointer_constraints_v1::lock_pointer`) is active on `output`.
+    pub fn pointer_locked_on(&self, output: infynitae_core::output::OutputId) -> bool {
+        let Some(constraint) = self.core.constraint() else {
+            return false;
+        };
+        if constraint.kind != infynitae_core::pointer::ConstraintKind::Lock {
+            return false;
+        }
+        self.exclusive_window(output).is_some_and(|w| {
+            self.core
+                .stage()
+                .element_containing_surface(constraint.surface)
+                == Some(w)
+        }) || matches!(
+            self.core.pointer(),
+            infynitae_core::pointer::PointerState::Located { output: o, .. } if o == output
+        )
+    }
+
     /// Sets a custom HOME directory path for reading config files and themes.
     pub fn set_config_home(&mut self, home: PathBuf) {
         self.config_home = Some(home);
