@@ -98,9 +98,13 @@ const ON_OFF: Control = Control::Switch {
 pub const TABLE: &[Setting] = &[
     Setting {
         key: "SESSION_RESTORE",
-        name: "Reopen apps at login",
-        says: "",
-        control: ON_OFF,
+        name: "Reopen apps",
+        says: "After a restart: of the desktop, not of the PC",
+        control: Control::Pick(&[
+            ("false", "Off"),
+            ("restart", "After a restart"),
+            ("true", "Always"),
+        ]),
         after: After::Reload("restore"),
         more: false,
         needs: &[],
@@ -599,7 +603,7 @@ mod tests {
         // Terminal (0) and Browser (2) have matching apps; Files (1) has none;
         // System monitor (3) requires BOTH System + Monitor, so "System" alone stays hidden.
         assert_eq!(c.shown_found(&cx), vec![0, 2]);
-        // At Size::S: 2 Found rows + SESSION_RESTORE + More row (START_TERMINAL & XWAYLAND).
+        // At Size::S: 2 Found rows + SESSION_RESTORE (Pick) + More row (START_TERMINAL & XWAYLAND).
         assert_eq!(c.height(&cx, 400.0), 4.0 * ui::ROW_H);
 
         // Clicking More (9000) reveals START_TERMINAL and XWAYLAND, still hiding AUTOMOUNT and
@@ -719,13 +723,16 @@ mod tests {
             )]
         );
 
-        // Switch change: SESSION_RESTORE (index 0 in TABLE -> hit ROW + 1 = 101, After::Reload("restore")).
+        // Pick change: SESSION_RESTORE (index 0 in TABLE -> hit ROW + 1 = 101 opens its list,
+        // LIST + 1 = 5001 is "After a restart"; After::Reload("restore")).
         out.clear();
         assert!(c.event(&press(101), &cx, &mut out));
+        assert!(out.is_empty());
+        assert!(c.event(&press(5001), &cx, &mut out));
         assert_eq!(
             out,
             vec![Action::Run(
-                "sh \"$HOME/infynitae/live/settings.sh\" log SESSION_RESTORE 'true' && sh \"$HOME/infynitae/live/settings.sh\" set SESSION_RESTORE 'false' >/dev/null 2>&1 && sh \"$HOME/infynitae/live/infynitae-reload\" restore >/dev/null 2>&1"
+                "sh \"$HOME/infynitae/live/settings.sh\" log SESSION_RESTORE 'true' && sh \"$HOME/infynitae/live/settings.sh\" set SESSION_RESTORE 'restart' >/dev/null 2>&1 && sh \"$HOME/infynitae/live/infynitae-reload\" restore >/dev/null 2>&1"
                     .to_string()
             )]
         );

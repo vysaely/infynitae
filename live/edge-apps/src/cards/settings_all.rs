@@ -418,14 +418,18 @@ impl SettingsAllCard {
                     })
                     .collect();
                 let apps = if custom.is_empty() {
-                    if cfg
+                    match cfg
                         .value("SESSION_RESTORE")
                         .trim()
-                        .eq_ignore_ascii_case("true")
+                        .to_ascii_lowercase()
+                        .as_str()
                     {
-                        vec!["Automatic".to_string(), "restore session".to_string()]
-                    } else {
-                        vec!["Automatic".to_string()]
+                        "true" => vec!["Automatic".to_string(), "restore session".to_string()],
+                        "restart" => vec![
+                            "Automatic".to_string(),
+                            "restore after a restart".to_string(),
+                        ],
+                        _ => vec!["Automatic".to_string()],
                     }
                 } else {
                     custom
@@ -2227,6 +2231,18 @@ mod tests {
         lock_cfg.now.insert("SLEEP_LOCK".into(), "true".into());
         apply_all_sources(&mut card, &dir, &lock_cfg);
         assert!(card.summary(7, &cx).contains("lock when away"));
+
+        // Apps group (index 5): SESSION_RESTORE's three values
+        let mut apps_cfg = full_config_data();
+        for (v, says) in [
+            ("true", "Automatic · restore session"),
+            ("restart", "Automatic · restore after a restart"),
+            ("false", "Automatic"),
+        ] {
+            apps_cfg.now.insert("SESSION_RESTORE".into(), v.into());
+            apply_all_sources(&mut card, &dir, &apps_cfg);
+            assert_eq!(card.summary(5, &cx), says, "SESSION_RESTORE={v}");
+        }
     }
 
     #[test]
