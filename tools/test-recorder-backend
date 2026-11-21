@@ -1,12 +1,42 @@
 #!/bin/sh
-# tools/test-recorder-backend: which engine keeps the replay buffer (REPLAY_BACKEND) and which codec
-# gpu-screen-recorder gets, with a stub gpu-screen-recorder; nothing is recorded.
+# tools/test-recorder-backend: which engine keeps the replay buffer (REPLAY_BACKEND), which codec
+# gpu-screen-recorder gets, and that stopping a recording leaves the replay stream and chunks
+# intact, with stubs; nothing is recorded.
 set -eu
 
 REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/infynitae-test-recorder.XXXXXX")
-trap 'rm -rf "$TMP"' EXIT INT TERM
-mkdir -p "$TMP/bin" "$TMP/home" "$TMP/run"
+cleanup() {
+    if [ -f "$TMP/run/infynitae-recorder-supervisor.pid" ]; then
+        sup_pid=$(cat "$TMP/run/infynitae-recorder-supervisor.pid" 2>/dev/null || true)
+        [ -n "$sup_pid" ] && kill -9 "$sup_pid" 2>/dev/null || true
+    fi
+    if [ -f "$TMP/run/infynitae-recording.pid" ]; then
+        rec_pgid=$(cat "$TMP/run/infynitae-recording.pid" 2>/dev/null || true)
+        case "$rec_pgid" in
+            ''|0|1|*[!0-9]*) ;;
+            *) kill -TERM -"$rec_pgid" 2>/dev/null || true ;;
+        esac
+    fi
+    if [ -d "$TMP/stub" ]; then
+        for pf in "$TMP/stub/stream.pids" "$TMP/stub/ffmpeg.pids"; do
+            [ -f "$pf" ] || continue
+            while IFS= read -r p; do
+                [ -n "$p" ] && kill -TERM "$p" 2>/dev/null || true
+            done < "$pf"
+        done
+        sleep 0.1
+        for pf in "$TMP/stub/stream.pids" "$TMP/stub/ffmpeg.pids"; do
+            [ -f "$pf" ] || continue
+            while IFS= read -r p; do
+                [ -n "$p" ] && kill -9 "$p" 2>/dev/null || true
+            done < "$pf"
+        done
+    fi
+    rm -rf "$TMP"
+}
+trap cleanup EXIT INT TERM
+mkdir -p "$TMP/bin" "$TMP/home/.local/bin" "$TMP/run" "$TMP/replay" "$TMP/stub"
 
 fail=0
 check() {
@@ -65,4 +95,166 @@ check "gpu-screen-recorder dying at once 3 times falls back to the compositor's 
     kill -9 $! 2>/dev/null
     [ -e "$RUNTIME_DIR/infynitae-gsr-failed" ] && echo yes || echo no')" "yes"
 
+# stubs for the compositor-capture replay backend and continuous recording (nothing is captured)
+cat > "$TMP/home/.local/bin/infynitae-record-stream" <<'STUB'
+#!/bin/sh
+if [ "${1:-}" = "--info" ]; then
+    echo "WIDTH=1920"
+    echo "HEIGHT=1080"
+    exit 0
+fi
+echo "$$" >> "$STUB_DIR/stream.pids"
+if [ "${STUB_IGNORE_INT:-0}" = 1 ]; then
+    trap '' INT
+else
+    trap 'kill "$child" 2>/dev/null || true; exit 0' INT
+fi
+trap 'kill "$child" 2>/dev/null || true; exit 0' TERM
+sleep 30 </dev/null >/dev/null 2>&1 &
+child=$!
+wait "$child" 2>/dev/null || true
+STUB
+chmod +x "$TMP/home/.local/bin/infynitae-record-stream"
+
+cat > "$TMP/bin/ffmpeg" <<'STUB'
+#!/bin/sh
+last=""
+for arg in "$@"; do
+    last="$arg"
+done
+case "$last" in
+    -)
+        exit 0
+        ;;
+    */chunk%03d.mkv)
+        dir=${last%/*}
+        echo "$$" >> "$STUB_DIR/ffmpeg.pids"
+        echo "replay" > "$dir/chunk000.mkv"
+        exec cat >/dev/null
+        ;;
+    *)
+        echo "$$" >> "$STUB_DIR/ffmpeg.pids"
+        if [ "${STUB_IGNORE_INT:-0}" = 1 ]; then
+            trap '' INT
+            if [ -n "${STUB_SIGNAL_LOG:-}" ]; then
+                trap 'echo TERM >> "$STUB_SIGNAL_LOG"; kill "$child" 2>/dev/null || true; exit 0' TERM
+            else
+                trap 'kill "$child" 2>/dev/null || true; exit 0' TERM
+            fi
+        elif [ -n "${STUB_SIGNAL_LOG:-}" ]; then
+            trap 'echo INT >> "$STUB_SIGNAL_LOG"; kill "$child" 2>/dev/null || true; exit 0' INT
+            trap 'echo TERM >> "$STUB_SIGNAL_LOG"; kill "$child" 2>/dev/null || true; exit 0' TERM
+        else
+            trap 'kill "$child" 2>/dev/null || true; exit 0' INT TERM
+        fi
+        sleep 30 </dev/null >/dev/null 2>&1 &
+        child=$!
+        wait "$child" 2>/dev/null || true
+        ;;
+esac
+STUB
+chmod +x "$TMP/bin/ffmpeg"
+
+cat > "$TMP/bin/pactl" <<'STUB'
+#!/bin/sh
+exit 0
+STUB
+chmod +x "$TMP/bin/pactl"
+
+cat > "$TMP/bin/notify-send" <<'STUB'
+#!/bin/sh
+exit 0
+STUB
+chmod +x "$TMP/bin/notify-send"
+
+rec() {
+    env -i HOME="$TMP/home" XDG_RUNTIME_DIR="$TMP/run" PATH="$TMP/bin:/usr/bin:/bin" \
+        WAYLAND_DISPLAY=wayland-test REPLAY_BACKEND=infynitae REPLAY_DIR="$TMP/replay" \
+        RECORD_AUDIO=none STUB_DIR="$TMP/stub" STUB_IGNORE_INT="${STUB_IGNORE_INT:-0}" \
+        STUB_SIGNAL_LOG="${STUB_SIGNAL_LOG:-}" \
+        sh "$REPO_DIR/live/record/infynitae-recorder" "$@" >/dev/null 2>&1
+}
+
+line_count() {
+    if [ -f "$1" ]; then
+        wc -l < "$1"
+    else
+        echo 0
+    fi
+}
+
+wait_for_pids() {
+    target_s=$1
+    target_f=$2
+    i=0
+    while [ "$i" -lt 40 ]; do
+        s_cnt=$(line_count "$TMP/stub/stream.pids")
+        f_cnt=$(line_count "$TMP/stub/ffmpeg.pids")
+        if [ "$s_cnt" -ge "$target_s" ] && [ "$f_cnt" -ge "$target_f" ]; then
+            return 0
+        fi
+        sleep 0.1
+        i=$((i + 1))
+    done
+    return 1
+}
+
+rec supervisor &
+sup_bg=$!
+i=0
+while [ "$i" -lt 40 ] && [ ! -f "$TMP/replay/chunk000.mkv" ]; do
+    sleep 0.1
+    i=$((i + 1))
+done
+wait_for_pids 1 1 || true
+replay_stream_pid=$(sed -n '1p' "$TMP/stub/stream.pids" 2>/dev/null || true)
+replay_ffmpeg_pid=$(sed -n '1p' "$TMP/stub/ffmpeg.pids" 2>/dev/null || true)
+echo "original-chunk000" > "$TMP/replay/chunk000.mkv"
+echo "original-chunk001" > "$TMP/replay/chunk001.mkv"
+
+STUB_SIGNAL_LOG="$TMP/stub/signals.log" rec record-start
+wait_for_pids 2 2 || true
+rec_pid_file=$(cat "$TMP/run/infynitae-recording.pid" 2>/dev/null || true)
+rec_stream_pid=$(sed -n '2p' "$TMP/stub/stream.pids" 2>/dev/null || true)
+rec_ffmpeg_pid=$(sed -n '2p' "$TMP/stub/ffmpeg.pids" 2>/dev/null || true)
+
+replay_pgid=$(ps -o pgid= -p "$replay_stream_pid" 2>/dev/null | tr -d ' ' || true)
+rec_stream_pgid=$(ps -o pgid= -p "$rec_stream_pid" 2>/dev/null | tr -d ' ' || true)
+rec_ffmpeg_pgid=$(ps -o pgid= -p "$rec_ffmpeg_pid" 2>/dev/null | tr -d ' ' || true)
+pgid_ok=$([ -n "$rec_pid_file" ] && [ "$rec_stream_pgid" = "$rec_pid_file" ] && [ "$rec_ffmpeg_pgid" = "$rec_pid_file" ] && [ "$replay_pgid" != "$rec_pid_file" ] && echo yes || echo no)
+check "recording runs in its own process group matching its PID file" "$pgid_ok" "yes"
+
+rec record-stop
+# give supervisor_loop (>1s sleep) time to restart and wipe chunks if the replay stream died
+sleep 1.5
+
+replay_alive=$([ -n "$replay_stream_pid" ] && [ -n "$replay_ffmpeg_pid" ] && kill -0 "$replay_stream_pid" 2>/dev/null && kill -0 "$replay_ffmpeg_pid" 2>/dev/null && echo yes || echo no)
+chunks_kept=$([ -f "$TMP/replay/chunk001.mkv" ] && [ "$(cat "$TMP/replay/chunk000.mkv" 2>/dev/null || true)" = "original-chunk000" ] && echo yes || echo no)
+rec_stopped=$(! kill -0 "$rec_stream_pid" 2>/dev/null && ! kill -0 "$rec_ffmpeg_pid" 2>/dev/null && [ ! -e "$TMP/run/infynitae-recording.pid" ] && echo yes || echo no)
+sig_first=$(head -n 1 "$TMP/stub/signals.log" 2>/dev/null || true)
+
+check "stopping a recording leaves the replay stream running" "$replay_alive" "yes"
+check "stopping a recording keeps existing replay chunks" "$chunks_kept" "yes"
+check "stopping a recording terminates both recording processes" "$rec_stopped" "yes"
+check "stop_recording sends SIGINT first to the recording group" "$sig_first" "INT"
+
+prev_s=$(line_count "$TMP/stub/stream.pids")
+prev_f=$(line_count "$TMP/stub/ffmpeg.pids")
+STUB_IGNORE_INT=1 STUB_SIGNAL_LOG="$TMP/stub/signals_ign.log" rec record-start
+wait_for_pids "$((prev_s + 1))" "$((prev_f + 1))" || true
+ign_stream_pid=$(sed -n "$((prev_s + 1))p" "$TMP/stub/stream.pids" 2>/dev/null || true)
+ign_ffmpeg_pid=$(sed -n "$((prev_f + 1))p" "$TMP/stub/ffmpeg.pids" 2>/dev/null || true)
+
+rec record-stop
+sleep 0.2
+ign_stopped=$([ -n "$ign_stream_pid" ] && [ -n "$ign_ffmpeg_pid" ] && ! kill -0 "$ign_stream_pid" 2>/dev/null && ! kill -0 "$ign_ffmpeg_pid" 2>/dev/null && [ ! -e "$TMP/run/infynitae-recording.pid" ] && echo yes || echo no)
+ign_sig=$(head -n 1 "$TMP/stub/signals_ign.log" 2>/dev/null || true)
+replay_still_alive=$([ -n "$replay_stream_pid" ] && [ -n "$replay_ffmpeg_pid" ] && kill -0 "$replay_stream_pid" 2>/dev/null && kill -0 "$replay_ffmpeg_pid" 2>/dev/null && echo yes || echo no)
+chunks_still_kept=$([ -f "$TMP/replay/chunk001.mkv" ] && [ "$(cat "$TMP/replay/chunk000.mkv" 2>/dev/null || true)" = "original-chunk000" ] && echo yes || echo no)
+
+check "stop_recording escalates to SIGTERM when recording ignores SIGINT" "$ign_stopped:$ign_sig" "yes:TERM"
+check "SIGTERM escalation still leaves replay running" "$replay_still_alive" "yes"
+check "SIGTERM escalation still keeps replay chunks" "$chunks_still_kept" "yes"
+
+kill -9 "$sup_bg" 2>/dev/null || true
 exit $fail
