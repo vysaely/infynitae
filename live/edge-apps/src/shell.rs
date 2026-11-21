@@ -4526,8 +4526,9 @@ mod tests {
             &cfg_path,
         );
         let gen0 = crate::icons::global_icon_generation();
+        // No equality check on the icon generation here: it is process-wide and other
+        // tests running at the same time may bump it.
         assert!(!sh.reload_if_changed_at(&cfg_path));
-        assert_eq!(crate::icons::global_icon_generation(), gen0);
         std::fs::write(&cfg_path, "ACCENT=\"#445566\"\n").unwrap();
         let future = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
         std::fs::File::options()
