@@ -871,7 +871,10 @@ mod tests {
             }
             if raw.starts_with("    #") {
                 if let (Some(k), Some(tag)) = (&current_key, last_bracket_tag(trimmed)) {
-                    if matches!(tag.as_str(), "save" | "reload" | "use" | "restart") {
+                    if matches!(
+                        tag.as_str(),
+                        "save" | "reload" | "use" | "restart" | "at login"
+                    ) {
                         out.insert(k.clone(), tag);
                     }
                 }
@@ -924,6 +927,7 @@ mod tests {
                 After::Save => "save",
                 After::Use => "use",
                 After::Restart => "restart",
+                After::Login => "at login",
                 After::Reload(_) => "reload",
             };
             assert_eq!(

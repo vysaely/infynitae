@@ -12,6 +12,7 @@
 #   [reload]  on Super+Shift+Backspace (or `infynitae-reload`)
 #   [use]     the next time the thing is used
 #   [restart] on the next compositor start (Ctrl+Alt+Backspace; closes windows)
+#   [at login] when the session starts: at login (and after Ctrl+Alt+Backspace)
 #
 # A shell file: SETTING="value", '#' starts a comment. `infynitae-settings set KEY VALUE` edits
 # one setting and keeps the lines under it.
@@ -562,7 +563,7 @@ SESSION_RESTORE="true"
     # options: true  · restart  · false
 
 START_TERMINAL="true"
-    # Open a terminal at login when nothing was restored [restart]
+    # Open a terminal at login when nothing was restored [at login]
     # default: true
     # options: true  · false
 
@@ -734,7 +735,7 @@ SCREEN_LOCKER="auto"
     #   auto    infynitae-lock  · a command
 
 START_LOCKED="false"
-    # Start the session at the lock screen [restart]
+    # Start the session at the lock screen [at login]
     # default: false
     # options: false  · true
 

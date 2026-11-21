@@ -50,16 +50,10 @@ const HIT_LOAD_APPLY: u32 = 7;
 const HIT_LOAD_CANCEL: u32 = 8;
 const HIT_LOAD_ITEM_BASE: u32 = 100;
 
-/// Keys tagged `[restart]` in `config/config`. All `OUTPUT_*` display keys also require restart
-/// (and `BATTERY_LIMIT` runs `battery-limit`; `SCALING_FILTER`, `MAX_APP_SCALE`, `ZOOM_SHARPEN`
-/// reload live on `[save]`).
-const RESTART_KEYS: &[&str] = &[
-    "AUTO_ROTATE",
-    "XWAYLAND",
-    "START_TERMINAL",
-    "START_LOCKED",
-    "REMOTE_DESKTOP",
-];
+/// Keys tagged `[restart]` in `config/config`, and a screen's mode, rate and turn
+/// ([`is_restart_key`]). Not `BATTERY_LIMIT`: the card and the control menu run `battery-limit`
+/// when they change it.
+const RESTART_KEYS: &[&str] = &["AUTO_ROTATE", "XWAYLAND", "REMOTE_DESKTOP"];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct UndoEntry {
@@ -1654,6 +1648,8 @@ mod tests {
         assert!(!is_restart_key("XKB_DEFAULT_LAYOUT"));
         assert!(!is_restart_key("XKB_DEFAULT_OPTIONS"));
         assert!(!is_restart_key("OSK"));
+        assert!(!is_restart_key("START_TERMINAL"));
+        assert!(!is_restart_key("START_LOCKED"));
         for k in [
             "OUTPUT_SCALE",
             "OUTPUT_DP_1_SCALE",

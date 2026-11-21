@@ -112,6 +112,7 @@ pub struct Setting {
   | `[reload]`, a helper | `sh "$HOME/infynitae/live/infynitae-reload" PART` (the part is in each card's table) | nothing |
   | `[use]` | nothing | nothing |
   | `[restart]` | nothing | "At the next start" in place of the state, in the accent, until the compositor restarts |
+  | `[at login]` | nothing | "At the next login", the same way: the key only does something when a session starts |
 
 - **A slider** writes on release, not while dragged (one line in the log, one apply).
 - **Undo.** `settings/about` shows "Undo: KEY was OLD" for the log's last line; a click sets it back
@@ -280,7 +281,7 @@ names in `/usr/share/X11/xkb/rules/evdev.lst` is a later step.
 | Browser | Found | `BROWSER` | `auto`, apps with `WebBrowser` | use |
 | System monitor | Found | `SYSTEM_MONITOR` | `auto`, apps with `System` and `Monitor` | use |
 | Reopen apps | Pick | `SESSION_RESTORE` | Off `false`, After a restart `restart`, Always `true` | Reload(`restore`) |
-| M Open a terminal when nothing was reopened | Switch | `START_TERMINAL` | | restart |
+| M Open a terminal when nothing was reopened | Switch | `START_TERMINAL` | | at login |
 | M Mount USB drives when plugged in | Switch | `AUTOMOUNT` | | Reload(`automount`) |
 | M Name drives by Roman numeral | Switch | `DRIVE_NAMES` | on `roman`, off `label` | Reload(`automount`) |
 | M X11 apps and games | Switch | `XWAYLAND` | | restart |
@@ -321,7 +322,7 @@ Hidden: Game mode without `gamemoded` on PATH. Left to the file: `FRAME_GUARD`, 
 | Lock when the screens go off | Switch | `IDLE_AUTO_LOCK` | | save |
 | Lock before sleep | Switch | `SLEEP_LOCK` | | Reload(`sleep-lock`) |
 | Stop charging at | Pick | `BATTERY_LIMIT` | Full `off`, 80 %, 90 % | save, then `sh "$HOME/infynitae/live/battery-limit"` |
-| M Start at the lock screen | Switch | `START_LOCKED` | | restart |
+| M Start at the lock screen | Switch | `START_LOCKED` | | at login |
 | M Show "Shutting down" | Switch | `SHUTDOWN_SCREEN` | | use |
 
 Hidden: "Stop charging at" unless a `/sys/class/power_supply/BAT*/charge_control_end_threshold`
