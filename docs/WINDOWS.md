@@ -73,6 +73,10 @@ a saved app to the next saved anchor of that app (unless a window open before co
 for its saved size or maximizes it again on the first screen (`resize_element`, 2026-10-31), puts
 it back fullscreen on the screen it had (windowed if that screen no longer exists), and puts the
 camera centres and zoom back.
+`SESSION_RESTORE=restart` (owner, 2026-11-21) does this only after the compositor restarted:
+each snapshot holds the boot's id (`/proc/sys/kernel/random/boot_id`), and one from another boot
+or without an id is removed at login instead, so after a reboot no app is reopened. `true`
+reopens at every login, `false` saves nothing.
 
 ## Tests
 

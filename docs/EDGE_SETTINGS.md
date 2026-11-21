@@ -279,7 +279,7 @@ names in `/usr/share/X11/xkb/rules/evdev.lst` is a later step.
 | Files | Found | `FILE_MANAGER` | `auto`, apps with `FileManager` | use |
 | Browser | Found | `BROWSER` | `auto`, apps with `WebBrowser` | use |
 | System monitor | Found | `SYSTEM_MONITOR` | `auto`, apps with `System` and `Monitor` | use |
-| Reopen apps at login | Switch | `SESSION_RESTORE` | | Reload(`restore`) |
+| Reopen apps | Pick | `SESSION_RESTORE` | Off `false`, After a restart `restart`, Always `true` | Reload(`restore`) |
 | M Open a terminal when nothing was reopened | Switch | `START_TERMINAL` | | restart |
 | M Mount USB drives when plugged in | Switch | `AUTOMOUNT` | | Reload(`automount`) |
 | M Name drives by Roman numeral | Switch | `DRIVE_NAMES` | on `roman`, off `label` | Reload(`automount`) |

@@ -557,8 +557,9 @@ XWAYLAND="true"
 
 SESSION_RESTORE="true"
     # Save and reopen the apps that were open, where they were [reload]
+    # restart: only after the compositor restarts, never after the PC restarts
     # default: true
-    # options: true  · false
+    # options: true  · restart  · false
 
 START_TERMINAL="true"
     # Open a terminal at login when nothing was restored [restart]
