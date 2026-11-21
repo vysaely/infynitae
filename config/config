@@ -420,7 +420,7 @@ WALLPAPER_PARALLAX="off"
     # options: off  · subtle  · strong
 
 
-# ═══ Displays & sharpness ══════════════════════════════════════════════════════════ [restart] ═══
+# ═══ Displays & sharpness ═════════════════════════════════════════════════════════════ [save] ═══
 
 OUTPUT_SCALE="1.0"
     # Interface scale of every screen
@@ -428,7 +428,7 @@ OUTPUT_SCALE="1.0"
     # options: 1.0  · 1.25  · 1.5  · 2.0 …
 
 SCALING_FILTER="sharp"
-    # How windows look when not at 100% zoom [save]
+    # How windows look when not at 100% zoom
     # default: sharp
     #   sharp      zoomed in: sharp pixels (nearest) · zoomed out: cached averaging
     #   smooth     zoomed in: smooth (linear) · zoomed out: cached averaging
@@ -437,13 +437,13 @@ SCALING_FILTER="sharp"
     #   (nearest and linear are accepted aliases for sharp and smooth)
 
 MAX_APP_SCALE="1"
-    # Apps redraw sharper as you zoom in, up to this scale [save]
+    # Apps redraw sharper as you zoom in, up to this scale
     # default: 1
     # options: 1 never: zooming only scales what is drawn (text soft when zoomed in, never
     #            shifts)  · 2  · 3 sharper, apps redraw as you zoom (see ZOOM_SHARPEN)  · 4 …
 
 ZOOM_SHARPEN="after"
-    # When apps redraw sharper as you zoom [save]
+    # When apps redraw sharper as you zoom
     # default: after
     #   after   once the zoom stops, at a whole scale (2x, 3x): text does not shift while zooming
     #   live    at each step while zooming (finer steps; a terminal re-flows its text at each)
@@ -457,7 +457,7 @@ VRR_ENABLED="auto"
 
 VIRTUAL_SCREEN="auto"
     # With no screen connected (monitor off or unplugged), a virtual 1920x1080 one stands in,
-    # so remote desktop still works [restart]
+    # so remote desktop still works
     # default: auto
     # options: auto  · off
 
@@ -471,12 +471,12 @@ OSK="auto"
 
 BATTERY_LIMIT="off"
     # The battery stops charging at this % (it wears more slowly). Laptops that support it;
-    # also in the control menu (Super+A)
+    # also in the control menu (Super+A), where a change applies at once [restart]
     # default: off
     #   off    to full  · e.g. "80"
 
 AUTO_ROTATE="auto"
-    # Turn the laptop's own screen with the device (convertibles; needs iio-sensor-proxy)
+    # Turn the laptop's own screen with the device (convertibles; needs iio-sensor-proxy) [restart]
     # default: auto
     # options: auto  · false
     #AUTO_ROTATE_INVERT="true"   swaps 90 and 270, for a sensor mounted the other way round
@@ -493,7 +493,7 @@ OUTPUT_LAYOUT="left-to-right"
     # default: left-to-right
     # options: left-to-right  · right-to-left
 
-# Per screen (its name, '-' written as '_'), e.g. for DP-1:
+# Per screen (its name, '-' written as '_'), e.g. for DP-1; _SCALE on save, the others [restart]:
 #   OUTPUT_DP_1_MODE="2560x1440"  OUTPUT_DP_1_RATE="144"  OUTPUT_DP_1_SCALE="1.25"
 #   OUTPUT_DP_1_TRANSFORM="90"    a turned screen: normal, 90, 180, 270 (counter-clockwise),
 #                                 flipped, flipped-90, flipped-180, flipped-270. While running:

@@ -29,6 +29,7 @@ use std::time::Duration;
 
 use infynitae_core::output::{OutputDescriptor, OutputId, OutputKey, Transform};
 use infynitae_core::{Core, InputPort, OutputLifecycleToken, PhysicalEvent};
+use infynitae_wayland::display_settings::DisplayChange;
 use infynitae_wayland::output_management::{HeadChange, HeadInfo, HeadMode};
 use infynitae_wayland::session::{Session, SessionOptions};
 use infynitae_wayland::{WaylandState, convert, log_line};
@@ -522,6 +523,44 @@ fn apply_output_configuration(data: &mut LoopData, changes: &[HeadChange]) -> bo
     }
     data.session.request_frame();
     true
+}
+
+/// The config's screen settings changed while running (`infynitae_wayland::display_settings`):
+/// the screens connected now take their new scales and order as a display settings tool's
+/// configuration; screens connected later, VRR and the virtual screen follow the new values.
+fn apply_display_change(data: &mut LoopData, change: &DisplayChange) {
+    let (before, now) = (&change.before, &change.now);
+    if now.scale_120 != before.scale_120 || now.screen_scales != before.screen_scales {
+        data.scale_120 = now.scale_120.unwrap_or(120);
+        data.factory.scale_120 = data.scale_120;
+        data.factory.custom_scales = now
+            .screen_scales
+            .iter()
+            .map(|(k, v)| (k.clone(), *v))
+            .collect();
+    }
+    let heads = data.state.display_head_changes(change);
+    if !heads.is_empty() && !apply_output_configuration(data, &heads) {
+        log_line!(
+            "[infynitae] The config's screen scales or order were refused; the screens stay as they were"
+        );
+    }
+    if now.vrr != before.vrr {
+        data.vrr_mode = now.vrr;
+        data.factory.vrr = now.vrr;
+        for s in &mut data.screens {
+            s.vrr_mode = now.vrr;
+            if s.vrr_supported {
+                data.state
+                    .set_output_adaptive_sync(s.id, now.vrr != Some(false));
+            }
+        }
+        data.session.request_frame();
+    }
+    if now.virtual_screen != before.virtual_screen {
+        data.virtual_screen_enabled = now.virtual_screen;
+        update_virtual_screen(data);
+    }
 }
 
 struct LoopData {
@@ -1950,6 +1989,9 @@ pub fn run_console_with(
         for c in data.state.take_output_configurations() {
             let ok = apply_output_configuration(&mut data, &c.changes);
             data.state.finish_output_configuration(c, ok);
+        }
+        if let Some(change) = data.state.take_display_change() {
+            apply_display_change(&mut data, &change);
         }
         apply_virtual_input(&mut data);
         // Process client requests to change screen power save modes

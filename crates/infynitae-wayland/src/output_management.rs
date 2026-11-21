@@ -268,12 +268,17 @@ impl WaylandState {
         }
         pending.resource.succeeded();
         for c in &pending.changes {
-            if let Some(on) = c.adaptive_sync
-                && let Some(info) = self.output_management.info.get_mut(&c.output)
-            {
-                info.adaptive_sync = Some(on);
-                self.output_heads_changed(c.output);
+            if let Some(on) = c.adaptive_sync {
+                self.set_output_adaptive_sync(c.output, on);
             }
+        }
+    }
+
+    /// VRR was allowed (`on`) or turned off on a screen that has it: every tool is told.
+    pub fn set_output_adaptive_sync(&mut self, output: OutputId, on: bool) {
+        if let Some(info) = self.output_management.info.get_mut(&output) {
+            info.adaptive_sync = Some(on);
+            self.output_heads_changed(output);
         }
     }
 

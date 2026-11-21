@@ -212,23 +212,23 @@ One block per screen, titled "DP-1  2560x1440  165 Hz" (model as its second line
 |---|---|---|---|---|
 | Resolution | Found (the screen's modes) | `OUTPUT_N_MODE` | | restart; at once too through `wlr-randr --output NAME --mode WxH` |
 | Refresh rate | Found (rates of that mode) | `OUTPUT_N_RATE` | | same, `--mode WxH@R` |
-| Scale | Pick | `OUTPUT_N_SCALE`; with one screen `OUTPUT_SCALE` | 1, 1.25, 1.5, 2 | same, `--scale` |
+| Scale | Pick | `OUTPUT_N_SCALE`; with one screen `OUTPUT_SCALE` | 1, 1.25, 1.5, 2 | save; through `wlr-randr --scale` when it lists the screen |
 | M Turned | Pick | `OUTPUT_N_TRANSFORM` | Not turned `normal`, 90, 180, 270 | same, `--transform` |
 
 Then, once:
 
 | Row | Control | Key | Values | After |
 |---|---|---|---|---|
-| Variable refresh rate | Pick | `VRR_ENABLED` | In fullscreen `auto`, On, Off | restart |
+| Variable refresh rate | Pick | `VRR_ENABLED` | In fullscreen `auto`, On, Off | save |
 | Night light warmth | Slide 3000-6500 K, step 100 | `NIGHT_LIGHT_TEMP` | | save |
-| M Order, left to right | Text | `OUTPUT_ORDER` | names with commas | restart |
+| M Order, left to right | Text | `OUTPUT_ORDER` | names with commas | save |
 | M Sharper when zoomed in | Pick | `MAX_APP_SCALE` | Never `1`, 2x, 3x | save |
 | M Zoomed windows | Pick | `SCALING_FILTER` | Sharp `sharp`, Smooth `smooth`, FSR `fsr`, FSR sharp `fsr-sharp` | save |
 
 A mode change through `wlr-randr` is followed by a card "Keep this? 10" in the edge's ask prompt
 (`infynitae-edge ask`, choices Keep and Back); no answer in 10 s puts the old mode back and does not
 write the key. Hidden: Resolution, Refresh rate and Turned without `wlr-randr` lists (the block then
-shows what is set, and Scale writes the key and says "At the next start"); Order with one screen;
+shows what is set, and Scale writes the key); Order with one screen;
 Refresh rate with one rate; Variable refresh rate when no mode list says the screen can (not known
 how to read that without trying: `wlr-randr --json` has `adaptive_sync` only where the compositor
 reports it). Left to the file: `ZOOM_SHARPEN`, `VIRTUAL_SCREEN`, `OUTPUT_LAYOUT`, `AUTO_ROTATE*`, `OSK`.

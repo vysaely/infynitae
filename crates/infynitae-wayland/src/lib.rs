@@ -18,6 +18,7 @@ pub mod convert;
 pub mod corners;
 pub mod cursor;
 pub mod desk;
+pub mod display_settings;
 pub mod extension;
 pub mod fitted;
 pub mod frame_schedule;
@@ -440,6 +441,10 @@ pub struct WaylandState {
     /// The layout and options the config asked for when the keymap was last built
     /// ([`configured_xkb_names`]): a reload builds it again only when they change.
     xkb_names: (String, String),
+    /// The config's screen settings at the last reload, and a change the backend has not taken
+    /// yet (`display_settings`).
+    display_settings: Option<display_settings::DisplaySettings>,
+    display_change: Option<display_settings::DisplayChange>,
     pub output_power: output_power::OutputPowerState,
     /// Virtual pointers and seat-keymap virtual keyboards, as real input (`virtual_input`).
     pub(crate) virtual_input: virtual_input::VirtualInputState,
@@ -858,6 +863,8 @@ impl WaylandState {
             night_light_temp: desk::DEFAULT_NIGHT_TEMP,
             keyboard_layout_written: None,
             xkb_names,
+            display_settings: None,
+            display_change: None,
             output_power: output_power::OutputPowerState::new(display, trust.gate(Cap::Display)),
             virtual_input: virtual_input::VirtualInputState::new(
                 display,
@@ -1596,6 +1603,7 @@ impl WaylandState {
                         }
                     }
                 }
+                self.note_display_settings(display_settings::DisplaySettings::parse(&content));
                 let xkb_names = configured_xkb_names(&content);
                 if xkb_names != self.xkb_names {
                     self.set_keymap_names(&xkb_names.0, &xkb_names.1);

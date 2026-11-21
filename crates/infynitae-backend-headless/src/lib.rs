@@ -15,7 +15,7 @@ use infynitae_core::output::{OutputDescriptor, OutputId, OutputKey, Transform};
 use infynitae_core::render::FrameEntry;
 use infynitae_core::stage::ElementId;
 use infynitae_core::{EntryError, FrameError, InputPort, OutputLifecycleToken, PhysicalEvent};
-use infynitae_wayland::{WaylandState, convert};
+use infynitae_wayland::{WaylandState, convert, log_line};
 use smithay::backend::renderer::test::DummyRenderer;
 
 /// A virtual output: hardware facts only.
@@ -457,30 +457,45 @@ impl Default for HeadlessCompositorOptions {
 
 /// Runs a headless compositor session: a virtual output, a listening Wayland socket, and a
 /// virtual vblank on the session's frame timer. Returns when a run limit is reached.
-/// The display settings clients applied (`wlr-output-management`): a headless output has no
-/// hardware to set, Core takes the new modes, scales and positions (each screen's new
-/// descriptor, then its position).
+/// The display settings clients applied (`wlr-output-management`), then the screens' scales
+/// and order from a config reload (`display_settings`): a headless output has no hardware to
+/// set, Core takes the new modes, scales and positions (each screen's new descriptor, then its
+/// position).
 pub fn apply_output_configurations(state: &mut WaylandState, token: &mut OutputLifecycleToken) {
     for c in state.take_output_configurations() {
-        let ok = state.output_change_plan(&c.changes).is_some_and(|plan| {
-            plan.into_iter().all(|p| {
-                if let Some(desc) = p.descriptor {
-                    match state.core_mut().output_reconfigured(token, p.output, desc) {
-                        Ok(fx) => state.apply(&fx),
-                        Err(_) => return false,
-                    }
-                }
-                if let Some(pos) = p.position {
-                    match state.core_mut().output_arranged(token, p.output, pos) {
-                        Ok(fx) => state.apply(&fx),
-                        Err(_) => return false,
-                    }
-                }
-                true
-            })
-        });
+        let ok = apply_head_changes(state, token, &c.changes);
         state.finish_output_configuration(c, ok);
     }
+    if let Some(change) = state.take_display_change() {
+        let heads = state.display_head_changes(&change);
+        if !heads.is_empty() && !apply_head_changes(state, token, &heads) {
+            log_line!("[infynitae] The config's screen scales or order were refused");
+        }
+    }
+}
+
+fn apply_head_changes(
+    state: &mut WaylandState,
+    token: &mut OutputLifecycleToken,
+    changes: &[infynitae_wayland::output_management::HeadChange],
+) -> bool {
+    state.output_change_plan(changes).is_some_and(|plan| {
+        plan.into_iter().all(|p| {
+            if let Some(desc) = p.descriptor {
+                match state.core_mut().output_reconfigured(token, p.output, desc) {
+                    Ok(fx) => state.apply(&fx),
+                    Err(_) => return false,
+                }
+            }
+            if let Some(pos) = p.position {
+                match state.core_mut().output_arranged(token, p.output, pos) {
+                    Ok(fx) => state.apply(&fx),
+                    Err(_) => return false,
+                }
+            }
+            true
+        })
+    })
 }
 
 /// The virtual devices' input (`zwlr_virtual_pointer_v1`, seat-keymap virtual keyboards) to Core
