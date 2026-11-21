@@ -59,7 +59,6 @@ const RESTART_KEYS: &[&str] = &[
     "OUTPUT_SCALE",
     "VRR_ENABLED",
     "VIRTUAL_SCREEN",
-    "OSK",
     "AUTO_ROTATE",
     "XWAYLAND",
     "START_TERMINAL",
@@ -1654,6 +1653,7 @@ mod tests {
         assert!(!is_restart_key("ZOOM_SHARPEN"));
         assert!(!is_restart_key("XKB_DEFAULT_LAYOUT"));
         assert!(!is_restart_key("XKB_DEFAULT_OPTIONS"));
+        assert!(!is_restart_key("OSK"));
     }
 
     #[test]

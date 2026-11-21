@@ -464,7 +464,7 @@ VIRTUAL_SCREEN="auto"
 OSK="auto"
     # On-screen keyboard (squeekboard): opens when a text field is pressed (in tablet mode only
     # when the device has a TabletMode switch), hides when leaving tablet mode or when the field
-    # goes; the panel's osk switch opens it by hand
+    # goes; the panel's osk switch opens it by hand [reload]
     # default: auto
     #   auto    a finger's tap on a field  · always  a tap or a click (Steam Deck's trackpad)
     #   off     only by hand   (the lock screen has its own)

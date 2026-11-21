@@ -1247,6 +1247,7 @@ impl WaylandState {
                 let mut fit_is_fullscreen = true;
                 let mut latency_mode = crate::frame_schedule::LatencyMode::Direct;
                 let mut scaling_filter = ZoomFilter::default();
+                let mut osk_mode = osk::OskMode::default();
                 let mut zoom_feel = infynitae_core::navigation::ZoomFeel::Smooth;
                 // without a DIRECT_SCANOUT line: the environment's, as at start (main.rs), else on
                 let mut direct_scanout = std::env::var("DIRECT_SCANOUT")
@@ -1403,7 +1404,7 @@ impl WaylandState {
                                 }
                             }
                             "OSK" => {
-                                self.osk.mode = osk::OskMode::parse(val);
+                                osk_mode = osk::OskMode::parse(val);
                             }
                             "NIGHT_LIGHT_TEMP" => {
                                 if let Ok(k) = val.parse::<u32>() {
@@ -1623,6 +1624,7 @@ impl WaylandState {
                 self.fitted.enabled = fit_is_fullscreen;
                 self.latency_mode = latency_mode;
                 self.scaling_filter = scaling_filter;
+                self.osk.mode = osk_mode;
                 self.direct_scanout = Some(direct_scanout);
                 self.hardware_cursor = hardware_cursor;
                 self.core.set_touch_edge_swipe(touch_edge_swipe);
@@ -2760,6 +2762,34 @@ mod key_binding_config_tests {
         std::fs::write(&cfg, "BORDER_WIDTH=\"1\"\n").unwrap();
         state.reload_config();
         assert_eq!(state.scaling_filter, super::ZoomFilter::Sharp);
+    }
+
+    #[test]
+    fn reload_config_sets_and_resets_the_osk_mode() {
+        use smithay::reexports::wayland_server::Display;
+        let temp = super::cursor::TestTempDir::new("wl_osk_reload");
+        let cfg_dir = temp.path().join(".config/infynitae");
+        std::fs::create_dir_all(&cfg_dir).unwrap();
+        let cfg = cfg_dir.join("config");
+
+        let (core, _, _, _) =
+            infynitae_core::Core::new(infynitae_core::navigation::PersistedCameras::default());
+        let display: Display<super::WaylandState> = Display::new().unwrap();
+        let mut state = super::WaylandState::new(&display.handle(), core);
+        state.set_config_home(temp.path().to_path_buf());
+
+        std::fs::write(&cfg, "OSK=\"off\"\n").unwrap();
+        state.reload_config();
+        assert_eq!(state.osk.mode, super::osk::OskMode::Off);
+
+        std::fs::write(&cfg, "OSK=\"always\"\n").unwrap();
+        state.reload_config();
+        assert_eq!(state.osk.mode, super::osk::OskMode::Clicks);
+
+        // the line removed: the default, a finger's tap
+        std::fs::write(&cfg, "BORDER_WIDTH=\"1\"\n").unwrap();
+        state.reload_config();
+        assert_eq!(state.osk.mode, super::osk::OskMode::Taps);
     }
 
     #[test]
