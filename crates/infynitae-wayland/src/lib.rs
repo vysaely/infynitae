@@ -18,6 +18,7 @@ pub mod convert;
 pub mod corners;
 pub mod cursor;
 pub mod desk;
+pub mod display_settings;
 pub mod extension;
 pub mod fitted;
 pub mod frame_schedule;
@@ -437,6 +438,13 @@ pub struct WaylandState {
     pub(crate) night_light_temp: u32,
     /// The keyboard layout last written for the panels (`desk::note_keyboard_layout`).
     pub(crate) keyboard_layout_written: Option<usize>,
+    /// The layout and options the config asked for when the keymap was last built
+    /// ([`configured_xkb_names`]): a reload builds it again only when they change.
+    xkb_names: (String, String),
+    /// The config's screen settings at the last reload, and a change the backend has not taken
+    /// yet (`display_settings`).
+    display_settings: Option<display_settings::DisplaySettings>,
+    display_change: Option<display_settings::DisplayChange>,
     pub output_power: output_power::OutputPowerState,
     /// Virtual pointers and seat-keymap virtual keyboards, as real input (`virtual_input`).
     pub(crate) virtual_input: virtual_input::VirtualInputState,
@@ -678,8 +686,7 @@ impl WaylandState {
             .ok()
             .and_then(|s| s.parse::<i32>().ok())
             .unwrap_or(35);
-        let mut xkb_layout = std::env::var("XKB_DEFAULT_LAYOUT").unwrap_or_default();
-        let mut xkb_options = std::env::var("XKB_DEFAULT_OPTIONS").unwrap_or_default();
+        let mut xkb_names = configured_xkb_names("");
 
         if let Ok(home) = std::env::var("HOME") {
             let config_path = format!("{home}/.config/infynitae/config");
@@ -698,23 +705,16 @@ impl WaylandState {
                                 repeat_rate = r;
                             }
                         }
-                        "XKB_DEFAULT_LAYOUT" => {
-                            if !val.is_empty() {
-                                xkb_layout = val.to_string();
-                            }
-                        }
-                        "XKB_DEFAULT_OPTIONS" if !val.is_empty() => {
-                            xkb_options = val.to_string();
-                        }
                         _ => {}
                     }
                 }
+                xkb_names = configured_xkb_names(&content);
             }
         }
 
         // a layout that makes no keymap (empty, misspelled) is never the seat's: `us` then
         let (xkb_layout, xkb_options) =
-            virtual_input::usable_keymap_names(&xkb_layout, &xkb_options);
+            virtual_input::usable_keymap_names(&xkb_names.0, &xkb_names.1);
         virtual_input::set_seat_keymap_names(&xkb_layout, &xkb_options);
         let seat_keymap = virtual_input::keymap_text(
             &xkb_layout,
@@ -862,6 +862,9 @@ impl WaylandState {
             night_light: false,
             night_light_temp: desk::DEFAULT_NIGHT_TEMP,
             keyboard_layout_written: None,
+            xkb_names,
+            display_settings: None,
+            display_change: None,
             output_power: output_power::OutputPowerState::new(display, trust.gate(Cap::Display)),
             virtual_input: virtual_input::VirtualInputState::new(
                 display,
@@ -1251,6 +1254,7 @@ impl WaylandState {
                 let mut fit_is_fullscreen = true;
                 let mut latency_mode = crate::frame_schedule::LatencyMode::Direct;
                 let mut scaling_filter = ZoomFilter::default();
+                let mut osk_mode = osk::OskMode::default();
                 let mut zoom_feel = infynitae_core::navigation::ZoomFeel::Smooth;
                 // without a DIRECT_SCANOUT line: the environment's, as at start (main.rs), else on
                 let mut direct_scanout = std::env::var("DIRECT_SCANOUT")
@@ -1407,7 +1411,7 @@ impl WaylandState {
                                 }
                             }
                             "OSK" => {
-                                self.osk.mode = osk::OskMode::parse(val);
+                                osk_mode = osk::OskMode::parse(val);
                             }
                             "NIGHT_LIGHT_TEMP" => {
                                 if let Ok(k) = val.parse::<u32>() {
@@ -1599,6 +1603,12 @@ impl WaylandState {
                         }
                     }
                 }
+                self.note_display_settings(display_settings::DisplaySettings::parse(&content));
+                let xkb_names = configured_xkb_names(&content);
+                if xkb_names != self.xkb_names {
+                    self.set_keymap_names(&xkb_names.0, &xkb_names.1);
+                    self.xkb_names = xkb_names;
+                }
                 if let Some(line) = default_settings_panel(edge_from_apps, settings_panel_line) {
                     exec_lines.push(line);
                 }
@@ -1622,6 +1632,7 @@ impl WaylandState {
                 self.fitted.enabled = fit_is_fullscreen;
                 self.latency_mode = latency_mode;
                 self.scaling_filter = scaling_filter;
+                self.osk.mode = osk_mode;
                 self.direct_scanout = Some(direct_scanout);
                 self.hardware_cursor = hardware_cursor;
                 self.core.set_touch_edge_swipe(touch_edge_swipe);
@@ -1712,6 +1723,30 @@ impl WaylandState {
                 cursor::theme_search_paths_with(home_path.as_deref(), xcursor_path.as_deref());
             self.set_cursor_theme_with_search_paths(&theme_name, cursor_size, paths);
         }
+    }
+
+    /// Builds the seat's keymap from `layout` and `options` (one that makes none falls back as at
+    /// start, `usable_keymap_names`). Every app's keyboard gets the new keymap; the apps and
+    /// actions started from now on get its names (`apply_keymap_env`), the virtual keyboards
+    /// that upload it count as the seat's, and the panels show its layout.
+    fn set_keymap_names(&mut self, layout: &str, options: &str) {
+        let (layout, options) = virtual_input::usable_keymap_names(layout, options);
+        let options = (!options.is_empty()).then_some(options);
+        let config = smithay::input::keyboard::XkbConfig {
+            layout: &layout,
+            options: options.clone(),
+            ..Default::default()
+        };
+        if let Err(e) = self.keyboard_handle().set_xkb_config(self, config) {
+            log_line!("[infynitae] Keyboard layout {layout:?}: {e:?}; the keymap stays as it was");
+            return;
+        }
+        let options_text = options.clone().unwrap_or_default();
+        virtual_input::set_seat_keymap_names(&layout, &options_text);
+        self.virtual_input.seat_keymap = virtual_input::keymap_text(&layout, options);
+        self.keyboard_layout_written = None;
+        self.note_keyboard_layout();
+        log_line!("[infynitae] Keyboard layout {layout:?}, options {options_text:?}");
     }
 
     /// Current input device configuration.
@@ -2081,6 +2116,23 @@ fn trust_policy(home: &std::path::Path, content: &str) -> trust::Policy {
         }
     }
     trust::Policy::from_lists(Some(home), lists.iter().map(|(c, v)| (*c, v.as_str())))
+}
+
+/// The keyboard layout and options `content` (the config) asks for: `XKB_DEFAULT_LAYOUT` and
+/// `XKB_DEFAULT_OPTIONS`, where an empty or missing line keeps the compositor's environment's,
+/// which the session set at start (the system's layout without a config line, `live/env.sh`).
+fn configured_xkb_names(content: &str) -> (String, String) {
+    let mut layout = std::env::var("XKB_DEFAULT_LAYOUT").unwrap_or_default();
+    let mut options = std::env::var("XKB_DEFAULT_OPTIONS").unwrap_or_default();
+    for (key, val) in content.lines().filter_map(config_line) {
+        let val = val.trim();
+        match key.trim() {
+            "XKB_DEFAULT_LAYOUT" if !val.is_empty() => layout = val.to_string(),
+            "XKB_DEFAULT_OPTIONS" if !val.is_empty() => options = val.to_string(),
+            _ => {}
+        }
+    }
+    (layout, options)
 }
 
 pub fn config_line(line: &str) -> Option<(String, String)> {
@@ -2718,6 +2770,34 @@ mod key_binding_config_tests {
         std::fs::write(&cfg, "BORDER_WIDTH=\"1\"\n").unwrap();
         state.reload_config();
         assert_eq!(state.scaling_filter, super::ZoomFilter::Sharp);
+    }
+
+    #[test]
+    fn reload_config_sets_and_resets_the_osk_mode() {
+        use smithay::reexports::wayland_server::Display;
+        let temp = super::cursor::TestTempDir::new("wl_osk_reload");
+        let cfg_dir = temp.path().join(".config/infynitae");
+        std::fs::create_dir_all(&cfg_dir).unwrap();
+        let cfg = cfg_dir.join("config");
+
+        let (core, _, _, _) =
+            infynitae_core::Core::new(infynitae_core::navigation::PersistedCameras::default());
+        let display: Display<super::WaylandState> = Display::new().unwrap();
+        let mut state = super::WaylandState::new(&display.handle(), core);
+        state.set_config_home(temp.path().to_path_buf());
+
+        std::fs::write(&cfg, "OSK=\"off\"\n").unwrap();
+        state.reload_config();
+        assert_eq!(state.osk.mode, super::osk::OskMode::Off);
+
+        std::fs::write(&cfg, "OSK=\"always\"\n").unwrap();
+        state.reload_config();
+        assert_eq!(state.osk.mode, super::osk::OskMode::Clicks);
+
+        // the line removed: the default, a finger's tap
+        std::fs::write(&cfg, "BORDER_WIDTH=\"1\"\n").unwrap();
+        state.reload_config();
+        assert_eq!(state.osk.mode, super::osk::OskMode::Taps);
     }
 
     #[test]

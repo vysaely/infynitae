@@ -42,7 +42,7 @@ pub const TABLE: &[Setting] = &[
         name: "Layouts",
         says: "",
         control: Control::Text,
-        after: After::Restart,
+        after: After::Save,
         more: false,
         needs: &[],
     },
@@ -141,7 +141,7 @@ pub const TABLE: &[Setting] = &[
         name: "Switch layouts with",
         says: "",
         control: Control::Pick(XKB_OPTIONS),
-        after: After::Restart,
+        after: After::Save,
         more: true,
         needs: &[],
     },
@@ -871,7 +871,10 @@ mod tests {
             }
             if raw.starts_with("    #") {
                 if let (Some(k), Some(tag)) = (&current_key, last_bracket_tag(trimmed)) {
-                    if matches!(tag.as_str(), "save" | "reload" | "use" | "restart") {
+                    if matches!(
+                        tag.as_str(),
+                        "save" | "reload" | "use" | "restart" | "at login"
+                    ) {
                         out.insert(k.clone(), tag);
                     }
                 }
@@ -924,6 +927,7 @@ mod tests {
                 After::Save => "save",
                 After::Use => "use",
                 After::Restart => "restart",
+                After::Login => "at login",
                 After::Reload(_) => "reload",
             };
             assert_eq!(
@@ -1167,7 +1171,7 @@ P: Phys=usb-0000:75:00.4-2.4/input0
                     .to_string()
             )]
         );
-        assert_eq!(c.state(0), "At the next start");
+        assert_eq!(c.state(0), "");
 
         // 2. Control::Slide (Pointer speed): Press + Drag emits nothing; Release emits once
         let speed_idx = row_idx("MOUSE_ACCEL_SPEED");
@@ -1218,7 +1222,7 @@ P: Phys=usb-0000:75:00.4-2.4/input0
         );
         assert_eq!(c.value(accel_idx), "adaptive");
 
-        // 4. Control::Pick (Switch layouts with, After::Restart)
+        // 4. Control::Pick (Switch layouts with, After::Save)
         let opts_idx = row_idx("XKB_DEFAULT_OPTIONS");
         let mut out = Vec::new();
         assert!(c.event(&press(ROW + 10 * opts_idx as u32), &cx, &mut out));
@@ -1233,7 +1237,7 @@ P: Phys=usb-0000:75:00.4-2.4/input0
             )]
         );
         assert_eq!(c.word(opts_idx), "Super+Space");
-        assert_eq!(c.state(opts_idx), "At the next start");
+        assert_eq!(c.state(opts_idx), "");
     }
 
     #[test]

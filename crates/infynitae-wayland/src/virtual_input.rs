@@ -137,10 +137,11 @@ impl VirtualInputState {
     }
 }
 
-/// The layout and options the seat's keyboard uses, once chosen (`usable_keymap_names`): every
-/// client the compositor starts gets them (`apply_keymap_env`), so apps that build their own
-/// keymap from `XKB_DEFAULT_*` (kitty) never differ from the seat's.
-static SEAT_KEYMAP_NAMES: std::sync::OnceLock<(String, String)> = std::sync::OnceLock::new();
+/// The layout and options the seat's keyboard uses, as chosen (`usable_keymap_names`) at start
+/// and on a config reload: every client the compositor starts gets them (`apply_keymap_env`), so
+/// apps that build their own keymap from `XKB_DEFAULT_*` (kitty) never differ from the seat's.
+static SEAT_KEYMAP_NAMES: std::sync::RwLock<Option<(String, String)>> =
+    std::sync::RwLock::new(None);
 
 /// The configured layout and options when they make a keymap; else the layout alone; else `us`,
 /// with a warning. An empty layout (`XKB_DEFAULT_LAYOUT=""`, a console keymap name such as
@@ -178,30 +179,37 @@ pub fn usable_keymap_names(layout: &str, options: &str) -> (String, String) {
     ("us".to_string(), String::new())
 }
 
-/// Records the seat's layout and options for the clients started from now on (once).
 /// The seat's layouts as configured (`"us,de"`), or empty before the keyboard exists.
 pub(crate) fn seat_layout_names() -> String {
-    SEAT_KEYMAP_NAMES
-        .get()
-        .map(|(l, _)| l.clone())
-        .unwrap_or_default()
+    seat_keymap_names().map(|(l, _)| l).unwrap_or_default()
 }
 
+fn seat_keymap_names() -> Option<(String, String)> {
+    SEAT_KEYMAP_NAMES
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+}
+
+/// Records the seat's layout and options for the clients started from now on.
 pub(crate) fn set_seat_keymap_names(layout: &str, options: &str) {
-    let _ = SEAT_KEYMAP_NAMES.set((layout.to_string(), options.to_string()));
+    *SEAT_KEYMAP_NAMES
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) =
+        Some((layout.to_string(), options.to_string()));
 }
 
 /// Gives `command` the seat's layout and options: `XKB_DEFAULT_LAYOUT`/`_OPTIONS` for the apps,
 /// and `INFYNITAE_XKB_LAYOUT`/`_OPTIONS`, which the session scripts keep over the config's
 /// (`live/config.sh`). Nothing before the seat's keyboard exists.
 pub(crate) fn apply_keymap_env(command: &mut std::process::Command) {
-    let Some((layout, options)) = SEAT_KEYMAP_NAMES.get() else {
+    let Some((layout, options)) = seat_keymap_names() else {
         return;
     };
     command
-        .env("XKB_DEFAULT_LAYOUT", layout)
-        .env("INFYNITAE_XKB_LAYOUT", layout)
-        .env("INFYNITAE_XKB_OPTIONS", options);
+        .env("XKB_DEFAULT_LAYOUT", &layout)
+        .env("INFYNITAE_XKB_LAYOUT", &layout)
+        .env("INFYNITAE_XKB_OPTIONS", &options);
     if options.is_empty() {
         command.env_remove("XKB_DEFAULT_OPTIONS");
     } else {

@@ -64,7 +64,7 @@ const START_LOCKED: Setting = Setting {
     name: "Start at the lock screen",
     says: "",
     control: ON_OFF,
-    after: After::Restart,
+    after: After::Login,
     more: true,
     needs: &[],
 };
@@ -514,7 +514,7 @@ mod tests {
             )]
         );
 
-        // Switch [restart] (row 3: START_LOCKED unset -> "true") and Switch [use] (row 4)
+        // Switch [at login] (row 3: START_LOCKED unset -> "true") and Switch [use] (row 4)
         let mut out = Vec::new();
         assert!(c.event(&press(ROW + 30 + 1), &cx_m, &mut out));
         assert_eq!(

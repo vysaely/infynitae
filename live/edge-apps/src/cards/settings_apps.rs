@@ -114,7 +114,7 @@ pub const TABLE: &[Setting] = &[
         name: "Open a terminal when nothing was reopened",
         says: "",
         control: ON_OFF,
-        after: After::Restart,
+        after: After::Login,
         more: true,
         needs: &[],
     },
@@ -738,7 +738,7 @@ mod tests {
         );
 
         // Switch under More: reveal More (9000), click AUTOMOUNT (index 2 -> 121, After::Reload("automount")),
-        // and START_TERMINAL (index 1 -> 111, After::Restart).
+        // and START_TERMINAL (index 1 -> 111, After::Login).
         out.clear();
         assert!(c.event(&press(9000), &cx, &mut out));
         assert!(c.event(&press(121), &cx, &mut out));

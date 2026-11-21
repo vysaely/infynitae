@@ -50,24 +50,10 @@ const HIT_LOAD_APPLY: u32 = 7;
 const HIT_LOAD_CANCEL: u32 = 8;
 const HIT_LOAD_ITEM_BASE: u32 = 100;
 
-/// Keys tagged `[restart]` in `config/config`. All `OUTPUT_*` display keys also require restart
-/// (and `BATTERY_LIMIT` runs `battery-limit`; `SCALING_FILTER`, `MAX_APP_SCALE`, `ZOOM_SHARPEN`
-/// reload live on `[save]`).
-const RESTART_KEYS: &[&str] = &[
-    "XKB_DEFAULT_LAYOUT",
-    "XKB_DEFAULT_OPTIONS",
-    "OUTPUT_ORDER",
-    "OUTPUT_LAYOUT",
-    "OUTPUT_SCALE",
-    "VRR_ENABLED",
-    "VIRTUAL_SCREEN",
-    "OSK",
-    "AUTO_ROTATE",
-    "XWAYLAND",
-    "START_TERMINAL",
-    "START_LOCKED",
-    "REMOTE_DESKTOP",
-];
+/// Keys tagged `[restart]` in `config/config`, and a screen's mode, rate and turn
+/// ([`is_restart_key`]). Not `BATTERY_LIMIT`: the card and the control menu run `battery-limit`
+/// when they change it.
+const RESTART_KEYS: &[&str] = &["AUTO_ROTATE", "XWAYLAND", "REMOTE_DESKTOP"];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct UndoEntry {
@@ -542,8 +528,13 @@ fn parse_undo(raw: &str) -> Option<UndoEntry> {
     Some(UndoEntry { key, old })
 }
 
+/// A key read only at the compositor's start: one of [`RESTART_KEYS`], or a screen's mode, rate
+/// or turn (`OUTPUT_<NAME>_MODE`, `_RATE`, `_TRANSFORM`; its `_SCALE` applies on save).
 fn is_restart_key(key: &str) -> bool {
-    key.starts_with("OUTPUT_") || RESTART_KEYS.contains(&key)
+    RESTART_KEYS.contains(&key)
+        || key.strip_prefix("OUTPUT_").is_some_and(|k| {
+            k.ends_with("_MODE") || k.ends_with("_RATE") || k.ends_with("_TRANSFORM")
+        })
 }
 
 fn parse_restart_keys(raw: &str, compositor_start: Option<u64>) -> Vec<String> {
@@ -1552,7 +1543,7 @@ mod tests {
         std::fs::write(dir.join("meminfo"), "MemTotal: 16777216 kB\n").unwrap();
         std::fs::write(
             dir.join("settings-changes"),
-            "900\tOUTPUT_SCALE\t1\n1000\tXKB_DEFAULT_LAYOUT\tus\n1050\tROUNDING\t8\n",
+            "900\tOUTPUT_SCALE\t1\n1000\tXWAYLAND\tfalse\n1050\tROUNDING\t8\n",
         )
         .unwrap();
         let sock = dir.join("wayland-0");
@@ -1590,8 +1581,8 @@ mod tests {
                 old: "8".into(),
             })
         );
-        // 900 < compositor start (1000), so only XKB_DEFAULT_LAYOUT is flagged.
-        assert_eq!(info.restart_keys, vec!["XKB_DEFAULT_LAYOUT"]);
+        // 900 < compositor start (1000), so only XWAYLAND is flagged.
+        assert_eq!(info.restart_keys, vec!["XWAYLAND"]);
     }
 
     #[test]
@@ -1636,11 +1627,11 @@ mod tests {
         assert_eq!(parse_undo("100\tBAD;KEY\tval\n"), None);
         assert_eq!(parse_undo("100\tROUNDING\t8\nbroken_tail\n"), None);
 
-        let changes = "500\tOUTPUT_SCALE\t1\n1000\tOUTPUT_SCALE\t2\n1010\tROUNDING\t8\n1020\tOUTPUT_DP_1\t1920x1080\n1030\tOUTPUT_SCALE\t1.5\n1040\tBATTERY_LIMIT\t80\n";
+        let changes = "500\tXWAYLAND\tfalse\n1000\tXWAYLAND\ttrue\n1010\tROUNDING\t8\n1020\tOUTPUT_DP_1_MODE\t1920x1080\n1025\tOUTPUT_SCALE\t2\n1030\tXWAYLAND\tfalse\n1040\tBATTERY_LIMIT\t80\n";
         assert_eq!(parse_restart_keys(changes, None), Vec::<String>::new());
         assert_eq!(
             parse_restart_keys(changes, Some(1000)),
-            vec!["OUTPUT_SCALE", "OUTPUT_DP_1"]
+            vec!["XWAYLAND", "OUTPUT_DP_1_MODE"]
         );
 
         let text =
@@ -1654,6 +1645,23 @@ mod tests {
         assert!(!is_restart_key("SCALING_FILTER"));
         assert!(!is_restart_key("MAX_APP_SCALE"));
         assert!(!is_restart_key("ZOOM_SHARPEN"));
+        assert!(!is_restart_key("XKB_DEFAULT_LAYOUT"));
+        assert!(!is_restart_key("XKB_DEFAULT_OPTIONS"));
+        assert!(!is_restart_key("OSK"));
+        assert!(!is_restart_key("START_TERMINAL"));
+        assert!(!is_restart_key("START_LOCKED"));
+        for k in [
+            "OUTPUT_SCALE",
+            "OUTPUT_DP_1_SCALE",
+            "OUTPUT_ORDER",
+            "OUTPUT_LAYOUT",
+            "VRR_ENABLED",
+            "VIRTUAL_SCREEN",
+        ] {
+            assert!(!is_restart_key(k), "{k}");
+        }
+        assert!(is_restart_key("OUTPUT_DP_1_RATE"));
+        assert!(is_restart_key("OUTPUT_DP_1_TRANSFORM"));
     }
 
     #[test]

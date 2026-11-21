@@ -112,6 +112,7 @@ pub struct Setting {
   | `[reload]`, a helper | `sh "$HOME/infynitae/live/infynitae-reload" PART` (the part is in each card's table) | nothing |
   | `[use]` | nothing | nothing |
   | `[restart]` | nothing | "At the next start" in place of the state, in the accent, until the compositor restarts |
+  | `[at login]` | nothing | "At the next login", the same way: the key only does something when a session starts |
 
 - **A slider** writes on release, not while dragged (one line in the log, one apply).
 - **Undo.** `settings/about` shows "Undo: KEY was OLD" for the log's last line; a click sets it back
@@ -212,23 +213,23 @@ One block per screen, titled "DP-1  2560x1440  165 Hz" (model as its second line
 |---|---|---|---|---|
 | Resolution | Found (the screen's modes) | `OUTPUT_N_MODE` | | restart; at once too through `wlr-randr --output NAME --mode WxH` |
 | Refresh rate | Found (rates of that mode) | `OUTPUT_N_RATE` | | same, `--mode WxH@R` |
-| Scale | Pick | `OUTPUT_N_SCALE`; with one screen `OUTPUT_SCALE` | 1, 1.25, 1.5, 2 | same, `--scale` |
+| Scale | Pick | `OUTPUT_N_SCALE`; with one screen `OUTPUT_SCALE` | 1, 1.25, 1.5, 2 | save; through `wlr-randr --scale` when it lists the screen |
 | M Turned | Pick | `OUTPUT_N_TRANSFORM` | Not turned `normal`, 90, 180, 270 | same, `--transform` |
 
 Then, once:
 
 | Row | Control | Key | Values | After |
 |---|---|---|---|---|
-| Variable refresh rate | Pick | `VRR_ENABLED` | In fullscreen `auto`, On, Off | restart |
+| Variable refresh rate | Pick | `VRR_ENABLED` | In fullscreen `auto`, On, Off | save |
 | Night light warmth | Slide 3000-6500 K, step 100 | `NIGHT_LIGHT_TEMP` | | save |
-| M Order, left to right | Text | `OUTPUT_ORDER` | names with commas | restart |
+| M Order, left to right | Text | `OUTPUT_ORDER` | names with commas | save |
 | M Sharper when zoomed in | Pick | `MAX_APP_SCALE` | Never `1`, 2x, 3x | save |
 | M Zoomed windows | Pick | `SCALING_FILTER` | Sharp `sharp`, Smooth `smooth`, FSR `fsr`, FSR sharp `fsr-sharp` | save |
 
 A mode change through `wlr-randr` is followed by a card "Keep this? 10" in the edge's ask prompt
 (`infynitae-edge ask`, choices Keep and Back); no answer in 10 s puts the old mode back and does not
 write the key. Hidden: Resolution, Refresh rate and Turned without `wlr-randr` lists (the block then
-shows what is set, and Scale writes the key and says "At the next start"); Order with one screen;
+shows what is set, and Scale writes the key); Order with one screen;
 Refresh rate with one rate; Variable refresh rate when no mode list says the screen can (not known
 how to read that without trying: `wlr-randr --json` has `adaptive_sync` only where the compositor
 reports it). Left to the file: `ZOOM_SHARPEN`, `VIRTUAL_SCREEN`, `OUTPUT_LAYOUT`, `AUTO_ROTATE*`, `OSK`.
@@ -239,7 +240,7 @@ lists; whether night light re-reads the temperature while on. Brightness stays i
 
 | Row | Control | Key | Values | After |
 |---|---|---|---|---|
-| Layouts | Text | `XKB_DEFAULT_LAYOUT` | "us,de"; empty: the system's | restart |
+| Layouts | Text | `XKB_DEFAULT_LAYOUT` | "us,de"; empty: the system's | save |
 | Repeat starts after | Slide 150-600 ms, step 10 | `KEYBOARD_REPEAT_DELAY` | | save |
 | Repeat speed | Slide 10-60 per second | `KEYBOARD_REPEAT_RATE` | | save |
 | Pointer speed | Slide -1.0 to 1.0, step 0.05 | `MOUSE_ACCEL_SPEED` | | save |
@@ -248,7 +249,7 @@ lists; whether night light re-reads the temperature while on. Brightness stays i
 | Scroll follows the fingers | Switch | `TOUCHPAD_NATURAL_SCROLL` | | save |
 | Canvas touchpad gestures | Switch | `TOUCHPAD_GESTURES` | | save |
 | M Super frees a captured pointer | Switch | `SUPER_FREES_CURSOR` | | save |
-| M Switch layouts with | Pick | `XKB_DEFAULT_OPTIONS` | None `""`, Alt+Shift `grp:alt_shift_toggle`, Super+Space `grp:win_space_toggle`, Caps Lock `grp:caps_toggle`; a value with other options shows "Set in the file" and is not changed | restart |
+| M Switch layouts with | Pick | `XKB_DEFAULT_OPTIONS` | None `""`, Alt+Shift `grp:alt_shift_toggle`, Super+Space `grp:win_space_toggle`, Caps Lock `grp:caps_toggle`; a value with other options shows "Set in the file" and is not changed | save |
 | M Keys heard by X11 apps | Pick | `XWAYLAND_KEYS` | None `off`, Modifiers, Shortcuts, All | save |
 
 Hidden: the three touchpad rows unless a device in `/proc/bus/input/devices` has "Touchpad" in its
@@ -280,7 +281,7 @@ names in `/usr/share/X11/xkb/rules/evdev.lst` is a later step.
 | Browser | Found | `BROWSER` | `auto`, apps with `WebBrowser` | use |
 | System monitor | Found | `SYSTEM_MONITOR` | `auto`, apps with `System` and `Monitor` | use |
 | Reopen apps | Pick | `SESSION_RESTORE` | Off `false`, After a restart `restart`, Always `true` | Reload(`restore`) |
-| M Open a terminal when nothing was reopened | Switch | `START_TERMINAL` | | restart |
+| M Open a terminal when nothing was reopened | Switch | `START_TERMINAL` | | at login |
 | M Mount USB drives when plugged in | Switch | `AUTOMOUNT` | | Reload(`automount`) |
 | M Name drives by Roman numeral | Switch | `DRIVE_NAMES` | on `roman`, off `label` | Reload(`automount`) |
 | M X11 apps and games | Switch | `XWAYLAND` | | restart |
@@ -321,7 +322,7 @@ Hidden: Game mode without `gamemoded` on PATH. Left to the file: `FRAME_GUARD`, 
 | Lock when the screens go off | Switch | `IDLE_AUTO_LOCK` | | save |
 | Lock before sleep | Switch | `SLEEP_LOCK` | | Reload(`sleep-lock`) |
 | Stop charging at | Pick | `BATTERY_LIMIT` | Full `off`, 80 %, 90 % | save, then `sh "$HOME/infynitae/live/battery-limit"` |
-| M Start at the lock screen | Switch | `START_LOCKED` | | restart |
+| M Start at the lock screen | Switch | `START_LOCKED` | | at login |
 | M Show "Shutting down" | Switch | `SHUTDOWN_SCREEN` | | use |
 
 Hidden: "Stop charging at" unless a `/sys/class/power_supply/BAT*/charge_control_end_threshold`

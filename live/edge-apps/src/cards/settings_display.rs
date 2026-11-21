@@ -35,7 +35,7 @@ pub const TABLE: &[Setting] = &[
         says: "",
         key: "VRR_ENABLED",
         control: Control::Pick(&[("auto", "In fullscreen"), ("on", "On"), ("off", "Off")]),
-        after: After::Restart,
+        after: After::Save,
         more: false,
         needs: &[],
     },
@@ -58,7 +58,7 @@ pub const TABLE: &[Setting] = &[
         says: "names with commas",
         key: "OUTPUT_ORDER",
         control: Control::Text,
-        after: After::Restart,
+        after: After::Save,
         more: true,
         needs: &[],
     },
@@ -1412,8 +1412,7 @@ impl DisplayCard {
                         name, "--scale", &opt.value, &row.key, old_opt, &opt.value,
                     )
                 } else {
-                    self.restarted.insert(row.key.clone());
-                    change_command(&row.key, old_opt, &opt.value, After::Restart)
+                    change_command(&row.key, old_opt, &opt.value, After::Save)
                 }
             }
             RowId::ScreenTransform(name) => wlr_and_write_command(
@@ -2523,7 +2522,7 @@ mod tests {
         )));
         assert!(!card.restarted.contains("OUTPUT_DP_1_SCALE"));
 
-        // Scale without wlr-randr writes key with change_command and shows "At the next start"
+        // Scale without wlr-randr writes the key, which the compositor applies on save
         let mut no_wlr_card = DisplayCard::new();
         no_wlr_card.apply("config", &sample_cfg(""));
         no_wlr_card.apply("screens", &parse_screens(&snap_one_screen_no_wlr()));
@@ -2552,9 +2551,9 @@ mod tests {
         assert!(!scale_offline_cmd.contains("wlr-randr"));
         assert_eq!(
             scale_offline_cmd,
-            change_command("OUTPUT_SCALE", Some("1.0"), "1.5", After::Restart)
+            change_command("OUTPUT_SCALE", Some("1.0"), "1.5", After::Save)
         );
-        assert!(no_wlr_card.restarted.contains("OUTPUT_SCALE"));
+        assert!(!no_wlr_card.restarted.contains("OUTPUT_SCALE"));
 
         // 3) Control Slide: Press/Drag preview without Run, Release + Scroll commit After::Save
         let (rows, _, _) = card.build_layout(&cx_m);

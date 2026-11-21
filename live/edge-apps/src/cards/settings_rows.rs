@@ -47,6 +47,8 @@ pub enum After {
     Use,
     /// [restart]: at the compositor's next start
     Restart,
+    /// [at login]: when the session starts (it does nothing while one runs)
+    Login,
     /// [reload] of a helper: `infynitae-reload PART`
     Reload(&'static str),
 }
@@ -240,7 +242,7 @@ pub struct TableCard {
     data: Option<ConfigData>,
     /// a value changed here, shown before the file says it
     pending: HashMap<&'static str, String>,
-    /// keys of [restart] settings changed since the edge started
+    /// keys of [restart] and [at login] settings changed since the edge started
     restart: HashSet<&'static str>,
     /// the row whose list is open, and the list
     pick: Option<usize>,
@@ -360,7 +362,7 @@ impl TableCard {
             &new,
             s.after,
         )));
-        if s.after == After::Restart {
+        if matches!(s.after, After::Restart | After::Login) {
             self.restart.insert(s.key);
         }
         self.pending.insert(s.key, new);
@@ -370,7 +372,10 @@ impl TableCard {
     fn state(&self, i: usize) -> String {
         let s = &self.table[i];
         if self.restart.contains(s.key) {
-            return "At the next start".into();
+            return match s.after {
+                After::Login => "At the next login".into(),
+                _ => "At the next start".into(),
+            };
         }
         s.says.to_string()
     }
@@ -705,7 +710,7 @@ impl Card for TableCard {
                             sq(&now),
                             sq(s.name)
                         )));
-                        if s.after == After::Restart {
+                        if matches!(s.after, After::Restart | After::Login) {
                             self.restart.insert(s.key);
                         }
                         true
@@ -908,6 +913,47 @@ pub(crate) mod tests {
             &data(&[("GAME_MODE", "true")], &[], &["gamemoded"]) as &dyn Any,
         );
         assert!(c.pending.is_empty());
+    }
+
+    #[test]
+    fn a_change_for_the_next_start_or_login_says_so() {
+        const SWITCH: Control = Control::Switch {
+            on: "true",
+            off: "false",
+        };
+        const L: &[Setting] = &[
+            Setting {
+                key: "XWAYLAND",
+                name: "X11 apps",
+                says: "",
+                control: SWITCH,
+                after: After::Restart,
+                more: false,
+                needs: &[],
+            },
+            Setting {
+                key: "START_LOCKED",
+                name: "Start at the lock screen",
+                says: "",
+                control: SWITCH,
+                after: After::Login,
+                more: false,
+                needs: &[],
+            },
+        ];
+        let th = Theme::from_config(&crate::config::Config::from_text(""));
+        let cx = test_cx(&th);
+        let mut c = TableCard::new(L);
+        c.apply(
+            "config",
+            &data(&[("XWAYLAND", "true"), ("START_LOCKED", "false")], &[], &[]) as &dyn Any,
+        );
+        assert_eq!((c.state(0), c.state(1)), (String::new(), String::new()));
+        let mut out = Vec::new();
+        assert!(c.event(&press(ROW + 1), &cx, &mut out));
+        assert!(c.event(&press(ROW + 10 + 1), &cx, &mut out));
+        assert_eq!(c.state(0), "At the next start");
+        assert_eq!(c.state(1), "At the next login");
     }
 
     #[test]

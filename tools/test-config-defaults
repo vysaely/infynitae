@@ -90,4 +90,18 @@ check "reload sleep-lock empty LOCK_WHEN_AWAY falls back to SLEEP_LOCK=false" "$
 got=$(sh -c 'infy_on() { [ "$1" = "true" ] || [ "$1" = "1" ] || [ "$1" = "yes" ]; }; LOCK_WHEN_AWAY=false SLEEP_LOCK=true; sed -n "/LOCK_WHEN_AWAY:-/{p;q}" live/session.sh | grep -q "LOCK_WHEN_AWAY:-" && if infy_on "${LOCK_WHEN_AWAY:-${SLEEP_LOCK:-true}}"; then echo on; else echo off; fi')
 check "session.sh prefers LOCK_WHEN_AWAY over SLEEP_LOCK" "$got" "off"
 
+# 9. A reload starts the on-screen keyboard when OSK is not off and it is not running
+osk_check() {
+    TMP_RL=$(mktemp -d)
+    sed -n '/^reload_osk() {/,/^}/p' live/infynitae-reload > "$TMP_RL/fn.sh"
+    got=$(sh -c "command() { echo squeekboard; }; pgrep() { $2; }; spawn() { echo \"spawn \$*\"; }; . $TMP_RL/fn.sh; $1; reload_osk" | tr '\n' ' ')
+    rm -rf "$TMP_RL"
+}
+osk_check 'unset OSK' false
+check "reload starts squeekboard for OSK unset" "$got" "spawn squeekboard osk: started "
+osk_check 'OSK=always' true
+check "reload leaves a running squeekboard" "$got" "osk: running "
+osk_check 'OSK=off' false
+check "reload does not start squeekboard for OSK=off" "$got" "osk: only by hand "
+
 [ "$fails" = 0 ] && echo "test-config-defaults: passed" || { echo "test-config-defaults: $fails failed"; exit 1; }

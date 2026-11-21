@@ -211,6 +211,9 @@ mod tests {
                         if c.contains("[restart]") {
                             return "[restart]";
                         }
+                        if c.contains("[at login]") {
+                            return "[at login]";
+                        }
                         if c.contains("[save]") {
                             return "[save]";
                         }
@@ -244,6 +247,7 @@ mod tests {
                 After::Save => "[save]",
                 After::Use => "[use]",
                 After::Restart => "[restart]",
+                After::Login => "[at login]",
                 After::Reload(_) => "[reload]",
             };
             assert_eq!(key_tag(&text, s.key), expected_tag, "tag for {}", s.key);
