@@ -376,9 +376,19 @@ save_replay_clip() {
     echo "[infynitae-recorder] Saved $DURATION_STR clip to $OUT_FILE"
 }
 
+recording_pgid() {
+    [ -f "$PID_FILE" ] || return 1
+    rec_pid=$(cat "$PID_FILE" 2>/dev/null || true)
+    case "$rec_pid" in
+        ''|0|1|*[!0-9]*) return 1 ;;
+    esac
+    kill -0 -"$rec_pid" 2>/dev/null || return 1
+    printf '%s\n' "$rec_pid"
+}
+
 start_recording() {
-    if [ -f "$PID_FILE" ] && kill -0 $(cat "$PID_FILE") 2>/dev/null; then
-        echo "Recording already running (PID $(cat "$PID_FILE"))"
+    if REC_PID=$(recording_pgid); then
+        echo "Recording already running (PID $REC_PID)"
         return 0
     fi
 
@@ -396,30 +406,45 @@ start_recording() {
 
     echo "[infynitae-recorder] Starting continuous recording: geometry ${GEOM}, ${RECORD_FPS}fps..."
 
-    # Run in background
-    set -f  # $A_ARGS holds ffmpeg filter text with brackets: no filename expansion
-    nice -n 10 "$STREAM_BIN" --fps "$RECORD_FPS" | nice -n 10 ffmpeg -loglevel error -y \
-        -f rawvideo -pix_fmt bgr0 -s:v "$GEOM" -r "$RECORD_FPS" -i - \
-        $A_ARGS \
-        $V_PIPELINE \
-        "$OUT_FILE" >/dev/null 2>&1 &
-    set +f
+    # Own session and process group so stop_recording signals only this recording; children reset
+    # INT/QUIT (set to SIG_IGN by &) while the wrapper keeps SIG_IGN so it waits for ffmpeg.
+    (
+        # shellcheck disable=SC2016
+        setsid sh -c '
+            set -f
+            # shellcheck disable=SC2086
+            env --default-signal=INT,QUIT nice -n 10 "$1" --fps "$2" | env --default-signal=INT,QUIT nice -n 10 ffmpeg -loglevel error -y \
+                -f rawvideo -pix_fmt bgr0 -s:v "$3" -r "$2" -i - \
+                $4 \
+                $5 \
+                "$6"
+        ' infynitae-recording "$STREAM_BIN" "$RECORD_FPS" "$GEOM" "$A_ARGS" "$V_PIPELINE" "$OUT_FILE" >/dev/null 2>&1 &
+        echo "$!" > "$PID_FILE"
+    )
 
-    REC_PID=$!
-    echo $REC_PID > "$PID_FILE"
+    REC_PID=$(cat "$PID_FILE")
     notify_toast "Recording" "Writing to ${OUT_FILE##*/}"
     echo "[infynitae-recorder] Started recording to $OUT_FILE (PID $REC_PID)"
 }
 
 stop_recording() {
     if [ -f "$PID_FILE" ]; then
-        REC_PID=$(cat "$PID_FILE")
-        if kill -0 "$REC_PID" 2>/dev/null; then
-            # Send SIGINT to allow clean MP4 header finalization
-            kill -INT "$REC_PID" 2>/dev/null || true
-            pkill -P "$REC_PID" 2>/dev/null || true
-            pkill -f "$STREAM_BIN" 2>/dev/null || true
-            sleep 1
+        if REC_PID=$(recording_pgid); then
+            # Send SIGINT to the recording group for clean MP4 header finalization
+            kill -INT -"$REC_PID" 2>/dev/null || true
+            wait_steps=0
+            while [ "$wait_steps" -lt 30 ] && kill -0 -"$REC_PID" 2>/dev/null; do
+                sleep 0.1
+                wait_steps=$((wait_steps + 1))
+            done
+            if kill -0 -"$REC_PID" 2>/dev/null; then
+                kill -TERM -"$REC_PID" 2>/dev/null || true
+                wait_steps=0
+                while [ "$wait_steps" -lt 10 ] && kill -0 -"$REC_PID" 2>/dev/null; do
+                    sleep 0.1
+                    wait_steps=$((wait_steps + 1))
+                done
+            fi
             notify_toast "Recording saved" "Saved to $RECORDINGS_DIR"
             echo "[infynitae-recorder] Recording stopped (PID $REC_PID)"
         fi
@@ -430,7 +455,7 @@ stop_recording() {
 }
 
 toggle_recording() {
-    if [ -f "$PID_FILE" ] && kill -0 $(cat "$PID_FILE") 2>/dev/null; then
+    if recording_pgid >/dev/null; then
         stop_recording
     else
         start_recording
@@ -476,8 +501,8 @@ case "$1" in
         else
             echo "Replay buffer: stopped"
         fi
-        if [ -f "$PID_FILE" ] && kill -0 $(cat "$PID_FILE") 2>/dev/null; then
-            echo "Recording: running (PID $(cat "$PID_FILE"))"
+        if REC_PID=$(recording_pgid); then
+            echo "Recording: running (PID $REC_PID)"
         else
             echo "Recording: stopped"
         fi
