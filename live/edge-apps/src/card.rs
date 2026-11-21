@@ -132,6 +132,79 @@ pub trait Card {
     fn wants_clock(&self) -> bool {
         false
     }
+    /// Called when an `Action::Run` or `Action::RunBackground` from this card ends.
+    /// True when what the card shows changed.
+    fn command_done(&mut self, _res: &CommandResult, _now: Instant) -> bool {
+        false
+    }
+    /// Next time transient command feedback on this card expires.
+    fn next_deadline(&self) -> Option<Instant> {
+        None
+    }
+    /// Clears expired transient feedback at `now`. True when what the card shows changed.
+    fn expire(&mut self, _now: Instant) -> bool {
+        false
+    }
+}
+
+pub const MAX_STDERR_BYTES: usize = 200;
+
+/// Outcome of a finished `Action::Run` or `Action::RunBackground` shell command.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CommandResult {
+    pub command: String,
+    /// Exit code, or `None` when killed by a signal or failed to start.
+    pub status: Option<i32>,
+    /// Last non-empty stderr line (or spawn error), stripped of CR/ANSI escapes and bounded to 200 bytes.
+    pub stderr_line: String,
+}
+
+fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut it = s.chars();
+    while let Some(c) = it.next() {
+        if c == '\x1b' {
+            if let Some(next) = it.next() {
+                if next == '[' {
+                    for b in it.by_ref() {
+                        if ('@'..='~').contains(&b) {
+                            break;
+                        }
+                    }
+                }
+            }
+            continue;
+        }
+        out.push(c);
+    }
+    out
+}
+
+fn truncate_utf8(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
+/// Returns the last non-empty stderr line, cleaned of `\r` progress overwrites and ANSI escapes
+/// and capped at `MAX_STDERR_BYTES` on a UTF-8 boundary.
+pub fn last_stderr_line(bytes: &[u8]) -> String {
+    let raw = String::from_utf8_lossy(bytes);
+    for line in raw.split(['\n', '\r']).rev() {
+        let clean = strip_ansi(line);
+        let trimmed = clean.trim();
+        if !trimmed.is_empty() {
+            return truncate_utf8(trimmed, MAX_STDERR_BYTES)
+                .trim_end()
+                .to_string();
+        }
+    }
+    String::new()
 }
 
 /// Pixels moved per discrete mouse wheel notch (120 units in Wayland).
@@ -562,5 +635,24 @@ mod tests {
         assert!(scroll_rows(&mut scroll, &mut accum, 3, 72.0, 2.0));
         assert_eq!(scroll, 3);
         assert!(!scroll_rows(&mut scroll, &mut accum, 3, 36.0, 1.0));
+    }
+
+    #[test]
+    fn last_stderr_line_picks_last_non_empty_strips_ansi_and_caps_200_bytes() {
+        assert_eq!(last_stderr_line(b""), "");
+        assert_eq!(last_stderr_line(b"\n  \r\n\t\n"), "");
+        assert_eq!(
+            last_stderr_line(b"first line\n\x1b[31m  Error: failed\x1b[0m\r\n\n  \n"),
+            "Error: failed"
+        );
+        assert_eq!(
+            last_stderr_line(b"scanning...\rFailed to pair"),
+            "Failed to pair"
+        );
+        let long = "é".repeat(120); // 240 bytes
+        let cut = last_stderr_line(long.as_bytes());
+        assert!(cut.len() <= MAX_STDERR_BYTES);
+        assert_eq!(cut.len(), 200);
+        assert!(std::str::from_utf8(cut.as_bytes()).is_ok());
     }
 }

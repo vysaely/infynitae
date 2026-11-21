@@ -4,7 +4,9 @@
 //! no process started here (`wayland.rs` does the I/O), so it is tested without a display.
 
 use crate::app::App;
-use crate::card::{Action, Button, Card, Cx, Event, Hits, Note, Rect, Status, Window};
+use crate::card::{
+    Action, Button, Card, CommandResult, Cx, Event, Hits, Note, Rect, Status, Window,
+};
 use crate::config::{Config, Panel, Side};
 use crate::draw::{self, Text, PAD_X};
 use crate::panel::CardRef;
@@ -1330,6 +1332,7 @@ impl Shell {
         self.hovered.clear();
         self.pressed = None;
         self.touch = None;
+        self.expire_cards(now);
         true
     }
 
@@ -3152,6 +3155,42 @@ impl Shell {
                 if pc.provider.id() == provider && pc.kind.sources.contains(&key) {
                     changed |= pc.card.apply(key, data);
                 }
+            }
+        }
+        changed
+    }
+
+    /// Delivers a finished card command's result to matching cards (`owner/kind`).
+    pub fn command_done(&mut self, card: &str, res: &CommandResult, now: Instant) -> bool {
+        let Some((owner, kind)) = card.split_once('/') else {
+            return false;
+        };
+        let mut changed = false;
+        for ps in &mut self.panels {
+            for pc in &mut ps.cards {
+                if pc.word.owner == owner && pc.word.kind == kind {
+                    changed |= pc.card.command_done(res, now);
+                }
+            }
+        }
+        changed
+    }
+
+    /// Earliest expiry deadline across cards with transient feedback (e.g. failed command lines).
+    pub fn card_deadline(&self) -> Option<Instant> {
+        self.panels
+            .iter()
+            .flat_map(|ps| ps.cards.iter())
+            .filter_map(|pc| pc.card.next_deadline())
+            .min()
+    }
+
+    /// Expires transient card feedback whose deadline passed by `now`.
+    pub fn expire_cards(&mut self, now: Instant) -> bool {
+        let mut changed = false;
+        for ps in &mut self.panels {
+            for pc in &mut ps.cards {
+                changed |= pc.card.expire(now);
             }
         }
         changed
@@ -5714,5 +5753,43 @@ mod tests {
             .actions
             .iter()
             .any(|(a, ..)| matches!(a, Action::Run(cmd) if cmd.contains("performance"))));
+    }
+
+    #[test]
+    fn command_done_routes_error_to_card_and_reopen_expires_after_ttl() {
+        let mut sh = shell("SUPER+A top right 380 settings/network settings/bluetooth");
+        let t0 = Instant::now();
+        let idx = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "control")
+            .unwrap();
+        sh.apply(
+            "settings",
+            "network",
+            &crate::cards::settings::parse_network(
+                "enabled\n---\nwifi:disconnected\n---\n :80:WPA2:CafeSec\n---\n",
+            ),
+        );
+        assert!(sh.open_panel_on(None, idx, false, t0));
+        assert!(sh.command_done(
+            "settings/network",
+            &CommandResult {
+                command: "nmcli connection up id 'CafeSec' >/dev/null".into(),
+                status: Some(4),
+                stderr_line:
+                    "Error: Connection activation failed: Secrets were required, but not provided."
+                        .into(),
+            },
+            t0,
+        ));
+        assert_eq!(sh.card_deadline(), Some(t0 + crate::ui::ERROR_TTL));
+        assert!(sh.close_at(t0 + std::time::Duration::from_secs(2)));
+        assert!(sh.open_panel_on(None, idx, false, t0 + crate::ui::ERROR_TTL));
+        assert_eq!(
+            sh.card_deadline(),
+            None,
+            "expired card errors must clear when reopening the panel"
+        );
     }
 }

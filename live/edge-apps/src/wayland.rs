@@ -3,7 +3,7 @@
 //! drawn while closed, toplevel list from the compositor, signals and request files, worker
 //! threads for sources, detached actions, and the `org.freedesktop.Notifications` strip.
 
-use crate::card::{Action, Button, Data, Source, Window};
+use crate::card::{Action, Button, CommandResult, Data, Source, Window};
 use crate::paths::runtime_path;
 use crate::shell::{OutputId, Shell, ARRIVE_LIFT};
 use smithay_client_toolkit::{
@@ -494,6 +494,8 @@ enum Fetched {
     Source(&'static str, &'static str, Data, Box<dyn Source>),
     /// One-off result from `Action::Run` after a card command finishes.
     Data(&'static str, &'static str, Data),
+    /// Exit status and bounded last stderr line from a card's shell command.
+    CommandDone(String, CommandResult),
     /// Installed apps re-read on a worker thread along with the folder mtimes statted before the
     /// read started.
     Apps(Vec<crate::app::App>, Vec<Option<std::time::SystemTime>>),
@@ -803,20 +805,41 @@ fn run_queued_with<F>(
     }
 }
 
-#[cfg_attr(test, allow(unused_variables))]
-fn run_sh_status(cmd: &str) {
-    // a test never runs it: it would change the machine's settings
-    #[cfg(not(test))]
-    if let Err(e) = Command::new("sh")
+fn run_sh_result_exec(cmd: &str) -> CommandResult {
+    match Command::new("sh")
         .arg("-c")
         .arg(cmd)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
+        .stderr(Stdio::piped())
+        .output()
     {
-        eprintln!("infynitae-edge-apps: run {cmd}: {e}");
+        Ok(out) => CommandResult {
+            command: cmd.to_string(),
+            status: out.status.code(),
+            stderr_line: crate::card::last_stderr_line(&out.stderr),
+        },
+        Err(e) => {
+            eprintln!("infynitae-edge-apps: run {cmd}: {e}");
+            CommandResult {
+                command: cmd.to_string(),
+                status: None,
+                stderr_line: crate::card::last_stderr_line(e.to_string().as_bytes()),
+            }
+        }
     }
+}
+
+fn run_sh_result(cmd: &str) -> CommandResult {
+    // a test never runs it from run_actions: it would change the machine's settings
+    #[cfg(test)]
+    return CommandResult {
+        command: cmd.to_string(),
+        status: Some(0),
+        stderr_line: String::new(),
+    };
+    #[cfg(not(test))]
+    run_sh_result_exec(cmd)
 }
 
 fn refresh_sources(tx: &Sender<Fetched>, prov: &'static str, keys: &[&'static str]) {
@@ -1168,6 +1191,20 @@ impl App {
         }
     }
 
+    fn redraw_open_outputs(&mut self) {
+        if self.shell.open.is_none() {
+            return;
+        }
+        for os in &mut self.outputs {
+            if self.shell.visible_on(os.id) {
+                os.dirty = true;
+                os.render_if_needed(&self.qh, &self.shell);
+                // a card that grew or shrank: the input region follows
+                os.set_input_region(&self.compositor, &self.shell);
+            }
+        }
+    }
+
     fn fetch_timeout(&self, now: Instant) -> Option<Duration> {
         self.shell.open?;
         let sources = self.shell.sources();
@@ -1197,7 +1234,10 @@ impl App {
                     let (tx, queued) = (self.fetch_tx.clone(), self.queued.clone());
                     let keys: Vec<&'static str> = keys.to_vec();
                     std::thread::spawn(move || {
-                        run_queued_with(&queued, &card, cmd, run_sh_status);
+                        run_queued_with(&queued, &card, cmd, |c| {
+                            let res = run_sh_result(c);
+                            let _ = tx.send(Fetched::CommandDone(card.clone(), res));
+                        });
                         // what the commands changed, shown at once
                         refresh_sources(&tx, prov, &keys);
                     });
@@ -1208,7 +1248,8 @@ impl App {
                     let tx = self.fetch_tx.clone();
                     let keys: Vec<&'static str> = keys.to_vec();
                     std::thread::spawn(move || {
-                        run_sh_status(&cmd);
+                        let res = run_sh_result(&cmd);
+                        let _ = tx.send(Fetched::CommandDone(card, res));
                         refresh_sources(&tx, prov, &keys);
                     });
                 }
@@ -2358,19 +2399,18 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
                     }
                     return;
                 }
+                channel::Event::Msg(Fetched::CommandDone(card, res)) => {
+                    if app.shell.command_done(&card, &res, Instant::now()) {
+                        app.redraw_open_outputs();
+                    }
+                    return;
+                }
                 _ => return,
             };
             let changed = app.shell.apply(prov, key, data.as_ref());
             let reloaded = app.reload_config();
-            if (changed || reloaded) && app.shell.open.is_some() {
-                for os in &mut app.outputs {
-                    if app.shell.visible_on(os.id) {
-                        os.dirty = true;
-                        os.render_if_needed(&app.qh, &app.shell);
-                        // a card that grew or shrank: the input region follows
-                        os.set_input_region(&app.compositor, &app.shell);
-                    }
-                }
+            if changed || reloaded {
+                app.redraw_open_outputs();
             }
         })
         .map_err(|e| e.to_string())?;
@@ -2538,6 +2578,19 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
                 app.sync_popups();
             }
             if let Some(d) = app.shell.notify.next_deadline() {
+                let rem = d
+                    .saturating_duration_since(now)
+                    .max(Duration::from_millis(5));
+                timeout = Some(timeout.map_or(rem, |t| t.min(rem)));
+            }
+        }
+        // transient card error messages clear cleanly without a 165 Hz tick loop
+        if app.shell.card_deadline().is_some() {
+            let now = Instant::now();
+            if app.shell.expire_cards(now) {
+                app.redraw_open_outputs();
+            }
+            if let Some(d) = app.shell.card_deadline() {
                 let rem = d
                     .saturating_duration_since(now)
                     .max(Duration::from_millis(5));
@@ -4997,5 +5050,61 @@ mod tests {
 
         let executed: Vec<String> = log_rx.try_iter().collect();
         assert_eq!(executed, vec!["scan", "first", "second", "third", "first"]);
+    }
+
+    #[test]
+    fn command_runner_keeps_exit_status_last_stderr_line_and_delivers_command_done() {
+        let long_err = run_sh_result_exec(
+            "printf 'ignored first line\\n\\033[31m%s\\033[0m\\n\\n' \"$(printf 'e%.0s' $(seq 1 250))\" >&2; exit 4",
+        );
+        assert_eq!(long_err.status, Some(4));
+        assert_eq!(long_err.stderr_line.len(), crate::card::MAX_STDERR_BYTES);
+        assert!(long_err.stderr_line.chars().all(|c| c == 'e'));
+
+        let ok = run_sh_result_exec("echo noise; echo ok >&2");
+        assert_eq!(ok.status, Some(0));
+        assert_eq!(ok.stderr_line, "ok");
+
+        // Run a real queued worker with two commands and verify CommandDone messages arrive in order.
+        let q = std::sync::Arc::new(std::sync::Mutex::new(CommandQueue::default()));
+        let cmd1 = "echo 'Error: Connection activation failed: Secrets were required, but not provided.' >&2; exit 4";
+        let cmd2 = "true";
+        assert!(q.lock().unwrap().enqueue("settings/network", cmd1.into()));
+        assert!(!q.lock().unwrap().enqueue("settings/network", cmd2.into()));
+
+        let (tx, rx) = channel::channel::<Fetched>();
+        let q_w = q.clone();
+        std::thread::spawn(move || {
+            run_queued_with(&q_w, "settings/network", cmd1.into(), |c| {
+                let res = run_sh_result_exec(c);
+                let _ = tx.send(Fetched::CommandDone("settings/network".into(), res));
+            });
+        });
+
+        let mut results = Vec::new();
+        while results.len() < 2 {
+            if let Ok(Fetched::CommandDone(card, res)) = rx.recv() {
+                assert_eq!(card, "settings/network");
+                results.push(res);
+            }
+        }
+        assert_eq!(results[0].status, Some(4));
+        assert_eq!(
+            results[0].stderr_line,
+            "Error: Connection activation failed: Secrets were required, but not provided."
+        );
+        assert_eq!(results[1].status, Some(0));
+
+        let mut sh = Shell::new(
+            crate::config::Config::from_text(
+                "PANEL_CONTROL=\"SUPER+A top right 380 settings/network\"\n",
+            ),
+            Vec::new(),
+        );
+        let now = Instant::now();
+        assert!(sh.command_done("settings/network", &results[0], now));
+        assert!(sh.card_deadline().is_some());
+        assert!(sh.command_done("settings/network", &results[1], now));
+        assert_eq!(sh.card_deadline(), None);
     }
 }

@@ -3,8 +3,8 @@
 //! `bluetoothctl` and `powerprofilesctl`.
 
 use crate::card::{
-    has_render_data, render_value, run_cmd, run_sh, Action, Button, Card, Cx, Data, Event, Hits,
-    Rect, Source, Status,
+    has_render_data, render_value, run_cmd, run_sh, Action, Button, Card, CommandResult, Cx, Data,
+    Event, Hits, Rect, Source, Status,
 };
 use crate::provider::{CardKind, Claim, Listed, Provider, Size};
 use crate::ui::{self, Icon, List, Row};
@@ -421,6 +421,7 @@ const H_NET: u32 = 10;
 pub struct NetworkCard {
     pub data: Option<NetworkData>,
     pub list: List,
+    pub error: ui::CardError,
 }
 
 impl NetworkCard {
@@ -480,6 +481,28 @@ pub fn join_command(n: &Wlan, saved: &[SavedWifi]) -> String {
     }
 }
 
+fn network_error_message(res: &CommandResult) -> String {
+    let lower = res.stderr_line.to_ascii_lowercase();
+    if lower.contains("secrets were required")
+        || lower.contains("wrong password")
+        || lower.contains("bad password")
+        || lower.contains("invalid password")
+        || lower.contains("no secrets")
+    {
+        return "Wrong password".into();
+    }
+    let prefix = if res.command.contains("radio wifi") {
+        "Wi-Fi switch failed"
+    } else if res.command.contains("rescan") {
+        "Scan failed"
+    } else if res.command.contains("connection down") {
+        "Disconnect failed"
+    } else {
+        "Could not join"
+    };
+    ui::command_error(prefix, &res.stderr_line)
+}
+
 impl Card for NetworkCard {
     fn apply(&mut self, key: &str, data: &dyn Any) -> bool {
         let (true, Some(d)) = (key == "network", data.downcast_ref::<NetworkData>()) else {
@@ -497,7 +520,7 @@ impl Card for NetworkCard {
         }
     }
     fn height(&self, cx: &Cx, _: f64) -> f64 {
-        let mut h = ui::ROW_H;
+        let mut h = ui::ROW_H + self.error.height();
         if self.has_list() {
             h += if cx.size == Size::M {
                 self.rows() as f64 * ui::LIST_ROW_H + 8.0
@@ -511,17 +534,15 @@ impl Card for NetworkCard {
         let Some(d) = &self.data else { return };
         let (word, detail, on) = d.state();
         let open = self.list_open(cx);
-        let (row_r, list_r) = if !self.has_list() {
-            (body, (0.0, 0.0, 0.0, 0.0))
-        } else if cx.size == Size::M {
-            let lh = body.3 - ui::ROW_H;
-            (
-                (body.0, body.1, body.2, ui::ROW_H),
-                (body.0, body.1 + ui::ROW_H, body.2, lh),
-            )
-        } else {
-            self.list.split(body, self.rows(), cx.list_above)
-        };
+        let (row_r, err_r, list_r) = ui::split_row_error_list(
+            &self.list,
+            body,
+            self.has_list(),
+            cx.size,
+            self.rows(),
+            cx.list_above,
+            self.error.message.is_some(),
+        );
         let right = if self.has_list() {
             30.0 + 8.0 + ui::MORE_W + 4.0
         } else {
@@ -547,6 +568,9 @@ impl Card for NetworkCard {
             if cx.size != Size::M {
                 ui::more(cr, cx, hits, H_MORE, row_r, x_right - 30.0 - 8.0, lit, open);
             }
+        }
+        if let (Some(er), Some(msg)) = (err_r, &self.error.message) {
+            ui::error_line(cr, cx, er, msg);
         }
         if list_r.3 > 1.0 {
             cr.save().ok();
@@ -666,6 +690,19 @@ impl Card for NetworkCard {
         self.list.open = true;
         self.list.settle();
     }
+    fn command_done(&mut self, res: &CommandResult, now: std::time::Instant) -> bool {
+        if res.status == Some(0) {
+            self.error.clear()
+        } else {
+            self.error.set(network_error_message(res), now)
+        }
+    }
+    fn next_deadline(&self) -> Option<std::time::Instant> {
+        self.error.until
+    }
+    fn expire(&mut self, now: std::time::Instant) -> bool {
+        self.error.expire(now)
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -758,6 +795,24 @@ pub struct BluetoothCard {
     pub searching: bool,
     /// the background scan command is running
     pub scanning: bool,
+    pub error: ui::CardError,
+}
+
+fn bluetooth_error_message(res: &CommandResult) -> String {
+    let prefix = if res.command.contains("pair ") {
+        "Pairing failed"
+    } else if res.command.contains("connect ") && !res.command.contains("disconnect ") {
+        "Connection failed"
+    } else if res.command.contains("disconnect ") {
+        "Disconnect failed"
+    } else if res.command.contains("scan on") {
+        "Scan failed"
+    } else if res.command.contains("power ") {
+        "Bluetooth switch failed"
+    } else {
+        "Bluetooth failed"
+    };
+    ui::command_error(prefix, &res.stderr_line)
 }
 
 impl BluetoothCard {
@@ -793,6 +848,7 @@ impl Card for BluetoothCard {
     }
     fn height(&self, cx: &Cx, _: f64) -> f64 {
         ui::ROW_H
+            + self.error.height()
             + if cx.size == Size::M {
                 self.rows() as f64 * ui::LIST_ROW_H + 8.0
             } else {
@@ -822,14 +878,15 @@ impl Card for BluetoothCard {
         } else {
             ("No device connected".to_string(), format!("{saved} saved"))
         };
-        let (row_r, list_r) = if cx.size == Size::M {
-            (
-                (body.0, body.1, body.2, ui::ROW_H),
-                (body.0, body.1 + ui::ROW_H, body.2, body.3 - ui::ROW_H),
-            )
-        } else {
-            self.list.split(body, self.rows(), cx.list_above)
-        };
+        let (row_r, err_r, list_r) = ui::split_row_error_list(
+            &self.list,
+            body,
+            true,
+            cx.size,
+            self.rows(),
+            cx.list_above,
+            self.error.message.is_some(),
+        );
         let lit = ui::row(
             cr,
             cx,
@@ -861,6 +918,9 @@ impl Card for BluetoothCard {
                 lit,
                 self.list.open,
             );
+        }
+        if let (Some(er), Some(msg)) = (err_r, &self.error.message) {
+            ui::error_line(cr, cx, er, msg);
         }
         if list_r.3 > 1.0 {
             cr.save().ok();
@@ -968,6 +1028,25 @@ impl Card for BluetoothCard {
         self.list.open = true;
         self.list.settle();
     }
+    fn command_done(&mut self, res: &CommandResult, now: std::time::Instant) -> bool {
+        let mut changed = false;
+        if res.command.contains(" scan on") && self.scanning {
+            self.scanning = false;
+            changed = true;
+        }
+        changed
+            | if res.status == Some(0) {
+                self.error.clear()
+            } else {
+                self.error.set(bluetooth_error_message(res), now)
+            }
+    }
+    fn next_deadline(&self) -> Option<std::time::Instant> {
+        self.error.until
+    }
+    fn expire(&mut self, now: std::time::Instant) -> bool {
+        self.error.expire(now)
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1041,6 +1120,7 @@ impl Source for PowerSource {
 #[derive(Default)]
 pub struct PowerCard {
     pub data: Option<PowerData>,
+    pub error: ui::CardError,
 }
 
 impl Card for PowerCard {
@@ -1060,7 +1140,7 @@ impl Card for PowerCard {
         }
     }
     fn height(&self, _: &Cx, _: f64) -> f64 {
-        34.0 + 8.0 + 16.0
+        34.0 + 8.0 + 16.0 + self.error.height()
     }
     fn draw(&self, cr: &Context, cx: &Cx, body: Rect, hits: &mut Hits) {
         let Some(d) = &self.data else { return };
@@ -1091,6 +1171,14 @@ impl Card for PowerCard {
                 text: mode_says(&d.active),
             },
         );
+        if let Some(msg) = &self.error.message {
+            ui::error_line(
+                cr,
+                cx,
+                (body.0, body.1 + 34.0 + 8.0 + 16.0, body.2, ui::ERROR_H),
+                msg,
+            );
+        }
     }
     fn event(&mut self, ev: &Event, _: &Cx, out: &mut Vec<Action>) -> bool {
         let Some(d) = &mut self.data else {
@@ -1126,6 +1214,22 @@ impl Card for PowerCard {
         // shown at once; the fetch after the command confirms or corrects it
         d.active = mode;
         true
+    }
+    fn command_done(&mut self, res: &CommandResult, now: std::time::Instant) -> bool {
+        if res.status == Some(0) {
+            self.error.clear()
+        } else {
+            self.error.set(
+                ui::command_error("Power mode failed", &res.stderr_line),
+                now,
+            )
+        }
+    }
+    fn next_deadline(&self) -> Option<std::time::Instant> {
+        self.error.until
+    }
+    fn expire(&mut self, now: std::time::Instant) -> bool {
+        self.error.expire(now)
     }
 }
 
@@ -1260,7 +1364,10 @@ pub(crate) mod tests {
         let d = parse_power("  performance:\n    CpuDriver:\tamd_pstate\n\n* balanced:\n    CpuDriver:\tamd_pstate\n\n  power-saver:\n    Degraded:  no\n");
         assert_eq!(d.modes, vec!["power-saver", "balanced", "performance"]);
         assert_eq!(d.active, "balanced");
-        let mut c = PowerCard { data: Some(d) };
+        let mut c = PowerCard {
+            data: Some(d),
+            ..Default::default()
+        };
         let th = crate::theme::Theme::from_config(&crate::config::Config::from_text(""));
         let cx = test_cx(&th);
         let mut out = Vec::new();
@@ -1299,7 +1406,8 @@ pub(crate) mod tests {
         );
         assert_eq!(
             PowerCard {
-                data: Some(PowerData::default())
+                data: Some(PowerData::default()),
+                ..Default::default()
             }
             .status(&cx),
             Status::Missing("This PC has no power modes".into())
@@ -1642,6 +1750,292 @@ pub(crate) mod tests {
             vec![Action::Run("bluetoothctl power off >&2".into())]
         );
         assert!(!c.searching && !c.scanning);
+    }
+
+    fn count_alert_red_pixels(card: &dyn Card, cx: &Cx, w: f64, y0: usize, y1: usize) -> usize {
+        let h = card.height(cx, w).ceil() as i32;
+        let mut surf = cairo::ImageSurface::create(cairo::Format::ARgb32, w as i32, h).unwrap();
+        {
+            let cr = Context::new(&surf).unwrap();
+            crate::draw::grey_text_edges(&cr);
+            let mut hits = Hits::new(None, None);
+            card.draw(&cr, cx, (0.0, 0.0, w, card.height(cx, w)), &mut hits);
+        }
+        surf.flush();
+        let stride = surf.stride() as usize;
+        let data = surf.data().unwrap();
+        let mut alert_px = 0usize;
+        for y in y0..y1.min(h as usize) {
+            for x in 0..(w as usize) {
+                let off = y * stride + x * 4;
+                let (b, _, r, a) = (data[off], data[off + 1], data[off + 2], data[off + 3]);
+                if a > 40 && r > b + 20 {
+                    alert_px += 1;
+                }
+            }
+        }
+        alert_px
+    }
+
+    #[test]
+    fn network_card_shows_wrong_password_and_stderr_error_then_clears_and_expires() {
+        use std::time::{Duration, Instant};
+
+        let th = crate::theme::Theme::from_config(&crate::config::Config::from_text(""));
+        assert!(th.alert.0 > th.alert.2);
+        let cx = test_cx(&th);
+        let mut c = NetworkCard::default();
+        c.apply(
+            "network",
+            &parse_network("enabled\n---\nwifi:disconnected\n---\n :80:WPA2:CafeSec\n---\n")
+                as &dyn Any,
+        );
+        let base_h = c.height(&cx, 300.0);
+        let t0 = Instant::now();
+
+        // 1. nmcli secrets failure maps to "Wrong password" and adds the alert line under the row.
+        assert!(c.command_done(
+            &CommandResult {
+                command: "nmcli connection up id 'CafeSec' >/dev/null".into(),
+                status: Some(4),
+                stderr_line:
+                    "Error: Connection activation failed: Secrets were required, but not provided."
+                        .into(),
+            },
+            t0,
+        ));
+        assert_eq!(c.error.message.as_deref(), Some("Wrong password"));
+        assert_eq!(c.height(&cx, 300.0), base_h + ui::ERROR_H);
+        assert!(
+            count_alert_red_pixels(
+                &c,
+                &cx,
+                300.0,
+                ui::ROW_H as usize,
+                (ui::ROW_H + ui::ERROR_H) as usize
+            ) > 10,
+            "expected alert-coloured error line under the closed network row"
+        );
+
+        // Panel closing does not wipe an active command error (important while `ask` closes panels).
+        c.panel_closed();
+        assert_eq!(c.height(&cx, 300.0), base_h + ui::ERROR_H);
+
+        // 2. With the list open (both below and above), height grows by ERROR_H and draws cleanly.
+        c.show_list();
+        let list_only_h = c.height(&cx, 300.0) - ui::ERROR_H;
+        assert!(
+            count_alert_red_pixels(
+                &c,
+                &cx,
+                300.0,
+                ui::ROW_H as usize,
+                (ui::ROW_H + ui::ERROR_H) as usize
+            ) > 10
+        );
+        let mut cx_above = test_cx(&th);
+        cx_above.list_above = true;
+        let err_top_above = (c.height(&cx_above, 300.0) - ui::ERROR_H) as usize;
+        assert!(
+            count_alert_red_pixels(
+                &c,
+                &cx_above,
+                300.0,
+                err_top_above,
+                err_top_above + ui::ERROR_H as usize
+            ) > 10
+        );
+        let mut cx_m = test_cx(&th);
+        cx_m.size = Size::M;
+        assert_eq!(
+            c.height(&cx_m, 300.0),
+            ui::ROW_H + ui::ERROR_H + c.rows() as f64 * ui::LIST_ROW_H + 8.0
+        );
+
+        // 3. Generic stderr error shows "Could not join: <stderr line>".
+        assert!(c.command_done(
+            &CommandResult {
+                command: "nmcli dev wifi connect 'OpenNet' >/dev/null".into(),
+                status: Some(10),
+                stderr_line: "Error: No network with SSID 'OpenNet' found.".into(),
+            },
+            t0 + Duration::from_secs(1),
+        ));
+        assert_eq!(
+            c.error.message.as_deref(),
+            Some("Could not join: Error: No network with SSID 'OpenNet' found.")
+        );
+        assert_eq!(c.height(&cx, 300.0), list_only_h + ui::ERROR_H);
+
+        // 4. Next success clears it.
+        assert!(c.command_done(
+            &CommandResult {
+                command: "nmcli connection up id 'CafeSec' >/dev/null".into(),
+                status: Some(0),
+                stderr_line: String::new(),
+            },
+            t0 + Duration::from_secs(2),
+        ));
+        assert_eq!(c.error.message, None);
+        assert_eq!(c.height(&cx, 300.0), list_only_h);
+
+        // 5. Expiry clears after ERROR_TTL.
+        let t1 = t0 + Duration::from_secs(3);
+        assert!(c.command_done(
+            &CommandResult {
+                command: "nmcli connection up id 'CafeSec' >/dev/null".into(),
+                status: Some(4),
+                stderr_line: "wrong password".into(),
+            },
+            t1,
+        ));
+        assert_eq!(c.error.message.as_deref(), Some("Wrong password"));
+        assert_eq!(c.next_deadline(), Some(t1 + ui::ERROR_TTL));
+        assert!(!c.expire(t1 + ui::ERROR_TTL - Duration::from_millis(1)));
+        assert!(c.expire(t1 + ui::ERROR_TTL));
+        assert_eq!(c.error.message, None);
+        assert_eq!(c.next_deadline(), None);
+        assert_eq!(c.height(&cx, 300.0), list_only_h);
+    }
+
+    #[test]
+    fn bluetooth_card_shows_pairing_error_clears_scanning_and_expires() {
+        use std::time::{Duration, Instant};
+
+        let th = crate::theme::Theme::from_config(&crate::config::Config::from_text(""));
+        let cx = test_cx(&th);
+        let mut c = BluetoothCard::default();
+        c.apply(
+            "bluetooth",
+            &parse_bluetooth(
+                "Controller 00:11:22:33:44:55\n\tPowered: yes\n---\n\
+                 Device AA:BB:CC:DD:EE:FF Speaker\n---\n---\n\
+                 Device AA:BB:CC:DD:EE:FF Speaker\nDevice 11:22:33:44:55:66 Phone\n",
+            ) as &dyn Any,
+        );
+        let mut out = Vec::new();
+        c.event(
+            &Event::Press {
+                hit: H_FIND,
+                button: Button::Left,
+                at: (0.0, 0.0),
+            },
+            &cx,
+            &mut out,
+        );
+        assert!(c.scanning && c.searching);
+
+        // Scan ends with status 0: scanning indicator clears while discovered devices remain shown.
+        let t0 = Instant::now();
+        assert!(c.command_done(
+            &CommandResult {
+                command: "bluetoothctl --timeout 15 scan on >&2".into(),
+                status: Some(0),
+                stderr_line: String::new(),
+            },
+            t0,
+        ));
+        assert!(!c.scanning && c.searching);
+
+        // Pairing failure keeps "Pairing failed: <stderr line>" under the row in alert colour.
+        let base_h = c.height(&cx, 300.0);
+        assert!(c.command_done(
+            &CommandResult {
+                command: "bluetoothctl pair '11:22:33:44:55:66' >&2 && bluetoothctl trust '11:22:33:44:55:66' >&2 && bluetoothctl connect '11:22:33:44:55:66' >&2".into(),
+                status: Some(1),
+                stderr_line: "Failed to pair: org.bluez.Error.AuthenticationFailed".into(),
+            },
+            t0,
+        ));
+        assert_eq!(
+            c.error.message.as_deref(),
+            Some("Pairing failed: Failed to pair: org.bluez.Error.AuthenticationFailed")
+        );
+        assert_eq!(c.height(&cx, 300.0), base_h + ui::ERROR_H);
+        assert!(
+            count_alert_red_pixels(
+                &c,
+                &cx,
+                300.0,
+                ui::ROW_H as usize,
+                (ui::ROW_H + ui::ERROR_H) as usize
+            ) > 10
+        );
+
+        // Next success clears it.
+        assert!(c.command_done(
+            &CommandResult {
+                command: "bluetoothctl connect 'AA:BB:CC:DD:EE:FF' >&2".into(),
+                status: Some(0),
+                stderr_line: String::new(),
+            },
+            t0 + Duration::from_secs(1),
+        ));
+        assert_eq!(c.error.message, None);
+        assert_eq!(c.height(&cx, 300.0), base_h);
+
+        // Connect failure expires after ERROR_TTL.
+        let t1 = t0 + Duration::from_secs(2);
+        assert!(c.command_done(
+            &CommandResult {
+                command: "bluetoothctl connect 'AA:BB:CC:DD:EE:FF' >&2".into(),
+                status: Some(1),
+                stderr_line: "Failed to connect: br-connection-page-timeout".into(),
+            },
+            t1,
+        ));
+        assert_eq!(
+            c.error.message.as_deref(),
+            Some("Connection failed: Failed to connect: br-connection-page-timeout")
+        );
+        assert_eq!(c.height(&cx, 300.0), base_h + ui::ERROR_H);
+        assert!(c.expire(t1 + ui::ERROR_TTL));
+        assert_eq!(c.error.message, None);
+        assert_eq!(c.height(&cx, 300.0), base_h);
+    }
+
+    #[test]
+    fn power_card_shows_error_then_clears() {
+        use std::time::{Duration, Instant};
+
+        let th = crate::theme::Theme::from_config(&crate::config::Config::from_text(""));
+        let cx = test_cx(&th);
+        let mut c = PowerCard {
+            data: Some(parse_power(
+                "  performance:\n\n* balanced:\n\n  power-saver:\n",
+            )),
+            ..Default::default()
+        };
+        let base_h = c.height(&cx, 300.0);
+        let t0 = Instant::now();
+        assert!(c.command_done(
+            &CommandResult {
+                command: "powerprofilesctl set 'performance' >/dev/null 2>&1".into(),
+                status: Some(2),
+                stderr_line: String::new(),
+            },
+            t0,
+        ));
+        assert_eq!(c.error.message.as_deref(), Some("Power mode failed"));
+        assert_eq!(c.height(&cx, 300.0), base_h + ui::ERROR_H);
+        assert!(
+            count_alert_red_pixels(
+                &c,
+                &cx,
+                300.0,
+                base_h as usize,
+                (base_h + ui::ERROR_H) as usize
+            ) > 10
+        );
+        assert!(c.command_done(
+            &CommandResult {
+                command: "powerprofilesctl set 'balanced' >/dev/null 2>&1".into(),
+                status: Some(0),
+                stderr_line: String::new(),
+            },
+            t0 + Duration::from_secs(1),
+        ));
+        assert_eq!(c.height(&cx, 300.0), base_h);
     }
 
     pub fn test_cx(th: &crate::theme::Theme) -> Cx<'_> {

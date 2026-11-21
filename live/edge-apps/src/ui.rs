@@ -8,12 +8,16 @@
 
 use crate::card::{Cx, Hits, Rect};
 use crate::draw::{self, Text};
+use crate::provider::Size;
 use crate::theme::{Rgba, Theme};
 use cairo::Context;
 use std::f64::consts::PI;
+use std::time::{Duration, Instant};
 
 pub const ROW_H: f64 = 40.0;
 pub const LIST_ROW_H: f64 = 32.0;
+pub const ERROR_H: f64 = 20.0;
+pub const ERROR_TTL: Duration = Duration::from_secs(10);
 /// How long a list takes to open or fold.
 pub const LIST_MS: f64 = 220.0;
 const ICON: f64 = 16.0;
@@ -604,6 +608,106 @@ impl List {
     pub fn shown(&self) -> bool {
         self.reveal > 0.0
     }
+}
+
+/// Transient command error state shared across cards that show a plain alert line under their row.
+#[derive(Default)]
+pub struct CardError {
+    pub message: Option<String>,
+    pub until: Option<Instant>,
+}
+
+impl CardError {
+    pub fn set(&mut self, msg: String, now: Instant) -> bool {
+        let next = Some(msg);
+        let changed = self.message != next;
+        self.message = next;
+        self.until = Some(now + ERROR_TTL);
+        changed
+    }
+
+    pub fn clear(&mut self) -> bool {
+        let changed = self.message.is_some();
+        self.message = None;
+        self.until = None;
+        changed
+    }
+
+    pub fn expire(&mut self, now: Instant) -> bool {
+        if self.until.is_some_and(|u| now >= u) {
+            return self.clear();
+        }
+        false
+    }
+
+    pub fn height(&self) -> f64 {
+        if self.message.is_some() {
+            ERROR_H
+        } else {
+            0.0
+        }
+    }
+}
+
+/// Formats `prefix` with `stderr_line` when non-empty.
+pub fn command_error(prefix: &str, stderr_line: &str) -> String {
+    if stderr_line.is_empty() {
+        prefix.to_string()
+    } else {
+        format!("{prefix}: {stderr_line}")
+    }
+}
+
+/// Splits `body` into `(row_rect, error_rect, list_rect)` so any error sits directly under the row.
+pub fn split_row_error_list(
+    list: &List,
+    body: Rect,
+    has_list: bool,
+    size: Size,
+    rows: usize,
+    list_above: bool,
+    has_error: bool,
+) -> (Rect, Option<Rect>, Rect) {
+    let err_h = if has_error { ERROR_H } else { 0.0 };
+    if !has_list {
+        let row_r = (body.0, body.1, body.2, ROW_H);
+        let err_r = has_error.then_some((body.0, body.1 + ROW_H, body.2, err_h));
+        return (row_r, err_r, (0.0, 0.0, 0.0, 0.0));
+    }
+    if size == Size::M {
+        let row_r = (body.0, body.1, body.2, ROW_H);
+        let err_r = has_error.then_some((body.0, body.1 + ROW_H, body.2, err_h));
+        let list_r = (
+            body.0,
+            body.1 + ROW_H + err_h,
+            body.2,
+            (body.3 - ROW_H - err_h).max(0.0),
+        );
+        return (row_r, err_r, list_r);
+    }
+    let avail = (body.0, body.1, body.2, (body.3 - err_h).max(ROW_H));
+    let (row_r, mut list_r) = list.split(avail, rows, list_above);
+    let err_r = has_error.then_some((row_r.0, row_r.1 + ROW_H, row_r.2, err_h));
+    if !list_above && list_r.3 > 0.0 {
+        list_r.1 += err_h;
+    }
+    (row_r, err_r, list_r)
+}
+
+/// Draws a plain one-line error under a card's row using the theme's alert colour.
+pub fn error_line(cr: &Context, cx: &Cx, r: Rect, msg: &str) {
+    draw::text_max(
+        cr,
+        r.0 + 8.0,
+        r.1 + 2.0,
+        (r.2 - 16.0).max(0.0),
+        &Text {
+            size: draw::SIZE_NOTE,
+            bold: false,
+            color: cx.theme.alert,
+            text: msg,
+        },
+    );
 }
 
 /// The soft box a list sits in.
