@@ -1,0 +1,209 @@
+#!/bin/sh
+# tools/test-disk-guard: unit tests for live/infynitae-disk-guard against sample sysfs trees,
+# mountinfo fixtures, fake fix helper, fake journalctl, and fake notify-send.
+set -eu
+
+REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
+GUARD="$REPO_DIR/live/infynitae-disk-guard"
+[ -x "$GUARD" ] || { echo "FAIL: $GUARD not found or not executable" >&2; exit 1; }
+
+TMP=$(mktemp -d "/tmp/infynitae-test-disk-guard.XXXXXX")
+trap 'rm -rf "$TMP"' EXIT INT TERM
+
+BIN="$TMP/bin"
+mkdir -p "$BIN"
+NOTIFY_LOG="$TMP/notify.log"
+FIX_LOG="$TMP/fix.log"
+JRN_LOG="$TMP/journalctl.log"
+
+cat > "$BIN/notify-send" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$NOTIFY_LOG"
+EOF
+chmod +x "$BIN/notify-send"
+
+cat > "$TMP/fake-fix" <<'EOF'
+#!/bin/sh
+echo "ran" >> "$FIX_LOG"
+printf '%s\n' "${FAKE_FIX_OUT:-reserve=restored}"
+exit "${FAKE_FIX_RC:-0}"
+EOF
+chmod +x "$TMP/fake-fix"
+
+cat > "$TMP/fake-journalctl" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$JRN_LOG"
+if [ -n "${FAKE_JRN_FAIL_SYSTEM:-}" ]; then
+    case " $* " in
+        *" _SYSTEMD_UNIT=systemd-oomd.service "*) exit 1 ;;
+    esac
+fi
+if [ -n "${FAKE_JRN_FILE:-}" ] && [ -f "$FAKE_JRN_FILE" ]; then
+    cat "$FAKE_JRN_FILE"
+fi
+EOF
+chmod +x "$TMP/fake-journalctl"
+
+make_sysfs() {
+    dir="$1" sect="$2" chunk="$3" d_tot="$4" m_tot="$5" s_tot="$6" m_bytes="$7" m_used="$8" rsv="$9"
+    rm -rf "$dir"
+    mkdir -p "$dir/devices/nvme0n1p1" "$dir/allocation/data" "$dir/allocation/metadata" "$dir/allocation/system"
+    printf '%s\n' "$sect" > "$dir/devices/nvme0n1p1/size"
+    printf '%s\n' "$chunk" > "$dir/allocation/data/chunk_size"
+    printf '%s\n' "$d_tot" > "$dir/allocation/data/disk_total"
+    printf '%s\n' "$d_tot" > "$dir/allocation/data/total_bytes"
+    printf '%s\n' "$m_tot" > "$dir/allocation/metadata/disk_total"
+    printf '%s\n' "$s_tot" > "$dir/allocation/system/disk_total"
+    printf '%s\n' "$m_bytes" > "$dir/allocation/metadata/total_bytes"
+    printf '%s\n' "$m_used" > "$dir/allocation/metadata/bytes_used"
+    printf '%s\n' "$rsv" > "$dir/allocation/global_rsv_size"
+}
+
+fail=0
+check() {
+    if [ "$2" = "$3" ]; then
+        echo "ok   $1"
+    else
+        echo "FAIL $1: expected [$3], got [$2]" >&2
+        fail=1
+    fi
+}
+
+run_guard() {
+    run_dir="$1"
+    shift
+    mkdir -p "$run_dir"
+    : > "$NOTIFY_LOG"
+    : > "$FIX_LOG"
+    : > "$JRN_LOG"
+    PATH="$BIN:$PATH" \
+    XDG_RUNTIME_DIR="$run_dir" \
+    NOTIFY_LOG="$NOTIFY_LOG" \
+    FIX_LOG="$FIX_LOG" \
+    JRN_LOG="$JRN_LOG" \
+    INFYNITAE_DISK_GUARD_OOMD_SOCKET="$TMP/no-sock" \
+    "$@" "$GUARD"
+}
+
+# 1. Sample sysfs triggering case from spec:
+# data chunk_size = 1 GiB (1073741824) -> 2x = 2 GiB
+# metadata total = 2 GiB (2147483648), used = 1.63 GiB (1750199173), global_rsv = 389 MiB (407896064)
+# metadata free = -10611589 (< 256 MiB)
+# unallocated = 1 MiB (1048576): 10 GiB device (20971520 sectors = 10737418240 B), allocated 10736369664 B
+make_sysfs "$TMP/sysfs-crit" 20971520 1073741824 8588886016 2147483648 0 2147483648 1750199173 407896064
+run_guard "$TMP/run1" env INFYNITAE_DISK_GUARD_SYSFS="$TMP/sysfs-crit" INFYNITAE_DISK_GUARD_FIX="$TMP/fake-fix"
+check "low unalloc (1 MiB) + low metadata free (1.63 GiB + 389 MiB / 2 GiB) triggers fix" \
+    "$(wc -l < "$FIX_LOG" | tr -d ' ')" "1"
+check "trigger shows exactly one notification" \
+    "$(wc -l < "$NOTIFY_LOG" | tr -d ' ')" "1"
+has_kept=$(grep -c 'Root drive was nearly full' "$NOTIFY_LOG" || true)
+check "restored reserve notifies plain message" "$has_kept" "1"
+
+# 2. Today's healthy state on owner's PC (/sys/fs/btrfs/3b60f0cc-bdfb-465a-a98d-95d1e6c1294a):
+# sectors = 840456207 (430313577984 B), data chunk = 10737418240, data disk_total = 261962596352,
+# metadata disk_total = 4294967296, system disk_total = 67108864 (unalloc ~152.73 GiB),
+# metadata total = 2147483648, used = 1383432192, global_rsv = 323026944 (free ~420.59 MiB)
+make_sysfs "$TMP/sysfs-healthy" 840456207 10737418240 261962596352 4294967296 67108864 2147483648 1383432192 323026944
+run_guard "$TMP/run2" env INFYNITAE_DISK_GUARD_SYSFS="$TMP/sysfs-healthy" INFYNITAE_DISK_GUARD_FIX="$TMP/fake-fix"
+check "today's healthy state does not trigger fix" "$(wc -l < "$FIX_LOG" | tr -d ' ')" "0"
+check "today's healthy state sends no notification" "$(wc -l < "$NOTIFY_LOG" | tr -d ' ')" "0"
+
+# 3. Single-condition negative checks (AND semantics):
+# 3a: unallocated = 1 MiB (< 2 GiB), metadata free = 300 MiB (>= 256 MiB)
+make_sysfs "$TMP/sysfs-meta-ok" 20971520 1073741824 8588886016 2147483648 0 2147483648 1425014784 407896064
+run_guard "$TMP/run3a" env INFYNITAE_DISK_GUARD_SYSFS="$TMP/sysfs-meta-ok" INFYNITAE_DISK_GUARD_FIX="$TMP/fake-fix"
+check "low unalloc with >= 256 MiB metadata free does not trigger" "$(wc -l < "$FIX_LOG" | tr -d ' ')" "0"
+
+# 3b: unallocated = 3 GiB (>= 2 GiB), metadata free < 256 MiB
+make_sysfs "$TMP/sysfs-unalloc-ok" 27262976 1073741824 8588886016 2147483648 0 2147483648 1750199173 407896064
+run_guard "$TMP/run3b" env INFYNITAE_DISK_GUARD_SYSFS="$TMP/sysfs-unalloc-ok" INFYNITAE_DISK_GUARD_FIX="$TMP/fake-fix"
+check "low metadata free with >= 2x chunk_size unallocated does not trigger" "$(wc -l < "$FIX_LOG" | tr -d ' ')" "0"
+
+# 4. Full mountinfo discovery + non-btrfs root:
+mkdir -p "$TMP/btrfs-root/test-uuid"
+cp -r "$TMP/sysfs-crit"/* "$TMP/btrfs-root/test-uuid/"
+cat > "$TMP/mountinfo-btrfs" <<'EOF'
+1 0 0:1 / / rw,relatime - rootfs rootfs rw
+32 2 0:29 /@ / rw,noatime shared:1 - btrfs /dev/nvme0n1p1 rw,ssd
+EOF
+run_guard "$TMP/run4" env \
+    INFYNITAE_DISK_GUARD_MOUNTINFO="$TMP/mountinfo-btrfs" \
+    INFYNITAE_DISK_GUARD_BTRFS="$TMP/btrfs-root" \
+    INFYNITAE_DISK_GUARD_FIX="$TMP/fake-fix"
+check "mountinfo resolves btrfs UUID and triggers fix" "$(wc -l < "$FIX_LOG" | tr -d ' ')" "1"
+
+# Second tick right away respects cooldown and does not re-run fix
+: > "$FIX_LOG"
+: > "$NOTIFY_LOG"
+PATH="$BIN:$PATH" XDG_RUNTIME_DIR="$TMP/run4" NOTIFY_LOG="$NOTIFY_LOG" FIX_LOG="$FIX_LOG" \
+    INFYNITAE_DISK_GUARD_OOMD_SOCKET="$TMP/no-sock" \
+    INFYNITAE_DISK_GUARD_MOUNTINFO="$TMP/mountinfo-btrfs" \
+    INFYNITAE_DISK_GUARD_BTRFS="$TMP/btrfs-root" \
+    INFYNITAE_DISK_GUARD_FIX="$TMP/fake-fix" "$GUARD"
+check "cooldown suppresses repeated fix within 30 minutes" "$(wc -l < "$FIX_LOG" | tr -d ' ')" "0"
+
+cat > "$TMP/mountinfo-ext4" <<'EOF'
+32 2 8:2 / / rw,noatime shared:1 - ext4 /dev/sda2 rw
+EOF
+run_guard "$TMP/run5" env \
+    INFYNITAE_DISK_GUARD_MOUNTINFO="$TMP/mountinfo-ext4" \
+    INFYNITAE_DISK_GUARD_BTRFS="$TMP/btrfs-root" \
+    INFYNITAE_DISK_GUARD_FIX="$TMP/fake-fix"
+check "ext4 root skips btrfs check cleanly" "$(wc -l < "$FIX_LOG" | tr -d ' ')" "0"
+
+# 5. Notification for reserve=released and failed fix:
+run_guard "$TMP/run6" env \
+    INFYNITAE_DISK_GUARD_SYSFS="$TMP/sysfs-crit" \
+    INFYNITAE_DISK_GUARD_FIX="$TMP/fake-fix" \
+    FAKE_FIX_OUT="reserve=released"
+has_low=$(grep -c 'Root drive is low on space' "$NOTIFY_LOG" || true)
+check "released reserve warns low space" "$has_low" "1"
+
+run_guard "$TMP/run7" env \
+    INFYNITAE_DISK_GUARD_SYSFS="$TMP/sysfs-crit" \
+    INFYNITAE_DISK_GUARD_FIX="$TMP/fake-fix" \
+    FAKE_FIX_RC=1
+has_fail=$(grep -c 'Root drive metadata is nearly full' "$NOTIFY_LOG" || true)
+check "failed fix warns cleanup failure" "$has_fail" "1"
+
+# 6. systemd-oomd journal notifications & --since tracking:
+cat > "$TMP/oom.log" <<'EOF'
+Marked /user.slice/user-1000.slice/user@1000.service/app.slice/app-discord-1280.scope for killing due to memory pressure for /user.slice/user-1000.slice/user@1000.service being 65.00% > 60.00% for > 20s with reclaim activity
+Marked /user.slice/user-1000.slice/user@1000.service/app.slice/app-discord-1280.scope for killing due to memory pressure for /user.slice/user-1000.slice/user@1000.service being 65.00% > 60.00% for > 20s with reclaim activity
+Killed /user.slice/user-1000.slice/user@1000.service/kitty-3783-0.scope due to memory used (100) / total (100)
+Marked /user.slice/user-1000.slice/user@1000.service/app.slice/app-gnome-org.mozilla.firefox-12345.scope for killing due to memory pressure
+Marked /user.slice/user-1000.slice/user@1000.service/app.slice/app-gnome\x2dterminal-555.scope for killing due to memory pressure
+EOF
+run_guard "$TMP/run8" env \
+    INFYNITAE_DISK_GUARD_MOUNTINFO="$TMP/mountinfo-ext4" \
+    INFYNITAE_DISK_GUARD_JOURNALCTL="$TMP/fake-journalctl" \
+    FAKE_JRN_FILE="$TMP/oom.log"
+check "oomd dedups and notifies 4 killed apps" "$(wc -l < "$NOTIFY_LOG" | tr -d ' ')" "4"
+check "oomd formats discord" "$(grep -c 'Closed discord - RAM was full' "$NOTIFY_LOG" || true)" "1"
+check "oomd formats kitty" "$(grep -c 'Closed kitty - RAM was full' "$NOTIFY_LOG" || true)" "1"
+check "oomd formats firefox from reverse-DNS scope" "$(grep -c 'Closed firefox - RAM was full' "$NOTIFY_LOG" || true)" "1"
+check "oomd unescapes \\x2d in gnome-terminal" "$(grep -c 'Closed gnome-terminal - RAM was full' "$NOTIFY_LOG" || true)" "1"
+check "first tick passes --since -65s" "$(grep -c -- '--since -65s' "$JRN_LOG" || true)" "1"
+
+# Second tick passes saved @timestamp in --since
+: > "$JRN_LOG"
+: > "$NOTIFY_LOG"
+PATH="$BIN:$PATH" XDG_RUNTIME_DIR="$TMP/run8" NOTIFY_LOG="$NOTIFY_LOG" FIX_LOG="$FIX_LOG" \
+    JRN_LOG="$JRN_LOG" INFYNITAE_DISK_GUARD_OOMD_SOCKET="$TMP/no-sock" \
+    INFYNITAE_DISK_GUARD_MOUNTINFO="$TMP/mountinfo-ext4" \
+    INFYNITAE_DISK_GUARD_JOURNALCTL="$TMP/fake-journalctl" "$GUARD"
+has_at_since=$(grep -c -- '--since @[0-9]' "$JRN_LOG" || true)
+check "second tick passes saved @timestamp to --since" "$has_at_since" "1"
+
+# 7. User-journal fallback when system journal read fails (non-wheel user):
+cat > "$TMP/oom-user.log" <<'EOF'
+app-flatpak-com.valvesoftware.Steam-999.scope: systemd-oomd killed 3 process(es) in this unit.
+EOF
+run_guard "$TMP/run9" env \
+    INFYNITAE_DISK_GUARD_MOUNTINFO="$TMP/mountinfo-ext4" \
+    INFYNITAE_DISK_GUARD_JOURNALCTL="$TMP/fake-journalctl" \
+    FAKE_JRN_FAIL_SYSTEM=1 \
+    FAKE_JRN_FILE="$TMP/oom-user.log"
+check "user journal fallback formats Steam" "$(grep -c 'Closed Steam - RAM was full' "$NOTIFY_LOG" || true)" "1"
+
+exit $fail
