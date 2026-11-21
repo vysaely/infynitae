@@ -104,6 +104,15 @@ pub const TABLE: &[Setting] = &[
         more: true,
         needs: &[],
     },
+    Setting {
+        key: "REPLAY_STORAGE",
+        name: "Replay kept in",
+        says: "On disk: almost no memory, written to the clips folder's drive all the time",
+        control: Control::Pick(&[("ram", "Memory"), ("disk", "The clips folder")]),
+        after: After::Reload("recorder"),
+        more: true,
+        needs: &["gpu-screen-recorder"],
+    },
 ];
 
 /// Buttons that open each output folder rather than editing a key in-card.
@@ -791,9 +800,10 @@ mod tests {
         assert_eq!(vals_gsr, vec!["auto", "gpu-screen-recorder", "infynitae"]);
 
         assert_eq!(with_gsr.visible_rows(&cx_s), (vec![0, 1, 2, 3], true));
+        // with gpu-screen-recorder, More also holds where its replay is kept (row 6)
         assert_eq!(
             with_gsr.visible_rows(&cx_m),
-            (vec![0, 1, 2, 3, 4, 5], false)
+            (vec![0, 1, 2, 3, 4, 5, 6], false)
         );
     }
 

@@ -230,6 +230,11 @@ gsr_usable() {
 start_gsr_replay() {
     mkdir -p "$CLIPS_DIR"
     set -- -w screen -f "$RECORD_FPS" -r "$TOTAL_SECS" -c mp4 -k "$(gsr_codec)" -o "$CLIPS_DIR"
+    # REPLAY_STORAGE=disk: the buffer is a file in CLIPS_DIR (a gsr-replay-*.gsr folder) instead of
+    # about 1.5 GB of RAM for 20 minutes at 60 fps
+    case "$(echo "${REPLAY_STORAGE:-ram}" | tr 'A-Z' 'a-z')" in
+        disk) set -- "$@" -replay-storage disk ;;
+    esac
     case "$(echo "${RECORD_AUDIO:-desktop}" | tr 'A-Z' 'a-z')" in
         desktop|true|1|yes|on) set -- "$@" -a default_output ;;
         mic|microphone) set -- "$@" -a default_input ;;
