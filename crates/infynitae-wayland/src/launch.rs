@@ -163,6 +163,20 @@ impl WaylandState {
         u32::try_from(creds.pid).ok()
     }
 
+    /// Whether the new window `a` comes from a process that the process of `b` started: how an
+    /// app runs a helper with its own connection, such as the captcha window a game opens. Two
+    /// windows of one connection do not count (another app's window in the tests, every X11
+    /// window through xwayland-satellite).
+    pub fn started_by_app_of(&self, a: ElementId, b: ElementId) -> bool {
+        self.client_pid(a)
+            .zip(self.client_pid(b))
+            .is_some_and(|(child, parent)| {
+                child_of(child, parent, |pid| {
+                    crate::ownership::stat_of(pid).map(|(_, ppid)| ppid)
+                })
+            })
+    }
+
     /// Whether the user opened the new window `element` (module docs), given when they last
     /// typed or clicked.
     pub fn opened_by_user(&mut self, element: ElementId, last_input: Instant) -> bool {
@@ -236,7 +250,9 @@ impl WaylandState {
         }
         let focused = self.core.focus().target().filter(|f| *f != element);
         focused.is_some_and(|f| {
-            self.core.fullscreen_of(f).is_some() && self.core.toplevel_parent(element) != Some(f)
+            self.core.fullscreen_of(f).is_some()
+                && self.core.toplevel_parent(element) != Some(f)
+                && !self.started_by_app_of(element, f)
         })
     }
 
@@ -278,5 +294,32 @@ mod tests {
             .ok()
             .and_then(|v| v.parse().ok());
         assert_eq!(tag_of(me), expected);
+    }
+}
+
+/// Whether `child`'s parent process is `parent`, by `ppid_of`.
+fn child_of(child: u32, parent: u32, ppid_of: impl Fn(i32) -> Option<i32>) -> bool {
+    child != parent
+        && i32::try_from(child)
+            .ok()
+            .and_then(ppid_of)
+            .is_some_and(|ppid| u32::try_from(ppid) == Ok(parent))
+}
+
+#[cfg(test)]
+mod child_of_tests {
+    use super::child_of;
+
+    #[test]
+    fn only_a_direct_child_counts() {
+        let ppid = |pid: i32| match pid {
+            200 => Some(100),
+            300 => Some(200),
+            _ => None,
+        };
+        assert!(child_of(200, 100, ppid));
+        assert!(!child_of(300, 100, ppid), "a grandchild");
+        assert!(!child_of(100, 100, ppid), "the same process");
+        assert!(!child_of(400, 100, ppid), "unknown");
     }
 }

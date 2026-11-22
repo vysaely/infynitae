@@ -669,7 +669,18 @@ pub fn run_headless_with(
             }
         } else if state.core().focus_on_open() {
             for &new_id in &new_mapped {
-                if let Ok(effects) = state.core_mut().set_focus(&mut input_port, Some(new_id)) {
+                let shown = state.core().toplevel_parent(new_id).is_some()
+                    || state
+                        .core()
+                        .focus()
+                        .target()
+                        .is_some_and(|f| state.started_by_app_of(new_id, f));
+                let result = if shown {
+                    state.core_mut().show_opened(&mut input_port, new_id)
+                } else {
+                    state.core_mut().set_focus(&mut input_port, Some(new_id))
+                };
+                if let Ok(effects) = result {
                     state.apply(&effects);
                     session.flush();
                 }

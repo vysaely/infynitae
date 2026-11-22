@@ -105,7 +105,7 @@ pub(crate) fn children_of(pid: i32) -> Vec<i32> {
 }
 
 /// `(state, ppid)` of `pid` from `/proc/<pid>/stat` (the fields after the command name).
-fn stat_of(pid: i32) -> Option<(char, i32)> {
+pub(crate) fn stat_of(pid: i32) -> Option<(char, i32)> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     let mut rest = stat.get(stat.rfind(')')? + 2..)?.split(' ');
     let state = rest.next()?.chars().next()?;

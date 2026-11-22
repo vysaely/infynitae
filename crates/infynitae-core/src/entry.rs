@@ -1895,10 +1895,14 @@ impl Core {
         if self.stage.state(id) != Some(crate::stage::Lifecycle::Mapped) {
             return Err(EntryError::InvalidEvent);
         }
+        let had_constraint = self.constraint.is_some();
         let mut out = Vec::new();
         self.show_chosen(id, &mut out);
         out.extend(self.focus.set_focus_at(self.input.clock.now_us(), Some(id)));
         out.extend(self.reconcile_constraints());
+        if had_constraint && self.constraint.is_none() {
+            self.true_position_into(&mut out);
+        }
         Ok(out)
     }
 

@@ -12,8 +12,12 @@ use std::time::Duration;
 
 use common::input::*;
 use common::{Lockstep, Probe};
-use infynitae_backend_headless::{pointer_button, pointer_motion, set_focus};
+use infynitae_backend_headless::{keyboard_key, pointer_button, pointer_motion, set_focus};
+use infynitae_core::input::keys::KEY_LEFTMETA;
+use infynitae_core::stage::ElementId;
 use infynitae_wayland::ClientState;
+use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface as ServerSurface;
+use smithay::wayland::pointer_constraints::with_pointer_constraint;
 use wayland_client::protocol::wl_registry::WlRegistry;
 use wayland_client::{Connection, EventQueue, QueueHandle};
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::Layer;
@@ -90,6 +94,314 @@ fn adv(ls: &mut Lockstep) {
     ls.pump();
     let t = ls.now + Duration::from_micros(16_667);
     ls.run_until(t);
+}
+
+fn helper_server_surface(ls: &Lockstep, elem_id: ElementId) -> ServerSurface {
+    ls.state
+        .window(elem_id)
+        .expect("window")
+        .toplevel()
+        .expect("toplevel")
+        .wl_surface()
+        .clone()
+}
+
+fn helper_smithay_active(ls: &Lockstep, elem_id: ElementId) -> bool {
+    let root = helper_server_surface(ls, elem_id);
+    let ptr = ls.state.seat().get_pointer().expect("seat pointer");
+    with_pointer_constraint(&root, &ptr, |c| c.map(|c| c.is_active()).unwrap_or(false))
+}
+
+#[test]
+fn held_super_releases_pointer_lock_in_windowed_game() {
+    let mut ls = Lockstep::new(Some(a_1080()));
+    // the config's defaults (FREE_CURSOR_ON_SUPER, FOCUS_ON_OPEN), read at login
+    ls.state.core_mut().set_free_cursor_on_super(true);
+    ls.state.core_mut().set_focus_on_open(true);
+    let qh = ls.qh.clone();
+    let g_idx = ls.probe.toplevel(&qh, "GAME", (800, 600), 0);
+    adv(&mut ls);
+    ls.probe.draw(&qh, g_idx);
+    adv(&mut ls);
+    let game_id = ls.state.elements().last().expect("game element");
+    set_focus(&mut ls.state, &mut ls.input, Some(game_id)).unwrap();
+    adv(&mut ls);
+
+    // Pointer on GAME
+    pointer_motion(
+        &mut ls.state,
+        &mut ls.input,
+        (100.0, 100.0),
+        (100.0, 100.0),
+        1000,
+    )
+    .unwrap();
+    adv(&mut ls);
+
+    // Request persistent pointer lock
+    ls.probe.lock_pointer(&qh, g_idx, false);
+    adv(&mut ls);
+
+    assert!(
+        helper_smithay_active(&ls, game_id),
+        "precondition: pointer lock is active on GAME"
+    );
+
+    // Hold Super (KEY_LEFTMETA)
+    keyboard_key(&mut ls.state, &mut ls.input, KEY_LEFTMETA, true, 2000).unwrap();
+    adv(&mut ls);
+
+    assert!(
+        !helper_smithay_active(&ls, game_id),
+        "held Super must release pointer lock in windowed game"
+    );
+
+    // Release Super
+    keyboard_key(&mut ls.state, &mut ls.input, KEY_LEFTMETA, false, 3000).unwrap();
+    adv(&mut ls);
+
+    assert!(
+        helper_smithay_active(&ls, game_id),
+        "releasing Super re-locks in windowed game"
+    );
+
+    // Fullscreen control: in fullscreen, Super must NOT release the pointer lock
+    ls.probe.surfaces[g_idx]
+        .toplevel
+        .as_ref()
+        .unwrap()
+        .set_fullscreen(None);
+    adv(&mut ls);
+    ls.probe.surfaces[g_idx].size = (1920, 1080);
+    ls.probe.draw(&qh, g_idx);
+    adv(&mut ls);
+    let out = ls.output();
+    assert_eq!(ls.state.core().presentation(out), Some(game_id));
+    assert!(helper_smithay_active(&ls, game_id));
+
+    // Hold Super in fullscreen
+    keyboard_key(&mut ls.state, &mut ls.input, KEY_LEFTMETA, true, 4000).unwrap();
+    adv(&mut ls);
+
+    assert!(
+        helper_smithay_active(&ls, game_id),
+        "held Super must NOT release pointer lock in fullscreen game"
+    );
+    keyboard_key(&mut ls.state, &mut ls.input, KEY_LEFTMETA, false, 5000).unwrap();
+    adv(&mut ls);
+}
+
+#[test]
+fn captcha_window_from_game_gets_focus_and_frees_pointer_then_restores_lock_on_close() {
+    let mut ls = Lockstep::new(Some(a_1080()));
+    // the config's defaults (FREE_CURSOR_ON_SUPER, FOCUS_ON_OPEN), read at login
+    ls.state.core_mut().set_free_cursor_on_super(true);
+    ls.state.core_mut().set_focus_on_open(true);
+    let qh = ls.qh.clone();
+    let g_idx = ls.probe.toplevel(&qh, "GAME", (800, 600), 0);
+    ls.probe.surfaces[g_idx]
+        .toplevel
+        .as_ref()
+        .unwrap()
+        .set_app_id("space.bigrat.mocktail".into());
+    adv(&mut ls);
+    ls.probe.draw(&qh, g_idx);
+    adv(&mut ls);
+    let game_id = ls.state.elements().last().expect("game element");
+    set_focus(&mut ls.state, &mut ls.input, Some(game_id)).unwrap();
+    adv(&mut ls);
+
+    // Pointer on GAME
+    pointer_motion(
+        &mut ls.state,
+        &mut ls.input,
+        (100.0, 100.0),
+        (100.0, 100.0),
+        1000,
+    )
+    .unwrap();
+    adv(&mut ls);
+
+    // Request persistent pointer lock on GAME
+    ls.probe.lock_pointer(&qh, g_idx, false);
+    adv(&mut ls);
+    assert!(
+        helper_smithay_active(&ls, game_id),
+        "precondition: pointer lock active on GAME"
+    );
+    assert_eq!(ls.probe.kb.active.as_deref(), Some("GAME"));
+
+    // The game opens its captcha window
+    let c_idx = ls.probe.toplevel(&qh, "CAPTCHA", (400, 300), 0);
+    ls.probe.surfaces[c_idx]
+        .toplevel
+        .as_ref()
+        .unwrap()
+        .set_app_id("org.mocktail.WebViewHelper".into());
+    adv(&mut ls);
+    ls.probe.draw(&qh, c_idx);
+    adv(&mut ls);
+    let captcha_id = ls
+        .state
+        .elements()
+        .into_iter()
+        .find(|&id| id != game_id)
+        .expect("captcha element");
+
+    // In the session the captcha comes from a process the game started
+    // (`started_by_app_of`); the harness's clients share one process, so it is shown here directly.
+    let fx = ls
+        .state
+        .core_mut()
+        .show_opened(&mut ls.input, captcha_id)
+        .unwrap();
+    ls.state.apply(&fx);
+    adv(&mut ls);
+
+    // Captcha window must get keyboard focus
+    assert_eq!(
+        ls.probe.kb.active.as_deref(),
+        Some("CAPTCHA"),
+        "captcha window must receive keyboard focus on open"
+    );
+
+    // Pointer lock on GAME must be deactivated (free pointer)
+    assert!(
+        !helper_smithay_active(&ls, game_id),
+        "pointer lock must be deactivated while captcha window is open"
+    );
+    assert!(
+        ls.probe.ptr.iter().any(|s| s == "unlocked"),
+        "client must receive unlocked event for game surface when captcha opens"
+    );
+
+    // Close captcha window
+    ls.probe.destroy_toplevel(c_idx);
+    adv(&mut ls);
+
+    // Focus must return to GAME
+    assert_eq!(
+        ls.probe.kb.active.as_deref(),
+        Some("GAME"),
+        "keyboard focus must return to GAME after captcha closes"
+    );
+
+    // Pointer lock must come back to GAME
+    assert!(
+        helper_smithay_active(&ls, game_id),
+        "pointer lock must reactivate on GAME after captcha closes"
+    );
+}
+
+#[test]
+fn captcha_window_from_fullscreen_game_gets_focus_and_frees_pointer_then_restores_lock_on_close() {
+    let mut ls = Lockstep::new(Some(a_1080()));
+    // the config's defaults (FREE_CURSOR_ON_SUPER, FOCUS_ON_OPEN), read at login
+    ls.state.core_mut().set_free_cursor_on_super(true);
+    ls.state.core_mut().set_focus_on_open(true);
+    let qh = ls.qh.clone();
+    let g_idx = ls.probe.toplevel(&qh, "GAME", (1920, 1080), 0);
+    ls.probe.surfaces[g_idx]
+        .toplevel
+        .as_ref()
+        .unwrap()
+        .set_app_id("space.bigrat.mocktail".into());
+    ls.probe.surfaces[g_idx]
+        .toplevel
+        .as_ref()
+        .unwrap()
+        .set_fullscreen(None);
+    adv(&mut ls);
+    ls.probe.draw(&qh, g_idx);
+    adv(&mut ls);
+    let game_id = ls.state.elements().last().expect("game element");
+    set_focus(&mut ls.state, &mut ls.input, Some(game_id)).unwrap();
+    adv(&mut ls);
+    assert!(
+        ls.state.core().fullscreen_of(game_id).is_some(),
+        "precondition: GAME is fullscreen"
+    );
+
+    // Pointer on GAME
+    pointer_motion(
+        &mut ls.state,
+        &mut ls.input,
+        (100.0, 100.0),
+        (100.0, 100.0),
+        1000,
+    )
+    .unwrap();
+    adv(&mut ls);
+
+    // Request persistent pointer lock on GAME
+    ls.probe.lock_pointer(&qh, g_idx, false);
+    adv(&mut ls);
+    assert!(
+        helper_smithay_active(&ls, game_id),
+        "precondition: pointer lock active on fullscreen GAME"
+    );
+    assert_eq!(ls.probe.kb.active.as_deref(), Some("GAME"));
+
+    // The game opens its captcha window
+    let c_idx = ls.probe.toplevel(&qh, "CAPTCHA", (400, 300), 0);
+    ls.probe.surfaces[c_idx]
+        .toplevel
+        .as_ref()
+        .unwrap()
+        .set_app_id("org.mocktail.WebViewHelper".into());
+    adv(&mut ls);
+    ls.probe.draw(&qh, c_idx);
+    adv(&mut ls);
+    let captcha_id = ls
+        .state
+        .elements()
+        .into_iter()
+        .find(|&id| id != game_id)
+        .expect("captcha element");
+
+    // In the session the captcha comes from a process the game started
+    // (`started_by_app_of`); the harness's clients share one process, so it is shown here directly.
+    let fx = ls
+        .state
+        .core_mut()
+        .show_opened(&mut ls.input, captcha_id)
+        .unwrap();
+    ls.state.apply(&fx);
+    adv(&mut ls);
+
+    // Captcha window must get keyboard focus
+    assert_eq!(
+        ls.probe.kb.active.as_deref(),
+        Some("CAPTCHA"),
+        "captcha window must receive keyboard focus over fullscreen game"
+    );
+
+    // Pointer lock on GAME must be deactivated (free pointer)
+    assert!(
+        !helper_smithay_active(&ls, game_id),
+        "pointer lock must be deactivated while captcha window is open"
+    );
+    assert!(
+        ls.probe.ptr.iter().any(|s| s == "unlocked"),
+        "client must receive unlocked event for game surface when captcha opens"
+    );
+
+    // Close captcha window
+    ls.probe.destroy_toplevel(c_idx);
+    adv(&mut ls);
+
+    // Focus must return to GAME
+    assert_eq!(
+        ls.probe.kb.active.as_deref(),
+        Some("GAME"),
+        "keyboard focus must return to fullscreen GAME after captcha closes"
+    );
+
+    // Pointer lock must come back to GAME
+    assert!(
+        helper_smithay_active(&ls, game_id),
+        "pointer lock must reactivate on fullscreen GAME after captcha closes"
+    );
 }
 
 #[test]

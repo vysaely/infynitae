@@ -2105,7 +2105,14 @@ pub fn run_console_with(
                     continue;
                 }
                 // one the user opened, or a dialog, comes out over a fullscreen window
-                let shown = user || data.state.core().toplevel_parent(new_id).is_some();
+                let same_client = data
+                    .state
+                    .core()
+                    .focus()
+                    .target()
+                    .is_some_and(|f| data.state.started_by_app_of(new_id, f));
+                let shown =
+                    user || data.state.core().toplevel_parent(new_id).is_some() || same_client;
                 let core = data.state.core_mut();
                 let result = if shown {
                     core.show_opened(&mut data.input_port, new_id)
