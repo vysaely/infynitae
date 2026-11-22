@@ -291,7 +291,7 @@ live/android-run infynitae-android-run
 LIST
     # xwayland-satellite with our patch; a failed build keeps the copy already installed
     sh "$src/live/build-satellite.sh" "$src" "$bin"
-    # the C helpers (portal, polkit agent, lock screen, wallpaper, recorder stream)
+    # the C helpers (portal, polkit agent, lock screen, wallpaper, recorder stream, X11 window process)
     sh "$src/live/build-helpers.sh" "$src" "$bin" \
         || warn "Some helpers were not built (see above); Infynitae runs without them"
 }

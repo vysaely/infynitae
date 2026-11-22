@@ -455,6 +455,14 @@ pub fn run(args: &[String]) -> ExitCode {
             ]))),
             _ => usage(),
         },
+        Some("force-close") => match (num(1), num(2)) {
+            (Some(i), Some(e)) => print_reply(&request(&Value::obj([
+                id,
+                ("cmd", "force_close".into()),
+                ("element", element(i, e)),
+            ]))),
+            _ => usage(),
+        },
         Some("navigate") => {
             let Some((to, zoom)) = parse_navigate_args(args) else {
                 return usage();

@@ -250,6 +250,9 @@ pub enum ShellCommand {
     },
     /// Asks `element` to close (`Effect::CloseRequest`).
     CloseElement { element: stage::ElementRef },
+    /// Ends `element`'s app as Super+Shift+Delete does (`Effect::ForceClose`): the answer "End"
+    /// to "<app> is not responding" (owner, 2026-11-22).
+    ForceCloseElement { element: stage::ElementRef },
     /// Arranges the cluster of `element` (the focused window without one) by `layout`, as the
     /// layout key does, and frames it on the pointer's screen (owner, 2026-11-21). Refused while
     /// an interaction is on, and when no window is arranged (none named or focused, or only
@@ -1328,8 +1331,8 @@ impl Core {
 
     /// The focused window took over the compositor's shortcuts (`keyboard-shortcuts-inhibit`), or
     /// gave them back. While it holds them, every key goes to it except Super+Shift+L, Super+Tab, Super+W,
-    /// Super+L and Super+A, so an app can never keep you from locking (owner, 2026-10-25), leaving it or
-    /// reaching the edge (2026-11-01). Quitting the session and switching
+    /// Super+L, Super+A and Super+Shift+Delete, so an app can never keep you from locking (owner,
+    /// 2026-10-25), leaving it, reaching the edge (2026-11-01) or ending it (2026-11-22). Quitting the session and switching
     /// terminals are the console backend's and never reach Core.
     pub fn set_shortcuts_inhibited(&mut self, inhibited: bool) {
         self.shortcuts_inhibited = inhibited;

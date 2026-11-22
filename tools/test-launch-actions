@@ -5,6 +5,7 @@
 #   SCREENSHOT_CMD and SCREEN_LOCKER are run as commands; TERMINAL keeps its own arguments
 # - Finding 19: game-mode parses mode and PID without unquoted set expansion
 # - Finding 5: brightness-up and brightness-down handle max_brightness 0 without division by zero
+# - force-close-x11 and not-responding (owner, 2026-11-22): what is said when a window is not ended
 set -eu
 
 REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
@@ -158,6 +159,93 @@ env -i HOME="$HOMEDIR" PATH="$BIN:/usr/bin:/bin" XDG_RUNTIME_DIR="$RUN" CALL_LOG
     INFYNITAE_SETTINGS_APPLIED=1 \
     sh -c "sh '$REPO_DIR/live/launch.sh' brightness-up" 2>"$TMP/b_err" || rc=$?
 check "brightness-up with max_brightness=0 does not divide by zero" "$(grep -c 'division by 0' "$TMP/b_err" 2>/dev/null || true)" 0
+
+# out-of-memory score: what an action opens gets 300, the lock screen keeps the desktop's
+read -r base_oom < /proc/self/oom_score_adj
+app_oom=$base_oom
+[ "$base_oom" -lt 300 ] && app_oom=300
+cat << 'EOF' > "$BIN/oom-probe"
+#!/bin/sh
+echo "oom: $(cat /proc/self/oom_score_adj)" >> "$CALL_LOG"
+EOF
+chmod +x "$BIN/oom-probe"
+: > "$LOG"
+run_action terminal "" TERMINAL="oom-probe"
+check "an app opened by key gets out-of-memory score $app_oom" "$(grep '^oom:' "$LOG")" "oom: $app_oom"
+: > "$LOG"
+run_action lock-screen "" SCREEN_LOCKER="oom-probe"
+check "  the lock screen keeps the desktop's $base_oom" "$(grep '^oom:' "$LOG")" "oom: $base_oom"
+
+# force-close-x11: infynitae-xkill gets the session's root (launch.sh's parent; the trailing ":"
+# keeps the shell from exec-ing launch.sh in its own place), and a window
+# whose process was not ended is said in a notification
+cat << 'EOF' > "$HOMEDIR/.local/bin/infynitae-xkill"
+#!/bin/sh
+echo "xkill: $*" >> "$CALL_LOG"
+exit "$XKILL_RC"
+EOF
+chmod +x "$HOMEDIR/.local/bin/infynitae-xkill"
+cat << 'EOF' > "$BIN/notify-send"
+#!/bin/sh
+echo "notify: $*" >> "$CALL_LOG"
+EOF
+chmod +x "$BIN/notify-send"
+force_close_x11() {
+    env -i HOME="$HOMEDIR" PATH="$BIN:/usr/bin:/bin" XDG_RUNTIME_DIR="$RUN" CALL_LOG="$LOG" \
+        ENABLE_EDGE=false INFYNITAE_SETTINGS_APPLIED=1 XKILL_RC="$1" \
+        sh -c 'echo $$; sh "$0" force-close-x11 game "The Game"; :' "$REPO_DIR/live/launch.sh" \
+        2>/dev/null || true
+}
+: > "$LOG"
+root=$(force_close_x11 0)
+check "force-close-x11 passes the app, the title and the session's root" \
+    "$(grep '^xkill:' "$LOG")" "xkill: game The Game $root"
+check "  ended: nothing to say" "$(grep -c '^notify:' "$LOG" || true)" 0
+: > "$LOG"
+force_close_x11 1 >/dev/null
+check "  no process found: a notification says so" "$(grep '^notify:' "$LOG")" \
+    "notify: -a Infynitae Could not end The Game No single process was found for its window. It was asked to close."
+: > "$LOG"
+force_close_x11 3 >/dev/null
+check "  outside the session: a notification says so" \
+    "$(grep -c '^notify: .*not one this session started' "$LOG" || true)" 1
+
+# not-responding: the edge asks "<title> is not responding" with End and Wait; End force closes
+# the window named, Wait leaves it; without an edge that can ask, a notification
+cat << 'EOF' > "$HOMEDIR/.local/bin/infynitae-edge"
+#!/bin/sh
+echo "edge: $* [$(tr '\n' ' ')]" >> "$CALL_LOG"
+[ -n "$EDGE_ANSWER" ] && echo "$EDGE_ANSWER"
+exit "${EDGE_RC:-0}"
+EOF
+chmod +x "$HOMEDIR/.local/bin/infynitae-edge"
+not_responding() {
+    env -i HOME="$HOMEDIR" PATH="$BIN:/usr/bin:/bin" XDG_RUNTIME_DIR="$RUN" CALL_LOG="$LOG" \
+        ENABLE_EDGE=true INFYNITAE_SETTINGS_APPLIED=1 "$@" \
+        sh "$REPO_DIR/live/launch.sh" not-responding 1 7 "Notes" >/dev/null 2>&1 || true
+}
+echo ask > "$RUN/infynitae-edge-rs.features"
+: > "$LOG"
+not_responding EDGE_ANSWER=End
+check "not-responding asks the edge with End and Wait" "$(grep '^edge:' "$LOG")" \
+    "edge: ask Notes is not responding [End Wait ]"
+check "  End force closes the window named" "$(grep -c '^infynitae-bin: msg force-close 1 7$' "$LOG" || true)" 1
+: > "$LOG"
+not_responding EDGE_ANSWER=Wait
+check "  Wait leaves it" "$(grep -c '^infynitae-bin:' "$LOG" || true)" 0
+: > "$LOG"
+not_responding EDGE_RC=1
+check "  cancelled leaves it" "$(grep -c '^infynitae-bin:\|^notify:' "$LOG" || true)" 0
+: > "$LOG"
+not_responding EDGE_RC=3
+check "  the edge gone: a notification instead" "$(grep '^notify:' "$LOG")" \
+    "notify: -a Infynitae Notes is not responding Super+Shift+Delete ends it."
+rm "$RUN/infynitae-edge-rs.features"
+: > "$LOG"
+not_responding EDGE_ANSWER=End
+check "  an edge that cannot ask is not asked" "$(grep -c '^edge:' "$LOG" || true)" 0
+check "  and a notification says it" "$(grep -c '^notify: .*Notes is not responding' "$LOG" || true)" 1
+rm "$HOMEDIR/.local/bin/infynitae-edge"
 
 # remember-window: a per-window toggle kept in the config for the window's app
 remember() {

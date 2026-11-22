@@ -181,6 +181,9 @@ pub struct Session {
     fallback: Option<Instant>,
     /// When an idle notification timer fires; `None` while no notification is pending (INV-IDLE-1).
     idle: Option<Instant>,
+    /// When a window asked to close is due to be asked about (`not_responding`); `None` while
+    /// none waits.
+    not_responding: Option<Instant>,
     /// When the cursor animation redraw timer fires; `None` while no animation frame change is pending.
     cursor_anim: Option<Instant>,
     /// SIGTERM or SIGINT arrived.
@@ -427,6 +430,7 @@ impl Session {
             fallback: None,
             render_at: None,
             idle: None,
+            not_responding: None,
             cursor_anim: None,
             terminated,
             signal_ids,
@@ -509,6 +513,9 @@ impl Session {
         let wake = self.wake.map(|at| at.saturating_duration_since(now));
         let fallback = self.fallback.map(|t| t.saturating_duration_since(now));
         let idle = self.idle.map(|t| t.saturating_duration_since(now));
+        let not_responding = self
+            .not_responding
+            .map(|t| t.saturating_duration_since(now));
         let cursor_anim = self.cursor_anim.map(|t| t.saturating_duration_since(now));
         let render_at = self.render_at.map(|t| t.saturating_duration_since(now));
         let extension = self
@@ -520,6 +527,7 @@ impl Session {
             wake,
             fallback,
             idle,
+            not_responding,
             cursor_anim,
             render_at,
             extension,
@@ -551,6 +559,13 @@ impl Session {
     /// current time is `now` ([`crate::WaylandState::idle_notify_check`]), or disarms it.
     pub fn set_idle_deadline(&mut self, deadline: Option<Duration>, now: Duration) {
         self.idle = deadline.map(|d| Instant::now() + d.saturating_sub(now));
+    }
+
+    /// Arms the wake-up for the next window asked to close to be asked about, given on the
+    /// presentation clock whose current time is `now`
+    /// ([`crate::WaylandState::not_responding_check`]), or disarms it.
+    pub fn set_not_responding_deadline(&mut self, deadline: Option<Duration>, now: Duration) {
+        self.not_responding = deadline.map(|d| Instant::now() + d.saturating_sub(now));
     }
 
     /// Arms the cursor animation redraw timer for `due`, given as duration until next frame change

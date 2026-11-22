@@ -35,6 +35,7 @@ mod layers;
 pub mod limits;
 mod lock;
 pub mod logger;
+mod not_responding;
 pub mod osk;
 pub mod output_management;
 pub mod output_power;
@@ -559,6 +560,8 @@ pub struct WaylandState {
     pub idle_notify: IdleNotifyState,
     /// Current virtual time for test harnesses driving the adapter in virtual time.
     pub(crate) current_time: Option<std::time::Duration>,
+    /// Windows asked to close, until they go or their client answers a ping (`not_responding`).
+    pub(crate) not_responding: not_responding::Watches<smithay::wayland::shell::xdg::ShellClient>,
     /// The config's `EXEC_*` commands, by the index Core's `Effect::Exec` names.
     pub(crate) exec_commands: Vec<String>,
     /// Processes started from shortcuts, to tell the windows the user opened (`launch`).
@@ -922,6 +925,7 @@ impl WaylandState {
             manual_idle_inhibit: false,
             idle_notify: IdleNotifyState::new(display),
             current_time: None,
+            not_responding: Default::default(),
             exec_commands: Vec::new(),
             launches: launch::Launches::default(),
             live_dir,
@@ -1913,6 +1917,48 @@ impl WaylandState {
             }
         }
         self.idle_notify_deadline()
+    }
+
+    /// Asks `element` to close and pings its client with the request (`not_responding`).
+    pub(crate) fn request_close(&mut self, element: ElementId) {
+        let Some(toplevel) = self.window(element).and_then(|w| w.toplevel()).cloned() else {
+            return;
+        };
+        toplevel.send_close();
+        let client = toplevel.client();
+        // a ping still out from an earlier request is as good as a new one
+        match client.send_ping(smithay::utils::SERIAL_COUNTER.next_serial()) {
+            Ok(()) | Err(smithay::wayland::shell::PingError::PingAlreadyPending(_)) => {
+                let now = self.current_time.unwrap_or_else(presentation_clock_now);
+                self.not_responding.start(element, client, now);
+            }
+            Err(smithay::wayland::shell::PingError::DeadSurface) => {}
+        }
+    }
+
+    /// Asks about each window asked to close that is still there unanswered after its wait
+    /// (`launch.sh not-responding <instance> <element> <name>`). Returns when the next wait ends,
+    /// on the clock of `now`; the backend wakes then.
+    pub fn not_responding_check(
+        &mut self,
+        now: std::time::Duration,
+    ) -> Option<std::time::Duration> {
+        let elements = &self.elements;
+        let due = self
+            .not_responding
+            .due(now, |e| elements.iter().any(|h| h.id == e));
+        for element in due {
+            let meta = self.core.stage().meta(element);
+            let name = meta
+                .and_then(|m| m.title.clone().filter(|t| !t.is_empty()))
+                .or_else(|| meta.and_then(|m| m.app_id.clone()))
+                .unwrap_or_default();
+            let instance = self.core.stage().instance().get().to_string();
+            let id = element.get().to_string();
+            log_line!("[infynitae] Window {id} ({name}) asked to close is not responding");
+            self.spawn_action_args("not-responding", &[&instance, &id, &name]);
+        }
+        self.not_responding.deadline()
     }
 
     /// Physical input occurred: resets the timer to `now` and sends `resumed` to all idled notifications.

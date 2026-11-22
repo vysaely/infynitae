@@ -71,7 +71,11 @@ these by date, e.g. "(owner, 2026-10-24)".
 - **Super+Q / W / E** start the terminal, launcher and file manager through one dispatcher
   (`live/launch.sh`), so each is a config setting.
 - **Super+Shift+C closes, Super+Shift+Delete force-closes** (owner, 2026-11-13: Super+Delete moved to Super+Shift+Delete; 2026-11-01; Super+C and Super+Shift+C from 2026-10-25, Super+Delete for closing before). Force close
-  ends the window's client process, pinned by a pidfd so a reused pid is never killed.
+  ends the window's client process, pinned by a pidfd so a reused pid is never killed. An X11
+  window's process is the one the X server names (X-Resource, `infynitae-xres-pid`), never
+  `_NET_WM_PID` alone, and only inside the session: never the satellite or Xwayland
+  (2026-11-22, "infynitae is about freedom"). A window asked to close that is still there after
+  5 s without answering a ping is asked about: "<title> is not responding", End or Wait.
 - **Super+Enter maximizes** (the shipped setting): the window takes the screen's size where it
   covers no other window (2026-11-10). `SUPER_ENTER_ACTION="fit"`, the default of a config
   without the line, makes it the fit toggle of 2026-10-21 (fit the window, again: the view
@@ -96,7 +100,7 @@ these by date, e.g. "(owner, 2026-10-24)".
 - **An app can take the shortcuts while it has focus** (2026-10-25, `keyboard-shortcuts-inhibit`:
   a VM, a remote desktop, a game): its keys go to it, Super-chords included, until it lets go
   or loses focus. Super+Shift+L (lock), and since 2026-11-01 Super+Tab, Super+W, Super+L and Super+A (a fullscreen game
-  took them, "what if I need it"), Ctrl+Alt+Backspace (quit) and Ctrl+Alt+F1… (terminals) always stay yours.
+  took them, "what if I need it"), since 2026-11-22 Super+Shift+Delete (force close), Ctrl+Alt+Backspace (quit) and Ctrl+Alt+F1… (terminals) always stay yours.
 - **Holding Super frees a cursor a game captured** (2026-10-25, "feel free in my desktop";
   `SUPER_FREES_CURSOR`).
 

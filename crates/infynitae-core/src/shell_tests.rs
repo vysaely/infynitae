@@ -599,3 +599,30 @@ fn a_jump_records_history_only_when_the_camera_moves() {
     assert_eq!((f.c.cameras().center(0), f.c.cameras().zoom(0)), start);
     assert_eq!(f.c.cameras().history(0).map(|h| h.len()), Some(0));
 }
+
+/// `ForceCloseElement` (the answer "End" to "<app> is not responding", 2026-11-22) ends the window
+/// named as Super+Shift+Delete does; a window already gone is a stale reference.
+#[test]
+fn force_close_element_ends_the_window_named() {
+    let mut f = fixture();
+    let w = map_win(&mut f.c, 1, 400, 300);
+    let fx =
+        f.c.shell_command(
+            &mut f.s,
+            ShellCommand::ForceCloseElement {
+                element: r(&f.c, w),
+            },
+        )
+        .unwrap();
+    assert_eq!(fx, vec![crate::protocol::Effect::ForceClose(w)]);
+    f.c.toplevel_destroyed(w);
+    assert_eq!(
+        f.c.shell_command(
+            &mut f.s,
+            ShellCommand::ForceCloseElement {
+                element: r(&f.c, w)
+            }
+        ),
+        Err(ShellError::StaleElement)
+    );
+}

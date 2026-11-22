@@ -12,6 +12,14 @@ fi
 # env.sh loaded the user's config (live/config.sh) and resolved WAYLAND_DISPLAY, DISPLAY and
 # XAUTHORITY; a second copy of both ran here on every Super+key until 2026-11-06
 
+# When memory runs out, the kernel ends an app before the desktop (session.sh, 1c): what an
+# action opens gets an out-of-memory score of 300; the lock screen keeps the desktop's
+if [ "$ACTION" != lock-screen ]; then
+    oom=""
+    read -r oom < /proc/self/oom_score_adj 2>/dev/null || true
+    [ -n "$oom" ] && [ "$oom" -lt 300 ] && { echo 300 > /proc/self/oom_score_adj; } 2>/dev/null
+fi
+
 # Allow complete user-script overrides in ~/.config/infynitae/launch.sh if present
 USER_SCRIPT="$HOME/.config/infynitae/launch.sh"
 if [ -x "$USER_SCRIPT" ]; then
@@ -287,8 +295,40 @@ GM_ARGS
         ;;
     force-close-x11)
         # Super+Shift+Delete on an X11 window: its own process, found from the X11 window (all X11
-        # windows share xwayland-satellite's connection)
-        "$HOME/.local/bin/infynitae-xkill" "$2" "$3"
+        # windows share xwayland-satellite's connection), and only one inside the session: the
+        # compositor started this script, so its process is the session's root
+        rc=0
+        "$HOME/.local/bin/infynitae-xkill" "$2" "$3" "$PPID" || rc=$?
+        case "$rc" in
+            0) why="" ;;
+            3) why="Its process is not one this session started, so it was left running." ;;
+            2) why="Finding its process needs xprop and infynitae-xres-pid (infynitae-update builds it)." ;;
+            *) why="No single process was found for its window." ;;
+        esac
+        if [ -n "$why" ] && command -v notify-send >/dev/null 2>&1; then
+            notify-send -a Infynitae "Could not end ${3:-${2:-the window}}" \
+                "$why It was asked to close." 2>/dev/null || true
+        fi
+        ;;
+    not-responding)
+        # a window asked to close is still there and its app did not answer the compositor's
+        # ping: $2 $3 the window, $4 its title. End ends it as Super+Shift+Delete does. Only an
+        # edge that says it can ask is asked (an older one takes "ask" as a reason to restart).
+        name=${4:-A window}
+        if edge_on && [ -n "${XDG_RUNTIME_DIR:-}" ] && cat "$XDG_RUNTIME_DIR/infynitae-edge.features" \
+            "$XDG_RUNTIME_DIR/infynitae-edge-rs.features" 2>/dev/null | grep -qx ask; then
+            rc=0
+            answer=$(printf 'End\nWait\n' | "$EDGE_BIN" ask "$name is not responding") || rc=$?
+            # 3: the edge stopped before it could ask
+            if [ "$rc" != 3 ]; then
+                [ "$answer" = End ] && exec "$INFYNITAE_BIN" msg force-close "$2" "$3"
+                exit 0
+            fi
+        fi
+        if command -v notify-send >/dev/null 2>&1; then
+            notify-send -a Infynitae "$name is not responding" \
+                "Super+Shift+Delete ends it." 2>/dev/null || true
+        fi
         ;;
     region-screenshot)
         # Super+S (Super+Shift+R too): Interactive region screenshot of the moment the key was

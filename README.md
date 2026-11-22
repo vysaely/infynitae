@@ -86,8 +86,8 @@ right.
 | `Super + A` | Control menu: Wi-Fi, Bluetooth, volume (all sound or one app), sound output, power, battery limit, do not disturb |
 | `Super + L` | List of open windows |
 | `Super + Shift + L` | Lock |
-| `Super + Shift + C` | Close the window |
-| `Super + Shift + Delete` | Force close (ends the app) |
+| `Super + Shift + C` | Close the window (an app that does not answer within 5 s: asked whether to end it) |
+| `Super + Shift + Delete` | Force close (ends the app, also an X11 app or game, and while an app holds the shortcuts) |
 | `Super + Shift + K` | Keep the window on top |
 | `Super + Shift + Escape` | System monitor |
 | `Super + Shift + P` | Hide the window from screenshots and sharing |

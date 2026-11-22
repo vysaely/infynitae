@@ -250,6 +250,9 @@ pub struct Probe {
     pub held_acks: Vec<(usize, u32)>,
     /// `ext-idle-notify-v1` events received in order ("idled", "resumed").
     pub idle_events: Vec<&'static str>,
+    /// A frozen app: `xdg_wm_base.ping` goes unanswered (counted in `pings`).
+    pub frozen: bool,
+    pub pings: usize,
 }
 
 /// Unique shm file names across the tests of this process.
@@ -1190,7 +1193,7 @@ impl Dispatch<WpFractionalScaleV1, usize> for Probe {
 
 impl Dispatch<XdgWmBase, ()> for Probe {
     fn event(
-        _: &mut Self,
+        st: &mut Self,
         wm: &XdgWmBase,
         ev: xdg_wm_base::Event,
         _: &(),
@@ -1198,7 +1201,10 @@ impl Dispatch<XdgWmBase, ()> for Probe {
         _: &QueueHandle<Self>,
     ) {
         if let xdg_wm_base::Event::Ping { serial } = ev {
-            wm.pong(serial);
+            st.pings += 1;
+            if !st.frozen {
+                wm.pong(serial);
+            }
         }
     }
 }
@@ -2166,6 +2172,7 @@ impl Lockstep {
             frame_fallback(&mut self.state, self.now);
             self.state.set_current_time(self.now);
             self.state.idle_notify_check(self.now);
+            self.state.not_responding_check(self.now);
             self.display.flush_clients().expect("server flush");
             self.conn.flush().expect("client flush");
             if let Some(guard) = self.conn.prepare_read() {

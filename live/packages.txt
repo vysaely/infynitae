@@ -26,4 +26,5 @@ xwayland-satellite
 clang
 xorg-xprop
 xorg-xwininfo
+libxcb
 xdg-user-dirs

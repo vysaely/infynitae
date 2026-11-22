@@ -1,16 +1,23 @@
 #!/bin/sh
-# infynitae-xkill APP_ID TITLE: Super+Shift+Delete on an X11 window. Every X11 app reaches the
-# compositor through xwayland-satellite's one connection, so cutting it would end them all; the
-# app's own process is found instead: the X11 window of that class with exactly that title, its
-# _NET_WM_PID, and that process with everything it started is killed. Matches started by another
-# match count as that one; nothing is killed unless exactly one process remains (the window was
-# already asked to close).
-#   exit 0: killed   1: no single match, nothing killed   2: no X11 tools or display
+# infynitae-xkill APP_ID TITLE SESSION_PID: Super+Shift+Delete on an X11 window. Every X11 app
+# reaches the compositor through xwayland-satellite's one connection, so cutting it would end them
+# all; the app's own process is found instead: the X11 windows of that class with exactly that
+# title, and for each the process the X server says created it (infynitae-xres-pid; the server
+# read it from the socket, the app cannot change it). _NET_WM_PID, which the app writes itself, is
+# only compared with it. Matches started by another match count as that one; nothing is killed
+# unless exactly one process remains (the window was already asked to close), and only inside the
+# session: a process under SESSION_PID (the compositor), never the satellite, Xwayland or what
+# runs under them. That process and everything it started is killed.
+#   exit 0: killed   1: no single match   2: no X11 tools or display   3: outside the session
 #   INFYNITAE_XKILL_DRY=1: print the processes instead of killing them
 set -u
 app=${1:-}
 title=${2:-}
-[ -n "$app" ] && [ -n "${DISPLAY:-}" ] && command -v xprop >/dev/null 2>&1 || exit 2
+session=${3:-}
+xres="$(dirname "$0")/infynitae-xres-pid"
+case "$session" in '' | *[!0-9]*) echo "infynitae-xkill: no session process given" >&2; exit 2 ;; esac
+[ -n "${DISPLAY:-}" ] && command -v xprop >/dev/null 2>&1 && [ -x "$xres" ] || exit 2
+[ -n "$app" ] || exit 1
 
 lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 want_class=$(lower "$app")
@@ -24,7 +31,8 @@ windows() {
     fi
 }
 
-pids=""
+# the matching windows, each with the _NET_WM_PID it claims
+matches=""
 for w in $(windows); do
     props=$(xprop -id "$w" WM_CLASS _NET_WM_NAME WM_NAME _NET_WM_PID 2>/dev/null) || continue
     # WM_CLASS = "instance", "class": either may be the app id the satellite gave the toplevel
@@ -35,18 +43,33 @@ for w in $(windows); do
     name=$(printf '%s\n' "$props" | grep '^_NET_WM_NAME.* = ' | sed 's/^[^"]*"//; s/"$//')
     [ -n "$name" ] || name=$(printf '%s\n' "$props" | grep '^WM_NAME.* = ' | sed 's/^[^"]*"//; s/"$//')
     [ "$name" = "$title" ] || continue
-    pid=$(printf '%s\n' "$props" | awk '/^_NET_WM_PID/ { print $3 }')
+    claimed=$(printf '%s\n' "$props" | awk '/^_NET_WM_PID/ { print $3 }')
+    matches="$matches $w:${claimed:--}"
+done
+[ -n "$matches" ] || exit 1
+
+pids=""
+# shellcheck disable=SC2046
+answers=$("$xres" $(for m in $matches; do printf '%s ' "${m%%:*}"; done)) || exit 2
+for m in $matches; do
+    w=${m%%:*}
+    claimed=${m#*:}
+    pid=$(printf '%s\n' "$answers" | awk -v w="$w" '$1 == w { print $2 }')
     case "$pid" in '' | *[!0-9]*) continue ;; esac
+    [ "$claimed" = "-" ] || [ "$claimed" = "$pid" ] \
+        || echo "infynitae-xkill: window $w says process $claimed, the X server says $pid" >&2
     case " $pids " in *" $pid "*) ;; *) pids="$pids $pid" ;; esac
 done
+
+parent() { awk '{ sub(/^.*\) /, ""); print $2 }' "/proc/$1/stat" 2>/dev/null; }
 
 # a match started by another match is part of that app (Steam's window comes from both steam
 # and the steamwebhelper it started): only the topmost ones are kept
 descends() {
-    up=$(awk '{ print $4 }' "/proc/$1/stat" 2>/dev/null)
+    up=$(parent "$1")
     while [ -n "$up" ] && [ "$up" -gt 1 ]; do
         [ "$up" = "$2" ] && return 0
-        up=$(awk '{ print $4 }' "/proc/$up/stat" 2>/dev/null)
+        up=$(parent "$up")
     done
     return 1
 }
@@ -62,8 +85,20 @@ done
 set -- $roots
 [ $# -eq 1 ] || exit 1
 root=$1
-# only this user's own processes
-[ "$(stat -c %u "/proc/$root" 2>/dev/null)" = "$(id -u)" ] || exit 1
+
+# inside the session: below the compositor, and neither the satellite nor Xwayland nor below them
+inside() {
+    p=$1
+    while [ -n "$p" ] && [ "$p" -gt 1 ]; do
+        [ "$p" = "$session" ] && return 0
+        case "$(basename "$(readlink "/proc/$p/exe" 2>/dev/null)")" in
+            xwayland-satellite | Xwayland) return 1 ;;
+        esac
+        p=$(parent "$p")
+    done
+    return 1
+}
+[ "$root" != "$session" ] && inside "$root" || exit 3
 
 # the tree: the process and everything it started
 tree() {
