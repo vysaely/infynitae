@@ -91,6 +91,8 @@ pub struct VolumeData {
     pub sinks: Vec<DeviceInfo>,
     /// default non-monitor input source, None when none exists
     pub mic: Option<DeviceInfo>,
+    /// every input that is not a monitor of an output, for choosing the microphone
+    pub sources: Vec<DeviceInfo>,
     /// playing streams (pactl list sink-inputs)
     pub apps: Vec<SinkInput>,
 }
@@ -178,6 +180,7 @@ pub fn parse_volume(out: &str) -> VolumeData {
     }
 
     let sources = parse_pactl_devices(out, "Source #", true);
+    d.sources = sources.clone();
     d.mic = if !default_source.is_empty() {
         if default_source.ends_with(".monitor") {
             None
@@ -367,6 +370,20 @@ pub fn switch_sink_command(sink_name: &str) -> String {
     )
 }
 
+/// Sets `source_name` as the default input and moves the streams that recorded from the old
+/// default to it. Streams on other inputs stay: the replay recorder also records an output's
+/// monitor, which must not end up on a microphone.
+pub fn switch_source_command(source_name: &str) -> String {
+    let s = crate::cards::settings::sq(source_name);
+    format!(
+        "old=$(pactl get-default-source 2>/dev/null); \
+         pactl set-default-source {s} >/dev/null 2>&1 || exit 1; \
+         oldid=$(pactl list short sources 2>/dev/null | awk -v n=\"$old\" '$2==n{{print $1}}'); \
+         pactl list short source-outputs 2>/dev/null | while read -r id src _; do \
+         [ \"$src\" = \"$oldid\" ] && pactl move-source-output \"$id\" {s} >/dev/null 2>&1; done; true"
+    )
+}
+
 pub fn mic_mute_command(muted: bool) -> String {
     pactl_mute_cmd("source", "@DEFAULT_SOURCE@", muted)
 }
@@ -406,6 +423,7 @@ pub fn fetch_volume_with(mut run: impl FnMut(&[&str]) -> String) -> VolumeData {
 
     let sources_out = run(&["pactl", "list", "sources"]);
     let sources = parse_pactl_devices(&sources_out, "Source #", true);
+    let all_sources = sources.clone();
     let mic = if sources.is_empty() {
         None
     } else {
@@ -428,6 +446,7 @@ pub fn fetch_volume_with(mut run: impl FnMut(&[&str]) -> String) -> VolumeData {
         default_sink,
         sinks,
         mic,
+        sources: all_sources,
         apps,
     }
 }
@@ -464,7 +483,9 @@ const H_BRIGHT: u32 = 2;
 const H_OUTPUT: u32 = 3;
 const H_MIC_MUTE: u32 = 4;
 const H_MIC_VOL: u32 = 5;
+const H_INPUT: u32 = 6;
 const H_SINK_BASE: u32 = 100;
+const H_SOURCE_BASE: u32 = 500;
 const H_APP_BASE: u32 = 1000;
 const SLIDER_ROW: f64 = 48.0;
 const OUTPUT_ROW: f64 = 26.0;
@@ -486,6 +507,7 @@ pub struct VolumeCard {
     pub volume: Option<VolumeData>,
     pub brightness: Option<Brightness>,
     output_list: ui::List,
+    input_list: ui::List,
     /// where each slider hit was drawn, for a press or drag that sets a level
     sliders: std::cell::RefCell<Vec<(u32, Rect)>>,
     /// slot index -> sink-input id from the last draw
@@ -496,6 +518,86 @@ pub struct VolumeCard {
 }
 
 impl VolumeCard {
+    /// The "Input" row with the microphone in use, and the list to choose another, from `y`;
+    /// returns the `y` under them.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_input_choice(
+        &self,
+        cr: &Context,
+        cx: &Cx,
+        hits: &mut Hits,
+        body: Rect,
+        mut y: f64,
+        v: &VolumeData,
+        mic: &DeviceInfo,
+    ) -> f64 {
+        let row_r: Rect = (body.0, y, body.2, ui::ROW_H);
+        let right_x = body.0 + body.2 - 8.0;
+        let name = mic.display_name();
+        let tw = draw::measure(
+            cr,
+            &Text {
+                size: draw::SIZE_SMALL,
+                bold: false,
+                color: cx.theme.accent_text,
+                text: name,
+            },
+        )
+        .0;
+        let box_w = (tw + 33.0).min(row_r.2 * 0.6);
+        let lit = ui::row(
+            cr,
+            cx,
+            hits,
+            H_INPUT,
+            row_r,
+            &ui::Row {
+                icon: None,
+                name: "Input",
+                state: "",
+                on: false,
+                right: box_w + 8.0,
+            },
+        );
+        ui::value_box(cr, cx, row_r, right_x, name, lit, self.input_list.shown());
+        y += ui::ROW_H;
+        if self.input_list.shown() {
+            let lh = self.input_list.height(v.sources.len());
+            if lh > 0.0 {
+                let lr: Rect = (body.0, y, body.2, lh);
+                cr.save().ok();
+                cr.rectangle(lr.0, lr.1, lr.2, lr.3);
+                cr.clip();
+                ui::list_box(cr, cx, lr);
+                for (i, src) in v.sources.iter().enumerate() {
+                    let rr: Rect = (
+                        body.0 + 4.0,
+                        lr.1 + 4.0 + i as f64 * ui::LIST_ROW_H,
+                        (body.2 - 8.0).max(0.0),
+                        ui::LIST_ROW_H,
+                    );
+                    if rr.1 + rr.3 > lr.1 + lr.3 + 0.5 {
+                        break;
+                    }
+                    ui::list_row(
+                        cr,
+                        cx,
+                        hits,
+                        H_SOURCE_BASE + i as u32,
+                        rr,
+                        src.display_name(),
+                        "",
+                        src.name == mic.name,
+                        None,
+                    );
+                }
+                cr.restore().ok();
+                y += lh;
+            }
+        }
+        y
+    }
+
     fn has_brightness(&self) -> bool {
         self.brightness.as_ref().is_some_and(|b| b.0.is_some())
     }
@@ -708,6 +810,9 @@ impl Card for VolumeCard {
                 if d.sinks.len() <= 1 {
                     self.output_list = ui::List::default();
                 }
+                if d.sources.len() <= 1 {
+                    self.input_list = ui::List::default();
+                }
                 self.volume = Some(d.clone());
                 changed
             }
@@ -752,6 +857,9 @@ impl Card for VolumeCard {
         }
         if v.mic.is_some() {
             h += DIVIDER_H + ui::ROW_H + MIC_SLIDE_H;
+            if v.sources.len() > 1 {
+                h += ui::ROW_H + self.input_list.height(v.sources.len());
+            }
         }
         if !v.apps.is_empty() {
             h += APPS_HEAD_H + v.apps.len() as f64 * APP_ROW_H;
@@ -939,6 +1047,10 @@ impl Card for VolumeCard {
             draw_divider(cr, th, body, y);
             y += DIVIDER_H;
             let right_x = body.0 + body.2 - 8.0;
+            let choose = v.sources.len() > 1;
+            if choose {
+                y = self.draw_input_choice(cr, cx, hits, body, y, v, mic);
+            }
             let val_str = format_level(mic.level, mic.muted);
             let val_t = Text {
                 size: 13.0,
@@ -961,7 +1073,7 @@ impl Card for VolumeCard {
                 &ui::Row {
                     icon: None,
                     name: "Microphone",
-                    state: &mic.description,
+                    state: if choose { "" } else { &mic.description },
                     on: false,
                     right: 30.0 + 8.0 + val_w + 8.0,
                 },
@@ -1094,7 +1206,30 @@ impl Card for VolumeCard {
                         self.output_list.toggle();
                         return true;
                     }
-                    h if (H_SINK_BASE..H_APP_BASE).contains(&h) && self.output_list.open => {
+                    H_INPUT => {
+                        if !self.volume.as_ref().is_some_and(|v| v.sources.len() > 1) {
+                            return false;
+                        }
+                        self.input_list.toggle();
+                        return true;
+                    }
+                    h if (H_SOURCE_BASE..H_APP_BASE).contains(&h) && self.input_list.open => {
+                        let idx = (h - H_SOURCE_BASE) as usize;
+                        let Some(v) = self.volume.as_mut() else {
+                            return false;
+                        };
+                        let Some(src) = v.sources.get(idx).cloned() else {
+                            return false;
+                        };
+                        self.input_list.open = false;
+                        if v.mic.as_ref().is_some_and(|m| m.name == src.name) {
+                            return true;
+                        }
+                        out.push(Action::Run(switch_source_command(&src.name)));
+                        v.mic = Some(src);
+                        return true;
+                    }
+                    h if (H_SINK_BASE..H_SOURCE_BASE).contains(&h) && self.output_list.open => {
                         let idx = (h - H_SINK_BASE) as usize;
                         let Some(v) = self.volume.as_mut() else {
                             return false;
@@ -1213,7 +1348,8 @@ impl Card for VolumeCard {
         self.set_target_level(target, pct, out)
     }
     fn tick(&mut self, dt_ms: f64) -> bool {
-        self.output_list.tick(dt_ms)
+        let a = self.output_list.tick(dt_ms);
+        self.input_list.tick(dt_ms) || a
     }
     fn show_list(&mut self) {
         if self.volume.as_ref().is_some_and(|v| v.sinks.len() > 1) {
@@ -1223,6 +1359,7 @@ impl Card for VolumeCard {
     }
     fn panel_closed(&mut self) {
         self.output_list = ui::List::default();
+        self.input_list = ui::List::default();
         self.drag_stream = None;
     }
 }
@@ -1813,6 +1950,90 @@ Sink Input #99
     }
 
     #[test]
+    fn input_choice_switches_the_microphone_and_moves_only_its_streams() {
+        let th = crate::theme::Theme::from_config(&crate::config::Config::from_text(""));
+        let cx = crate::cards::settings::tests::test_cx(&th);
+        let built_in = DeviceInfo {
+            name: "alsa_input.pci-0000_00_1b.0.analog-stereo".into(),
+            description: "Built-in Audio Analog Stereo".into(),
+            level: Some(80),
+            muted: false,
+        };
+        let usb = DeviceInfo {
+            name: "alsa_input.usb-Example_Mic-00.mono-fallback".into(),
+            description: "USB Microphone Mono".into(),
+            level: Some(100),
+            muted: false,
+        };
+        let mut c = VolumeCard::default();
+        let data = VolumeData {
+            level: Some(60),
+            output: "Built-in Audio Analog Stereo".into(),
+            mic: Some(built_in.clone()),
+            sources: vec![built_in.clone(), usb.clone()],
+            ..Default::default()
+        };
+        c.apply("volume", &data as &dyn Any);
+        c.apply("brightness", &Brightness(None) as &dyn Any);
+
+        let closed_h = c.height(&cx, 316.0);
+        let mut out = Vec::new();
+        assert!(c.event(
+            &Event::Press {
+                hit: H_INPUT,
+                button: Button::Left,
+                at: (0.0, 0.0),
+            },
+            &cx,
+            &mut out
+        ));
+        while c.tick(16.0) {}
+        let open_h = c.height(&cx, 316.0);
+        assert!(open_h > closed_h, "the list of inputs opens");
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 400, 600).unwrap();
+        let cr = cairo::Context::new(&surf).unwrap();
+        let mut hits = Hits::new(None, None);
+        c.draw(&cr, &cx, (0.0, 0.0, 316.0, open_h), &mut hits);
+        assert!(hits.list.iter().any(|(id, _)| *id == H_SOURCE_BASE + 1));
+
+        out.clear();
+        assert!(c.event(
+            &Event::Press {
+                hit: H_SOURCE_BASE + 1,
+                button: Button::Left,
+                at: (0.0, 0.0),
+            },
+            &cx,
+            &mut out
+        ));
+        assert_eq!(out, vec![Action::Run(switch_source_command(&usb.name))]);
+        let Action::Run(cmd) = &out[0] else {
+            unreachable!()
+        };
+        assert!(
+            cmd.contains("pactl set-default-source 'alsa_input.usb-Example_Mic-00.mono-fallback'")
+        );
+        assert!(
+            cmd.contains("[ \"$src\" = \"$oldid\" ]"),
+            "only streams on the old input move: {cmd}"
+        );
+        assert_eq!(c.volume.as_ref().unwrap().mic.as_ref(), Some(&usb));
+
+        // one input: no choice to make, the row is not drawn
+        let mut one = VolumeCard::default();
+        let single = VolumeData {
+            mic: Some(built_in.clone()),
+            sources: vec![built_in],
+            ..data
+        };
+        one.apply("volume", &single as &dyn Any);
+        let mut hits = Hits::new(None, None);
+        let h = one.height(&cx, 316.0);
+        one.draw(&cr, &cx, (0.0, 0.0, 316.0, h), &mut hits);
+        assert!(!hits.list.iter().any(|(id, _)| *id == H_INPUT));
+    }
+
+    #[test]
     fn output_switch_click_sets_default_sink_and_moves_streams() {
         let th = crate::theme::Theme::from_config(&crate::config::Config::from_text(""));
         let cx = crate::cards::settings::tests::test_cx(&th);
@@ -1824,6 +2045,7 @@ Sink Input #99
             default_sink: "alsa_output.pci-0000_00_1f.3.analog-stereo".into(),
             sinks: parse_pactl_devices(SAMPLE_SINKS, "Sink #", false),
             mic: None,
+            sources: Vec::new(),
             apps: parse_pactl_sink_inputs(SAMPLE_SINK_INPUTS),
         };
         c.apply("volume", &data as &dyn Any);
@@ -1894,6 +2116,7 @@ Sink Input #99
             default_sink: "alsa_output.pci-0000_00_1f.3.analog-stereo".into(),
             sinks: vec![],
             mic: None,
+            sources: Vec::new(),
             apps: vec![],
         };
         c.apply("volume", &base as &dyn Any);
@@ -1991,6 +2214,7 @@ Sink Input #99
 
         // 2 streams appear.
         let two = VolumeData {
+            sources: Vec::new(),
             apps: parse_pactl_sink_inputs(SAMPLE_SINK_INPUTS),
             ..empty.clone()
         };
@@ -2049,6 +2273,7 @@ Sink Input #99
 
         // Stream #14 ends -> only #19 remains, height shrinks.
         let one = VolumeData {
+            sources: Vec::new(),
             apps: vec![two.apps[1].clone()],
             ..empty.clone()
         };
@@ -2078,6 +2303,7 @@ Sink Input #99
                 level: Some(70),
                 muted: false,
             }),
+            sources: Vec::new(),
             apps: parse_pactl_sink_inputs(SAMPLE_SINK_INPUTS),
         };
         c.apply("volume", &data as &dyn Any);
@@ -2156,6 +2382,7 @@ Sink Input #99
             default_sink: "sink0".into(),
             sinks: vec![],
             mic: None,
+            sources: Vec::new(),
             apps: parse_pactl_sink_inputs(SAMPLE_SINK_INPUTS),
         };
         c.apply("volume", &two as &dyn Any);
@@ -2191,6 +2418,7 @@ Sink Input #99
 
         // Stream #14 stops mid-drag; stream #19 shifts into slot 0 (still hit id H_APP_BASE + 1).
         let shifted = VolumeData {
+            sources: Vec::new(),
             apps: vec![two.apps[1].clone()],
             ..two
         };
@@ -2243,6 +2471,7 @@ Sink Input #99
             default_sink: "alsa_output.pci-0000_00_1f.3.analog-stereo".into(),
             sinks: parse_pactl_devices(SAMPLE_SINKS, "Sink #", false),
             mic: None,
+            sources: Vec::new(),
             apps: parse_pactl_sink_inputs(SAMPLE_SINK_INPUTS),
         };
         c.apply("volume", &data as &dyn Any);
@@ -2295,6 +2524,7 @@ Sink Input #99
                 level: Some(50),
                 muted: false,
             }),
+            sources: Vec::new(),
             apps: parse_pactl_sink_inputs(SAMPLE_SINK_INPUTS),
         };
         c.apply("volume", &data as &dyn Any);
@@ -2416,6 +2646,7 @@ Sink Input #99
             default_sink: String::new(),
             sinks: vec![],
             mic: None,
+            sources: Vec::new(),
             apps: vec![],
         };
         c.apply("volume", &empty as &dyn Any);
@@ -2433,6 +2664,7 @@ Sink Input #99
                 muted: false,
             }],
             mic: None,
+            sources: Vec::new(),
             apps: vec![],
         };
         c.apply("volume", &single as &dyn Any);
