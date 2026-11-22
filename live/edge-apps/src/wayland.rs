@@ -898,6 +898,10 @@ struct App {
     was_animating: bool,
     /// the notification pop-ups' strip, made with the first pop-up
     popups: Option<PopupLayer>,
+    /// the desktop widgets' surface on the first screen, there only while the WIDGETS line has one
+    widget_layer: Option<PopupLayer>,
+    /// the touch point that went down on a widget
+    widget_touch: Option<i32>,
     /// active touch point on the notification pop-ups strip (id, start position)
     popup_touch: Option<(i32, (f64, f64))>,
     /// the session bus connection serving org.freedesktop.Notifications
@@ -936,7 +940,7 @@ impl App {
         }
         if self.popups.is_none() && !self.shell.notify.popups.is_empty() {
             if let Some(output) = self.outputs.first().map(|o| o.output.clone()) {
-                self.popups = PopupLayer::new(self, output);
+                self.popups = PopupLayer::new(self, output, false);
             }
         }
         if let Some(pl) = self.popups.as_mut() {
@@ -945,6 +949,26 @@ impl App {
         if self.shell.open.is_some() {
             // the open panel's cards list them too
             self.sync_all();
+        }
+    }
+
+    /// The widgets' surface made on the first screen when the WIDGETS line has a widget and
+    /// removed when it has none (no surface at all without the line).
+    fn sync_widgets(&mut self) {
+        let want = !self.shell.widgets.list.is_empty();
+        if !want {
+            self.widget_layer = None;
+            self.widget_touch = None;
+        } else if self.widget_layer.is_none() {
+            if let Some(output) = self.outputs.first().map(|o| o.output.clone()) {
+                self.widget_layer = PopupLayer::new(self, output, true);
+            }
+        }
+    }
+
+    fn redraw_widgets(&mut self) {
+        if let Some(wl) = self.widget_layer.as_mut() {
+            wl.render(&self.qh, &self.compositor, &self.shell);
         }
     }
 
@@ -1049,7 +1073,12 @@ impl App {
                 }
             }
         }
-        if let Some(pl) = self.popups.as_mut().filter(|p| &p.output == output) {
+        for pl in self
+            .popups
+            .iter_mut()
+            .chain(self.widget_layer.iter_mut())
+            .filter(|p| &p.output == output)
+        {
             if pl.integer_scale != scale {
                 pl.integer_scale = scale;
                 if pl.viewport.is_none() {
@@ -1118,12 +1147,16 @@ impl App {
                 }
             }
         }
+        // the WIDGETS line or the look may have changed
+        self.sync_widgets();
+        self.redraw_widgets();
         true
     }
 
     /// After anything changed: the actions run, the sources fetched as needed, every surface drawn.
     fn sync_all(&mut self) {
         self.reload_config();
+        self.sync_widgets();
         self.run_actions();
         if self.shell.open.is_some() {
             self.shell.now = chrono::Local::now().naive_local();
@@ -1146,32 +1179,57 @@ impl App {
         self.sync_all();
     }
 
-    /// The open panel's sources, fetched on one long-lived worker thread per source while open;
-    /// `force` fetches again before its time.
+    /// What the sources are fetched for: an open panel (its index + 1), else the desktop's widgets
+    /// alone (0); None: nothing shows, nothing is fetched. When it changes, the sources fetched
+    /// once per showing are fetched again.
+    fn shown_key(&self) -> Option<usize> {
+        self.shell
+            .open
+            .map(|i| i + 1)
+            .or((!self.shell.widgets.list.is_empty()).then_some(0))
+    }
+
+    /// The open panel's sources and the widgets'.
+    fn shown_sources(&self) -> Vec<SourceId> {
+        let mut sources = self.shell.sources();
+        for id in self.shell.widget_sources() {
+            if !sources.contains(&id) {
+                sources.push(id);
+            }
+        }
+        sources
+    }
+
+    /// The open panel's and the widgets' sources, fetched on one long-lived worker thread per
+    /// source while shown; `force` fetches again before its time.
     fn fetch_due(&mut self, force: bool) {
         let reloaded = if self.shell.open.is_some() {
             self.reload_config()
         } else {
             false
         };
-        let Some(open) = self.shell.open else {
+        match self.shell.open {
+            Some(open) => {
+                if let Some((dirs, mtimes)) = self.app_refresh.check_open(Some(open)) {
+                    if !spawn_apps_worker(dirs, mtimes, self.fetch_tx.clone()) {
+                        self.app_refresh.in_flight = false;
+                    }
+                }
+            }
+            None => self.app_refresh.sync_closed(),
+        }
+        let Some(shown) = self.shown_key() else {
             self.fetch.sync_panel(None, &[]);
             self.workers.clear();
-            self.app_refresh.sync_closed();
             return;
         };
-        if let Some((dirs, mtimes)) = self.app_refresh.check_open(Some(open)) {
-            if !spawn_apps_worker(dirs, mtimes, self.fetch_tx.clone()) {
-                self.app_refresh.in_flight = false;
-            }
-        }
         let force = force || self.shell.take_fetch_needed();
-        let sources = self.shell.sources();
+        let sources = self.shown_sources();
         self.workers.retain(|id, _| sources.contains(id));
         let now = Instant::now();
         for (id, src) in self
             .fetch
-            .take_due(Some(open), &sources, force, now, |p, k| {
+            .take_due(Some(shown), &sources, force, now, |p, k| {
                 crate::provider::by_id(p).and_then(|prov| prov.source(k))
             })
         {
@@ -1206,8 +1264,8 @@ impl App {
     }
 
     fn fetch_timeout(&self, now: Instant) -> Option<Duration> {
-        self.shell.open?;
-        let sources = self.shell.sources();
+        self.shown_key()?;
+        let sources = self.shown_sources();
         self.fetch
             .next_timeout(&sources, now)
             .map(|d| d.max(Duration::from_millis(5)))
@@ -1456,8 +1514,9 @@ impl CompositorHandler for App {
         }
         if let Some(pl) = self
             .popups
-            .as_mut()
-            .filter(|p| p.layer.wl_surface() == surface)
+            .iter_mut()
+            .chain(self.widget_layer.iter_mut())
+            .find(|p| p.layer.wl_surface() == surface)
         {
             if pl.integer_scale != factor {
                 pl.integer_scale = factor;
@@ -1522,6 +1581,20 @@ impl CompositorHandler for App {
             pl.frame_pending = false;
             pl.render(qh, &self.compositor, &self.shell);
         }
+        if self
+            .widget_layer
+            .as_ref()
+            .is_some_and(|l| l.layer.wl_surface() == surface)
+        {
+            // drawn again only while a card's animation runs (or a draw waited for this frame)
+            let running = self.shell.widgets_tick(Instant::now());
+            if let Some(wl) = self.widget_layer.as_mut() {
+                wl.frame_pending = false;
+                if running || wl.again {
+                    wl.render(qh, &self.compositor, &self.shell);
+                }
+            }
+        }
     }
     fn surface_enter(
         &mut self,
@@ -1548,6 +1621,8 @@ impl OutputHandler for App {
     fn new_output(&mut self, _: &Connection, qh: &QueueHandle<Self>, output: wl_output::WlOutput) {
         self.create_output_surface(output.clone());
         self.sync_output_scale(&output, qh);
+        // the first screen plugged in: the widgets on it at once
+        self.sync_widgets();
     }
     fn update_output(
         &mut self,
@@ -1569,6 +1644,16 @@ impl OutputHandler for App {
             self.popups = None;
             self.popup_touch = None;
         }
+        if self
+            .widget_layer
+            .as_ref()
+            .is_some_and(|w| w.output == output)
+        {
+            // the widgets go to the first screen left
+            self.widget_layer = None;
+            self.widget_touch = None;
+            self.sync_widgets();
+        }
     }
 }
 
@@ -1578,6 +1663,14 @@ impl LayerShellHandler for App {
         if self.popups.as_ref().is_some_and(|p| &p.layer == layer) {
             self.popups = None;
             self.popup_touch = None;
+        }
+        if self
+            .widget_layer
+            .as_ref()
+            .is_some_and(|w| &w.layer == layer)
+        {
+            self.widget_layer = None;
+            self.widget_touch = None;
         }
     }
     fn configure(
@@ -1594,7 +1687,12 @@ impl LayerShellHandler for App {
             os.configured = true;
             os.apply_mode(qh, &self.compositor, &self.shell);
         }
-        if let Some(pl) = self.popups.as_mut().filter(|p| &p.layer == layer) {
+        if let Some(pl) = self
+            .popups
+            .iter_mut()
+            .chain(self.widget_layer.iter_mut())
+            .find(|p| &p.layer == layer)
+        {
             pl.width = configure.new_size.0.max(1);
             pl.height = configure.new_size.1.max(1);
             pl.configured = true;
@@ -1822,6 +1920,7 @@ impl PointerHandler for App {
     ) {
         let mut changed = false;
         let mut pop_changed = false;
+        let mut widgets_changed = false;
         for event in events {
             if let PointerEventKind::Enter { serial } = event.kind {
                 if let Some(dev) = &self.cursor_device {
@@ -1859,6 +1958,29 @@ impl PointerHandler for App {
                     }
                     _ => {}
                 }
+                continue;
+            }
+            if self
+                .widget_layer
+                .as_ref()
+                .is_some_and(|l| l.layer.wl_surface() == &event.surface)
+            {
+                let (x, y) = event.position;
+                let sh = &mut self.shell;
+                widgets_changed |= match event.kind {
+                    PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
+                        sh.widget_motion(x, y)
+                    }
+                    PointerEventKind::Leave { .. } => sh.widget_leave(),
+                    PointerEventKind::Press { button, .. } => match button {
+                        BTN_LEFT => sh.widget_press(x, y, Button::Left),
+                        BTN_RIGHT => sh.widget_press(x, y, Button::Right),
+                        BTN_MIDDLE => sh.widget_press(x, y, Button::Middle),
+                        _ => false,
+                    },
+                    PointerEventKind::Release { .. } => sh.widget_release(),
+                    PointerEventKind::Axis { .. } => false,
+                };
                 continue;
             }
             let Some((os_id, w, h)) = self
@@ -1906,6 +2028,9 @@ impl PointerHandler for App {
         if pop_changed {
             self.sync_popups();
         }
+        if widgets_changed {
+            self.redraw_widgets();
+        }
         if changed || !self.shell.actions.is_empty() {
             self.sync_all();
         }
@@ -1931,6 +2056,27 @@ impl TouchHandler for App {
         {
             if self.popup_touch.is_none() {
                 self.popup_touch = Some((id, position));
+            }
+            return;
+        }
+        if self
+            .widget_layer
+            .as_ref()
+            .is_some_and(|l| l.layer.wl_surface() == &surface)
+        {
+            // one finger on the widgets at a time, as the left button
+            if self.widget_touch.is_none() {
+                self.widget_touch = Some(id);
+                self.shell.widgets.pointer = Some(position);
+                if self
+                    .shell
+                    .widget_press(position.0, position.1, Button::Left)
+                {
+                    self.redraw_widgets();
+                }
+                if !self.shell.actions.is_empty() {
+                    self.sync_all();
+                }
             }
             return;
         }
@@ -1979,6 +2125,17 @@ impl TouchHandler for App {
             }
             return;
         }
+        if self.widget_touch == Some(id) {
+            self.widget_touch = None;
+            // a finger lifted leaves no hover light
+            if self.shell.widget_release() | self.shell.widget_leave() {
+                self.redraw_widgets();
+            }
+            if !self.shell.actions.is_empty() {
+                self.sync_all();
+            }
+            return;
+        }
         if self.shell.touch_up(id) || !self.shell.actions.is_empty() {
             self.sync_all();
         }
@@ -2002,6 +2159,15 @@ impl TouchHandler for App {
                 }
                 return;
             }
+        }
+        if self.widget_touch == Some(id) {
+            if self.shell.widget_motion(position.0, position.1) {
+                self.redraw_widgets();
+            }
+            if !self.shell.actions.is_empty() {
+                self.sync_all();
+            }
+            return;
         }
         if self.shell.touch_motion(id, position.0, position.1) {
             self.sync_all();
@@ -2031,6 +2197,11 @@ impl TouchHandler for App {
 
     fn cancel(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_touch::WlTouch) {
         self.popup_touch = None;
+        if self.widget_touch.take().is_some()
+            && (self.shell.widget_cancel() | self.shell.widget_leave())
+        {
+            self.redraw_widgets();
+        }
         if self.shell.touch_cancel() {
             self.sync_all();
         }
@@ -2092,8 +2263,9 @@ impl Dispatch<WpFractionalScaleV1, wl_surface::WlSurface> for App {
         }
         if let Some(pl) = state
             .popups
-            .as_mut()
-            .filter(|p| p.layer.wl_surface() == surface)
+            .iter_mut()
+            .chain(state.widget_layer.iter_mut())
+            .find(|p| p.layer.wl_surface() == surface)
         {
             if pl.fractional_scale_120 != Some(scale) {
                 pl.fractional_scale_120 = Some(scale);
@@ -2337,6 +2509,8 @@ fn init_app(
         ran: Vec::new(),
         was_animating: false,
         popups: None,
+        widget_layer: None,
+        widget_touch: None,
         popup_touch: None,
         notify_conn: None,
         shell_sock: None,
@@ -2402,6 +2576,7 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
                 channel::Event::Msg(Fetched::CommandDone(card, res)) => {
                     if app.shell.command_done(&card, &res, Instant::now()) {
                         app.redraw_open_outputs();
+                        app.redraw_widgets();
                     }
                     return;
                 }
@@ -2411,6 +2586,9 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
             let reloaded = app.reload_config();
             if changed || reloaded {
                 app.redraw_open_outputs();
+            }
+            if changed && app.shell.widget_sources().contains(&(prov, key)) {
+                app.redraw_widgets();
             }
         })
         .map_err(|e| e.to_string())?;
@@ -2425,6 +2603,7 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
                         }
                     }
                 }
+                app.redraw_widgets();
             }
         })
         .map_err(|e| e.to_string())?;
@@ -2535,11 +2714,12 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
         if app.shell.hover_tick(Instant::now()) {
             app.sync_all();
         }
-        if app.shell.open.is_some() {
+        if app.shell.open.is_some() || !app.shell.widgets.list.is_empty() {
             let prev = app.shell.now;
             let now = chrono::Local::now().naive_local();
             app.shell.now = now;
-            if app.shell.wants_clock() && minute_key(prev) != minute_key(now) {
+            let new_minute = minute_key(prev) != minute_key(now);
+            if app.shell.open.is_some() && app.shell.wants_clock() && new_minute {
                 for os in &mut app.outputs {
                     if app.shell.visible_on(os.id) {
                         os.dirty = true;
@@ -2547,12 +2727,16 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
                     }
                 }
             }
+            if new_minute && app.shell.widgets_want_clock() {
+                app.redraw_widgets();
+            }
             app.fetch_due(false);
         }
-        // while a panel is open, wake when its shortest periodic source interval is next due;
-        // closed (or only once-per-open sources), nothing wakes the edge for data fetches
+        // while a panel is open or widgets show, wake when the shortest periodic source interval
+        // is next due; closed without widgets (or only once-per-open sources), nothing wakes the
+        // edge for data fetches
         let mut timeout = app.fetch_timeout(Instant::now());
-        if app.shell.open.is_some() && app.shell.wants_clock() {
+        if (app.shell.open.is_some() && app.shell.wants_clock()) || app.shell.widgets_want_clock() {
             let rem = next_minute_timeout(app.shell.now);
             timeout = Some(timeout.map_or(rem, |t| t.min(rem)));
         }
@@ -2589,6 +2773,7 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
             let now = Instant::now();
             if app.shell.expire_cards(now) {
                 app.redraw_open_outputs();
+                app.redraw_widgets();
             }
             if let Some(d) = app.shell.card_deadline() {
                 let rem = d
@@ -2640,8 +2825,10 @@ fn next_minute_timeout(now: chrono::NaiveDateTime) -> Duration {
 /// The notification pop-ups' surface (in place of mako): a strip down the right of the first
 /// screen on the Top layer, taking the pointer only on the cards, and unmapped (no buffer) while
 /// there is nothing to show, so it costs nothing and is never one more surface over a full-screen
-/// window.
+/// window. The desktop's widgets have one of these too (`widgets`): the whole first screen on the
+/// Bottom layer, under the windows, taking the pointer only on the widgets.
 struct PopupLayer {
+    widgets: bool,
     output: wl_output::WlOutput,
     frac_scale: Option<WpFractionalScaleV1>,
     viewport: Option<WpViewport>,
@@ -2679,7 +2866,8 @@ impl Drop for PopupLayer {
 const POPUP_STRIP_W: u32 = (crate::notify::POPUP_W + crate::notify::MARGIN + 16.0) as u32;
 
 impl PopupLayer {
-    fn new(app: &App, output: wl_output::WlOutput) -> Option<PopupLayer> {
+    /// The pop-ups' strip (`widgets` false) or the widgets' surface (true) on `output`.
+    fn new(app: &App, output: wl_output::WlOutput, widgets: bool) -> Option<PopupLayer> {
         let pool = SlotPool::new(4096, &app.shm).ok()?;
         let integer_scale = app
             .outputs
@@ -2705,15 +2893,29 @@ impl PopupLayer {
             ),
             _ => (None, None),
         };
-        let layer = app.layer_shell.create_layer_surface(
-            &app.qh,
-            surface,
-            Layer::Top,
-            Some("infynitae-notifications"),
-            Some(&output),
-        );
-        layer.set_anchor(Anchor::TOP | Anchor::RIGHT | Anchor::BOTTOM);
-        layer.set_size(POPUP_STRIP_W, 0);
+        // the compositor's layer rules know both names
+        let layer = if widgets {
+            let l = app.layer_shell.create_layer_surface(
+                &app.qh,
+                surface,
+                Layer::Bottom,
+                Some("infynitae-widgets"),
+                Some(&output),
+            );
+            l.set_anchor(Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT);
+            l
+        } else {
+            let l = app.layer_shell.create_layer_surface(
+                &app.qh,
+                surface,
+                Layer::Top,
+                Some("infynitae-notifications"),
+                Some(&output),
+            );
+            l.set_anchor(Anchor::TOP | Anchor::RIGHT | Anchor::BOTTOM);
+            l.set_size(POPUP_STRIP_W, 0);
+            l
+        };
         layer.set_exclusive_zone(-1);
         layer.set_keyboard_interactivity(KeyboardInteractivity::None);
         if let Ok(region) = Region::new(&app.compositor) {
@@ -2723,6 +2925,7 @@ impl PopupLayer {
         }
         layer.commit();
         Some(PopupLayer {
+            widgets,
             output,
             frac_scale,
             viewport,
@@ -2785,8 +2988,17 @@ impl PopupLayer {
         }
     }
 
-    /// Shows the pop-ups as they are now (or unmaps the strip when there are none).
+    /// Shows the pop-ups as they are now (or unmaps the strip when there are none), or the
+    /// widgets.
     fn render(&mut self, qh: &QueueHandle<App>, compositor: &CompositorState, shell: &Shell) {
+        if self.widgets {
+            // a frame after each: the cards' animations (a list opening) go on from there
+            let region = shell.widget_region();
+            self.present(qh, compositor, &region, true, |cr, _, _| {
+                shell.draw_widgets(cr)
+            });
+            return;
+        }
         let n = &shell.notify;
         if n.popups.is_empty() {
             if self.mapped {
@@ -2801,6 +3013,32 @@ impl PopupLayer {
             }
             return;
         }
+        let now = Instant::now();
+        // only the cards take the pointer; the rest of the strip lets clicks through
+        let region: Vec<(i32, i32, i32, i32)> = crate::notify::layout(n, self.width as f64)
+            .into_iter()
+            .map(|(_, r)| (r.0 as i32, r.1 as i32, r.2.ceil() as i32, r.3.ceil() as i32))
+            .collect();
+        // a card still sliding in: the next frame too
+        let arriving = n.popups.iter().any(|p| {
+            now.saturating_duration_since(p.born).as_secs_f64() * 1000.0 < crate::notify::ARRIVE_MS
+        });
+        let pointer = self.pointer;
+        self.present(qh, compositor, &region, arriving, |cr, lw, _| {
+            crate::notify::draw(cr, &shell.theme, n, lw, pointer, now)
+        });
+    }
+
+    /// One frame drawn by `draw` (given the surface's logical size), the pointer taken only on
+    /// `region`; `more` asks for a frame callback after it.
+    fn present(
+        &mut self,
+        qh: &QueueHandle<App>,
+        compositor: &CompositorState,
+        region: &[(i32, i32, i32, i32)],
+        more: bool,
+        draw: impl FnOnce(&cairo::Context, f64, f64),
+    ) {
         if !self.configured {
             if !self.mapped {
                 self.layer.commit();
@@ -2825,7 +3063,6 @@ impl PopupLayer {
             return;
         };
         canvas.fill(0);
-        let now = Instant::now();
         let (sx, sy) = (f64::from(bw) / lw, f64::from(bh) / lh);
         if let Ok(surface) = unsafe {
             cairo::ImageSurface::create_for_data_unsafe(
@@ -2838,27 +3075,22 @@ impl PopupLayer {
         } {
             if let Ok(cr) = cairo::Context::new(&surface) {
                 cr.scale(sx, sy);
-                crate::notify::draw(&cr, &shell.theme, n, lw, self.pointer, now);
+                draw(&cr, lw, lh);
             }
             surface.flush();
         }
-        // only the cards take the pointer; the rest of the strip lets clicks through
-        if let Ok(region) = Region::new(compositor) {
-            for (_, r) in crate::notify::layout(n, lw) {
-                region.add(r.0 as i32, r.1 as i32, r.2.ceil() as i32, r.3.ceil() as i32);
+        if let Ok(r) = Region::new(compositor) {
+            for &(x, y, w, h) in region {
+                r.add(x, y, w, h);
             }
             self.layer
                 .wl_surface()
-                .set_input_region(Some(region.wl_region()));
+                .set_input_region(Some(r.wl_region()));
         }
         self.apply_surface_scale();
         let wl = self.layer.wl_surface();
         wl.damage_buffer(0, 0, bw, bh);
-        // a card still sliding in: the next frame too
-        let arriving = n.popups.iter().any(|p| {
-            now.saturating_duration_since(p.born).as_secs_f64() * 1000.0 < crate::notify::ARRIVE_MS
-        });
-        if arriving {
+        if more {
             wl.frame(qh, wl.clone());
             self.frame_pending = true;
         }
@@ -3470,6 +3702,8 @@ mod tests {
         surface_viewport_dest: HashMap<u32, Option<(i32, i32)>>,
         surface_kb: HashMap<u32, u32>,
         layers_by_surface: HashMap<u32, u32>,
+        /// each layer surface's layer (0 background, 1 bottom, 2 top, 3 overlay) and name
+        layer_kind: HashMap<u32, (u32, String)>,
         layer_to_surface: HashMap<u32, u32>,
         layer_to_output_global: HashMap<u32, u32>,
         buffers: HashMap<u32, (i32, i32)>,
@@ -3849,8 +4083,11 @@ mod tests {
                             let lid = Self::read_u32(body, &mut off);
                             let sid = Self::read_u32(body, &mut off);
                             let out_obj = Self::read_u32(body, &mut off);
+                            let layer = Self::read_u32(body, &mut off);
+                            let namespace = Self::read_str(body, &mut off);
                             objs.insert(lid, Obj::LayerSurface);
                             let mut st = state.lock().unwrap();
+                            st.layer_kind.insert(sid, (layer, namespace));
                             st.layers_by_surface.insert(sid, lid);
                             st.layer_to_surface.insert(lid, sid);
                             if let Some(&gidx) = st.output_obj_to_global.get(&out_obj) {
@@ -4531,6 +4768,110 @@ mod tests {
         assert_eq!(app.shell.open_output, Some(out2_id));
         assert!(surface_has_nonzero_pixels(&mut app.outputs[1]));
         assert!(!surface_has_nonzero_pixels(&mut app.outputs[0]));
+    }
+
+    #[test]
+    fn headless_widgets_surface_only_with_a_line_under_the_windows_taking_clicks_on_widgets() {
+        let spec = || {
+            vec![MockOutputSpec {
+                width: 1280,
+                height: 800,
+                scale: 1,
+                fractional_120: 120,
+            }]
+        };
+        let layers = |mock: &MockWayland| {
+            let mut v: Vec<(u32, String)> = mock
+                .state
+                .lock()
+                .unwrap()
+                .layer_kind
+                .values()
+                .cloned()
+                .collect();
+            v.sort();
+            v
+        };
+        // no WIDGETS line: the panels' surface only (Top layer), nothing for widgets
+        let (mock, conn) = MockWayland::start(spec(), false);
+        let sh = Shell::new(crate::config::Config::from_text(""), Vec::new());
+        let (fetch_tx, _fetch_rx) = channel::channel::<Fetched>();
+        let (mut app, mut eq) = init_app(&conn, sh, fetch_tx).unwrap();
+        app.sync_all();
+        eq.roundtrip(&mut app).unwrap();
+        assert!(app.widget_layer.is_none());
+        assert_eq!(layers(&mock), vec![(2, "infynitae-edge".to_string())]);
+        drop(app);
+        drop(mock);
+
+        // with the line: the widgets' surface on the Bottom layer, the pointer on the widgets only
+        let (mock, conn) = MockWayland::start(spec(), false);
+        let mut sh = Shell::new(
+            crate::config::Config::from_text(
+                "WIDGETS=\"power@100,100,380x150 clock@600,100,300x100\"\n",
+            ),
+            Vec::new(),
+        );
+        sh.apply(
+            "settings",
+            "power",
+            &crate::cards::settings::parse_power("* balanced:\n  performance:\n")
+                as &dyn std::any::Any,
+        );
+        let (fetch_tx, _fetch_rx) = channel::channel::<Fetched>();
+        let (mut app, mut eq) = init_app(&conn, sh, fetch_tx).unwrap();
+        app.sync_all();
+        eq.roundtrip(&mut app).unwrap();
+        eq.roundtrip(&mut app).unwrap();
+        assert_eq!(
+            layers(&mock),
+            vec![
+                (1, "infynitae-widgets".to_string()),
+                (2, "infynitae-edge".to_string())
+            ]
+        );
+        let sid = {
+            use smithay_client_toolkit::reexports::client::Proxy;
+            app.widget_layer
+                .as_ref()
+                .expect("widgets' surface")
+                .layer
+                .wl_surface()
+                .id()
+                .protocol_id()
+        };
+        let c = mock.last_commit(sid);
+        assert_eq!(c.buffer_size, Some((1280, 800)));
+        assert_eq!(c.keyboard_interactivity, 0);
+        assert_eq!(
+            c.input_rects,
+            vec![(100, 100, 380, 150), (600, 100, 300, 100)]
+        );
+        // no panel open: the widgets' source is fetched all the same
+        assert_eq!(app.shell.open, None);
+        assert!(app.workers.contains_key(&("settings", "power")));
+
+        // a click on the second power mode reaches the card; one beside the widgets does nothing
+        mock.send_pointer_move(sid, 50.0, 50.0, true);
+        mock.send_pointer_click(BTN_LEFT);
+        eq.roundtrip(&mut app).unwrap();
+        assert!(app.ran.is_empty());
+        let perf = app.shell.widget_frame()[0].1.list[1].1;
+        mock.send_pointer_move(sid, perf.0 + 5.0, perf.1 + 5.0, false);
+        mock.send_pointer_click(BTN_LEFT);
+        eq.roundtrip(&mut app).unwrap();
+        assert!(
+            app.ran.iter().any(|c| c.contains("performance")),
+            "{:?}",
+            app.ran
+        );
+
+        // the line taken out: the surface goes
+        app.shell
+            .rebuild_panels(crate::config::Config::from_text(""), None);
+        app.sync_all();
+        assert!(app.widget_layer.is_none());
+        assert!(app.workers.is_empty());
     }
 
     #[test]
