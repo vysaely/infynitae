@@ -47,10 +47,17 @@ these by date, e.g. "(owner, 2026-10-24)".
   Super+L does nothing.
 - **Super+Shift+Escape opens a system monitor** (owner, 2026-11-01; `SYSTEM_MONITOR`), also over a
   fullscreen game holding the shortcuts, as a stuck game is when it is needed.
-- **The launcher puts what you started recently first** (owner, 2026-11-01). An exact name comes
-  first, then recently started apps whose name matches, latest first, then other names. Apps count
-  as started only from the launcher, as there is no other record of them
-  (`~/.local/state/infynitae/recent-apps`).
+- **The launcher puts what you started often and lately first when you search** (owner, 2026-11-01;
+  search only, 2026-11-22: "the launcher is not supposed to be recently started apps only; when
+  searching it should"). Results go by how well the name matches (the exact name, then names
+  starting with what was typed, then a word starting with it, and so on); within one of these, the
+  apps started more often and more lately come first, then by name. The newest start counts 1 and a
+  start's weight halves every 20 newer starts; an app's starts add up. With nothing typed the
+  launcher shows the apps as before, and Enter starts nothing. Apps count as started only when the
+  edge starts them (launcher, favorites, app list, a card's own app button), as there is no other
+  record of them:
+  `~/.local/state/infynitae/recent-apps`, one "seconds, tab, desktop file" line per start, newest
+  first, the newest 200 kept.
 - **Often used on the left hand, rare on the right** (2026-10-31). Super+Tab, Q, W, E, A, S, C,
   V and Space are the everyday keys; Super+Shift+L, Shift+O, Shift+P, Shift+I, Alt+P and
   Shift+BackSpace the rare ones. So **Super+S is the region screenshot** (Super+Shift+S the whole

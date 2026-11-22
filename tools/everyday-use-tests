@@ -95,10 +95,10 @@ def launcher_fast_enter():
     close_all(); chord("super+w"); wait(0.8); text("alac", 0); emit((1, 28, 1)); emit((1, 28, 0))
     rec("Enter straight after typing starts what was typed", bool(until(lambda: has("alacritty"), 8)), str(ids()))
 @test
-def launcher_recent_first():
-    close_all(); latest = sh("head -1 ~/.local/state/infynitae/recent-apps | cut -f2"); chord("super+w"); wait(1); shot("launcher-recents"); chord("esc"); wait(.5)
-    chord("super+w"); wait(.8); chord("enter"); key = "mousepad" if "mousepad" in latest else ("alacritty" if "lacritty" in latest else latest.split(".")[0])
-    rec("nothing typed, Enter: the latest app again", bool(until(lambda: has(key), 8)), f"latest {latest}, got {ids()}")
+def launcher_empty_enter():
+    # recent starts order search results only (owner 2026-11-22): nothing typed, the launcher is the app list
+    close_all(); chord("super+w"); wait(1); shot("launcher-empty"); chord("enter"); wait(2)
+    rec("nothing typed, Enter starts nothing", not els(), str(ids())); chord("esc"); wait(.4)
 @test
 def launcher_no_match_enter():
     close_all(); chord("super+w"); wait(.8); text("zzzzq"); wait(.5); shot("launcher-nomatch"); chord("enter"); wait(2)

@@ -355,7 +355,7 @@ pub enum Event<'a> {
 pub enum Action {
     Run(String),                    // sh -c, off the UI thread, queued FIFO per card
     RunBackground(String),          // sh -c, off the UI thread, outside the card's queue
-    Launch(String),                 // an app by id: its Exec line, noted in the recent apps (apps.rs:1130)
+    Launch(String),                 // an app by id: its Exec line, noted in the recent apps (recent.rs)
     OpenUri(String),                // "steam://rungameid/730", a folder
     Focus(u32), CloseWindow(u32),   // a window from cx.windows
     Dismiss(u32),                   // a notification from cx.notes
