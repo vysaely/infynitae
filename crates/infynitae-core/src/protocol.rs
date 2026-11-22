@@ -812,6 +812,7 @@ impl Core {
     fn drop_fullscreen(&mut self, id: ElementId) {
         // nor is it held to a size or maximized: its next map starts at its own size
         self.held_sizes.retain(|(e, _)| *e != id);
+        self.layout_cells.retain(|(e, _)| *e != id);
         self.returning.retain(|e| *e != id);
         self.maximized.retain(|(e, _)| *e != id);
         self.maximized_at.retain(|(e, _)| *e != id);
@@ -821,7 +822,6 @@ impl Core {
         self.fullscreen.retain(|f| f.element != id);
         self.windowed_placement_pending.retain(|e| *e != id);
         self.restore_offers.retain(|(e, _)| *e != id);
-        self.layout_cells.retain(|(e, _)| *e != id);
     }
 
     /// Default windowed placement (F-PLACE-1), resolved once per element through `stage::place`.
