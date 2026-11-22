@@ -2226,6 +2226,7 @@ pub fn run_console_with(
         turn.mark("idle notify");
         let asked = data.state.not_responding_check(now);
         data.session.set_not_responding_deadline(asked, now);
+        turn.mark("not responding");
         let anim_due = data.state.cursor_animation_due(now);
         data.session.set_cursor_animation_due(anim_due);
         turn.mark("cursor animation");

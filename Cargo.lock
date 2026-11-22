@@ -644,7 +644,6 @@ dependencies = [
  "libc",
  "smithay",
  "wayland-protocols-wlr",
- "xcursor",
 ]
 
 [[package]]
