@@ -504,6 +504,9 @@ pub struct WaylandState {
     pub latency_mode: crate::frame_schedule::LatencyMode,
     /// LATENCY_STATS: input-to-screen times in the session log every 10 s.
     pub latency_stats: bool,
+    /// With LATENCY_STATS, the surface slowest to make into an element since the turn's last
+    /// [`Self::take_slowest_surface`] (`convert::SlowestSurface`).
+    slowest_surface: convert::SlowestSurface,
     /// GPU_RELIEF: a screen missing refreshes slows the windows out of use.
     pub gpu_relief: bool,
     /// WINDOW_CORNERS: the radius of a window's free corners, logical px (0 square; corners.rs).
@@ -896,6 +899,7 @@ impl WaylandState {
             square_corners: true,
             latency_mode: crate::frame_schedule::LatencyMode::Direct,
             latency_stats: false,
+            slowest_surface: None,
             gpu_relief: true,
             border_active: smithay::backend::renderer::Color32F::new(0.48, 0.64, 0.97, 1.0),
             border_inactive: smithay::backend::renderer::Color32F::new(0.20, 0.23, 0.33, 1.0),

@@ -1821,6 +1821,7 @@ pub fn run_console_with(
         data.last_turn_slow = busy >= threshold;
         if turn_started.is_some() {
             data.loop_busy_max = data.loop_busy_max.max(busy);
+            turn.surface = data.state.take_slowest_surface();
             if let Some(line) = data.slow_turn.record_at(&turn, busy, threshold, now) {
                 log_line!("{line}");
             }
@@ -3638,6 +3639,8 @@ fn core_presentation_format(
 struct TurnClock {
     last: Option<std::time::Instant>,
     phases: Vec<(&'static str, Duration)>,
+    /// The surface slowest to make into an element this turn (`take_slowest_surface`).
+    surface: Option<String>,
 }
 
 /// Fallback slow-turn threshold when no physical screen is connected.
@@ -3657,6 +3660,7 @@ impl TurnClock {
         Self {
             last: Some(start),
             phases: Vec::with_capacity(20),
+            surface: None,
         }
     }
 
@@ -3665,6 +3669,7 @@ impl TurnClock {
         Self {
             last: None,
             phases: Vec::new(),
+            surface: None,
         }
     }
 
@@ -3706,8 +3711,12 @@ impl TurnClock {
         if rest >= Duration::from_millis(1) {
             out.push(format!("other {:.1} ms", rest.as_secs_f64() * 1000.0));
         }
+        let surface = self
+            .surface
+            .as_ref()
+            .map_or_else(String::new, |s| format!("; slowest surface {s}"));
         Some(format!(
-            "[infynitae] Slow turn {:.1} ms: {}",
+            "[infynitae] Slow turn {:.1} ms: {}{surface}",
             busy.as_secs_f64() * 1000.0,
             out.join(", ")
         ))
@@ -4935,6 +4944,26 @@ mod tests {
                 .as_deref(),
             Some(
                 "[infynitae] Slow turn 60.5 ms: render 40.0 ms, client requests 15.0 ms, other 5.0 ms"
+            )
+        );
+    }
+
+    /// A slow "layers above" or "windows" says which surface took the time.
+    #[test]
+    fn a_slow_turn_names_its_slowest_surface() {
+        use std::time::Duration;
+        let mut c = super::TurnClock::new(std::time::Instant::now());
+        c.phases = vec![("layers above", Duration::from_millis(7))];
+        c.surface = Some("infynitae-edge-apps, shm 1920x1080 buffer, 6.9 ms".into());
+        assert_eq!(
+            c.slow_parts(Duration::from_millis(7), super::SLOW_TURN_FALLBACK),
+            None
+        );
+        assert_eq!(
+            c.slow_parts(Duration::from_millis(8), super::SLOW_TURN_FALLBACK)
+                .as_deref(),
+            Some(
+                "[infynitae] Slow turn 8.0 ms: layers above 7.0 ms, other 1.0 ms; slowest surface infynitae-edge-apps, shm 1920x1080 buffer, 6.9 ms"
             )
         );
     }
