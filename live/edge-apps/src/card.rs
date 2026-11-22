@@ -63,6 +63,8 @@ pub struct Cx<'a> {
     /// the app the card is tied to; None for a provider's own card
     pub app: Option<&'a App>,
     pub apps: &'a [App],
+    /// the apps started lately, for the order of search results
+    pub recent: &'a crate::recent::Recent,
     pub windows: &'a [Window],
     pub notes: &'a [Note],
     /// the panel is at the bottom edge: lists open over their row

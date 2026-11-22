@@ -1317,6 +1317,7 @@ impl App {
                             app.exec.clone()
                         };
                         spawn_detached(&cmd);
+                        self.shell.note_launch(&id);
                     }
                     self.shell.close();
                 }
@@ -2534,6 +2535,9 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
     let mut shell = Shell::new(crate::config::Config::load(), crate::app::load(&app_dirs));
     shell.set_app_dirs_with_mtimes(app_dirs, apps_mtime);
     shell.live = true;
+    if let Some(p) = crate::recent::path() {
+        shell.load_recent(p);
+    }
     let (fetch_tx, fetch_rx) = channel::channel::<Fetched>();
     let (icon_tx, icon_rx) = channel::channel::<()>();
     crate::icons::set_icon_wakeup(move || {

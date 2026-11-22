@@ -912,6 +912,7 @@ mod tests {
             size: crate::provider::Size::M,
             app: None,
             apps: &[],
+            recent: &crate::recent::NONE,
             windows: &[],
             notes: &[],
             list_above: false,

@@ -396,6 +396,9 @@ pub struct Shell {
     pub cfg: Config,
     pub theme: Theme,
     pub apps: Vec<App>,
+    /// the apps started lately and the file they are kept in (`None` until `load_recent`)
+    pub recent: crate::recent::Recent,
+    recent_path: Option<std::path::PathBuf>,
     pub windows: Vec<Window>,
     pub notes: Vec<Note>,
     /// the edge's own notifications: pop-ups and history (`notes` is the history as cards read it)
@@ -500,6 +503,8 @@ impl Shell {
             cfg,
             theme,
             apps,
+            recent: Default::default(),
+            recent_path: None,
             windows: Vec::new(),
             notes: Vec::new(),
             notify: Default::default(),
@@ -551,6 +556,25 @@ impl Shell {
         self.edit.active
     }
 
+    /// Reads the recent apps from `path` and writes each start to it from now on.
+    pub fn load_recent(&mut self, path: std::path::PathBuf) {
+        match crate::recent::Recent::load(&path) {
+            Ok(r) => self.recent = r,
+            Err(e) => eprintln!("infynitae-edge-apps: read {}: {e}", path.display()),
+        }
+        self.recent_path = Some(path);
+    }
+
+    /// App `id` was started (`Action::Launch`): the newest line of the recent apps' file.
+    pub fn note_launch(&mut self, id: &str) {
+        self.recent.note(id, chrono::Utc::now().timestamp());
+        if let Some(p) = &self.recent_path {
+            if let Err(e) = self.recent.save(p) {
+                eprintln!("infynitae-edge-apps: write {}: {e}", p.display());
+            }
+        }
+    }
+
     pub fn take_fetch_needed(&mut self) -> bool {
         std::mem::take(&mut self.fetch_needed)
     }
@@ -562,6 +586,7 @@ impl Shell {
             size,
             app: app_id.and_then(|id| self.apps.iter().find(|a| a.id == id)),
             apps: &self.apps,
+            recent: &self.recent,
             windows: &self.windows,
             notes: &self.notes,
             list_above,
@@ -2493,6 +2518,7 @@ impl Shell {
                     .as_deref()
                     .and_then(|id| self.apps.iter().find(|a| a.id == id)),
                 apps: &self.apps,
+                recent: &self.recent,
                 windows: &self.windows,
                 notes: &self.notes,
                 list_above: above,
@@ -5728,5 +5754,39 @@ mod tests {
             None,
             "expired card errors must clear when reopening the panel"
         );
+    }
+
+    #[test]
+    fn a_start_is_written_first_in_the_recent_apps_and_the_history_stays() {
+        let dir =
+            std::env::temp_dir().join(format!("edge-apps-shell-recent-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("recent-apps");
+        std::fs::write(
+            &path,
+            "1700000200\tfirefox.desktop\n1700000100\tsteam.desktop\n",
+        )
+        .unwrap();
+        let mut sh = shell("SUPER+W top center 440 apps/search");
+        sh.load_recent(path.clone());
+        sh.note_launch("foot");
+        let text = std::fs::read_to_string(&path).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 3, "{text}");
+        let (when, name) = lines[0].split_once('\t').unwrap();
+        assert_eq!(name, "foot.desktop");
+        assert!(when.parse::<i64>().unwrap() > 1700000200);
+        assert_eq!(
+            lines[1..],
+            ["1700000200\tfirefox.desktop", "1700000100\tsteam.desktop"]
+        );
+        // the cards see it at once
+        assert!(sh
+            .cx(Size::M, None, false)
+            .recent
+            .scores()
+            .contains_key("foot"));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

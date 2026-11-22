@@ -415,7 +415,7 @@ impl AppsListCard {
 
     /// The apps matching the query, best first, by their index in `cx.apps`.
     fn matches(&self, cx: &Cx) -> Vec<usize> {
-        search_apps(cx.apps, &self.query)
+        search_apps(cx.apps, cx.recent, &self.query)
             .into_iter()
             .filter_map(|m| cx.apps.iter().position(|a| std::ptr::eq(a, m)))
             .collect()
@@ -824,7 +824,13 @@ fn score_term(app: &App, term: &str) -> Option<u8> {
     None
 }
 
-pub fn search_apps<'a>(apps: &'a [App], query: &str) -> Vec<&'a App> {
+/// The apps matching every word of `query`, best match first; within one match quality the apps
+/// started often and lately (`Recent::scores`) first, then by name. Nothing typed: none.
+pub fn search_apps<'a>(
+    apps: &'a [App],
+    recent: &crate::recent::Recent,
+    query: &str,
+) -> Vec<&'a App> {
     let trimmed = query.trim();
     if trimmed.is_empty() {
         return Vec::new();
@@ -834,7 +840,8 @@ pub fn search_apps<'a>(apps: &'a [App], query: &str) -> Vec<&'a App> {
         return Vec::new();
     }
 
-    let mut ranked: Vec<(u16, String, &App)> = Vec::new();
+    let started = recent.scores();
+    let mut ranked: Vec<(u16, f64, String, &App)> = Vec::new();
     for app in apps {
         let mut total_score = 0u16;
         let mut matched = true;
@@ -846,15 +853,17 @@ pub fn search_apps<'a>(apps: &'a [App], query: &str) -> Vec<&'a App> {
             total_score += u16::from(s);
         }
         if matched {
-            ranked.push((total_score, app.name.to_lowercase(), app));
+            let lately = started.get(app.id.as_str()).copied().unwrap_or(0.0);
+            ranked.push((total_score, lately, app.name.to_lowercase(), app));
         }
     }
     ranked.sort_by(|a, b| {
         a.0.cmp(&b.0)
-            .then_with(|| a.1.cmp(&b.1))
-            .then_with(|| a.2.id.cmp(&b.2.id))
+            .then_with(|| b.1.total_cmp(&a.1))
+            .then_with(|| a.2.cmp(&b.2))
+            .then_with(|| a.3.id.cmp(&b.3.id))
     });
-    ranked.into_iter().map(|(_, _, app)| app).collect()
+    ranked.into_iter().map(|(_, _, _, app)| app).collect()
 }
 
 #[derive(Default)]
@@ -882,7 +891,7 @@ impl Card for SearchCard {
         if cx.size == Size::S || self.query.trim().is_empty() {
             return SEARCH_BAR_H;
         }
-        let matches = search_apps(cx.apps, &self.query);
+        let matches = search_apps(cx.apps, cx.recent, &self.query);
         let results_h = if matches.is_empty() {
             ui::LIST_ROW_H
         } else {
@@ -896,7 +905,7 @@ impl Card for SearchCard {
         let trimmed = self.query.trim();
         let active = !trimmed.is_empty();
         let matches = if cx.size != Size::S && active {
-            search_apps(cx.apps, &self.query)
+            search_apps(cx.apps, cx.recent, &self.query)
         } else {
             Vec::new()
         };
@@ -1047,7 +1056,10 @@ impl Card for SearchCard {
                 if self.query.is_empty() {
                     return false;
                 }
-                let Some(app) = search_apps(cx.apps, &self.query).into_iter().next() else {
+                let Some(app) = search_apps(cx.apps, cx.recent, &self.query)
+                    .into_iter()
+                    .next()
+                else {
                     return false;
                 };
                 out.push(Action::Launch(app.id.clone()));
@@ -1066,7 +1078,7 @@ impl Card for SearchCard {
                 if idx >= SEARCH_MAX_RESULTS {
                     return false;
                 }
-                let matches = search_apps(cx.apps, &self.query);
+                let matches = search_apps(cx.apps, cx.recent, &self.query);
                 let Some(app) = matches.get(idx) else {
                     return false;
                 };
@@ -1642,6 +1654,7 @@ mod tests {
             size,
             app: None,
             apps,
+            recent: &crate::recent::NONE,
             windows: &[],
             notes: &[],
             list_above: false,
@@ -1947,7 +1960,7 @@ mod tests {
             make_app("steam", "Steam", &["Game"]),
         ];
 
-        let ids: Vec<&str> = search_apps(&apps, "firefox")
+        let ids: Vec<&str> = search_apps(&apps, &crate::recent::NONE, "firefox")
             .iter()
             .map(|a| a.id.as_str())
             .collect();
@@ -1955,7 +1968,7 @@ mod tests {
             ids,
             vec!["firefox", "ff-dev", "my-firefox-helper", "org.mozilla.fx",]
         );
-        let sub_ids: Vec<&str> = search_apps(&apps, "frx")
+        let sub_ids: Vec<&str> = search_apps(&apps, &crate::recent::NONE, "frx")
             .iter()
             .map(|a| a.id.as_str())
             .collect();
@@ -2019,6 +2032,84 @@ mod tests {
             &mut out
         ));
         assert_eq!(card.height(&cx_m, 340.0), SEARCH_BAR_H);
+    }
+
+    /// Starts, oldest first: "KDE Find" three times, Firefox twice, then Foot once.
+    fn recent_starts() -> crate::recent::Recent {
+        let mut r = crate::recent::Recent::default();
+        for (when, id) in [
+            (1, "kfind"),
+            (2, "kfind"),
+            (3, "kfind"),
+            (4, "firefox"),
+            (5, "firefox"),
+            (6, "foot"),
+        ] {
+            r.note(id, when);
+        }
+        r
+    }
+
+    fn launcher_apps() -> Vec<App> {
+        vec![
+            make_app("files", "Files", &["System"]),
+            make_app("firefox", "Firefox", &["Network"]),
+            make_app("foot", "Foot", &["System"]),
+            make_app("kfind", "KDE Find", &["Utility"]),
+        ]
+    }
+
+    #[test]
+    fn search_puts_apps_started_often_and_lately_first_within_a_match() {
+        let apps = launcher_apps();
+        let recent = recent_starts();
+        let ids = |q: &str| -> Vec<String> {
+            search_apps(&apps, &recent, q)
+                .iter()
+                .map(|a| a.id.clone())
+                .collect()
+        };
+        // names starting with "f": Firefox (twice) before Foot (once, latest) before Files (never);
+        // "KDE Find", started most, only has a word starting with it and stays after them
+        assert_eq!(ids("f"), ["firefox", "foot", "files", "kfind"]);
+        // a name starting with the query beats letters in order, however often that app started
+        assert_eq!(ids("fo"), ["foot", "firefox"]);
+        assert_eq!(ids("kde find"), ["kfind"]);
+
+        // Enter in the launcher's list starts the first of them
+        let th = Theme::from_config(&Config::from_text(""));
+        let cx = Cx {
+            recent: &recent,
+            ..test_cx(&th, Size::M, &apps)
+        };
+        let mut card = AppsListCard::default();
+        let mut out = Vec::new();
+        card.event(&Event::Text("f"), &cx, &mut out);
+        assert!(card.event(&Event::Enter, &cx, &mut out));
+        assert_eq!(
+            out,
+            vec![Action::Launch("firefox".into()), Action::ClosePanel]
+        );
+    }
+
+    #[test]
+    fn nothing_typed_the_launcher_is_the_same_and_enter_starts_nothing() {
+        let th = Theme::from_config(&Config::from_text(""));
+        let apps = launcher_apps();
+        let recent = recent_starts();
+        let plain = test_cx(&th, Size::M, &apps);
+        let cx = Cx {
+            recent: &recent,
+            ..test_cx(&th, Size::M, &apps)
+        };
+        let mut list = AppsListCard::default();
+        assert_eq!(list.visible_window(&cx), list.visible_window(&plain));
+        let mut search = SearchCard::default();
+        assert_eq!(search.height(&cx, 340.0), SEARCH_BAR_H);
+        let mut out = Vec::new();
+        assert!(!list.event(&Event::Enter, &cx, &mut out));
+        assert!(!search.event(&Event::Enter, &cx, &mut out));
+        assert!(out.is_empty(), "{out:?}");
     }
 
     #[test]

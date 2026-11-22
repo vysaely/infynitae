@@ -1896,6 +1896,7 @@ mod tests {
             size,
             app,
             apps: test_apps(),
+            recent: &crate::recent::NONE,
             windows,
             notes: &[],
             list_above: false,
