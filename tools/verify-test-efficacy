@@ -1763,8 +1763,8 @@ CONTROLS = [
     ("close binding: Super+Shift+C resolves nothing", f"{CORE}/input/keys.rs",
      "        return Some(KeyAction::CloseFocused);", "        return None;",
      "infynitae-backend-headless", ["--test", "t1_close_binding"], "super_shift_c_asks_the_focused_window_to_close"),
-    ("close binding: the close request is never sent", f"{WAYLAND}/outputs.rs",
-     "                        t.send_close();", "                        let _ = t;",
+    ("close binding: the close request is never sent", f"{WAYLAND}/lib.rs",
+     "        toplevel.send_close();\n        let client = toplevel.client();", "        let client = toplevel.client();",
      "infynitae-backend-headless", ["--test", "t1_close_binding"], "super_shift_c_asks_the_focused_window_to_close"),
     # ---- Layer surfaces (owner decisions 2026-10-21 L1–L8; C12.F19 prepared)
     ("L3: overlay and top surfaces are not hit before the Canvas", f"{CORE}/lib.rs",
