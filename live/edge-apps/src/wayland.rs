@@ -217,14 +217,7 @@ impl OutputSurface {
                 // the question takes the whole screen: a click outside it cancels
                 region.add(0, 0, w.ceil() as i32, h.ceil() as i32);
             } else if show_here && shell.open.is_some() {
-                let idx = shell.open.unwrap();
-                // opened by its key: the whole screen, so a click outside reaches the edge and
-                // closes it; opened by hover: the panel and the way to it, so leaving closes it
-                let r = if shell.opened_by_hover {
-                    shell.hover_box(idx, w, h)
-                } else {
-                    (0.0, 0.0, w, h)
-                };
+                let r = open_input_rect(shell, shell.open.unwrap(), w, h);
                 region.add(
                     r.0.floor() as i32,
                     r.1.floor() as i32,
@@ -1717,6 +1710,14 @@ impl KeyboardHandler for App {
             .iter()
             .find(|o| o.layer.wl_surface() == surface)
             .map(|o| o.id);
+        if self.keyboard_output.is_some()
+            && self.shell.open.is_some()
+            && !self.shell.opened_by_hover
+            && !self.shell.keyboard_held
+        {
+            self.shell.keyboard_held = true;
+            self.sync_all();
+        }
     }
     fn leave(
         &mut self,
@@ -2609,14 +2610,34 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
     Ok(())
 }
 
+/// What of the screen takes the pointer while panel `idx` is open. Opened by hover: the panel
+/// and the way to it, so leaving closes it. Opened by its key: the panel alone, so the desktop
+/// around it keeps working (owner, 2026-11-22). Editing or a menu of the edge open: the whole
+/// screen, so a click outside reaches the edge.
+fn open_input_rect(shell: &Shell, idx: usize, w: f64, h: f64) -> (f64, f64, f64, f64) {
+    if shell.opened_by_hover {
+        shell.hover_box(idx, w, h)
+    } else if shell.editing() || shell.edit_menu.is_some() || shell.window_menu.is_some() {
+        (0.0, 0.0, w, h)
+    } else {
+        shell.layout(idx, w, h).0
+    }
+}
+
 fn keyboard_interactivity(shell: &Shell) -> KeyboardInteractivity {
     if !shell.active() {
         KeyboardInteractivity::None
-    } else if shell.opened_by_hover
-        && !shell.clicked_inside
-        && !shell.ask.ask.on
-        && !shell.editing()
-    {
+    } else if shell.ask.ask.on || shell.editing() {
+        KeyboardInteractivity::Exclusive
+    } else if shell.opened_by_hover {
+        if shell.clicked_inside {
+            KeyboardInteractivity::Exclusive
+        } else {
+            KeyboardInteractivity::OnDemand
+        }
+    } else if shell.keyboard_held {
+        // opened by its key, and the keyboard came: kept on demand from now on, so the
+        // compositor keeps it here until a window is hovered or clicked
         KeyboardInteractivity::OnDemand
     } else {
         KeyboardInteractivity::Exclusive
@@ -3440,6 +3461,25 @@ mod tests {
             keyboard_interactivity(&sh),
             KeyboardInteractivity::Exclusive,
             "key-opened panel takes Exclusive keyboard interactivity at once"
+        );
+        sh.keyboard_held = true;
+        assert_eq!(
+            keyboard_interactivity(&sh),
+            KeyboardInteractivity::OnDemand,
+            "once the keyboard came, a key-opened panel holds it on demand so windows can take it"
+        );
+        assert!(sh.close_at(t0));
+        assert!(sh.open_panel(idx, false, t0));
+        assert_eq!(
+            keyboard_interactivity(&sh),
+            KeyboardInteractivity::Exclusive,
+            "opening again takes the keyboard again"
+        );
+        let (pbox, _) = sh.layout(idx, 1280.0, 800.0);
+        assert_eq!(
+            open_input_rect(&sh, idx, 1280.0, 800.0),
+            pbox,
+            "a key-opened panel takes the pointer only over itself"
         );
     }
 
@@ -4321,7 +4361,18 @@ mod tests {
         assert_eq!(c1.buffer_size, Some((2560, 1600)));
         assert_eq!(c1.buffer_scale, 2);
         assert_eq!(c1.viewport_dest, None);
-        assert_eq!(c1.input_rects, vec![(0, 0, 1280, 800)]);
+        // opened by its key: the pointer is taken over the panel only, the desktop keeps the rest
+        let idx = app.shell.open.unwrap();
+        let (pb, _) = app.shell.layout(idx, 1280.0, 800.0);
+        assert_eq!(
+            c1.input_rects,
+            vec![(
+                pb.0.floor() as i32,
+                pb.1.floor() as i32,
+                pb.2.ceil() as i32,
+                pb.3.ceil() as i32
+            )]
+        );
         assert!(surface_has_nonzero_pixels(&mut app.outputs[0]));
 
         // Compositor updates wl_output scale to 3; buffers and set_buffer_scale follow.
