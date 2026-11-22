@@ -1250,7 +1250,7 @@ impl WaylandState {
                 let mut zoom_sharpen_after = true;
                 let (mut background_priority, mut game_mode) = (true, true);
                 let mut gpu_relief = true;
-                let (mut tearing, mut tearing_always) = (true, true);
+                let (mut tearing, mut tearing_always) = (true, false);
                 let mut fit_is_fullscreen = true;
                 let mut latency_mode = crate::frame_schedule::LatencyMode::Direct;
                 let mut scaling_filter = ZoomFilter::default();

@@ -1993,6 +1993,8 @@ mod tests {
         let cx = test_cx(&th);
         let mut cfg = full_config_data();
         cfg.now.insert("COLOR_SCHEME".into(), "prefer-dark".into());
+        cfg.now
+            .insert("THEME_FROM_WALLPAPER".into(), "false".into());
         cfg.now.insert("BORDER_ACTIVE".into(), "#cc70a9".into());
         cfg.now.insert(
             "WALLPAPER".into(),
@@ -2199,6 +2201,9 @@ mod tests {
 
         // ACCENT wins over BORDER_ACTIVE; shuffle counts as from wallpaper.
         let mut cfg = full_config_data();
+        // the accent typed in, not taken from the wallpaper (the shipped default since 2026-11-22)
+        cfg.now
+            .insert("THEME_FROM_WALLPAPER".into(), "false".into());
         cfg.now.insert("ACCENT".into(), "#1188ee".into());
         cfg.now.insert("BORDER_ACTIVE".into(), "#cc70a9".into());
         let mut card = SettingsAllCard::with_paths(dir.join("missing"), dir.join("missing_cfg"));

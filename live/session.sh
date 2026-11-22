@@ -314,7 +314,7 @@ fi
 RESTORE_BIN=$(infy_bin infynitae-restore || true)
 RESTORE_SESSION=false
 # restart: the watcher runs as with true; restore and check skip a snapshot from before this boot
-if infy_on "${SESSION_RESTORE:-true}" || [ "${SESSION_RESTORE:-}" = restart ]; then
+if infy_on "${SESSION_RESTORE:-restart}" || [ "${SESSION_RESTORE:-restart}" = restart ]; then
     if [ -n "$RESTORE_BIN" ]; then
         # check: a saved window whose app can be launched (else the terminal below starts).
         # The watcher starts once the restore is done: a snapshot taken while windows are
