@@ -1,12 +1,15 @@
-//! OUTPUT_SCALE, OUTPUT_<NAME>_SCALE, OUTPUT_ORDER and OUTPUT_LAYOUT apply on a config reload to
-//! the screens connected now: each takes its new scale, and they are placed side by side again
-//! in the new order. The first reload records what the screens started with.
+//! OUTPUT_SCALE, OUTPUT_<NAME>_SCALE, _MODE, _RATE, _TRANSFORM, OUTPUT_ORDER and OUTPUT_LAYOUT
+//! apply on a config reload to the screens connected now: each takes its new mode, turn and
+//! scale, and they are placed side by side again in the new order. The first reload records
+//! what the screens started with.
 
 mod common;
 
 use common::{Lockstep, output_k};
 use infynitae_core::navigation::PersistedCameras;
+use infynitae_core::output::Transform;
 use infynitae_wayland::cursor::TestTempDir;
+use infynitae_wayland::output_management::{HeadInfo, HeadMode};
 
 fn reload(ls: &mut Lockstep, home: &std::path::Path, config: &str) {
     let dir = home.join(".config/infynitae");
@@ -102,4 +105,111 @@ fn a_reload_gives_the_screens_their_new_scales_and_order() {
         "OUTPUT_LAYOUT=\"right-to-left\"\nBORDER_WIDTH=\"2\"\n",
     );
     assert_eq!(screen(&ls, "B"), (1.0, (1920.0, 500.0)));
+}
+
+/// The screen on `connector`: its mode, refresh, turn and where it is placed.
+fn screen_mode(ls: &Lockstep, connector: &str) -> ((u32, u32), u32, Transform, (f64, f64)) {
+    let o = ls
+        .state
+        .core()
+        .outputs()
+        .iter()
+        .find(|o| o.key.connector == connector)
+        .expect("the screen is connected");
+    (o.phys, o.refresh_mhz, o.transform, o.arrangement)
+}
+
+#[test]
+fn a_reload_gives_the_screens_their_new_modes_and_turns() {
+    let temp = TestTempDir::new("t1_live_display_modes");
+    let mut ls = Lockstep::with(
+        PersistedCameras::default(),
+        &[
+            output_k("A", (1920, 1080), 120, 60_000),
+            output_k("B", (2560, 1440), 120, 60_000),
+        ],
+    );
+    // the modes the backend found on A (a headless screen has only its current one)
+    let a = ls
+        .state
+        .core()
+        .outputs()
+        .iter()
+        .find(|o| o.key.connector == "A")
+        .unwrap()
+        .id;
+    let m = |w, h, refresh_mhz, preferred| HeadMode {
+        size: (w, h),
+        refresh_mhz,
+        preferred,
+    };
+    ls.state.set_output_head_info(
+        a,
+        HeadInfo {
+            modes: vec![
+                m(1920, 1080, 60_000, true),
+                m(1920, 1080, 144_000, false),
+                m(1280, 720, 60_000, false),
+            ],
+            physical_size: None,
+            adaptive_sync: None,
+        },
+    );
+    reload(&mut ls, temp.path(), "");
+
+    reload(&mut ls, temp.path(), "OUTPUT_A_MODE=\"1280x720\"\n");
+    assert_eq!(
+        screen_mode(&ls, "A"),
+        ((1280, 720), 60_000, Transform::Normal, (0.0, 0.0))
+    );
+    assert_eq!(
+        screen_mode(&ls, "B").3,
+        (1280.0, 0.0),
+        "next to A at its new width"
+    );
+
+    reload(
+        &mut ls,
+        temp.path(),
+        "OUTPUT_A_MODE=\"1280x720\"\nOUTPUT_B_TRANSFORM=\"90\"\nOUTPUT_ORDER=\"B,A\"\n",
+    );
+    assert_eq!(
+        screen_mode(&ls, "B"),
+        ((2560, 1440), 60_000, Transform::R90, (0.0, 0.0))
+    );
+    assert_eq!(
+        screen_mode(&ls, "A").3,
+        (1440.0, 0.0),
+        "to the right of B turned upright"
+    );
+
+    // the mode line removed and a rate given: the preferred size at the nearest rate; the turn's
+    // line removed leaves B turned
+    reload(
+        &mut ls,
+        temp.path(),
+        "OUTPUT_A_RATE=\"144\"\nOUTPUT_ORDER=\"B,A\"\n",
+    );
+    assert_eq!(
+        screen_mode(&ls, "A"),
+        ((1920, 1080), 144_000, Transform::Normal, (1440.0, 0.0))
+    );
+    assert_eq!(screen_mode(&ls, "B").2, Transform::R90);
+
+    // a size the screen has no mode for: its preferred mode at its highest rate, as at start
+    reload(
+        &mut ls,
+        temp.path(),
+        "OUTPUT_A_MODE=\"1280x720\"\nOUTPUT_ORDER=\"B,A\"\n",
+    );
+    assert_eq!(screen_mode(&ls, "A").0, (1280, 720));
+    reload(
+        &mut ls,
+        temp.path(),
+        "OUTPUT_A_MODE=\"800x600\"\nOUTPUT_ORDER=\"B,A\"\n",
+    );
+    assert_eq!(
+        screen_mode(&ls, "A"),
+        ((1920, 1080), 144_000, Transform::Normal, (1440.0, 0.0))
+    );
 }
