@@ -2629,7 +2629,21 @@ fn render(data: &mut LoopData, turn: &mut TurnClock) {
         let render_result =
             s.compositor
                 .render_frame(&mut data.renderer, &elements, clear, frame_flags);
-        turn.mark("render_frame");
+        // a slow one says whether the GPU drew it: most of the 63 turns of 50 to 437 ms on
+        // 2026-11-22 came in the same stretches as slow capture draws or GPU relief
+        turn.mark(match &render_result {
+            Ok(r) if r.is_empty => "render_frame, nothing new",
+            Ok(r)
+                if matches!(
+                    r.primary_element,
+                    smithay::backend::drm::compositor::PrimaryPlaneElement::Element(_)
+                ) =>
+            {
+                "render_frame, scanned out"
+            }
+            Ok(_) => "render_frame, composited",
+            Err(_) => "render_frame, failed",
+        });
         let queued = match render_result {
             Ok(result) if !result.is_empty => {
                 use smithay::backend::drm::compositor::PrimaryPlaneElement;
