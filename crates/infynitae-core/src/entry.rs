@@ -7409,6 +7409,106 @@ mod tests {
         );
     }
 
+    /// Strict focus (owner, 2026-11-22: "when panels/edge is open keyboard cant interact with the
+    /// windows"): an open panel asks for the keyboard on demand, and a click on a window takes it
+    /// back from the panel, even when that window was focused before the panel was clicked.
+    #[test]
+    fn a_click_on_a_window_takes_the_keyboard_from_an_on_demand_panel() {
+        use crate::geom::{LocalPoint, LocalRect, LocalSize};
+        use crate::layer::{Anchors, KeyboardInteractivity, Layer, LayerState};
+        use crate::snapshot::{InputRegion, SnapshotSurface, SurfaceKey, SurfaceRole, SurfaceTree};
+        let layer_tree = |k: u64, w: i32, h: i32, mapped: bool| SurfaceTree {
+            geometry: LocalRect {
+                loc: LocalPoint::default(),
+                size: LocalSize { w, h },
+            },
+            surfaces: vec![SnapshotSurface {
+                key: SurfaceKey::from_raw(std::num::NonZeroU64::new(k).unwrap()),
+                role: SurfaceRole::Root,
+                size: if mapped {
+                    LocalSize { w, h }
+                } else {
+                    LocalSize::default()
+                },
+                mapped,
+                input: InputRegion::Infinite,
+                frame_requested: false,
+            }],
+        };
+
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        c.set_focus_follows_mouse(false);
+        let ws = map_windows(&mut c, a, 1);
+        let mut fx = Vec::new();
+        c.place_by_user(
+            ws[0],
+            crate::geom::CanvasPoint { x: -200, y: -540 },
+            &mut fx,
+        )
+        .unwrap();
+        c.render_list(a).unwrap();
+
+        let panel = c.layer_created(Some(a)).unwrap();
+        let lstate = LayerState {
+            layer: Some(Layer::Top),
+            anchors: Anchors {
+                top: true,
+                bottom: false,
+                left: true,
+                right: true,
+            },
+            size: (0, 80),
+            margins: (0, 0, 0, 0),
+            exclusive_zone: 0,
+            keyboard: KeyboardInteractivity::OnDemand,
+        };
+        let lfx = c
+            .layer_committed(panel, lstate, layer_tree(99, 0, 0, false))
+            .unwrap();
+        let lsize = lfx
+            .iter()
+            .find_map(|e| match e {
+                Effect::LayerConfigure { layer, size } if *layer == panel => Some(*size),
+                _ => None,
+            })
+            .expect("layer configure");
+        c.layer_committed(panel, lstate, layer_tree(99, lsize.w, lsize.h, true))
+            .unwrap();
+
+        c.pointer = PointerState::Located {
+            output: a,
+            p: (960.0, 150.0),
+        };
+        mouse_button(&mut c, &mut i, true);
+        mouse_button(&mut c, &mut i, false);
+        assert_eq!(c.focus().target(), Some(ws[0]));
+
+        // the panel is clicked (a slider in it): it takes the keyboard
+        mouse_move(&mut c, &mut i, (0.0, -110.0));
+        assert!(c.layer_hit(a, (960.0, 41.0), true).is_some());
+        mouse_button(&mut c, &mut i, true);
+        mouse_button(&mut c, &mut i, false);
+        assert_eq!(c.focus().layer(), Some(panel));
+
+        // strict focus: going back over the window keeps the keyboard on the panel
+        mouse_move(&mut c, &mut i, (0.0, 110.0));
+        assert_eq!(c.focus().layer(), Some(panel));
+
+        let fx = mouse_button(&mut c, &mut i, true);
+        mouse_button(&mut c, &mut i, false);
+        assert_eq!(
+            (c.focus().layer(), c.focus().target()),
+            (None, Some(ws[0])),
+            "a click on the window takes the keyboard from the on-demand panel"
+        );
+        assert!(
+            fx.iter()
+                .any(|e| matches!(e, Effect::KeyboardFocus(Some(w)) if *w == ws[0])),
+            "the adapter is told to give the window the keyboard: {fx:?}"
+        );
+    }
+
     #[test]
     fn an_input_layer_over_the_window_blocks_its_pointer_constraint() {
         use crate::geom::{LocalPoint, LocalRect, LocalSize};
