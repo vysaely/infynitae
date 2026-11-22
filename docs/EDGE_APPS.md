@@ -528,8 +528,8 @@ Kept as in `live/edge-rs/src/wayland.rs`, which was measured and fixed over seve
 - **Keyboard**: opened by key, exclusive until the keyboard arrives, then on demand, so a window the
   pointer goes to or clicks can take it while the panel stays open; a click on the panel takes it back.
   Opened by hover, on demand until a click inside. Editing or a question: exclusive.
-- **Columns**: a panel taller than the screen flows into columns side by side, editing too; dragging a
-  card drops it in the column under the pointer.
+- **Taller than the screen**: a panel scrolls in its one column (wheel, touchpad, keys), editing too
+  (owner 2026-11-22; columns side by side were tried and dropped).
 - **Under a fullscreen window**: the closed surface is unmapped (no buffer), so the window can be shown
   directly (`wayland.rs:237-262`; the reason is in the comment at 160-164).
 - **Buffers and damage**: two shm buffers per surface; each frame clears and redraws the panel's box and
