@@ -4,9 +4,23 @@ State (2026-11-13): stage 1 (panels, system cards, launcher, windows, clipboard,
 ask prompt, panel editing and Add a card in `edit.rs`), stage 2 app cards (calendar, monitor, music,
 Steam, chat, files, simple), and the Settings cards (`docs/EDGE_SETTINGS.md`, including
 `settings/keys`) are built in `live/edge-apps` with VM scripts in `tools/vm-edge/` (`papps.py`,
-`papps2.py`, `pask.py`, `pedit.py`, `psettings.py`, `pkeys.py`); desktop widgets (`WIDGETS`) are not
-yet built there. `EDGE_IMPL="apps"` picks it; `live/edge-rs` stays the default until it switches
-over.
+`papps2.py`, `pask.py`, `pedit.py`, `psettings.py`, `pkeys.py`). The desktop's widgets (`WIDGETS`) are
+built too (2026-11-22, `widgets.rs`; below). `EDGE_IMPL="apps"` is the default since 2026-11-22
+(`live/edge-pick`); `"rust"` and `"c"` still pick the frozen edges.
+
+Desktop widgets (2026-11-22): the `WIDGETS` line as `live/edge-rs` reads it (`module[:look]@x,y,WxH`,
+the old words mapped as in section 1, each switch word a Quick settings card of that one switch at
+its own place) and new words with places (`steam/games@60,60,380x234`); a word without its place,
+a card whose app is not installed, and a repeated card are left out, at most 16. They are cards
+drawn by the panels' code (`shell::draw_card`) on one layer surface `infynitae-widgets`, Bottom
+layer, first screen, made only while the line has a widget; the input region is the shown widgets'
+boxes. Their sources are fetched in the open panel's schedule, also with no panel open; the clock
+redraws on the minute. A click, a drag and a finger reach the card; scrolling, the keyboard, a tray
+app's right-click menu (it shows cards in a panel's place) and Remove do not. Edit mode is not
+ported (edge-rs's is a second editor for free placement): the line is changed in the config, and
+`infynitae-edge widgets` opens nothing here (it is read as a panel's name). `--render widgets WxH
+FILE` draws them alone; a panel's `--render` draws them under it. Tests: `widgets.rs`, `panel.rs`, `config.rs`, `main.rs`
+and `headless_widgets_*` in `wayland.rs` (against the mock compositor); not yet run in the VM.
 
 The rest of this document is the plan as written before building. The owner asked for the edge to be reworked from zero: first map the
 apps, then every card in a panel comes from an app. You add an app, then pick one of its cards. Known

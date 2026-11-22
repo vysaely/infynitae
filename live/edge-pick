@@ -1,18 +1,19 @@
 #!/bin/sh
-# Points BIN/infynitae-edge at the edge EDGE_IMPL names (docs/EDGE_RUST.md, stage 6): "rust" (the
-# default) for infynitae-edge-rs, "c" for infynitae-edge-c, "apps" for infynitae-edge-apps (the edge
-# rebuilt from apps, docs/EDGE_APPS.md; while it is new it falls back to the Rust one). The name everything calls (the
-# compositor's panel keys, launch.sh, session.sh, infynitae-reload, format-drive) stays the same.
-# A missing choice falls back to the other edge. An edge installed before the switch (a file named
-# infynitae-edge) is kept as infynitae-edge-c.
+# Points BIN/infynitae-edge at the edge EDGE_IMPL names (docs/EDGE_RUST.md, stage 6): "apps" (the
+# default) for infynitae-edge-apps (the edge rebuilt from apps, docs/EDGE_APPS.md), "rust" for
+# infynitae-edge-rs, "c" for infynitae-edge-c. The name everything calls (the compositor's panel
+# keys, launch.sh, session.sh, infynitae-reload, format-drive) stays the same. A missing choice
+# falls back to the other edge (the Rust one for apps: binaries installed before the edge from apps
+# was built). An edge installed before the switch (a file named infynitae-edge) is kept as
+# infynitae-edge-c.
 #   edge-pick [BIN dir, default ~/.local/bin]
 BIN="${1:-$HOME/.local/bin}"
 cfg="$HOME/.config/infynitae/config"
 impl=$(sed -n 's/^EDGE_IMPL=["'\'']\{0,1\}\([A-Za-z]*\).*/\1/p' "$cfg" 2>/dev/null | tail -n 1)
 case "$impl" in
     c | C) want=infynitae-edge-c other=infynitae-edge-rs ;;
-    apps | Apps | APPS) want=infynitae-edge-apps other=infynitae-edge-rs ;;
-    *) want=infynitae-edge-rs other=infynitae-edge-c ;;
+    rust | Rust | RUST) want=infynitae-edge-rs other=infynitae-edge-c ;;
+    *) want=infynitae-edge-apps other=infynitae-edge-rs ;;
 esac
 if [ -f "$BIN/infynitae-edge" ] && [ ! -L "$BIN/infynitae-edge" ]; then
     if [ -x "$BIN/infynitae-edge-c" ]; then
@@ -28,4 +29,4 @@ if [ ! -x "$BIN/$want" ]; then
 fi
 [ "$(readlink "$BIN/infynitae-edge" 2>/dev/null)" = "$want" ] && exit 0
 ln -sfn "$want" "$BIN/infynitae-edge.new" && mv -Tf "$BIN/infynitae-edge.new" "$BIN/infynitae-edge"
-echo "==> The edge is $want (EDGE_IMPL=${impl:-rust})"
+echo "==> The edge is $want (EDGE_IMPL=${impl:-apps})"

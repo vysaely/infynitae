@@ -45,6 +45,12 @@ edges on other hardware.
 
 These pass the test suite but have not run on a real screen or device yet:
 
+- **The edge from apps is the default edge (2026-11-22):** `EDGE_IMPL="apps"` in the shipped config
+  and when unset (`live/edge-apps`, [EDGE_APPS.md](EDGE_APPS.md)), the one the owner runs. It
+  draws the desktop's widgets (`WIDGETS`) now, read as the Rust edge reads them; they are changed
+  in the config, not arranged in place. The widgets are tested against a mock
+  compositor only, not yet on a screen. The Rust edge (`"rust"`) and the C edge (`"c"`) are frozen
+  and still built.
 - **The 2026-11-06 overhaul** (tried as a fresh default user in the test VM, not yet on the
   owner's screen):
   - **Lock screen:** the wallpaper blurred and dimmed behind it, the user's picture

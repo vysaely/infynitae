@@ -169,12 +169,15 @@ fn parse_place(a: &str) -> Option<(i32, i32, i32, i32)> {
 /// The panel's cards, with the owner's `FAVORITES` as the argument of a favorites card that has
 /// none (the old `favorites` word, or `apps/favorites` written bare).
 pub fn cards_with(p: &Panel, favorites: &str) -> Vec<CardRef> {
+    with_favorites(cards(p), favorites)
+}
+
+fn with_favorites(mut out: Vec<CardRef>, favorites: &str) -> Vec<CardRef> {
     let ids: Vec<&str> = favorites
         .split([' ', ',', '\t'])
         .map(str::trim)
         .filter(|w| !w.is_empty())
         .collect();
-    let mut out = cards(p);
     for c in &mut out {
         if c.owner == "apps" && c.kind == "favorites" && c.argument.is_none() && !ids.is_empty() {
             c.argument = Some(ids.join(","));
@@ -222,6 +225,47 @@ pub fn cards(p: &Panel) -> Vec<CardRef> {
     out
 }
 
+/// The desktop's widgets from the WIDGETS line, with `FAVORITES` as `cards_with` gives them: each
+/// word that has its place, in order, at most 16 (as edge-rs). The Rust edge drew each switch word
+/// as a widget of its own, so an old switch word is a Quick settings card of that one switch, at
+/// its own place. A card comes once (by owner, kind and argument).
+pub fn widget_cards(p: &Panel, favorites: &str) -> Vec<CardRef> {
+    let mut out: Vec<CardRef> = Vec::new();
+    for raw in &p.words {
+        let (body, at) = match raw.split_once('@') {
+            Some((a, b)) => (a, b),
+            None => continue,
+        };
+        let Some(place) = parse_place(at) else {
+            continue;
+        };
+        let base = body.split(':').next().unwrap_or("").to_ascii_lowercase();
+        let card = if QUICK.contains(&base.as_str()) {
+            let mut q = CardRef::new("settings", "quick");
+            q.argument = Some(if base == "night" {
+                "nightlight".into()
+            } else {
+                base
+            });
+            q.place = Some(place);
+            q
+        } else {
+            match read_word(raw) {
+                Some(c) => c,
+                None => continue,
+            }
+        };
+        if out.len() < 16
+            && !out.iter().any(|o| {
+                o.owner == card.owner && o.kind == card.kind && o.argument == card.argument
+            })
+        {
+            out.push(card);
+        }
+    }
+    with_favorites(out, favorites)
+}
+
 /// A panel's line in the new words (what `--print-panels` prints after the panel's name).
 pub fn line(p: &Panel) -> String {
     let mut out = p.value();
@@ -250,7 +294,8 @@ pub fn print(cfg: &Config) -> String {
         s += &format!("{} {}\n", p.name, line(p));
     }
     if let Some(w) = &cfg.widgets {
-        s += &format!("widgets {}\n", line(w));
+        let words: Vec<String> = widget_cards(w, "").iter().map(CardRef::word).collect();
+        s += &format!("widgets {}\n", words.join(" "));
     }
     s
 }
@@ -342,6 +387,51 @@ mod tests {
         assert_eq!(
             panel("settings/ /x bad$/kind steam/games steam/games:l unknownword"),
             vec!["steam/games"]
+        );
+    }
+
+    fn widgets(line: &str) -> Vec<String> {
+        let cfg = Config::from_text(&format!("WIDGETS=\"{line}\"\nFAVORITES=\"steam\"\n"));
+        widget_cards(cfg.widgets.as_ref().expect("widgets"), &cfg.favorites)
+            .iter()
+            .map(|c| c.word())
+            .collect()
+    }
+
+    #[test]
+    fn the_widgets_line_gives_each_placed_card_at_its_place() {
+        // the edge-rs line of docs/EDGE_RUST.md and config/config, read unchanged
+        assert_eq!(
+            widgets("clock:big@60,60,380x150 calendar@60,230,380x330 media@470,60,380x234"),
+            vec![
+                "calendar/clock:m@60,60,380x150",
+                "calendar/month@60,230,380x330",
+                "music/playing@470,60,380x234",
+            ]
+        );
+        // each switch its own widget; a word without its place (or too small) is left out; a
+        // card comes once; new words with their places; favorites from FAVORITES
+        assert_eq!(
+            widgets("dnd@10,10,180x46 night@200,10,180x46 media wifi@500,40,180x10 clock@1,1,300x100 clock:big@5,5,300x100 steam/games@60,60,380x234 favorites@0,400,380x80"),
+            vec![
+                "settings/quick=dnd@10,10,180x46",
+                "settings/quick=nightlight@200,10,180x46",
+                "calendar/clock:s@1,1,300x100",
+                "steam/games@60,60,380x234",
+                "apps/favorites=steam@0,400,380x80",
+            ]
+        );
+    }
+
+    #[test]
+    fn print_panels_lists_the_widgets_with_their_places() {
+        let cfg = Config::from_text("WIDGETS=\"clock@60,60,380x150 dnd@10,10,180x46\"\n");
+        assert!(
+            print(&cfg).ends_with(
+                "widgets calendar/clock:s@60,60,380x150 settings/quick=dnd@10,10,180x46\n"
+            ),
+            "{}",
+            print(&cfg)
         );
     }
 

@@ -1,6 +1,6 @@
 #!/bin/sh
-# tools/test-edge-pick: live/edge-pick points infynitae-edge at the edge EDGE_IMPL names (rust by
-# default, c, apps), falls back to another when that one is not built, and keeps an old plain
+# tools/test-edge-pick: live/edge-pick points infynitae-edge at the edge EDGE_IMPL names (apps by
+# default, rust, c), falls back to another when that one is not built, and keeps an old plain
 # infynitae-edge as the C one. Stand-in binaries in a temporary folder. Run from the repository root.
 set -eu
 REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
@@ -18,12 +18,14 @@ pick() {
 
 mkdir -p "$TMP/bin"
 mk infynitae-edge-rs; mk infynitae-edge-c; mk infynitae-edge-apps
-check "no EDGE_IMPL: the Rust edge" '[ "$(pick "")" = infynitae-edge-rs ]'
+check "no EDGE_IMPL: the edge from apps" '[ "$(pick "")" = infynitae-edge-apps ]'
+check "EDGE_IMPL=rust: the Rust edge" '[ "$(pick rust)" = infynitae-edge-rs ]'
 check "EDGE_IMPL=c: the C edge" '[ "$(pick c)" = infynitae-edge-c ]'
 check "EDGE_IMPL=apps: the edge from apps" '[ "$(pick apps)" = infynitae-edge-apps ]'
 check "EDGE_IMPL=rust again: back to the Rust edge" '[ "$(pick rust)" = infynitae-edge-rs ]'
 rm -f "$TMP/bin/infynitae-edge-apps"
 check "apps not built: the Rust edge instead" '[ "$(pick apps)" = infynitae-edge-rs ]'
+check "no EDGE_IMPL, apps not built: the Rust edge instead" '[ "$(pick "")" = infynitae-edge-rs ]'
 
 rm -rf "$TMP/bin"; mkdir -p "$TMP/bin"; mk infynitae-edge-rs; mk infynitae-edge
 check "an old plain infynitae-edge is kept as the C one" \

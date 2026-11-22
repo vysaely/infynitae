@@ -167,7 +167,7 @@ impl Card for NotInstalledCard {
     }
 }
 
-fn place_one(w: CardRef, apps: &[App]) -> Placed {
+pub fn place_one(w: CardRef, apps: &[App]) -> Placed {
     if let Some((prov, app)) = provider::resolve(&w.owner, apps) {
         if let (Some(kind), Some(card)) = (
             prov.kind(&w.kind),
@@ -401,6 +401,8 @@ pub struct Shell {
     /// the edge's own notifications: pop-ups and history (`notes` is the history as cards read it)
     pub notify: crate::notify::Notify,
     pub panels: Vec<PanelState>,
+    /// the desktop's widgets (`WIDGETS`), shown whether a panel is open or not
+    pub widgets: crate::widgets::Widgets,
     pub open: Option<usize>,
     pub open_output: Option<OutputId>,
     ask_output: Option<OutputId>,
@@ -492,7 +494,9 @@ impl Shell {
                 panel: p.clone(),
             })
             .collect();
+        let widgets = crate::widgets::place(&cfg, &apps);
         Shell {
+            widgets,
             cfg,
             theme,
             apps,
@@ -1148,7 +1152,10 @@ impl Shell {
         }
         let cfg = Config::from_text(&std::fs::read_to_string(path).unwrap_or_default());
         crate::icons::clear_icon_cache();
-        if cfg.panels == self.cfg.panels && cfg.favorites == self.cfg.favorites {
+        if cfg.panels == self.cfg.panels
+            && cfg.favorites == self.cfg.favorites
+            && cfg.widgets == self.cfg.widgets
+        {
             // the same panels and cards: keep them (an open list, the accent picker stay as they
             // are while a setting is written); the colours and the cards' data follow
             self.theme = Theme::from_config(&cfg);
@@ -1226,6 +1233,7 @@ impl Shell {
                 panel: p.clone(),
             })
             .collect();
+        self.widgets = crate::widgets::place(&cfg, &self.apps);
         self.cfg = cfg;
     }
 
@@ -3186,14 +3194,21 @@ impl Shell {
         })
     }
 
-    /// New data for `(provider, key)`: every card that lists it. True when one changed.
+    /// Every placed card: the panels' and the desktop widgets'.
+    fn all_cards_mut(&mut self) -> impl Iterator<Item = &mut Placed> {
+        self.panels
+            .iter_mut()
+            .flat_map(|ps| ps.cards.iter_mut())
+            .chain(self.widgets.list.iter_mut().map(|w| &mut w.placed))
+    }
+
+    /// New data for `(provider, key)`: every card that lists it (in a panel or on the desktop).
+    /// True when one changed.
     pub fn apply(&mut self, provider: &str, key: &str, data: &dyn std::any::Any) -> bool {
         let mut changed = false;
-        for ps in &mut self.panels {
-            for pc in &mut ps.cards {
-                if pc.provider.id() == provider && pc.kind.sources.contains(&key) {
-                    changed |= pc.card.apply(key, data);
-                }
+        for pc in self.all_cards_mut() {
+            if pc.provider.id() == provider && pc.kind.sources.contains(&key) {
+                changed |= pc.card.apply(key, data);
             }
         }
         changed
@@ -3205,11 +3220,9 @@ impl Shell {
             return false;
         };
         let mut changed = false;
-        for ps in &mut self.panels {
-            for pc in &mut ps.cards {
-                if pc.word.owner == owner && pc.word.kind == kind {
-                    changed |= pc.card.command_done(res, now);
-                }
+        for pc in self.all_cards_mut() {
+            if pc.word.owner == owner && pc.word.kind == kind {
+                changed |= pc.card.command_done(res, now);
             }
         }
         changed
@@ -3220,6 +3233,7 @@ impl Shell {
         self.panels
             .iter()
             .flat_map(|ps| ps.cards.iter())
+            .chain(self.widgets.list.iter().map(|w| &w.placed))
             .filter_map(|pc| pc.card.next_deadline())
             .min()
     }
@@ -3227,10 +3241,8 @@ impl Shell {
     /// Expires transient card feedback whose deadline passed by `now`.
     pub fn expire_cards(&mut self, now: Instant) -> bool {
         let mut changed = false;
-        for ps in &mut self.panels {
-            for pc in &mut ps.cards {
-                changed |= pc.card.expire(now);
-            }
+        for pc in self.all_cards_mut() {
+            changed |= pc.card.expire(now);
         }
         changed
     }
@@ -3447,16 +3459,6 @@ impl Shell {
                 frame.push((*ci, *r, hits));
                 continue;
             }
-            // a card without its header only while it shows itself (Loading and Missing say
-            // whose they are)
-            let headed = pc.card.header(&cx) || status != Status::Ready;
-            let head = if headed { HEAD_H } else { 0.0 };
-            let body = (
-                r.0 + PAD_X - 8.0,
-                r.1 + PAD_TOP + head,
-                r.2 - 2.0 * (PAD_X - 8.0),
-                r.3 - PAD_TOP - head - PAD_BOTTOM,
-            );
             let lifted = p < 1.0;
             if lifted {
                 let drop_y = if closing_p.is_some() {
@@ -3467,43 +3469,7 @@ impl Shell {
                 cr.push_group();
                 cr.translate(0.0, (1.0 - p) * drop_y);
             }
-            draw::card(cr, th, r.0, r.1, r.2, r.3);
-            if headed {
-                let title = pc
-                    .card
-                    .title(&cx)
-                    .unwrap_or_else(|| pc.kind.title.to_string());
-                draw_header(cr, th, *r, &title, &pc.from);
-            }
-            match status {
-                Status::Ready => {
-                    cr.save().ok();
-                    cr.rectangle(body.0 - 1.0, body.1 - 1.0, body.2 + 2.0, body.3 + 2.0);
-                    cr.clip();
-                    pc.card.draw(cr, &cx, body, &mut hits);
-                    cr.restore().ok();
-                }
-                Status::Loading => {
-                    draw::text(
-                        cr,
-                        body.0 + 8.0,
-                        body.1,
-                        &Text {
-                            size: 12.0,
-                            bold: false,
-                            color: th.muted,
-                            text: "Loading",
-                        },
-                    );
-                }
-                Status::Missing(why) => {
-                    let l = missing_layout(cr, body.2 - 16.0, &why);
-                    draw::set(cr, th.muted);
-                    cr.move_to((body.0 + 8.0).round(), body.1.round());
-                    pangocairo::functions::show_layout(cr, &l);
-                }
-                Status::Hidden => {}
-            }
+            draw_card(cr, th, pc, &cx, status, *r, &mut hits);
             if lifted {
                 let _ = cr.pop_group_to_source();
                 let _ = cr.paint_with_alpha(p);
@@ -3587,6 +3553,66 @@ impl Shell {
             self.frame_screen.set((w, h));
         }
         pbox
+    }
+}
+
+/// One card in its box `r`: the box, its header, and its body as its status says (a panel's card
+/// or a desktop widget).
+pub fn draw_card(
+    cr: &cairo::Context,
+    th: &Theme,
+    pc: &Placed,
+    cx: &Cx,
+    status: Status,
+    r: Rect,
+    hits: &mut Hits,
+) {
+    // a card without its header only while it shows itself (Loading and Missing say
+    // whose they are)
+    let headed = pc.card.header(cx) || status != Status::Ready;
+    let head = if headed { HEAD_H } else { 0.0 };
+    let body = (
+        r.0 + PAD_X - 8.0,
+        r.1 + PAD_TOP + head,
+        r.2 - 2.0 * (PAD_X - 8.0),
+        r.3 - PAD_TOP - head - PAD_BOTTOM,
+    );
+    draw::card(cr, th, r.0, r.1, r.2, r.3);
+    if headed {
+        let title = pc
+            .card
+            .title(cx)
+            .unwrap_or_else(|| pc.kind.title.to_string());
+        draw_header(cr, th, r, &title, &pc.from);
+    }
+    match status {
+        Status::Ready => {
+            cr.save().ok();
+            cr.rectangle(body.0 - 1.0, body.1 - 1.0, body.2 + 2.0, body.3 + 2.0);
+            cr.clip();
+            pc.card.draw(cr, cx, body, hits);
+            cr.restore().ok();
+        }
+        Status::Loading => {
+            draw::text(
+                cr,
+                body.0 + 8.0,
+                body.1,
+                &Text {
+                    size: 12.0,
+                    bold: false,
+                    color: th.muted,
+                    text: "Loading",
+                },
+            );
+        }
+        Status::Missing(why) => {
+            let l = missing_layout(cr, body.2 - 16.0, &why);
+            draw::set(cr, th.muted);
+            cr.move_to((body.0 + 8.0).round(), body.1.round());
+            pangocairo::functions::show_layout(cr, &l);
+        }
+        Status::Hidden => {}
     }
 }
 

@@ -212,14 +212,20 @@ impl Panel {
     }
 
     /// The desktop's widgets from a WIDGETS line: `module[:look]@x,y,wxh ...` in screen pixels.
-    /// A widget without its place is left out (Add in edit mode gives one).
+    /// A widget without its place is left out; new `owner/kind@x,y,wxh` words count as widgets too
+    /// (`panel::widget_cards` reads the words).
     pub fn widgets(value: &str) -> Option<Panel> {
         let mut p = Panel::new("widgets", Side::Top, -1, None, false, &[]);
         p.apply(value);
         p.items.retain(|i| i.rect.is_some());
         p.desktop = true;
         p.placed = true;
-        (!p.items.is_empty()).then_some(p)
+        let placed = p.words.iter().any(|w| {
+            w.split_once('@')
+                .and_then(|(_, at)| parse_rect(at))
+                .is_some_and(|(_, _, pw, ph)| pw >= 24 && ph >= 20)
+        });
+        placed.then_some(p)
     }
 
     /// The panel as its PANEL_ line value (the C edge's panel_value); the desktop's widgets as
@@ -850,6 +856,22 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn a_widgets_line_counts_when_any_word_has_its_place() {
+        // new card words alone (docs/EDGE_APPS.md: `steam/games@60,60,380x234`)
+        let c = Config::from_text("WIDGETS=\"steam/games@60,60,380x234\"\n");
+        assert!(c.widgets.is_some_and(|w| w.desktop));
+        // no place, a place too small, an empty line, no line: no widgets
+        for text in [
+            "WIDGETS=\"steam/games clock\"\n",
+            "WIDGETS=\"steam/games@1,1,20x10\"\n",
+            "WIDGETS=\"\"\n",
+            "",
+        ] {
+            assert!(Config::from_text(text).widgets.is_none(), "{text}");
+        }
+    }
 
     #[test]
     fn built_in_panels_follow_the_edge_and_the_control_side() {
