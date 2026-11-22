@@ -1227,36 +1227,10 @@ impl Core {
             })
             .collect();
 
-        const CLUSTER_GAP: i64 = 300;
-        let n = live.len();
-        let mut visited = vec![false; n];
-        let mut clusters: Vec<Vec<stage::ElementId>> = Vec::new();
-
-        for i in 0..n {
-            if visited[i] {
-                continue;
-            }
-            visited[i] = true;
-            let mut cluster = vec![live[i]];
-            let mut queue = vec![i];
-            while let Some(curr) = queue.pop() {
-                let (ax0, ay0, ax1, ay1) = rects[curr];
-                for j in 0..n {
-                    if !visited[j] {
-                        let (bx0, by0, bx1, by1) = rects[j];
-                        let dx = (ax0 - bx1).max(bx0 - ax1).max(0);
-                        let dy = (ay0 - by1).max(by0 - ay1).max(0);
-                        if dx <= CLUSTER_GAP && dy <= CLUSTER_GAP {
-                            visited[j] = true;
-                            cluster.push(live[j]);
-                            queue.push(j);
-                        }
-                    }
-                }
-            }
-            clusters.push(cluster);
-        }
-        clusters
+        groups_near(&rects)
+            .into_iter()
+            .map(|g| g.into_iter().map(|i| live[i]).collect())
+            .collect()
     }
 
     /// Returns the cluster containing `element`, or a single-element list if none.
@@ -2497,6 +2471,40 @@ impl Core {
             ]);
         }
     }
+}
+
+/// The rects `(x0, y0, x1, y1)` grouped into clusters, by index: a rect within 300 px of a
+/// cluster's rect on both axes belongs to it. Each group in the order of its first rect.
+pub(crate) fn groups_near(rects: &[(i64, i64, i64, i64)]) -> Vec<Vec<usize>> {
+    const CLUSTER_GAP: i64 = 300;
+    let n = rects.len();
+    let mut visited = vec![false; n];
+    let mut groups = Vec::new();
+    for i in 0..n {
+        if visited[i] {
+            continue;
+        }
+        visited[i] = true;
+        let mut group = vec![i];
+        let mut queue = vec![i];
+        while let Some(curr) = queue.pop() {
+            let (ax0, ay0, ax1, ay1) = rects[curr];
+            for j in 0..n {
+                if !visited[j] {
+                    let (bx0, by0, bx1, by1) = rects[j];
+                    let dx = (ax0 - bx1).max(bx0 - ax1).max(0);
+                    let dy = (ay0 - by1).max(by0 - ay1).max(0);
+                    if dx <= CLUSTER_GAP && dy <= CLUSTER_GAP {
+                        visited[j] = true;
+                        group.push(j);
+                        queue.push(j);
+                    }
+                }
+            }
+        }
+        groups.push(group);
+    }
+    groups
 }
 
 #[cfg(test)]
