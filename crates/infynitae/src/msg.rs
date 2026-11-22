@@ -12,6 +12,8 @@
 //! infynitae msg shortcut <name>                 a global shortcut (mute, deafen, …) to apps
 //! infynitae msg overview                        pick a window from a menu and go to it
 //! infynitae msg layers [app]                    every window's surfaces and where they are drawn
+//! infynitae msg arrange <layout> [inst elem]    tidy, grid or columns: the focused window's
+//!                                               cluster, or that window's
 //! ```
 
 use std::io::{BufRead, BufReader, Write};
@@ -99,7 +101,7 @@ fn first_output() -> u64 {
 
 fn usage() -> ExitCode {
     eprintln!(
-        "Usage: infynitae msg snapshot | focus <inst> <elem> | navigate <x> <y> [zoom] | navigate element <inst> <elem> | place <name> | restore [output] | shortcut <name> | overview | lock | night-light [on|off] | keyboard-layout | osk [on|off] | capture-chord | layers [app]"
+        "Usage: infynitae msg snapshot | focus <inst> <elem> | navigate <x> <y> [zoom] | navigate element <inst> <elem> | place <name> | restore [output] | shortcut <name> | overview | lock | night-light [on|off] | keyboard-layout | osk [on|off] | capture-chord | layers [app] | arrange tidy|grid|columns [<inst> <elem>]"
     );
     ExitCode::from(2)
 }
@@ -428,6 +430,23 @@ pub fn run(args: &[String]) -> ExitCode {
             }
             _ => usage(),
         },
+        Some("arrange") => {
+            let layout = match args.get(1).map(String::as_str) {
+                Some(l @ ("tidy" | "grid" | "columns")) => l,
+                _ => return usage(),
+            };
+            let element = match (args.len(), num(2), num(3)) {
+                (2, ..) => Value::Null,
+                (4, Some(i), Some(e)) => element(i, e),
+                _ => return usage(),
+            };
+            print_reply(&request(&Value::obj([
+                id,
+                ("cmd", "arrange".into()),
+                ("layout", layout.into()),
+                ("element", element),
+            ])))
+        }
         Some("close") => match (num(1), num(2)) {
             (Some(i), Some(e)) => print_reply(&request(&Value::obj([
                 id,

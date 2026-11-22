@@ -14,6 +14,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod arrange;
 pub mod frames;
 pub mod geom;
 pub mod input;
@@ -249,6 +250,14 @@ pub enum ShellCommand {
     },
     /// Asks `element` to close (`Effect::CloseRequest`).
     CloseElement { element: stage::ElementRef },
+    /// Arranges the cluster of `element` (the focused window without one) by `layout`, as the
+    /// layout key does, and frames it on the pointer's screen (owner, 2026-11-21). Refused while
+    /// an interaction is on, and when no window is arranged (none named or focused, or only
+    /// windows a layout leaves out).
+    ArrangeCluster {
+        element: Option<stage::ElementRef>,
+        layout: arrange::ClusterLayout,
+    },
 }
 
 /// Where [`ShellCommand::Navigate`] centres the camera.
@@ -316,6 +325,7 @@ pub enum EntryError {
     InvalidEvent,
 }
 
+pub use arrange::ClusterLayout;
 pub use protocol::PlacementPolicy;
 
 /// Action taken on Super+Enter: toggle fitting the camera to the window (`Fit`), or toggle
@@ -562,6 +572,12 @@ pub struct Core {
     /// touch forgets them: a window opened after one is the user's, and opens near the cursor
     /// (owner, 2026-11-03).
     closed_windows: Vec<(String, geom::CanvasPoint)>,
+    /// Windows a layout asked for another size, with their cell, until they answer
+    /// (`Core::laid_out_anchor`).
+    layout_cells: Vec<(stage::ElementId, arrange::Cell)>,
+    /// The cluster the layout key arranged last (by the window it was pressed on) and the layout:
+    /// the next press there takes the next layout.
+    last_layout: Option<(stage::ElementId, arrange::ClusterLayout)>,
     /// Whether camera teleports/recenters to newly opened windows.
     pub teleport_on_open: bool,
     /// Whether physical input occurred since the last query (INV-IDLE-1).
@@ -668,6 +684,8 @@ impl Core {
                 window_menu: None,
                 toplevel_parents: Vec::new(),
                 closed_windows: Vec::new(),
+                layout_cells: Vec::new(),
+                last_layout: None,
                 teleport_on_open: false,
                 physical_input_activity: false,
                 touches: touch::Touches::default(),

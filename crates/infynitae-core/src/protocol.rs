@@ -543,6 +543,7 @@ impl Core {
         {
             self.held_sizes.retain(|(e, _)| *e != id);
         }
+        self.layout_answered(id, acked);
     }
 
     /// F-PRESENT-1: the presentation view of the mapped fullscreen element of `model`'s output.
@@ -820,6 +821,7 @@ impl Core {
         self.fullscreen.retain(|f| f.element != id);
         self.windowed_placement_pending.retain(|e| *e != id);
         self.restore_offers.retain(|(e, _)| *e != id);
+        self.layout_cells.retain(|(e, _)| *e != id);
     }
 
     /// Default windowed placement (F-PLACE-1), resolved once per element through `stage::place`.
@@ -1098,6 +1100,8 @@ impl Core {
         anchor: CanvasPoint,
         out: &mut Vec<Effect>,
     ) -> Result<(), ProtocolError> {
+        // where the user puts it wins over a layout's cell it has not answered yet
+        self.layout_cells.retain(|(e, _)| *e != id);
         self.place_by_shell(id, anchor, out)
     }
 
@@ -1112,6 +1116,7 @@ impl Core {
         let (anchor, tree) = (self.stage.anchor(id)?, self.stage.tree(id)?);
         let size = (tree.geometry.size.w, tree.geometry.size.h);
         self.resized_out_of_maximize(id);
+        self.layout_cells.retain(|(e, _)| *e != id);
         self.resize = Some(ResizeTrack {
             element: id,
             left,
@@ -1595,6 +1600,11 @@ impl Core {
                 if let Some(anchor) = self.resize_committed(id, tree.geometry.size, out) {
                     self.stage.place(id, anchor).map_err(stale)?;
                 }
+                // a window a layout asked for a size is centred in its cell at the size it drew
+                let laid_out = self.laid_out_anchor(id, tree.geometry.size);
+                if let Some(at) = laid_out {
+                    self.stage.place(id, at).map_err(stale)?;
+                }
                 // An element that left fullscreen without ever having been a window is placed at
                 // its first windowed presentation (P9b): the first commit after it acknowledged a
                 // configure without the fullscreen state, whatever its size. Frames committed
@@ -1648,6 +1658,7 @@ impl Core {
                     let maximized = self.maximized.iter().any(|(e, _)| *e == id);
                     if !asked
                         && !resizing
+                        && laid_out.is_none()
                         && !maximized
                         && let Some(at) = self.self_resized(id, old, new)
                     {

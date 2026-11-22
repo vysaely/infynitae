@@ -14,6 +14,7 @@ pub const KEY_RIGHTCTRL: u32 = 97;
 pub const KEY_LEFTALT: u32 = 56;
 pub const KEY_RIGHTALT: u32 = 100;
 pub const KEY_F: u32 = 33;
+pub const KEY_G: u32 = 34;
 pub const KEY_A: u32 = 30;
 pub const KEY_D: u32 = 32;
 pub const KEY_LEFTSHIFT: u32 = 42;
@@ -166,6 +167,10 @@ pub enum KeyAction {
     RecenterKeepZoom,
     /// Opens the window menu for the window under the pointer (or the focused window).
     WindowMenu,
+    /// Super+G (2026-11-21; Super+Shift+Space, the one suggested, keeps the zoom of Super+Space):
+    /// the focused window's cluster tidied, then in a grid, then in columns, at each press
+    /// (`arrange`)
+    ArrangeCluster,
     /// A user command from the config (`EXEC_<NAME>="CHORD:command"`), by its index in the
     /// adapter's command list.
     Exec(u16),
@@ -391,6 +396,7 @@ pub const ACTION_NAMES: &[(&str, KeyAction)] = &[
     ("RECENTER_KEEP_ZOOM", KeyAction::RecenterKeepZoom),
     ("BACK", KeyAction::ViewportRestore),
     ("WINDOW_MENU", KeyAction::WindowMenu),
+    ("CLUSTER_LAYOUT", KeyAction::ArrangeCluster),
 ];
 
 /// [`resolve_key_binding`] with the user's bindings first: a chord of theirs wins (also over a
@@ -536,6 +542,11 @@ pub fn resolve_key_binding(
         if let Some(s) = slot {
             return Some(KeyAction::FocusClusterSlot(s));
         }
+    }
+    // Super+G: the focused window's cluster arranged, the next layout at each press; exactly
+    // Logo, never during interaction
+    if key == KEY_G && mods.logo && !mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
+        return Some(KeyAction::ArrangeCluster);
     }
     // Super+W: the app launcher; exactly Logo, never during interaction
     if key == KEY_W && mods.logo && !mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
@@ -1255,6 +1266,29 @@ mod tests {
         // During interaction: None
         assert_eq!(resolve_key_binding(KEY_V, logo, true), None);
         assert!(ACTION_NAMES.contains(&("CLIPBOARD", KeyAction::ClipboardHistory)));
+    }
+
+    /// Super+G arranges the cluster (2026-11-21): exactly Logo, never during an interaction;
+    /// `BIND_CLUSTER_LAYOUT` names it.
+    #[test]
+    fn super_g_arranges_the_cluster() {
+        assert_eq!(
+            resolve_key_binding(KEY_G, mods(true, false, false, false), false),
+            Some(KeyAction::ArrangeCluster)
+        );
+        assert_eq!(
+            resolve_key_binding(KEY_G, mods(true, false, false, false), true),
+            None
+        );
+        for m in [
+            mods(false, false, false, false),
+            mods(true, false, false, true),
+            mods(true, true, false, false),
+            mods(true, false, true, false),
+        ] {
+            assert_eq!(resolve_key_binding(KEY_G, m, false), None, "{m:?}");
+        }
+        assert!(ACTION_NAMES.contains(&("CLUSTER_LAYOUT", KeyAction::ArrangeCluster)));
     }
 
     /// The owner's keys of 2026-10-31 ("often used on the left hand, rare on the right"): Super+S

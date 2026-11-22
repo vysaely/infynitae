@@ -189,6 +189,7 @@ impl Core {
                                     | KeyAction::RecenterKeepZoom
                                     | KeyAction::FocusSlot(_)
                                     | KeyAction::FocusClusterSlot(_)
+                                    | KeyAction::ArrangeCluster
                                     | KeyAction::FocusNext
                                     | KeyAction::FocusDirection(_)
                                     | KeyAction::ToggleOverview
@@ -986,6 +987,12 @@ impl Core {
                 self.focus_cluster_slot(slot, proof, out);
                 return;
             }
+            KeyAction::ArrangeCluster => {
+                if let Some(id) = self.focus.target() {
+                    self.arrange_cluster(id, None, proof, out);
+                }
+                return;
+            }
             KeyAction::ToggleFullscreen => self.toggle_fullscreen(),
             KeyAction::ToggleKeepOnTop => {
                 if let Some(id) = self.focus.target() {
@@ -1527,23 +1534,6 @@ impl Core {
         if cluster.is_empty() {
             return;
         }
-        let Some(output) = self
-            .pointer_output()
-            .or_else(|| self.outputs().first().map(|o| o.id))
-        else {
-            return;
-        };
-        let Some(camera) = self.cameras.camera_for_output(output) else {
-            return;
-        };
-        let (Some((view_size, scale)), Some(extent), Some(usable)) = (
-            self.output(output).map(|m| (m.view_size(), m.scale)),
-            self.output(output).map(|m| m.logical_extent()),
-            self.usable_area(output),
-        ) else {
-            return;
-        };
-
         let mut min_x = i64::MAX;
         let mut min_y = i64::MAX;
         let mut max_x = i64::MIN;
@@ -1567,6 +1557,33 @@ impl Core {
             return;
         }
         let g = (min_x, min_y, (max_x - min_x).max(1), (max_y - min_y).max(1));
+        self.frame_bounds(proof, g, out);
+    }
+
+    /// Fits or centres the pointer's screen's camera on the Canvas rect `g` `(x, y, w, h)`, at
+    /// zoom 1 at most (a cluster, or the cells a layout gave it).
+    pub(crate) fn frame_bounds(
+        &mut self,
+        proof: authority::Authorized,
+        g: (i64, i64, i64, i64),
+        out: &mut Vec<Effect>,
+    ) {
+        let Some(output) = self
+            .pointer_output()
+            .or_else(|| self.outputs().first().map(|o| o.id))
+        else {
+            return;
+        };
+        let Some(camera) = self.cameras.camera_for_output(output) else {
+            return;
+        };
+        let (Some((view_size, scale)), Some(extent), Some(usable)) = (
+            self.output(output).map(|m| (m.view_size(), m.scale)),
+            self.output(output).map(|m| m.logical_extent()),
+            self.usable_area(output),
+        ) else {
+            return;
+        };
         if let Some(mut target) =
             crate::navigation::fit_target_in(view_size, extent, usable, scale, g)
         {
@@ -3467,6 +3484,23 @@ impl Core {
                     .resolve(element)
                     .map_err(|_| ShellError::StaleElement)?;
                 out.push(Effect::CloseRequest(id));
+            }
+            ShellCommand::ArrangeCluster { element, layout } => {
+                let id = match element {
+                    Some(element) => self.shell_mapped(element)?,
+                    None => self.focus.target().ok_or(ShellError::Refused)?,
+                };
+                if self.input.interaction.active() {
+                    return Err(ShellError::Busy);
+                }
+                if !self.arrange_cluster(
+                    id,
+                    Some(layout),
+                    Some(authority::Authorized::mint()),
+                    &mut out,
+                ) {
+                    return Err(ShellError::Refused);
+                }
             }
         }
         Ok(out)

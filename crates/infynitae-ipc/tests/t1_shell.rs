@@ -1114,3 +1114,39 @@ fn show_window_menu_emits_ipc_event_and_window_menu_commands_apply() {
     );
     assert_eq!(r4.get("ok"), Some(&Value::Bool(true)));
 }
+
+/// `arrange` (2026-11-21): a layout by name for the cluster of the window named; an unknown
+/// layout is an invalid request and moves nothing.
+#[test]
+fn arrange_tidies_the_named_windows_cluster() {
+    let (mut core, mut server, _o) = setup();
+    // both open centred in the view, one over the other
+    let a = map_win(&mut core, 1, 400, 300);
+    let b = map_win(&mut core, 2, 400, 300);
+    let at = |core: &Core, id| core.stage().anchor(id).map(|p| (p.x, p.y));
+    assert_eq!(at(&core, a), at(&core, b));
+    let mut cmd = connect(&mut server);
+    let a_ref = eref(&core, a);
+    let bad = cmd.reply(
+        &mut server,
+        &mut core,
+        &format!(r#"{{"id":1,"cmd":"arrange","layout":"diagonal","element":{a_ref}}}"#),
+    );
+    assert_eq!(
+        bad.get("error").and_then(Value::as_str),
+        Some("invalid_request")
+    );
+    assert_eq!(at(&core, a), at(&core, b));
+    let ok = cmd.reply(
+        &mut server,
+        &mut core,
+        &format!(r#"{{"id":2,"cmd":"arrange","layout":"tidy","element":{a_ref}}}"#),
+    );
+    assert_eq!(ok.get("ok"), Some(&Value::Bool(true)));
+    let (ax, ay) = at(&core, a).unwrap();
+    assert_eq!(
+        at(&core, b),
+        Some((ax + 412, ay)),
+        "side by side, 12 px apart"
+    );
+}
