@@ -303,7 +303,8 @@ impl Core {
     /// The layout key (Super+G) and `infynitae msg arrange`: `around`'s cluster (its
     /// parent's, for a child) arranged by `layout`, or by the layout after the one this cluster
     /// got last (tidy first). With `proof`, the camera frames the result. False when nothing was
-    /// arranged.
+    /// arranged, and when `around` is a window a layout leaves out (a fullscreen game focused:
+    /// the windows hidden behind it stay as they are).
     pub(crate) fn arrange_cluster(
         &mut self,
         around: ElementId,
@@ -315,6 +316,9 @@ impl Core {
             .toplevel_parent(around)
             .filter(|p| self.stage.mapped(*p).is_some())
             .unwrap_or(around);
+        if self.arranged(&[around]).is_empty() {
+            return false;
+        }
         let layout = layout.unwrap_or(match self.last_layout {
             Some((e, last)) if e == around => last.next(),
             _ => ClusterLayout::Tidy,
@@ -739,6 +743,12 @@ mod tests {
         );
         let after: Vec<_> = [top, mini, full].map(|e| anchor(&d.c, e)).to_vec();
         assert_eq!(after, before);
+        // pressed on the fullscreen window or the one kept on top: nothing is arranged
+        let (q_at, p_at) = (anchor(&d.c, q), anchor(&d.c, p));
+        for e in [full, top] {
+            assert!(!d.c.arrange_cluster(e, Some(ClusterLayout::Grid), None, &mut fx));
+        }
+        assert_eq!((anchor(&d.c, q), anchor(&d.c, p)), (q_at, p_at));
         // pressed on the dialog, its parent's cluster is arranged
         assert!(d.c.arrange_cluster(dialog, Some(ClusterLayout::Columns), None, &mut fx));
         assert_eq!(asked(&fx, p), Some((942, 1056)));
