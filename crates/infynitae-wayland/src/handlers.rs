@@ -1710,7 +1710,14 @@ mod tests {
             client.id(),
             smithay::reexports::wayland_server::backend::DisconnectReason::ConnectionClosed,
         );
-        let _ = display.dispatch_clients(&mut state);
+        // kill_client only marks the client; it leaves the client list in the backend's cleanup,
+        // which dispatch_clients runs only when the socket has an event. The hang-up from
+        // drop(client_sock) is missed while a process another test thread is starting still holds
+        // a copy of that socket (between its fork and exec). Dispatching this client always runs
+        // the cleanup.
+        let _ = display
+            .backend()
+            .dispatch_single_client(&mut state, client.id());
         state.clear_orphaned_selections();
         assert_eq!(state.selection_owners[0], None);
 
