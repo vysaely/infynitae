@@ -1856,6 +1856,7 @@ pub fn run_console_with(
         if data.state.capture_notice(std::time::Instant::now()) {
             data.state.announce_hidden_capture();
         }
+        turn.mark("capture indicator");
         // Watches ~/.config/infynitae/config for changes and reloads settings
         if data.last_config_check.elapsed() >= Duration::from_millis(250) {
             data.last_config_check = std::time::Instant::now();
@@ -1898,6 +1899,7 @@ pub fn run_console_with(
                     data.last_config_mtime = Some(mtime);
                 }
             }
+            turn.mark("config watch");
 
             // Idle sleep and auto-lock check (skipped when idle is inhibited)
             if !data.dpms_active
@@ -1920,6 +1922,8 @@ pub fn run_console_with(
                 data.state.set_all_outputs_power_mode(
                     infynitae_wayland::output_power::OutputPowerMode::Off,
                 );
+                // `clear` waits for the kernel to turn each screen off (a blocking modeset)
+                turn.mark("screen off");
                 if data.idle_auto_lock {
                     // an error here is a child someone else reaped: it is not running, or the screen
                     // would never lock again after the first failure
@@ -1958,10 +1962,11 @@ pub fn run_console_with(
                             Err(e) => log_line!("[infynitae] Auto-lock could not start: {e}"),
                         }
                     }
+                    turn.mark("auto-lock");
                 }
             }
         }
-        turn.mark("config and idle");
+        turn.mark("idle check");
         if let Some(ext) = extension.as_mut() {
             ext.set_locked(data.state.is_locked());
             let (fx, changed) = ext.service(data.state.core_mut());
