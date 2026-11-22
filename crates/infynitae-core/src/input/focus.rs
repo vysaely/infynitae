@@ -337,6 +337,15 @@ impl FocusModel {
         vec![Effect::LayerKeyboardFocus(layer)]
     }
 
+    /// A layer holding the keyboard exclusively now asks for it on demand: it keeps it, and a
+    /// window clicked or focused takes it as from any on-demand holder (owner, 2026-11-22: the
+    /// edge's panel opened by its key takes the keyboard, then lets the desktop have it).
+    pub(crate) fn layer_demote(&mut self, layer: crate::layer::LayerId) {
+        if self.layer == Some((layer, true)) {
+            self.layer = Some((layer, false));
+        }
+    }
+
     /// The layer surface lets the keyboard go (unmapped, destroyed, no longer interactive): it
     /// returns to the window focus.
     pub(crate) fn layer_release(&mut self, layer: crate::layer::LayerId) -> Vec<Effect> {

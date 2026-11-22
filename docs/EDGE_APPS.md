@@ -506,9 +506,16 @@ Kept as in `live/edge-rs/src/wayland.rs`, which was measured and fixed over seve
   Bottom layer on the first output for the desktop's widgets, made only when there is a `WIDGETS` line
   (`wayland.rs:1163-1173`). A surface the size of the panel was considered and not chosen: a list opening
   in place would need a new size from the compositor on each frame of its animation, and the hover strips
-  and "a click outside closes" need the whole output anyway.
-- **Input region**: closed, only the hover strips; opened by hover, the panel and the way to it; opened
-  by key, the whole output so a click outside closes it (`wayland.rs:173-235`).
+  need the whole output anyway.
+- **Input region** (`open_input_rect` in `wayland.rs`): closed, only the hover strips; opened by hover,
+  the panel and the way to it; opened by key, the panel alone, so the desktop around it keeps working
+  (owner, 2026-11-22). Editing, or a menu of the edge open: the whole output, so a click outside reaches
+  the edge.
+- **Keyboard**: opened by key, exclusive until the keyboard arrives, then on demand, so a window the
+  pointer goes to or clicks can take it while the panel stays open; a click on the panel takes it back.
+  Opened by hover, on demand until a click inside. Editing or a question: exclusive.
+- **Columns**: a panel taller than the screen flows into columns side by side, editing too; dragging a
+  card drops it in the column under the pointer.
 - **Under a fullscreen window**: the closed surface is unmapped (no buffer), so the window can be shown
   directly (`wayland.rs:237-262`; the reason is in the comment at 160-164).
 - **Buffers and damage**: two shm buffers per surface; each frame clears and redraws the panel's box and

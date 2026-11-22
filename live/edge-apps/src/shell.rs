@@ -406,6 +406,9 @@ pub struct Shell {
     ask_output: Option<OutputId>,
     pub opened_by_hover: bool,
     pub clicked_inside: bool,
+    /// A panel opened by its key has had the keyboard: from then on it holds it on demand, so a
+    /// window the pointer goes to or clicks can take it (the panel stays open meanwhile).
+    pub keyboard_held: bool,
     hover_open: Option<(OutputId, usize, Instant)>,
     hover_close: Option<Instant>,
     /// the pointer on the active output (or from `--render`), and per-output pointers
@@ -502,6 +505,7 @@ impl Shell {
             apps_mtime: Vec::new(),
             transient: None,
             edit_menu: None,
+            keyboard_held: false,
             window_menu: None,
             query: String::new(),
             selected: None,
@@ -701,15 +705,17 @@ impl Shell {
                 + heights.iter().sum::<f64>()
                 + (GAP + strip) * rows.len().saturating_sub(1) as f64
         };
-        // Taller than the screen: the rows flow into more columns side by side (first column on
-        // the left), when they fit across the screen; otherwise one column that scrolls.
+        // Taller than the screen: the rows flow into more columns side by side, when they fit
+        // across the screen; otherwise one column that scrolls. Editing too, so the panel looks
+        // the same while edited (owner, 2026-11-22); each row then carries its strip.
         let avail = (h - 2.0 * MARGIN).max(0.0);
         let mut col_of = vec![0usize; rows.len()];
         let mut cols = 1usize;
-        if !editing && content_h > avail && rows.len() > 1 {
+        if content_h > avail && rows.len() > 1 {
             let mut y = 0.0;
             let mut c = 0usize;
             for (k, rh) in heights.iter().enumerate() {
+                let rh = rh + strip;
                 if y > 0.0 && y + rh > avail {
                     c += 1;
                     y = 0.0;
@@ -733,7 +739,9 @@ impl Shell {
                     .map(|(rh, _)| *rh)
                     .collect();
                 tallest = tallest.max(
-                    rows_in.iter().sum::<f64>() + GAP * rows_in.len().saturating_sub(1) as f64,
+                    rows_in.iter().sum::<f64>()
+                        + strip * rows_in.len() as f64
+                        + GAP * rows_in.len().saturating_sub(1) as f64,
                 );
             }
             tallest
@@ -776,9 +784,9 @@ impl Shell {
         let mut col_h = vec![0.0f64; cols];
         for (rh, c) in heights.iter().zip(&col_of) {
             if col_h[*c] > 0.0 {
-                col_h[*c] += GAP + strip;
+                col_h[*c] += GAP;
             }
-            col_h[*c] += rh;
+            col_h[*c] += strip + rh;
         }
         let mut out = Vec::new();
         let mut col = usize::MAX;
@@ -990,6 +998,7 @@ impl Shell {
         }
         self.opened_by_hover = false;
         self.clicked_inside = false;
+        self.keyboard_held = false;
         self.hover_open = None;
         self.hover_close = None;
         self.hovered.clear();
@@ -1353,6 +1362,7 @@ impl Shell {
         self.reset_keys(idx);
         self.opened_by_hover = by_hover;
         self.clicked_inside = false;
+        self.keyboard_held = false;
         self.hover_open = None;
         self.hover_close = None;
         self.opened_at = Some(now);
@@ -1400,6 +1410,7 @@ impl Shell {
         self.keyboard = false;
         self.opened_by_hover = false;
         self.clicked_inside = false;
+        self.keyboard_held = false;
         self.hover_open = None;
         self.hover_close = None;
         self.hovered.clear();
@@ -3800,6 +3811,35 @@ mod tests {
         // too narrow for two columns: one column that scrolls, as before
         let (narrow, rects_n, _) = sh.layout_local(idx, 600.0, h);
         assert!(rects_n.iter().all(|(_, r)| r.0 == 0.0) && narrow.2 <= 600.0);
+    }
+
+    #[test]
+    fn an_edited_panel_keeps_its_columns() {
+        let mut sh = shell("SUPER+A bottom right 380 calendar/clock settings/network settings/bluetooth settings/power settings/session");
+        let idx = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "control")
+            .unwrap();
+        let (_, _, h1) = sh.layout_local(idx, 1920.0, 1080.0);
+        let h = h1 * 0.7 + 2.0 * MARGIN;
+        let (_, plain, _) = sh.layout_local(idx, 1920.0, h);
+        let cols = |r: &[(usize, Rect)]| {
+            let mut xs: Vec<i64> = r.iter().map(|(_, r)| r.0.round() as i64).collect();
+            xs.sort_unstable();
+            xs.dedup();
+            xs.len()
+        };
+        assert!(cols(&plain) > 1);
+        sh.open_panel(idx, false, Instant::now());
+        sh.open_ms = f64::INFINITY;
+        assert!(sh.enter_edit(1920.0, h));
+        let (pbox, edited, _) = sh.layout_local(idx, 1920.0, h);
+        assert!(cols(&edited) > 1, "editing keeps the columns: {edited:?}");
+        // every card and the strip over it fit in the panel, so nothing hides under the screen
+        assert!(edited
+            .iter()
+            .all(|(_, r)| r.1 - crate::edit::STRIP_H >= -0.5 && r.1 + r.3 <= pbox.3 + 0.5));
     }
 
     #[test]

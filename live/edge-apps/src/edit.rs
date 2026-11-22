@@ -376,12 +376,18 @@ impl EditState {
 
 /// Rows of laid-out card rectangles (1 full-width card, or 2 half-width cards sharing `y`).
 pub fn card_rows(rects: &[(usize, Rect)]) -> Vec<Vec<(usize, Rect)>> {
+    // a half card is narrower than the widest card; two full cards side by side are two columns
+    let full = rects.iter().map(|(_, r)| r.2).fold(0.0_f64, f64::max);
+    let half = |r: &Rect| r.2 < full - 1.0;
     let mut rows: Vec<Vec<(usize, Rect)>> = Vec::new();
     for &(ci, r) in rects {
-        let same_row = rows
-            .last()
-            .and_then(|row| row.last())
-            .is_some_and(|(_, pr)| (pr.1 - r.1).abs() < 2.0);
+        let same_row = rows.last().is_some_and(|row| {
+            row.len() == 1
+                && (row[0].1 .1 - r.1).abs() < 2.0
+                && half(&row[0].1)
+                && half(&r)
+                && r.0 > row[0].1 .0
+        });
         if same_row {
             if let Some(row) = rows.last_mut() {
                 row.push((ci, r));
@@ -391,6 +397,44 @@ pub fn card_rows(rects: &[(usize, Rect)]) -> Vec<Vec<(usize, Rect)>> {
         }
     }
     rows
+}
+
+fn row_left(row: &[(usize, Rect)]) -> f64 {
+    row.iter().map(|(_, r)| r.0).fold(f64::INFINITY, f64::min)
+}
+
+/// The rows of `rects` by column: a panel taller than the screen flows into columns side by
+/// side, and the rows of one column share their left edge.
+fn card_columns(rects: &[(usize, Rect)]) -> Vec<Vec<Vec<(usize, Rect)>>> {
+    let mut cols: Vec<Vec<Vec<(usize, Rect)>>> = Vec::new();
+    for row in card_rows(rects) {
+        let x0 = row_left(&row);
+        match cols.last_mut() {
+            Some(c) if (row_left(&c[0]) - x0).abs() < 2.0 => c.push(row),
+            _ => cols.push(vec![row]),
+        }
+    }
+    cols
+}
+
+/// The column of `cols` nearest to `x`.
+fn column_at(cols: &[Vec<Vec<(usize, Rect)>>], x: f64) -> Option<&Vec<Vec<(usize, Rect)>>> {
+    let dist = |c: &Vec<Vec<(usize, Rect)>>| {
+        let x0 = row_left(&c[0]);
+        let x1 = c
+            .iter()
+            .flatten()
+            .map(|(_, r)| r.0 + r.2)
+            .fold(f64::NEG_INFINITY, f64::max);
+        if x < x0 {
+            x0 - x
+        } else if x > x1 {
+            x - x1
+        } else {
+            0.0
+        }
+    };
+    cols.iter().min_by(|a, b| dist(a).total_cmp(&dist(b)))
 }
 
 /// Drop gap index `0..=cards_len` in panel-local coordinates for dragging `drag_idx`.
@@ -404,8 +448,9 @@ pub fn drop_index(
     if cards_len < 2 || rects.is_empty() {
         return None;
     }
-    let rows = card_rows(rects);
-    for row in &rows {
+    let cols = card_columns(rects);
+    let rows = column_at(&cols, local_x)?;
+    for row in rows {
         let row_top = row.iter().map(|(_, r)| r.1).fold(f64::INFINITY, f64::min) - STRIP_H;
         let row_bot = row
             .iter()
@@ -458,43 +503,51 @@ enum DropLine {
 }
 
 fn drop_line_geom(rects: &[(usize, Rect)], pw: f64, at: usize) -> Option<DropLine> {
-    let rows = card_rows(rects);
-    for row in &rows {
-        if row.len() == 2 {
-            let (i0, r0) = row[0];
-            let (i1, r1) = row[1];
-            if at == i1 {
-                let mid_x = (r0.0 + r0.2 + r1.0) * 0.5;
-                let top = r0.1.min(r1.1) - STRIP_H + 4.0;
-                let bot = (r0.1 + r0.3).max(r1.1 + r1.3);
-                return Some(DropLine::Vertical {
-                    x: mid_x,
-                    y: top,
-                    h: (bot - top).max(16.0),
-                });
-            }
-            if at == i0 {
+    let cols = card_columns(rects);
+    let w = (pw - 8.0).max(12.0);
+    for rows in &cols {
+        // a column starts at its cards' left edge (0 for the first one)
+        let x = row_left(&rows[0]) + 4.0;
+        for row in rows {
+            if row.len() == 2 {
+                let (i0, r0) = row[0];
+                let (i1, r1) = row[1];
+                if at == i1 {
+                    let mid_x = (r0.0 + r0.2 + r1.0) * 0.5;
+                    let top = r0.1.min(r1.1) - STRIP_H + 4.0;
+                    let bot = (r0.1 + r0.3).max(r1.1 + r1.3);
+                    return Some(DropLine::Vertical {
+                        x: mid_x,
+                        y: top,
+                        h: (bot - top).max(16.0),
+                    });
+                }
+                if at == i0 {
+                    return Some(DropLine::Horizontal {
+                        x,
+                        y: r0.1.min(r1.1) - STRIP_H - GAP * 0.3,
+                        w,
+                    });
+                }
+            } else if row[0].0 == at {
                 return Some(DropLine::Horizontal {
-                    x: 4.0,
-                    y: r0.1.min(r1.1) - STRIP_H - GAP * 0.3,
-                    w: (pw - 8.0).max(12.0),
+                    x,
+                    y: row[0].1 .1 - STRIP_H - GAP * 0.3,
+                    w,
                 });
             }
-        } else if row[0].0 == at {
-            return Some(DropLine::Horizontal {
-                x: 4.0,
-                y: row[0].1 .1 - STRIP_H - GAP * 0.3,
-                w: (pw - 8.0).max(12.0),
-            });
         }
     }
-    rows.last().map(|row| {
-        let bot = row.iter().map(|(_, r)| r.1 + r.3).fold(0.0_f64, f64::max);
-        DropLine::Horizontal {
-            x: 4.0,
-            y: bot + GAP * 0.5,
-            w: (pw - 8.0).max(12.0),
-        }
+    // after the last card: under the column that holds it
+    let rows = cols
+        .iter()
+        .max_by_key(|c| c.iter().flatten().map(|(ci, _)| *ci).max().unwrap_or(0))?;
+    let row = rows.last()?;
+    let bot = row.iter().map(|(_, r)| r.1 + r.3).fold(0.0_f64, f64::max);
+    Some(DropLine::Horizontal {
+        x: row_left(&rows[0]) + 4.0,
+        y: bot + GAP * 0.5,
+        w,
     })
 }
 
@@ -1775,6 +1828,36 @@ mod tests {
             (2, (12.0, 148.0, 356.0, 100.0)),
         ];
         assert_eq!(drop_index(&half_rects, 3, 2, 190.0, 65.0), Some(1));
+
+        // Two columns (a panel taller than the screen): [0, 1] at x=400, [2, 3] at x=0, both
+        // with a card at y=28. The pointer's column decides, not only its height.
+        let cols = vec![
+            (0, (400.0, 28.0, 380.0, 100.0)),
+            (1, (400.0, 168.0, 380.0, 100.0)),
+            (2, (0.0, 28.0, 380.0, 100.0)),
+            (3, (0.0, 168.0, 380.0, 100.0)),
+        ];
+        assert_eq!(
+            card_rows(&cols).len(),
+            4,
+            "cards of two columns are no half row"
+        );
+        assert_eq!(
+            drop_index(&cols, 4, 0, 100.0, 50.0),
+            Some(2),
+            "top of the left column"
+        );
+        assert_eq!(
+            drop_index(&cols, 4, 3, 500.0, 240.0),
+            Some(2),
+            "under card 1"
+        );
+        match drop_line_geom(&cols, 380.0, 2) {
+            Some(DropLine::Horizontal { x, .. }) => {
+                assert_eq!(x, 4.0, "above card 2, in the left column")
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]

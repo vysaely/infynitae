@@ -693,6 +693,10 @@ impl crate::Core {
         } else if self.focus.layer() == Some(id) && !keeps {
             self.focus.layer_release(id)
         } else {
+            if self.focus.layer() == Some(id) {
+                // exclusive before, on demand now: kept, but a window focus takes it
+                self.focus.layer_demote(id);
+            }
             Vec::new()
         }
     }
@@ -1562,6 +1566,32 @@ mod tests {
             Some(rect(0, -1050, 1920, 1080))
         );
         assert_eq!(c.layer_preferred_scale(bar), Some((120, 1)));
+    }
+
+    /// The edge's panel opened by its key (owner, 2026-11-22): it takes the keyboard exclusively,
+    /// then asks for it on demand. It keeps it until a window is focused, which then gets it,
+    /// even the window that was focused before.
+    #[test]
+    fn exclusive_then_on_demand_keeps_the_keyboard_until_a_window_takes_it() {
+        let Fx {
+            mut c, mut i, o, ..
+        } = setup();
+        let w = map_win(&mut c, 9, 400, 300);
+        c.set_focus(&mut i, Some(w)).unwrap();
+        let mut panel_state = state(Layer::Top, (false, false, false, true), (360, 480), 0);
+        panel_state.keyboard = KeyboardInteractivity::Exclusive;
+        let (panel, _) = map(&mut c, o, 1, panel_state);
+        assert_eq!(c.focus().layer(), Some(panel));
+        panel_state.keyboard = KeyboardInteractivity::OnDemand;
+        c.layer_committed(panel, panel_state, tree(1, 360, 480, true))
+            .unwrap();
+        assert_eq!(c.focus().layer(), Some(panel), "kept after the switch");
+        c.set_focus(&mut i, Some(w)).unwrap();
+        assert_eq!(
+            (c.focus().layer(), c.focus().target()),
+            (None, Some(w)),
+            "the window focused again takes the keyboard"
+        );
     }
 
     #[test]
