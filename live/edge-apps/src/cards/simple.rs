@@ -513,6 +513,7 @@ mod tests {
             size,
             app,
             apps,
+            recent: &crate::recent::NONE,
             windows,
             notes,
             list_above: false,

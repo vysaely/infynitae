@@ -229,6 +229,7 @@ impl Shell {
                     .as_deref()
                     .and_then(|id| self.apps.iter().find(|a| a.id == id)),
                 apps: &self.apps,
+                recent: &self.recent,
                 windows: &self.windows,
                 notes: &self.notes,
                 list_above: false,

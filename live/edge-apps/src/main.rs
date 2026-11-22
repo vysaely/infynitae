@@ -15,6 +15,7 @@ mod notify_server;
 mod panel;
 mod paths;
 mod provider;
+mod recent;
 mod shell;
 mod theme;
 mod ui;
