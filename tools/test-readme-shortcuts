@@ -240,7 +240,7 @@ def self_test():
         assert any("Super + L" in e and "ToggleWindowList" in e for e in errs), f"Expected Super+L defect detection, got: {errs}"
 
         # Seed Defect 2: Super + C documented as Close the window
-        bad_content = content.replace("| `Super + Shift + C` | Close the window |", "| `Super + C` | Close the window |")
+        bad_content = content.replace("| `Super + Shift + C` |", "| `Super + C` |", 1)
         with open(tmp_readme, "w", encoding="utf-8") as f:
             f.write(bad_content)
         errs = check_readme_shortcuts(tmp_readme, KEYS_RS)
