@@ -214,7 +214,7 @@ One block per screen, titled "DP-1  2560x1440  165 Hz" (model as its second line
 
 | Row | Control | Key (`N`: the name, `-` as `_`) | Values | After |
 |---|---|---|---|---|
-| Resolution | Found (the screen's modes) | `OUTPUT_N_MODE` | | restart; at once too through `wlr-randr --output NAME --mode WxH` |
+| Resolution | Found (the screen's modes) | `OUTPUT_N_MODE` | | save; at once too through `wlr-randr --output NAME --mode WxH` |
 | Refresh rate | Found (rates of that mode) | `OUTPUT_N_RATE` | | same, `--mode WxH@R` |
 | Scale | Pick | `OUTPUT_N_SCALE`; with one screen `OUTPUT_SCALE` | 1, 1.25, 1.5, 2 | save; through `wlr-randr --scale` when it lists the screen |
 | M Turned | Pick | `OUTPUT_N_TRANSFORM` | Not turned `normal`, 90, 180, 270 | same, `--transform` |
@@ -344,7 +344,7 @@ now (read its head before building). Left to the file: `SCREEN_LOCKER`.
 | Clipboard history | Switch | `CLIPBOARD_HISTORY` | | Reload(`clipboard`) |
 | M Keep the clipboard after an app closes | Switch | `CLIPBOARD_PERSIST` | | Reload(`clipboard`) |
 | M Cursor in captures | Switch | `SCREENCOPY_CURSOR` | | save |
-| M Remote desktop | Switch | `REMOTE_DESKTOP` | | restart |
+| M Remote desktop | Switch | `REMOTE_DESKTOP` | | Reload(`portal`) |
 
 Source `shares`: that file's lines. Hidden: the two lists while empty; Clipboard history without
 `cliphist` and `wl-paste`; the other clipboard row without `wl-clip-persist`. Left to the file: every

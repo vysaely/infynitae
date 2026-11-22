@@ -125,3 +125,35 @@ if [ ! -f "$PORTAL_FLAG" ]; then
     exit 1
 fi
 echo "ok Finding 11: pgrep filters by user ID to prevent foreign process hijacking"
+
+# ---- 4. The portal routing files are written only when their content changes: infynitae-reload
+# portal restarts xdg-desktop-portal when one is newer than its start (REMOTE_DESKTOP)
+portal_env() {
+    (
+        export HOME="$TMP/home4" XDG_RUNTIME_DIR="$TMP/run4" REMOTE_DESKTOP="$1"
+        mkdir -p "$HOME" "$XDG_RUNTIME_DIR"
+        set +eu
+        . "$ENV_SCRIPT" >/dev/null 2>&1
+    )
+}
+conf="$TMP/home4/.config/xdg-desktop-portal/infynitae-portals.conf"
+pfile="$TMP/home4/.local/share/xdg-desktop-portal/portals/infynitae.portal"
+portal_env false
+touch -d @1000 "$conf" "$pfile"
+portal_env false
+if [ "$(stat -c %Y "$conf") $(stat -c %Y "$pfile")" != "1000 1000" ]; then
+    echo "FAIL portal files: rewritten with the same content"
+    exit 1
+fi
+portal_env true
+if ! grep -qx 'org.freedesktop.impl.portal.RemoteDesktop=infynitae' "$conf" \
+    || ! grep -q 'org.freedesktop.impl.portal.RemoteDesktop;' "$pfile" \
+    || [ "$(stat -c %Y "$conf")" = 1000 ] || [ "$(stat -c %Y "$pfile")" = 1000 ]; then
+    echo "FAIL portal files: REMOTE_DESKTOP=true not written"
+    exit 1
+fi
+if [ "$(tail -c 1 "$conf" | od -An -c | tr -d ' ')" != '\n' ]; then
+    echo "FAIL portal files: no newline at the end"
+    exit 1
+fi
+echo "ok portal files: written only when REMOTE_DESKTOP (or another input) changes them"

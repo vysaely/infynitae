@@ -445,4 +445,27 @@ check "idempotent run does not re-enable active timers" \
 check "install.sh --help lists --no-disk-guard" \
     "$("$REPO_DIR/install.sh" --help | grep -c -- '--no-disk-guard' || true)" "1"
 
+# 11. install_programs replaces the compositor only when its content changed, and says so in
+# COMPOSITOR_CHANGED (infynitae-update tells from it whether a restart brings anything). A source
+# with only the compositor and build scripts that do nothing; the other programs are missing.
+src="$TMP/programs-src"
+mkdir -p "$src/target/release" "$src/live" "$TMP/programs-home"
+printf '#!/bin/sh\nexit 0\n' > "$src/live/build-satellite.sh"
+cp "$src/live/build-satellite.sh" "$src/live/build-helpers.sh"
+install_compositor() {
+    env -i PATH="$PATH" HOME="$TMP/programs-home" CARGO_TARGET_DIR=target bash -c '
+        . "'"$REPO_DIR"'/live/install-lib.sh"
+        install_programs "'"$src"'" 2>/dev/null
+        echo "$COMPOSITOR_CHANGED $(stat -c %i "$HOME/.local/bin/infynitae")"'
+}
+printf 'one' > "$src/target/release/infynitae"
+first=$(install_compositor)
+check "first install: changed" "${first%% *}" true
+second=$(install_compositor)
+check "the same content again: not changed, the file left as it was" "$second" "false ${first#* }"
+printf 'two' > "$src/target/release/infynitae"
+third=$(install_compositor)
+check "new content: changed" "${third%% *}" true
+check "new content: installed" "$(cat "$TMP/programs-home/.local/bin/infynitae")" two
+
 exit $fail

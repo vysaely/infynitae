@@ -165,17 +165,28 @@ SETTINGS_IFACE="" SETTINGS_BACKEND="gtk"
 if grep -qF org.freedesktop.impl.portal.Settings "$HOME/.local/bin/infynitae-portal" 2>/dev/null; then
     SETTINGS_IFACE="org.freedesktop.impl.portal.Settings;" SETTINGS_BACKEND="infynitae;gtk"
 fi
-cat << EOF > "$PORTAL_DATA_DIR/infynitae.portal"
-[portal]
+# Each file is written only when its content changes: infynitae-reload portal restarts
+# xdg-desktop-portal when one is newer than its start (it reads them only then).
+# (read with the shell's own read: no process started per Super+key)
+_infy_put() {
+    _infy_old=""
+    if [ -f "$1" ]; then
+        while IFS= read -r _infy_l || [ -n "$_infy_l" ]; do
+            _infy_old="$_infy_old$_infy_l
+"
+        done < "$1"
+    fi
+    [ "$_infy_old" = "$2
+" ] || printf '%s\n' "$2" > "$1"
+}
+_infy_put "$PORTAL_DATA_DIR/infynitae.portal" "[portal]
 DBusName=org.freedesktop.impl.portal.desktop.infynitae
 Interfaces=org.freedesktop.impl.portal.GlobalShortcuts;$SETTINGS_IFACE$REMOTE_IFACES
-UseIn=infynitae;wlroots;
-EOF
+UseIn=infynitae;wlroots;"
 
 PORTAL_CFG_DIR="$HOME/.config/xdg-desktop-portal"
 mkdir -p "$PORTAL_CFG_DIR"
-cat << EOF > "$PORTAL_CFG_DIR/infynitae-portals.conf"
-[preferred]
+_infy_put "$PORTAL_CFG_DIR/infynitae-portals.conf" "[preferred]
 default=gtk;wlr
 org.freedesktop.impl.portal.GlobalShortcuts=infynitae
 org.freedesktop.impl.portal.RemoteDesktop=$RD_BACKEND
@@ -184,8 +195,9 @@ org.freedesktop.impl.portal.Screenshot=wlr
 org.freedesktop.impl.portal.Settings=$SETTINGS_BACKEND
 org.freedesktop.impl.portal.FileChooser=gtk
 org.freedesktop.impl.portal.AppChooser=gtk
-org.freedesktop.impl.portal.Notification=gtk
-EOF
+org.freedesktop.impl.portal.Notification=gtk"
+unset -f _infy_put
+unset _infy_old _infy_l
 
 # Ensure infynitae-portal is running
 PORTAL_LOG="$HOME/.local/state/infynitae/portal.log"

@@ -51,7 +51,9 @@ there are no menus: it installs what fits the machine, minus what the options le
 infynitae-update
 ```
 
-Your config is never overwritten, and parts left out at install stay out.
+Your config is never overwritten, and parts left out at install stay out. The helpers restart in
+place with your windows open; at the end it says whether the compositor itself changed (then the
+new one runs from the next login or reboot) or nothing needs a restart.
 
 ## Shortcuts
 

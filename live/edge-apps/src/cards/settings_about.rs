@@ -50,10 +50,8 @@ const HIT_LOAD_APPLY: u32 = 7;
 const HIT_LOAD_CANCEL: u32 = 8;
 const HIT_LOAD_ITEM_BASE: u32 = 100;
 
-/// Keys tagged `[restart]` in `config/config`, and a screen's mode, rate and turn
-/// ([`is_restart_key`]). Not `BATTERY_LIMIT`: the card and the control menu run `battery-limit`
-/// when they change it.
-const RESTART_KEYS: &[&str] = &["AUTO_ROTATE", "XWAYLAND", "REMOTE_DESKTOP"];
+/// Keys tagged `[restart]` in `config/config` ([`is_restart_key`]).
+const RESTART_KEYS: &[&str] = &["XWAYLAND"];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct UndoEntry {
@@ -528,13 +526,9 @@ fn parse_undo(raw: &str) -> Option<UndoEntry> {
     Some(UndoEntry { key, old })
 }
 
-/// A key read only at the compositor's start: one of [`RESTART_KEYS`], or a screen's mode, rate
-/// or turn (`OUTPUT_<NAME>_MODE`, `_RATE`, `_TRANSFORM`; its `_SCALE` applies on save).
+/// A key read only at the compositor's start: one of [`RESTART_KEYS`].
 fn is_restart_key(key: &str) -> bool {
     RESTART_KEYS.contains(&key)
-        || key.strip_prefix("OUTPUT_").is_some_and(|k| {
-            k.ends_with("_MODE") || k.ends_with("_RATE") || k.ends_with("_TRANSFORM")
-        })
 }
 
 fn parse_restart_keys(raw: &str, compositor_start: Option<u64>) -> Vec<String> {
@@ -1629,10 +1623,7 @@ mod tests {
 
         let changes = "500\tXWAYLAND\tfalse\n1000\tXWAYLAND\ttrue\n1010\tROUNDING\t8\n1020\tOUTPUT_DP_1_MODE\t1920x1080\n1025\tOUTPUT_SCALE\t2\n1030\tXWAYLAND\tfalse\n1040\tBATTERY_LIMIT\t80\n";
         assert_eq!(parse_restart_keys(changes, None), Vec::<String>::new());
-        assert_eq!(
-            parse_restart_keys(changes, Some(1000)),
-            vec!["XWAYLAND", "OUTPUT_DP_1_MODE"]
-        );
+        assert_eq!(parse_restart_keys(changes, Some(1000)), vec!["XWAYLAND"]);
 
         let text =
             std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../config/config"))
@@ -1642,6 +1633,8 @@ mod tests {
             assert!(def.contains_key(*k), "{k} missing from config/config");
         }
         assert!(!is_restart_key("BATTERY_LIMIT"));
+        assert!(!is_restart_key("AUTO_ROTATE"));
+        assert!(!is_restart_key("REMOTE_DESKTOP"));
         assert!(!is_restart_key("SCALING_FILTER"));
         assert!(!is_restart_key("MAX_APP_SCALE"));
         assert!(!is_restart_key("ZOOM_SHARPEN"));
@@ -1653,6 +1646,9 @@ mod tests {
         for k in [
             "OUTPUT_SCALE",
             "OUTPUT_DP_1_SCALE",
+            "OUTPUT_DP_1_MODE",
+            "OUTPUT_DP_1_RATE",
+            "OUTPUT_DP_1_TRANSFORM",
             "OUTPUT_ORDER",
             "OUTPUT_LAYOUT",
             "VRR_ENABLED",
@@ -1660,8 +1656,6 @@ mod tests {
         ] {
             assert!(!is_restart_key(k), "{k}");
         }
-        assert!(is_restart_key("OUTPUT_DP_1_RATE"));
-        assert!(is_restart_key("OUTPUT_DP_1_TRANSFORM"));
     }
 
     #[test]

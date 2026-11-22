@@ -29,7 +29,7 @@ use std::time::Duration;
 
 use infynitae_core::output::{OutputDescriptor, OutputId, OutputKey, Transform};
 use infynitae_core::{Core, InputPort, OutputLifecycleToken, PhysicalEvent};
-use infynitae_wayland::display_settings::DisplayChange;
+use infynitae_wayland::display_settings::{DisplayChange, parse_transform};
 use infynitae_wayland::output_management::{HeadChange, HeadInfo, HeadMode};
 use infynitae_wayland::session::{Session, SessionOptions};
 use infynitae_wayland::{WaylandState, convert, log_line};
@@ -149,22 +149,6 @@ pub fn resolve_output_transform(
         .unwrap_or(Transform::Normal)
 }
 
-/// `OUTPUT_<NAME>_TRANSFORM`: the rotation's name, as wlr-randr names them (and the degrees alone,
-/// counter-clockwise like wl_output). Pure.
-fn parse_transform(v: &str) -> Option<Transform> {
-    Some(match v.trim().to_ascii_lowercase().as_str() {
-        "normal" | "0" => Transform::Normal,
-        "90" => Transform::R90,
-        "180" => Transform::R180,
-        "270" => Transform::R270,
-        "flipped" => Transform::Flipped,
-        "flipped-90" => Transform::Flipped90,
-        "flipped-180" => Transform::Flipped180,
-        "flipped-270" => Transform::Flipped270,
-        _ => return None,
-    })
-}
-
 /// Validates an output scale factor, returning its 1/120 representation if within 0.25..=8.0. Pure.
 pub fn validate_scale(scale: f64) -> Option<u32> {
     if (0.25..=8.0).contains(&scale) {
@@ -249,37 +233,22 @@ pub fn choose_mode(modes: &[ModeInfo]) -> Option<usize> {
     choose_mode_custom(modes, None, None)
 }
 
-/// The mode to use with optional custom target resolution and refresh rate.
+/// The mode to use with optional custom target resolution and refresh rate, chosen as a config
+/// reload chooses it (`display_settings::choose_mode`).
 pub fn choose_mode_custom(
     modes: &[ModeInfo],
     target_size: Option<(u16, u16)>,
     target_rate: Option<u32>,
 ) -> Option<usize> {
-    let size = target_size.or_else(|| {
-        modes
-            .iter()
-            .find(|m| m.preferred)
-            .or_else(|| modes.first())
-            .map(|m| m.size)
-    })?;
-    let matching_size: Vec<(usize, &ModeInfo)> = modes
+    let heads: Vec<HeadMode> = modes
         .iter()
-        .enumerate()
-        .filter(|(_, m)| m.size == size)
+        .map(|m| HeadMode {
+            size: (i32::from(m.size.0), i32::from(m.size.1)),
+            refresh_mhz: m.refresh_mhz as i32,
+            preferred: m.preferred,
+        })
         .collect();
-
-    if let Some(rate) = target_rate
-        && let Some(&(idx, _)) = matching_size
-            .iter()
-            .min_by_key(|(_, m)| (m.refresh_mhz as i64 - rate as i64).abs())
-    {
-        return Some(idx);
-    }
-
-    matching_size
-        .into_iter()
-        .max_by_key(|(_, m)| m.refresh_mhz)
-        .map(|(i, _)| i)
+    infynitae_wayland::display_settings::choose_mode(&heads, target_size, target_rate)
 }
 
 type Compositor =
@@ -522,8 +491,8 @@ fn apply_output_configuration(data: &mut LoopData, changes: &[HeadChange]) -> bo
 }
 
 /// The config's screen settings changed while running (`infynitae_wayland::display_settings`):
-/// the screens connected now take their new scales and order as a display settings tool's
-/// configuration; screens connected later, VRR and the virtual screen follow the new values.
+/// the screens connected now take their new modes, turns, scales and order as a display settings
+/// tool's configuration; screens connected later, VRR and the virtual screen follow the new values.
 fn apply_display_change(data: &mut LoopData, change: &DisplayChange) {
     let (before, now) = (&change.before, &change.now);
     if now.scale_120 != before.scale_120 || now.screen_scales != before.screen_scales {
@@ -535,10 +504,13 @@ fn apply_display_change(data: &mut LoopData, change: &DisplayChange) {
             .map(|(k, v)| (k.clone(), *v))
             .collect();
     }
+    data.factory.custom_modes = now.screen_modes.clone().into_iter().collect();
+    data.factory.custom_rates = now.screen_rates.clone().into_iter().collect();
+    data.factory.custom_transforms = now.screen_transforms.clone().into_iter().collect();
     let heads = data.state.display_head_changes(change);
     if !heads.is_empty() && !apply_output_configuration(data, &heads) {
         log_line!(
-            "[infynitae] The config's screen scales or order were refused; the screens stay as they were"
+            "[infynitae] The config's screen modes, turns, scales or order were refused; the screens stay as they were"
         );
     }
     if now.vrr != before.vrr {
@@ -5127,18 +5099,6 @@ mod tests {
 
     /// T6: Ctrl+Alt+Backspace quits and Ctrl+Alt+F1…F12 switch VT, with both modifiers held; any
     /// other key, or a missing modifier, is the session's.
-    #[test]
-    fn rotations_are_read_by_their_names() {
-        assert_eq!(parse_transform("90"), Some(Transform::R90));
-        assert_eq!(
-            parse_transform(" Flipped-270 "),
-            Some(Transform::Flipped270)
-        );
-        assert_eq!(parse_transform("normal"), Some(Transform::Normal));
-        assert_eq!(parse_transform("45"), None);
-        assert_eq!(parse_transform(""), None);
-    }
-
     #[test]
     fn panel_orientation_maps_kernel_values_and_lets_custom_override() {
         assert_eq!(

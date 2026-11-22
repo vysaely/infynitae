@@ -2,7 +2,7 @@
 # Restart Infynitae's helper programs in place, without restarting the compositor (your windows
 # stay open). Only the compositor binary itself needs Ctrl+Alt+Backspace.
 #
-#   infynitae-reload [all|settings|wallpaper|recorder|portal|polkit|screenshare|clipboard|osk|status] ...
+#   infynitae-reload [all|settings|wallpaper|recorder|portal|polkit|screenshare|clipboard|osk|battery-limit|autorotate|status] ...
 #
 # Run it from any terminal inside the session, or let infynitae-update call it.
 
@@ -171,7 +171,26 @@ reload_recorder() {
     fi
 }
 
+# xdg-desktop-portal reads which backend serves what (the two files env.sh writes, from
+# REMOTE_DESKTOP) only when it starts: restarted when one of them changed after its start.
+# A restart ends the apps' portal sessions (a screen share), so only then.
 reload_portal() {
+    since=$(systemctl --user show --timestamp=unix -P ActiveEnterTimestamp xdg-desktop-portal.service 2>/dev/null)
+    since=${since#@}
+    if systemctl --user is-active --quiet xdg-desktop-portal.service 2>/dev/null \
+        && [ -n "$since" ] && [ "$since" -eq "$since" ] 2>/dev/null; then
+        for f in "$HOME/.config/xdg-desktop-portal/infynitae-portals.conf" \
+            "$HOME/.local/share/xdg-desktop-portal/portals/infynitae.portal"; do
+            if [ "$(stat -c %Y "$f" 2>/dev/null || echo 0)" -gt "$since" ]; then
+                if systemctl --user restart xdg-desktop-portal.service 2>>"$LOG"; then
+                    echo "portal: xdg-desktop-portal restarted (its backends changed)"
+                else
+                    echo "portal: xdg-desktop-portal could not be restarted (see helpers.log)"
+                fi
+                break
+            fi
+        done
+    fi
     p=$(first "$LIVE/infynitae-portal" "$BIN_DIR/infynitae-portal")
     stop_helper infynitae-portal
     if [ -n "$p" ]; then
@@ -389,6 +408,46 @@ reload_osk() {
     esac
 }
 
+# The battery's charge limit (BATTERY_LIMIT), set when it is not the one in force. "off" lets the
+# battery charge to full again.
+reload_battery_limit() {
+    b=$(first "$LIVE/battery-limit" "$BIN_DIR/infynitae-battery-limit")
+    [ -n "$b" ] || return 0
+    if ! now=$(sh "$b" 2>/dev/null); then
+        echo "battery-limit: this machine has none"
+        return
+    fi
+    case "${BATTERY_LIMIT:-off}" in
+        off|false|no|"") want=off ;;
+        *) want=$BATTERY_LIMIT ;;
+    esac
+    if [ "$now" = "$want" ]; then
+        echo "battery-limit: $want"
+    elif sh "$b" "$want" >> "$LOG" 2>&1; then
+        echo "battery-limit: set to $want"
+    else
+        echo "battery-limit: could not set $want (see helpers.log)"
+    fi
+}
+
+# Screen auto-rotation (AUTO_ROTATE, AUTO_ROTATE_INVERT, AUTO_ROTATE_OUTPUT): the autorotate
+# helper, as session.sh starts it, started again to read the settings.
+reload_autorotate() {
+    stop_helper autorotate
+    case "${AUTO_ROTATE:-auto}" in
+        false|0|off|no|FALSE|False|OFF|Off|NO|No)
+            echo "autorotate: stopped (AUTO_ROTATE is off)"
+            return
+            ;;
+    esac
+    command -v monitor-sensor >/dev/null 2>&1 || return 0
+    r=$(first "$LIVE/autorotate" "$BIN_DIR/autorotate")
+    if [ -n "$r" ]; then
+        spawn "$r"
+        echo "autorotate: restarted"
+    fi
+}
+
 reload_clipboard() {
     stop_matching wl-clip-persist "--clipboard regular"
     stop_matching wl-paste "cliphist store"
@@ -418,7 +477,7 @@ status() {
     # the compositor's file on disk was replaced since it started: a restart picks up the update
     exe=$(readlink "/proc/$(pgrep -u "$(id -u)" -x infynitae | head -1)/exe" 2>/dev/null)
     case "$exe" in
-        *" (deleted)") echo "compositor: an updated binary is installed; Ctrl+Alt+Backspace loads it" ;;
+        *" (deleted)") echo "compositor: an updated binary is installed; it runs from the next login or reboot" ;;
         *) echo "compositor: running the installed binary" ;;
     esac
 }
@@ -426,7 +485,7 @@ status() {
 [ $# -eq 0 ] && set -- all
 for what in "$@"; do
     case "$what" in
-        all) reload_settings; reload_wallpaper; reload_edge; reload_restore; reload_sleep_lock; reload_notifications; reload_automount; reload_recorder; reload_portal; reload_polkit; reload_screenshare; reload_clipboard; reload_osk ;;
+        all) reload_settings; reload_wallpaper; reload_edge; reload_restore; reload_sleep_lock; reload_notifications; reload_automount; reload_recorder; reload_portal; reload_polkit; reload_screenshare; reload_clipboard; reload_osk; reload_battery_limit; reload_autorotate ;;
         settings) reload_settings ;;
         wallpaper) reload_wallpaper ;;
         edge|island) reload_edge ;;
@@ -440,9 +499,11 @@ for what in "$@"; do
         screenshare) reload_screenshare ;;
         clipboard) reload_clipboard ;;
         osk) reload_osk ;;
+        battery-limit) reload_battery_limit ;;
+        autorotate) reload_autorotate ;;
         status) status ;;
         *)
-            echo "usage: infynitae-reload [all|settings|wallpaper|edge|restore|sleep-lock|notifications|automount|recorder|portal|polkit|screenshare|clipboard|osk|status] ..." >&2
+            echo "usage: infynitae-reload [all|settings|wallpaper|edge|restore|sleep-lock|notifications|automount|recorder|portal|polkit|screenshare|clipboard|osk|battery-limit|autorotate|status] ..." >&2
             exit 2
             ;;
     esac
