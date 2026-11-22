@@ -5345,6 +5345,7 @@ mod tests {
                 level: Some(50),
                 muted: false,
                 output: "Speakers".into(),
+                ..Default::default()
             } as &dyn std::any::Any,
         );
         sh.apply(
@@ -5681,6 +5682,7 @@ mod tests {
                 level: Some(20),
                 muted: false,
                 output: "Speakers".into(),
+                ..Default::default()
             } as &dyn std::any::Any,
         );
         sh.apply(

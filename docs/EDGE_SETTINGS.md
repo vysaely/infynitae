@@ -39,7 +39,9 @@ Not cards, and why:
 - **Notifications.** The config has two keys: `GAME_QUIET` (a row in Games) and `NOTIFICATIONS` (which
   program shows them; left to the file). Do not disturb is in `settings/quick`. Two rows do not make a
   card; typing "notifications" in the panel finds both (section 5).
-- **Sound devices.** `sound/volume` has the output list. The config has no sound key.
+- **Sound devices.** `sound/volume` switches the output sink (and moves playing streams to it),
+  mutes and adjusts the default microphone when a non-monitor source exists, and sets per-app
+  playback levels (shown only while streams play). The config has no sound key.
 - **Keys** (`BIND_*`, `EXEC_*`, `GLOBAL_SHORTCUTS`). Changing a key needs the edge to hear a held chord,
   and `Event` (`card.rs:190`) carries typed text only. Left to the file until the owner asks for it.
 - **Panels.** `PANEL_*`, `WIDGETS` and `FAVORITES` are changed by editing a panel, as now.
