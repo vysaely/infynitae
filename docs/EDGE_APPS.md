@@ -566,7 +566,8 @@ Kept as in `live/edge-rs/src/wayland.rs`, which was measured and fixed over seve
    - Sound (`cards/sound.rs`), M: Volume slider and mute button, Brightness slider when available, Output
      row with fold-out sink list when `pactl` reports multiple sinks (`set-default-sink` plus
      `move-sink-input` on playing streams; plain `Output:` line for one sink), Microphone switch and slider
-     for `@DEFAULT_SOURCE@` when a non-monitor source exists, and one row per playing `sink-input` with
+     for `@DEFAULT_SOURCE@` when a non-monitor source exists (with several, an Input row to choose one:
+     `set-default-source`, and the streams on the old one move; an output's monitor stays), and one row per playing `sink-input` with
      Mute/Unmute and slider (hidden when nothing plays).
 5. `apps/*`, `windows/list`, `clipboard/history`, `calendar/clock`: today's modules moved onto the card
    trait so the four built-in panels work. Edit mode with "Add a card" by app.
