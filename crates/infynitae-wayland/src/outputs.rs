@@ -49,11 +49,7 @@ impl WaylandState {
                     self.configure_toplevel(element, Some((size.w, size.h)));
                     self.wlr_toplevels.dirty = true;
                 }
-                Effect::CloseRequest(element) => {
-                    if let Some(t) = self.window(element).and_then(|w| w.toplevel()) {
-                        t.send_close();
-                    }
-                }
+                Effect::CloseRequest(element) => self.request_close(element),
                 Effect::ForceClose(element) => self.force_close(element),
                 Effect::PreferredScale {
                     element,

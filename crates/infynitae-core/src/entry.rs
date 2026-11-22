@@ -3500,6 +3500,13 @@ impl Core {
                     .map_err(|_| ShellError::StaleElement)?;
                 out.push(Effect::CloseRequest(id));
             }
+            ShellCommand::ForceCloseElement { element } => {
+                let id = self
+                    .stage
+                    .resolve(element)
+                    .map_err(|_| ShellError::StaleElement)?;
+                out.push(Effect::ForceClose(id));
+            }
             ShellCommand::ArrangeCluster { element, layout } => {
                 let id = match element {
                     Some(element) => self.shell_mapped(element)?,

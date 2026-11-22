@@ -250,6 +250,9 @@ pub enum ShellCommand {
     },
     /// Asks `element` to close (`Effect::CloseRequest`).
     CloseElement { element: stage::ElementRef },
+    /// Ends `element`'s app as Super+Shift+Delete does (`Effect::ForceClose`): the answer "End"
+    /// to "<app> is not responding" (owner, 2026-11-22).
+    ForceCloseElement { element: stage::ElementRef },
     /// Arranges the cluster of `element` (the focused window without one) by `layout`, as the
     /// layout key does, and frames it on the pointer's screen (owner, 2026-11-21). Refused while
     /// an interaction is on, and when no window is arranged (none named or focused, or only

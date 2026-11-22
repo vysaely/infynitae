@@ -401,11 +401,7 @@ impl Dispatch<ZwlrForeignToplevelHandleV1, ElementId> for WaylandState {
         }
         match request {
             Request::Activate { .. } => state.wlr_toplevel_activate(client, id),
-            Request::Close => {
-                if let Some(t) = state.window(id).and_then(|w| w.toplevel()) {
-                    t.send_close();
-                }
-            }
+            Request::Close => state.request_close(id),
             Request::SetMaximized => state.wlr_toplevel_request(id, ToplevelRequest::SetMaximized),
             Request::UnsetMaximized => {
                 state.wlr_toplevel_request(id, ToplevelRequest::UnsetMaximized)

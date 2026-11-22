@@ -5,6 +5,7 @@
 #   SCREENSHOT_CMD and SCREEN_LOCKER are run as commands; TERMINAL keeps its own arguments
 # - Finding 19: game-mode parses mode and PID without unquoted set expansion
 # - Finding 5: brightness-up and brightness-down handle max_brightness 0 without division by zero
+# - force-close-x11 and not-responding (owner, 2026-11-22): what is said when a window is not ended
 set -eu
 
 REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
@@ -192,6 +193,43 @@ check "  no process found: a notification says so" "$(grep '^notify:' "$LOG")" \
 force_close_x11 3 >/dev/null
 check "  outside the session: a notification says so" \
     "$(grep -c '^notify: .*not one this session started' "$LOG" || true)" 1
+
+# not-responding: the edge asks "<title> is not responding" with End and Wait; End force closes
+# the window named, Wait leaves it; without an edge that can ask, a notification
+cat << 'EOF' > "$HOMEDIR/.local/bin/infynitae-edge"
+#!/bin/sh
+echo "edge: $* [$(tr '\n' ' ')]" >> "$CALL_LOG"
+[ -n "$EDGE_ANSWER" ] && echo "$EDGE_ANSWER"
+exit "${EDGE_RC:-0}"
+EOF
+chmod +x "$HOMEDIR/.local/bin/infynitae-edge"
+not_responding() {
+    env -i HOME="$HOMEDIR" PATH="$BIN:/usr/bin:/bin" XDG_RUNTIME_DIR="$RUN" CALL_LOG="$LOG" \
+        ENABLE_EDGE=true INFYNITAE_SETTINGS_APPLIED=1 "$@" \
+        sh "$REPO_DIR/live/launch.sh" not-responding 1 7 "Notes" >/dev/null 2>&1 || true
+}
+echo ask > "$RUN/infynitae-edge-rs.features"
+: > "$LOG"
+not_responding EDGE_ANSWER=End
+check "not-responding asks the edge with End and Wait" "$(grep '^edge:' "$LOG")" \
+    "edge: ask Notes is not responding [End Wait ]"
+check "  End force closes the window named" "$(grep -c '^infynitae-bin: msg force-close 1 7$' "$LOG" || true)" 1
+: > "$LOG"
+not_responding EDGE_ANSWER=Wait
+check "  Wait leaves it" "$(grep -c '^infynitae-bin:' "$LOG" || true)" 0
+: > "$LOG"
+not_responding EDGE_RC=1
+check "  cancelled leaves it" "$(grep -c '^infynitae-bin:\|^notify:' "$LOG" || true)" 0
+: > "$LOG"
+not_responding EDGE_RC=3
+check "  the edge gone: a notification instead" "$(grep '^notify:' "$LOG")" \
+    "notify: -a Infynitae Notes is not responding Super+Shift+Delete ends it."
+rm "$RUN/infynitae-edge-rs.features"
+: > "$LOG"
+not_responding EDGE_ANSWER=End
+check "  an edge that cannot ask is not asked" "$(grep -c '^edge:' "$LOG" || true)" 0
+check "  and a notification says it" "$(grep -c '^notify: .*Notes is not responding' "$LOG" || true)" 1
+rm "$HOMEDIR/.local/bin/infynitae-edge"
 
 # remember-window: a per-window toggle kept in the config for the window's app
 remember() {

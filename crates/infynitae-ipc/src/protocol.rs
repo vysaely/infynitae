@@ -274,6 +274,11 @@ fn request(v: &Value, core: &Core) -> Result<Request, RequestError> {
         "close_element" | "close" => Request::Command(ShellCommand::CloseElement {
             element: element("element")?,
         }),
+        "force_close_element" | "force_close" => {
+            Request::Command(ShellCommand::ForceCloseElement {
+                element: element("element")?,
+            })
+        }
         // `{"cmd": "arrange", "layout": "tidy"|"grid"|"columns", "element"?}`: the cluster of the
         // window named, else of the focused one
         "arrange" => Request::Command(ShellCommand::ArrangeCluster {

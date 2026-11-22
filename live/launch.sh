@@ -302,6 +302,26 @@ GM_ARGS
                 "$why It was asked to close." 2>/dev/null || true
         fi
         ;;
+    not-responding)
+        # a window asked to close is still there and its app did not answer the compositor's
+        # ping: $2 $3 the window, $4 its title. End ends it as Super+Shift+Delete does. Only an
+        # edge that says it can ask is asked (an older one takes "ask" as a reason to restart).
+        name=${4:-A window}
+        if edge_on && [ -n "${XDG_RUNTIME_DIR:-}" ] && cat "$XDG_RUNTIME_DIR/infynitae-edge.features" \
+            "$XDG_RUNTIME_DIR/infynitae-edge-rs.features" 2>/dev/null | grep -qx ask; then
+            rc=0
+            answer=$(printf 'End\nWait\n' | "$EDGE_BIN" ask "$name is not responding") || rc=$?
+            # 3: the edge stopped before it could ask
+            if [ "$rc" != 3 ]; then
+                [ "$answer" = End ] && exec "$INFYNITAE_BIN" msg force-close "$2" "$3"
+                exit 0
+            fi
+        fi
+        if command -v notify-send >/dev/null 2>&1; then
+            notify-send -a Infynitae "$name is not responding" \
+                "Super+Shift+Delete ends it." 2>/dev/null || true
+        fi
+        ;;
     region-screenshot)
         # Super+S (Super+Shift+R too): Interactive region screenshot of the moment the key was
         # pressed

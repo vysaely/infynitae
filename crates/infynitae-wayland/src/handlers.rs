@@ -692,6 +692,10 @@ impl XdgShellHandler for WaylandState {
         &mut self.xdg_shell
     }
 
+    fn client_pong(&mut self, client: smithay::wayland::shell::xdg::ShellClient) {
+        self.not_responding.answered(&client);
+    }
+
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
         let id = self.core.toplevel_created();
         self.elements.push(ElementHandle {

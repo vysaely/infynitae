@@ -1113,6 +1113,14 @@ fn show_window_menu_emits_ipc_event_and_window_menu_commands_apply() {
         &format!(r#"{{"id":5,"cmd":"close","element":{w_ref}}}"#),
     );
     assert_eq!(r4.get("ok"), Some(&Value::Bool(true)));
+
+    // "End" to "<app> is not responding": the window's app is ended as by Super+Shift+Delete
+    let r5 = cmd.reply(
+        &mut server,
+        &mut core,
+        &format!(r#"{{"id":6,"cmd":"force_close","element":{w_ref}}}"#),
+    );
+    assert_eq!(r5.get("ok"), Some(&Value::Bool(true)));
 }
 
 /// `arrange` (2026-11-21): a layout by name for the cluster of the window named; an unknown

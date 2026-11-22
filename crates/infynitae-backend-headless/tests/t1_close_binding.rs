@@ -7,6 +7,7 @@ mod common;
 use common::input::*;
 use infynitae_backend_headless::keyboard_key;
 use infynitae_core::input::keys::{KEY_C, KEY_DELETE, KEY_LEFTMETA, KEY_LEFTSHIFT};
+use std::time::Duration;
 
 /// Holds `mods`, taps C, and releases `mods`.
 fn chord(r: &mut Rig, mods: &[u32]) {
@@ -100,5 +101,104 @@ fn super_shift_delete_ends_the_focused_windows_client() {
     assert!(
         r.ls.state.core().stage().state(w).is_none(),
         "the window went with its client"
+    );
+}
+
+/// Focuses W, names it "Editor", freezes its client or not, and asks it to close (Super+Shift+C).
+/// Returns W's element and the probe's index of it.
+fn ask_w_to_close(r: &mut Rig, frozen: bool) -> (infynitae_core::stage::ElementId, usize) {
+    let w = *r.ls.state.core().stage().mapped_elements().last().unwrap();
+    let fx =
+        r.ls.state
+            .core_mut()
+            .set_focus(&mut r.ls.input, Some(w))
+            .unwrap();
+    r.ls.state.apply(&fx);
+    let idx =
+        r.ls.probe
+            .surfaces
+            .iter()
+            .position(|s| s.label == "W")
+            .unwrap();
+    let surf = &r.ls.probe.surfaces[idx];
+    surf.toplevel.as_ref().unwrap().set_title("Editor".into());
+    surf.wl.commit();
+    r.ls.pump();
+    r.ls.probe.frozen = frozen;
+    chord(r, &[KEY_LEFTMETA, KEY_LEFTSHIFT]);
+    assert_eq!(r.ls.probe.close_requests, [idx]);
+    assert_eq!(r.ls.probe.pings, 1, "one ping goes with the request");
+    (w, idx)
+}
+
+fn asked(r: &Rig, w: infynitae_core::stage::ElementId, within: Duration) -> bool {
+    let instance = r.ls.state.core().stage().instance().get();
+    r.ls.wait_for_launcher_action(
+        &format!("not-responding {instance} {} Editor", w.get()),
+        within,
+    )
+}
+
+/// Owner, 2026-11-22: a window asked to close that stays and does not answer the ping is asked
+/// about ("Editor is not responding", End or Wait) once, after the wait and not before.
+#[test]
+fn a_frozen_window_asked_to_close_is_asked_about_once() {
+    let mut r = Rig::x8();
+    let start = r.ls.now;
+    let (w, _) = ask_w_to_close(&mut r, true);
+    r.ls.run_until(start + Duration::from_millis(4500));
+    assert!(
+        !asked(&r, w, Duration::from_millis(300)),
+        "not before the wait: {:?}",
+        r.ls.recorded_launcher_actions()
+    );
+    r.ls.run_until(start + Duration::from_millis(5200));
+    assert!(
+        asked(&r, w, Duration::from_secs(5)),
+        "after it: {:?}",
+        r.ls.recorded_launcher_actions()
+    );
+    r.ls.run_until(start + Duration::from_secs(12));
+    std::thread::sleep(Duration::from_millis(200));
+    let times =
+        r.ls.recorded_launcher_actions()
+            .iter()
+            .filter(|a| a.starts_with("not-responding"))
+            .count();
+    assert_eq!(times, 1, "asked once");
+    assert_eq!(
+        r.ls.probe.pings, 1,
+        "and pinged once: nothing polls the app"
+    );
+}
+
+/// A client that answers the ping is left to close in its own time (it may be asking to save).
+#[test]
+fn a_window_that_answers_is_not_asked_about() {
+    let mut r = Rig::x8();
+    let start = r.ls.now;
+    let (w, _) = ask_w_to_close(&mut r, false);
+    r.ls.run_until(start + Duration::from_secs(6));
+    assert!(
+        !asked(&r, w, Duration::from_millis(300)),
+        "{:?}",
+        r.ls.recorded_launcher_actions()
+    );
+}
+
+/// A frozen client whose window goes away anyway (it closed before it froze) is not asked about.
+#[test]
+fn a_window_that_went_is_not_asked_about() {
+    let mut r = Rig::x8();
+    let start = r.ls.now;
+    let (w, idx) = ask_w_to_close(&mut r, true);
+    r.ls.probe.destroy_toplevel(idx);
+    r.ls.pump();
+    assert!(r.ls.state.core().stage().state(w).is_none());
+    r.ls.run_until(start + Duration::from_secs(6));
+    assert!(
+        !asked(&r, w, Duration::from_millis(300)),
+        "{:?}",
+        r.ls.recorded_launcher_actions()
     );
 }
