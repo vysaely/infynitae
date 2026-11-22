@@ -7,7 +7,7 @@ mod common;
 
 use common::{Lockstep, output_k};
 use infynitae_core::navigation::PersistedCameras;
-use infynitae_core::output::Transform;
+use infynitae_core::output::{OutputDescriptor, Transform};
 use infynitae_wayland::cursor::TestTempDir;
 use infynitae_wayland::output_management::{HeadInfo, HeadMode};
 
@@ -150,6 +150,7 @@ fn a_reload_gives_the_screens_their_new_modes_and_turns() {
                 m(1920, 1080, 60_000, true),
                 m(1920, 1080, 144_000, false),
                 m(1280, 720, 60_000, false),
+                m(1280, 720, 75_000, false),
             ],
             physical_size: None,
             adaptive_sync: None,
@@ -157,10 +158,11 @@ fn a_reload_gives_the_screens_their_new_modes_and_turns() {
     );
     reload(&mut ls, temp.path(), "");
 
+    // a size: its highest rate
     reload(&mut ls, temp.path(), "OUTPUT_A_MODE=\"1280x720\"\n");
     assert_eq!(
         screen_mode(&ls, "A"),
-        ((1280, 720), 60_000, Transform::Normal, (0.0, 0.0))
+        ((1280, 720), 75_000, Transform::Normal, (0.0, 0.0))
     );
     assert_eq!(
         screen_mode(&ls, "B").3,
@@ -212,4 +214,28 @@ fn a_reload_gives_the_screens_their_new_modes_and_turns() {
         screen_mode(&ls, "A"),
         ((1920, 1080), 144_000, Transform::Normal, (1440.0, 0.0))
     );
+
+    // with no mode line, a rate line keeps the size a tool set
+    reload(&mut ls, temp.path(), "OUTPUT_ORDER=\"B,A\"\n");
+    let model = ls.state.core().output(a).unwrap().clone();
+    let desc = OutputDescriptor {
+        key: model.key.clone(),
+        mode: (1280, 720),
+        transform: model.transform,
+        scale_120: 120,
+        refresh_mhz: 60_000,
+    };
+    let fx = ls
+        .state
+        .core_mut()
+        .output_reconfigured(&mut ls.token, a, desc)
+        .expect("reconfigured");
+    ls.state.apply(&fx);
+    reload(
+        &mut ls,
+        temp.path(),
+        "OUTPUT_A_RATE=\"75\"\nOUTPUT_ORDER=\"B,A\"\n",
+    );
+    assert_eq!(screen_mode(&ls, "A").0, (1280, 720));
+    assert_eq!(screen_mode(&ls, "A").1, 75_000);
 }

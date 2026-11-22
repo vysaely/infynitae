@@ -255,18 +255,22 @@ impl WaylandState {
 
     /// The mode screen `o` (connector `name`, lowercased) takes when its `_MODE` or `_RATE` line
     /// changed and that mode is not the one it has. A size it has no mode for gives its preferred
-    /// mode, as at start.
+    /// mode, as at start. Only `_RATE` changed with no `_MODE` line before or now: the rate at the
+    /// size it has (a tool may have set one that is not the preferred).
     fn config_mode(&self, o: &OutputModel, name: &str, change: &DisplayChange) -> Option<HeadMode> {
         let (before, now) = (&change.before, &change.now);
-        let size = now.screen_modes.get(name).copied();
+        let line_size = now.screen_modes.get(name).copied();
         let rate = now.screen_rates.get(name).copied();
-        if (
-            before.screen_modes.get(name).copied(),
-            before.screen_rates.get(name).copied(),
-        ) == (size, rate)
-        {
+        let before_size = before.screen_modes.get(name).copied();
+        if (before_size, before.screen_rates.get(name).copied()) == (line_size, rate) {
             return None;
         }
+        let size = match (line_size, before_size) {
+            (None, None) => u16::try_from(o.phys.0)
+                .ok()
+                .zip(u16::try_from(o.phys.1).ok()),
+            _ => line_size,
+        };
         let current = HeadMode {
             size: (o.phys.0 as i32, o.phys.1 as i32),
             refresh_mhz: o.refresh_mhz as i32,
