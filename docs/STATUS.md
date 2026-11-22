@@ -162,6 +162,13 @@ These pass the test suite but have not run on a real screen or device yet:
   tear, game content type, an X11 window) is on, notifications wait (`GAME_QUIET`): one drawn
   over a game ends its direct path to the screen and tearing.
 - **Real-time audio and desktop** (`--no-realtime`): real-time scheduling rights (`rtkit`, `realtime` group from `realtime-privileges`).
+  With them the compositor's main thread runs at real-time priority 2, else at nice -10 where the
+  limit allows; with reset-on-fork either way, so the apps it opens start at normal priority
+  (before 2026-11-22 they inherited real-time 2).
+- **Apps first when memory runs out:** what the session and the shortcuts open gets an
+  out-of-memory score of 300; the compositor, the session script until the login lock, and the
+  lock screen keep the score they started with (lowering it needs root), so the kernel ends an
+  app first.
 - **ntsync**: NT synchronisation for Wine and Proton loaded at boot (`/etc/modules-load.d/ntsync.conf`) when the kernel has the module.
 - **No background memory compaction**: `vm.compaction_proactiveness = 0` (`/etc/sysctl.d/99-infynitae-memory.conf`) prevents latency spikes under load.
 - **A full GPU slows the windows out of use** (`GPU_RELIEF`): while a game fills a screen, a
