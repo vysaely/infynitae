@@ -899,6 +899,8 @@ struct App {
     popup_touch: Option<(i32, (f64, f64))>,
     /// the session bus connection serving org.freedesktop.Notifications
     notify_conn: Option<zbus::blocking::Connection>,
+    /// serves the tray watcher while the edge runs (`tray_watcher.rs`)
+    tray_conn: Option<zbus::blocking::Connection>,
     /// the compositor's shell IPC socket (`$XDG_RUNTIME_DIR/infynitae/shell.sock`)
     shell_sock: Option<std::os::unix::net::UnixStream>,
     shell_buf: Vec<u8>,
@@ -2514,6 +2516,7 @@ fn init_app(
         widget_touch: None,
         popup_touch: None,
         notify_conn: None,
+        tray_conn: None,
         shell_sock: None,
         shell_buf: Vec::new(),
         exit: false,
@@ -2547,6 +2550,11 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
             }
             Err(e) => eprintln!("infynitae-edge-apps: notifications: not serving: {e}"),
         }
+    }
+    // the tray's watcher, which the Background card reads (or another one's, see the module)
+    match crate::tray_watcher::start() {
+        Ok(conn) => app.tray_conn = Some(conn),
+        Err(e) => eprintln!("infynitae-edge-apps: tray: no watcher: {e}"),
     }
     // catch any config change or creation between startup and the first event-loop wait
     app.shell.reload_if_changed();

@@ -1341,7 +1341,11 @@ fn fetch_dbus_tray() -> (Vec<TrayItem>, bool) {
     let Ok(conn) = zbus::blocking::Connection::session() else {
         return (Vec::new(), false);
     };
-    let Ok(dbus) = zbus::blocking::fdo::DBusProxy::new(&conn) else {
+    fetch_dbus_tray_on(&conn)
+}
+
+fn fetch_dbus_tray_on(conn: &zbus::blocking::Connection) -> (Vec<TrayItem>, bool) {
+    let Ok(dbus) = zbus::blocking::fdo::DBusProxy::new(conn) else {
         return (Vec::new(), false);
     };
     let Ok(watcher_name) = zbus::names::BusName::try_from("org.kde.StatusNotifierWatcher") else {
@@ -1352,7 +1356,7 @@ fn fetch_dbus_tray() -> (Vec<TrayItem>, bool) {
     }
 
     let Ok(watcher) = zbus::blocking::Proxy::new(
-        &conn,
+        conn,
         "org.kde.StatusNotifierWatcher",
         "/StatusNotifierWatcher",
         "org.kde.StatusNotifierWatcher",
@@ -1373,7 +1377,7 @@ fn fetch_dbus_tray() -> (Vec<TrayItem>, bool) {
             continue;
         }
         let Ok(props) =
-            zbus::blocking::Proxy::new(&conn, bus, path, "org.freedesktop.DBus.Properties")
+            zbus::blocking::Proxy::new(conn, bus, path, "org.freedesktop.DBus.Properties")
         else {
             continue;
         };
@@ -2265,5 +2269,215 @@ mod tests {
             "first 200-icon draw stalled: {all_200_ms:.3} ms"
         );
         cache.wait_idle();
+    }
+
+    /// A session bus of the test's own, gone with the value; None (with a message) on a machine
+    /// without dbus-daemon.
+    struct Bus {
+        daemon: std::process::Child,
+        address: String,
+        dir: PathBuf,
+    }
+
+    impl Bus {
+        fn start(tag: &str) -> Option<Bus> {
+            use std::io::BufRead;
+            let dir = temp_dir(tag);
+            let spawned = std::process::Command::new("dbus-daemon")
+                .arg("--session")
+                .arg("--nofork")
+                .arg("--print-address=1")
+                .arg(format!("--address=unix:dir={}", dir.display()))
+                .stdout(std::process::Stdio::piped())
+                .spawn();
+            let mut daemon = match spawned {
+                Ok(d) => d,
+                Err(e) => {
+                    eprintln!("skipped: no dbus-daemon to run a private bus: {e}");
+                    let _ = std::fs::remove_dir_all(&dir);
+                    return None;
+                }
+            };
+            let mut address = String::new();
+            std::io::BufReader::new(daemon.stdout.take().unwrap())
+                .read_line(&mut address)
+                .unwrap();
+            let address = address.trim().to_string();
+            assert!(!address.is_empty(), "dbus-daemon printed no address");
+            Some(Bus {
+                daemon,
+                address,
+                dir,
+            })
+        }
+
+        fn connect(&self) -> zbus::blocking::connection::Builder<'_> {
+            zbus::blocking::connection::Builder::address(self.address.as_str()).unwrap()
+        }
+    }
+
+    impl Drop for Bus {
+        fn drop(&mut self) {
+            let _ = self.daemon.kill();
+            let _ = self.daemon.wait();
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    /// Polls `done` for up to five seconds (the watcher hears of a name going away from the bus).
+    fn eventually(mut done: impl FnMut() -> bool) -> bool {
+        let until = std::time::Instant::now() + Duration::from_secs(5);
+        while std::time::Instant::now() < until {
+            if done() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        done()
+    }
+
+    struct FakeItem;
+
+    #[zbus::interface(name = "org.kde.StatusNotifierItem")]
+    impl FakeItem {
+        #[zbus(property)]
+        fn id(&self) -> String {
+            "discord".into()
+        }
+        #[zbus(property)]
+        fn title(&self) -> String {
+            "Discord".into()
+        }
+        #[zbus(property)]
+        fn status(&self) -> String {
+            "Active".into()
+        }
+    }
+
+    /// A watcher of a bar or desktop, as far as the edge sees it: it takes hosts.
+    struct OtherWatcher {
+        host: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    #[zbus::interface(name = "org.kde.StatusNotifierWatcher")]
+    impl OtherWatcher {
+        fn register_status_notifier_host(&self, _service: String) {
+            self.host.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    fn host_registered(conn: &zbus::blocking::Connection) -> bool {
+        zbus::blocking::Proxy::new(
+            conn,
+            crate::tray_watcher::NAME,
+            crate::tray_watcher::PATH,
+            crate::tray_watcher::NAME,
+        )
+        .and_then(|p| p.get_property::<bool>("IsStatusNotifierHostRegistered"))
+        .unwrap_or(false)
+    }
+
+    #[test]
+    fn a_tray_app_registers_with_the_edge_s_watcher_and_leaves_with_its_name() {
+        use crate::tray_watcher::{NAME, PATH};
+        let Some(bus) = Bus::start("tray") else {
+            return;
+        };
+        let _watcher = crate::tray_watcher::start_on(bus.connect()).unwrap();
+        let reader = bus.connect().build().unwrap();
+        assert_eq!(fetch_dbus_tray_on(&reader), (Vec::new(), true));
+        assert!(
+            eventually(|| host_registered(&reader)),
+            "the edge is a host of its own watcher"
+        );
+
+        let item_path = "/org/ayatana/NotificationItem/discord";
+        let item = bus
+            .connect()
+            .serve_at(item_path, FakeItem)
+            .unwrap()
+            .build()
+            .unwrap();
+        item.call_method(
+            Some(NAME),
+            PATH,
+            Some(NAME),
+            "RegisterStatusNotifierItem",
+            &(item_path,),
+        )
+        .unwrap();
+        let item_bus = item.unique_name().unwrap().to_string();
+
+        let (items, ok) = fetch_dbus_tray_on(&reader);
+        assert!(ok);
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            (items[0].id.as_str(), items[0].title.as_str()),
+            ("discord", "Discord")
+        );
+        assert_eq!(
+            (items[0].bus_name.as_str(), items[0].obj_path.as_str()),
+            (item_bus.as_str(), item_path)
+        );
+
+        // the Background card shows it
+        let th = Theme::from_config(&Config::from_text(""));
+        let cx = test_cx(&th, Size::S, &[]);
+        let mut card = BackgroundCard::default();
+        let src = BackgroundSource { runtime_dir: None };
+        assert!(card.apply("background", &src.collect_with_bus(items, ok) as &dyn Any));
+        assert_eq!(card.status(&cx), Status::Ready);
+        let h = card.height(&cx, 340.0);
+        assert_eq!(h, ROW_H);
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 400, 200).unwrap();
+        let cr = cairo::Context::new(&surf).unwrap();
+        let mut hits = Hits::new(None, None);
+        card.draw(&cr, &cx, (10.0, 20.0, 340.0, h), &mut hits);
+        assert_eq!(hits.list.len(), 1);
+
+        drop(item);
+        assert!(
+            eventually(|| fetch_dbus_tray_on(&reader) == (Vec::new(), true)),
+            "the item is still listed after its connection closed"
+        );
+    }
+
+    #[test]
+    fn the_edge_leaves_another_watcher_the_name_and_takes_it_when_that_one_quits() {
+        use crate::tray_watcher::{NAME, PATH};
+        let Some(bus) = Bus::start("tray-other") else {
+            return;
+        };
+        let host = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let other = bus
+            .connect()
+            .serve_at(PATH, OtherWatcher { host: host.clone() })
+            .unwrap()
+            .name(NAME)
+            .unwrap()
+            .build()
+            .unwrap();
+        let other_bus = other.unique_name().unwrap().to_string();
+        let edge = crate::tray_watcher::start_on(bus.connect()).unwrap();
+        let edge_bus = edge.unique_name().unwrap().to_string();
+        let reader = bus.connect().build().unwrap();
+        let dbus = zbus::blocking::fdo::DBusProxy::new(&reader).unwrap();
+        let owner = || {
+            dbus.get_name_owner(zbus::names::BusName::try_from(NAME).unwrap())
+                .map(|o| o.to_string())
+                .ok()
+        };
+        assert_eq!(owner(), Some(other_bus));
+        assert!(
+            eventually(|| host.load(std::sync::atomic::Ordering::SeqCst)),
+            "the edge registers as a host with the other watcher"
+        );
+
+        drop(other);
+        assert!(eventually(|| owner().as_deref() == Some(edge_bus.as_str())));
+        assert!(
+            eventually(|| host_registered(&reader)),
+            "the edge registers as a host with itself once it serves"
+        );
     }
 }

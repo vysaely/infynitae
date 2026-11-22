@@ -17,6 +17,7 @@ mod paths;
 mod provider;
 mod shell;
 mod theme;
+mod tray_watcher;
 mod ui;
 mod wayland;
 mod widgets;
