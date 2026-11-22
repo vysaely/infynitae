@@ -2826,15 +2826,10 @@ fn keyboard_interactivity(shell: &Shell) -> KeyboardInteractivity {
         KeyboardInteractivity::None
     } else if shell.ask.ask.on || shell.editing() {
         KeyboardInteractivity::Exclusive
-    } else if shell.opened_by_hover {
-        if shell.clicked_inside {
-            KeyboardInteractivity::Exclusive
-        } else {
-            KeyboardInteractivity::OnDemand
-        }
-    } else if shell.keyboard_held {
-        // opened by its key, and the keyboard came: kept on demand from now on, so the
-        // compositor keeps it here until a window is hovered or clicked
+    } else if shell.opened_by_hover || shell.keyboard_held {
+        // on demand: a click on the panel gives it the keyboard, a click on a window gives it
+        // back (owner, 2026-11-22). The compositor focuses only an exclusive layer when it opens,
+        // so a panel opened by its key asks for it exclusively until the keyboard has come.
         KeyboardInteractivity::OnDemand
     } else {
         KeyboardInteractivity::Exclusive
@@ -3665,7 +3660,7 @@ mod tests {
     }
 
     #[test]
-    fn hover_panel_uses_ondemand_keyboard_until_clicked_inside() {
+    fn an_open_panel_holds_the_keyboard_on_demand() {
         let mut sh = Shell::new(
             crate::config::Config::from_text(
                 "PANEL_CONTROL=\"SUPER+A top right 380 hover settings/session\"\n",
@@ -3689,12 +3684,12 @@ mod tests {
         );
 
         let ((ox, oy, _, _), _) = sh.layout(idx, 1280.0, 800.0);
-        assert!(sh.click(1280.0, 800.0, ox + 10.0, oy + 10.0, Button::Left));
-        assert!(sh.clicked_inside);
+        sh.click(1280.0, 800.0, ox + 10.0, oy + 10.0, Button::Left);
+        assert_eq!(sh.open, Some(idx), "a click inside keeps the panel open");
         assert_eq!(
             keyboard_interactivity(&sh),
-            KeyboardInteractivity::Exclusive,
-            "clicking inside a hover panel promotes keyboard interactivity to Exclusive"
+            KeyboardInteractivity::OnDemand,
+            "a click inside a hover panel keeps it on demand, so a click on a window takes the keyboard"
         );
 
         assert!(sh.close_at(t0));
