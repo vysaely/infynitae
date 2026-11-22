@@ -851,6 +851,7 @@ impl Core {
                     || matches!(
                         a,
                         KeyAction::SpawnLockScreen
+                            | KeyAction::ForceCloseFocused
                             | KeyAction::FocusNext
                             | KeyAction::ToggleWindowList
                             | KeyAction::ToggleLauncher
@@ -4695,11 +4696,14 @@ mod tests {
     }
 
     /// While the focused window holds a shortcuts inhibitor, a bound chord goes to it as a key;
-    /// Super+Shift+L still locks; given back, the chord is the compositor's again.
+    /// Super+Shift+L still locks and Super+Shift+Delete still ends it; given back, the chord is the
+    /// compositor's again.
     #[test]
     fn inhibited_shortcuts_go_to_the_window_except_lock() {
         let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
-        let _ = c.output_connected(&mut t, desc("A")).unwrap();
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        let w = map_windows(&mut c, a, 1)[0];
+        c.set_focus(&mut i, Some(w)).unwrap();
         let logo = Modifiers {
             logo: true,
             shift: false,
@@ -4786,6 +4790,17 @@ mod tests {
             let fx = press(&mut c, key, false);
             assert!(!forwarded(&fx, key), "the edge stays reachable: {fx:?}");
         }
+        held.set(Modifiers {
+            shift: true,
+            ..logo
+        });
+        let fx = press(&mut c, crate::input::keys::KEY_DELETE, false);
+        held.set(logo);
+        assert!(
+            fx.contains(&Effect::ForceClose(w)),
+            "Super+Shift+Delete ends the window that holds the shortcuts: {fx:?}"
+        );
+        assert!(!forwarded(&fx, crate::input::keys::KEY_DELETE));
         c.set_shortcuts_inhibited(false);
         assert!(
             !forwarded(&press(&mut c, KEY_Q, false), KEY_Q),
