@@ -4,6 +4,7 @@
 //! (INV-CAMERA-1).
 
 use crate::Core;
+use crate::arrange::GAP;
 use crate::geom::{self, CanvasPoint, CanvasPos, LocalPoint, LocalRect, LocalSize, Q16_ONE};
 use crate::input::Axis;
 use crate::output::{self, OutputId};
@@ -1041,29 +1042,47 @@ impl Core {
         Ok(())
     }
 
-    /// The first screen's usable view in Canvas px, `(x0, y0, x1, y1)`: what the camera shows less
-    /// the layers' exclusive zones (bars), at the camera's zoom.
+    /// The usable view new windows open in, in Canvas px, `(x0, y0, x1, y1)`: what the camera of
+    /// the pointer's screen (else the first) shows less the layers' exclusive zones (bars).
     fn usable_view(&self) -> Option<(i64, i64, i64, i64)> {
-        let output = self.outputs.first()?;
+        self.placement_view().map(|(view, _)| view)
+    }
+
+    /// [`Core::usable_view`] and the pointer on the Canvas when it is on that screen, both where
+    /// the camera comes to rest: during a glide (`ZOOM_FEEL` other than "instant") a window was
+    /// kept inside where the camera was at that moment and ended off screen once it stopped.
+    fn placement_view(&self) -> Option<(crate::stage::CanvasBox, Option<(i64, i64)>)> {
+        let output = self
+            .pointer_output()
+            .and_then(|o| self.outputs.iter().find(|m| m.id == o))
+            .or_else(|| self.outputs.first())?;
         let camera = self.cameras.camera_for_output(output.id)?;
-        let centre = self.cameras.center(camera)?;
-        let zoom = self.cameras.zoom(camera).unwrap_or(1.0);
+        let rest = self.cameras.effective_value(camera)?;
+        let zoom = rest.zoom;
         let extent = output.logical_extent();
         let (ux, uy, uw, uh) = self
             .usable_area(output.id)
             .unwrap_or((0.0, 0.0, extent.0, extent.1));
         let (cx, cy) = (
-            centre.x as f64 / Q16_ONE as f64,
-            centre.y as f64 / Q16_ONE as f64,
+            rest.center.x as f64 / Q16_ONE as f64,
+            rest.center.y as f64 / Q16_ONE as f64,
         );
         let x0 = cx + (ux - extent.0 / 2.0) / zoom;
         let y0 = cy + (uy - extent.1 / 2.0) / zoom;
-        Some((
+        let view = (
             x0.ceil() as i64,
             y0.ceil() as i64,
             (x0 + uw / zoom).floor() as i64,
             (y0 + uh / zoom).floor() as i64,
-        ))
+        );
+        let pointer = match self.pointer {
+            pointer::PointerState::Located { output: o, p } if o == output.id => Some((
+                (cx + (p.0 - extent.0 / 2.0) / zoom).round() as i64,
+                (cy + (p.1 - extent.1 / 2.0) / zoom).round() as i64,
+            )),
+            _ => None,
+        };
+        Some((view, pointer))
     }
 
     /// A window that opened larger than its room and was offered the room (the adapter's fit,
@@ -2088,132 +2107,101 @@ impl Core {
         }
         // an app swapping its own windows keeps the place (Steam: updater, then login, then the
         // main window; owner, 2026-10-25): no input since the close, no other window of the app
-        // open, the place still in view and free. Anything else opens near the cursor.
+        // open, the place still in view and free. Anything else opens beside the windows in view.
         if let Some(at) = self.successor_anchor(id, tree) {
             return Some(at);
         }
-        let output = self.outputs.first()?;
-        let centre = self
-            .cameras
-            .camera_for_output(output.id)
-            .and_then(|c| self.cameras.center(c))?;
-        // the usable region (L4): the output view less its layers' exclusive zones, centred at its
-        // own centre, which lies `d` from the view's (Canvas px at the camera's zoom)
-        let extent = output.logical_extent();
-        let (ux, uy, uw, uh) = self
-            .usable_area(output.id)
-            .unwrap_or((0.0, 0.0, extent.0, extent.1));
-        let zoom = self
-            .cameras
-            .camera_for_output(output.id)
-            .and_then(|c| self.cameras.zoom(c))
-            .unwrap_or(1.0);
-        let d = (
-            (ux + uw / 2.0 - extent.0 / 2.0) / zoom,
-            (uy + uh / 2.0 - extent.1 / 2.0) / zoom,
-        );
-        let usable = (uw, uh);
-        let axis = |c: i64, usable: f64, outer: i32| {
-            let half_outer = i64::from(outer.max(0)) * Q16_ONE / 2;
-            let half_usable = geom::q16(usable / 2.0);
-            c - half_outer.min(half_usable)
-        };
-        let center_anchor = CanvasPos {
-            x: axis(
-                centre.x.saturating_add(geom::q16(d.0)),
-                usable.0,
-                tree.geometry.size.w,
-            ),
-            y: axis(
-                centre.y.saturating_add(geom::q16(d.1)),
-                usable.1,
-                tree.geometry.size.h,
-            ),
-        }
-        .round_to_point()?;
-
         if self.placement == PlacementPolicy::CentredInView {
-            return Some(center_anchor);
-        }
-
-        // PlacementPolicy::ClusterTiling
-        let new_w = tree.geometry.size.w as i64;
-        let new_h = tree.geometry.size.h as i64;
-        if new_w <= 0 || new_h <= 0 {
-            return Some(center_anchor);
-        }
-
-        // Visual geometry bounds of all currently mapped windows (the window itself, placed again
-        // by `place_opening_at_size`, is no obstacle)
-        let existing = self.window_rects_except(id);
-
-        let center_gx = center_anchor.x;
-        let center_gy = center_anchor.y;
-        // CLUSTER_SORT "app": beside its app's window in view instead of at the pointer
-        let (target_gx, target_gy) = if let Some(beside) = self.beside_own_app(id) {
-            beside
-        } else if let pointer::PointerState::Located { output: ptr_out, p } = self.pointer
-            && ptr_out == output.id
-            && ((p.0 - extent.0 / 2.0).abs() > 1.0 || (p.1 - extent.1 / 2.0).abs() > 1.0)
-        {
-            let cd = ((p.0 - extent.0 / 2.0) / zoom, (p.1 - extent.1 / 2.0) / zoom);
-            CanvasPos {
+            let output = self.outputs.first()?;
+            let centre = self
+                .cameras
+                .camera_for_output(output.id)
+                .and_then(|c| self.cameras.center(c))?;
+            // the usable region (L4): the output view less its layers' exclusive zones, centred at
+            // its own centre, which lies `d` from the view's (Canvas px at the camera's zoom)
+            let extent = output.logical_extent();
+            let (ux, uy, uw, uh) = self
+                .usable_area(output.id)
+                .unwrap_or((0.0, 0.0, extent.0, extent.1));
+            let zoom = self
+                .cameras
+                .camera_for_output(output.id)
+                .and_then(|c| self.cameras.zoom(c))
+                .unwrap_or(1.0);
+            let d = (
+                (ux + uw / 2.0 - extent.0 / 2.0) / zoom,
+                (uy + uh / 2.0 - extent.1 / 2.0) / zoom,
+            );
+            let usable = (uw, uh);
+            let axis = |c: i64, usable: f64, outer: i32| {
+                let half_outer = i64::from(outer.max(0)) * Q16_ONE / 2;
+                let half_usable = geom::q16(usable / 2.0);
+                c - half_outer.min(half_usable)
+            };
+            let center_anchor = CanvasPos {
                 x: axis(
-                    centre.x.saturating_add(geom::q16(cd.0)),
+                    centre.x.saturating_add(geom::q16(d.0)),
                     usable.0,
                     tree.geometry.size.w,
                 ),
                 y: axis(
-                    centre.y.saturating_add(geom::q16(cd.1)),
+                    centre.y.saturating_add(geom::q16(d.1)),
                     usable.1,
                     tree.geometry.size.h,
                 ),
             }
-            .round_to_point()
-            .map(|pt| (pt.x, pt.y))
-            .unwrap_or((center_gx, center_gy))
-        } else {
-            (center_gx, center_gy)
-        };
-        // near the cursor, but on the screen: a window that fits the usable view is kept inside it
-        // (owner, 2026-10-31: every new window opens in free space near the cursor)
-        let (target_gx, target_gy) = match self.usable_view() {
-            Some((x0, y0, x1, y1)) => {
-                let keep = |t: i64, lo: i64, hi: i64, s: i64| {
-                    if hi - lo >= s { t.clamp(lo, hi - s) } else { t }
-                };
-                (
-                    keep(target_gx, x0, x1, new_w),
-                    keep(target_gy, y0, y1, new_h),
-                )
-            }
-            None => (target_gx, target_gy),
-        };
-
-        if existing.is_empty() {
-            return Some(CanvasPoint {
-                x: target_gx,
-                y: target_gy,
-            });
+            .round_to_point()?;
+            return Some(center_anchor);
         }
 
-        let overlaps = |gx: i64, gy: i64| overlaps_any(&existing, (gx, gy, new_w, new_h));
-
-        if !overlaps(target_gx, target_gy) {
+        // PlacementPolicy::ClusterTiling (owner, 2026-11-22)
+        let (view, pointer) = self.placement_view()?;
+        let size = (
+            i64::from(tree.geometry.size.w),
+            i64::from(tree.geometry.size.h),
+        );
+        let middle = ((view.0 + view.2) / 2, (view.1 + view.3) / 2);
+        // the window's top left corner for its centre at `c`, a window that fits kept inside the
+        // usable view; one that does not keeps its top left there, so it stays reachable
+        let centred_at = |c: (i64, i64)| {
+            (
+                keep_in_range(c.0 - size.0 / 2, size.0, view.0, view.2),
+                keep_in_range(c.1 - size.1 / 2, size.1, view.1, view.3),
+            )
+        };
+        if size.0 <= 0 || size.1 <= 0 {
             return Some(CanvasPoint {
-                x: target_gx,
-                y: target_gy,
+                x: middle.0,
+                y: middle.1,
             });
         }
-        // never over another window: the nearest free spot to the cursor, one wholly on screen
-        // first, else the nearest on the Canvas (owner, 2026-10-31)
-        let best = self.free_spot_near(&existing, (new_w, new_h), (target_gx, target_gy));
-        let (chosen_gx, chosen_gy) =
-            best.unwrap_or_else(|| beside_all(&existing, (target_gx, target_gy)));
-        Some(CanvasPoint {
-            x: chosen_gx,
-            y: chosen_gy,
-        })
+        let existing = self.window_rects_except(id);
+        // CLUSTER_SORT "app": right of its app's window in view, else the nearest free spot
+        if let Some(beside) = self.beside_own_app(id) {
+            let at = centred_at((beside.0 + size.0 / 2, beside.1 + size.1 / 2));
+            let (x, y) = if overlaps_any(&existing, (at.0, at.1, size.0, size.1)) {
+                self.free_spot_near(&existing, size, at)
+                    .unwrap_or_else(|| beside_all(&existing, at))
+            } else {
+                at
+            };
+            return Some(CanvasPoint { x, y });
+        }
+        // no window in this view: the middle of the usable view, wherever the pointer rests
+        // (owner, 2026-11-22: "in the middle of the viewport if it's the first in that viewport")
+        let Some(cluster) = self.anchor_cluster(id, view, pointer.unwrap_or(middle)) else {
+            let (x, y) = centred_at(middle);
+            return Some(CanvasPoint { x, y });
+        };
+        // beside that cluster, on its side nearest the pointer: the nearest free spot touching
+        // it, one wholly on screen first, else beyond the view, still touching it. Only free
+        // Canvas is taken: no other window moves (owner, 2026-11-22)
+        let target = centred_at(pointer.unwrap_or(middle));
+        let (x, y) = self
+            .free_spot_beside(&cluster, &existing, size, target)
+            .or_else(|| self.free_spot_near(&existing, size, target))
+            .unwrap_or_else(|| beside_all(&existing, target));
+        Some(CanvasPoint { x, y })
     }
 
     /// A window that maps in fullscreen keeps its place on the Canvas off the other windows at
@@ -2332,65 +2320,135 @@ impl Core {
         existing
     }
 
+    /// The cluster a new window opens beside (owner, 2026-11-22), the window-geometry rects of
+    /// its windows: the focused window's when it shows in `view`; else, of the clusters with a
+    /// window in `view`, the one nearest `near` (the pointer, or the view's middle). `None`: no
+    /// window shows in `view`. Windows kept on top, minimized or fullscreen are in no cluster.
+    fn anchor_cluster(
+        &self,
+        id: ElementId,
+        view: (i64, i64, i64, i64),
+        near: (i64, i64),
+    ) -> Option<Vec<(i64, i64, i64, i64)>> {
+        let mut elems = Vec::new();
+        let mut rects = Vec::new();
+        for e in self.stage.mapped_elements() {
+            if e == id
+                || self.stage.is_above(e)
+                || self.stage.is_minimized(e)
+                || self.fullscreen_of(e).is_some()
+            {
+                continue;
+            }
+            if let (Some(a), Some(t)) = (self.stage.anchor(e), self.stage.tree(e)) {
+                let (w, h) = (i64::from(t.geometry.size.w), i64::from(t.geometry.size.h));
+                if w > 0 && h > 0 {
+                    elems.push(e);
+                    rects.push((a.x, a.y, a.x.saturating_add(w), a.y.saturating_add(h)));
+                }
+            }
+        }
+        let shows =
+            |r: &(i64, i64, i64, i64)| r.0 < view.2 && r.2 > view.0 && r.1 < view.3 && r.3 > view.1;
+        let groups: Vec<Vec<usize>> = crate::groups_near(&rects)
+            .into_iter()
+            .filter(|g| g.iter().any(|&i| shows(&rects[i])))
+            .collect();
+        let focused = self.focus.target().and_then(|f| {
+            let i = elems.iter().position(|&e| e == f)?;
+            groups.iter().find(|g| g.contains(&i) && shows(&rects[i]))
+        });
+        let distance = |g: &&Vec<usize>| {
+            g.iter()
+                .map(|&i| {
+                    let (x0, y0, x1, y1) = rects[i];
+                    let dx = i128::from((x0 - near.0).max(near.0 - x1).max(0));
+                    let dy = i128::from((y0 - near.1).max(near.1 - y1).max(0));
+                    dx * dx + dy * dy
+                })
+                .min()
+        };
+        let group = focused.or_else(|| groups.iter().min_by_key(distance))?;
+        Some(group.iter().map(|&i| rects[i]).collect())
+    }
+
     /// The free spot nearest `target` for a window of `size` among `existing` (the cluster
     /// placement's search, F-PLACE-1): grid-aligned candidates flush with the windows' edges and
-    /// the target's lines, the 12 px gap kept; a spot wholly in the first screen's view wins over
-    /// a nearer one that is not. `None` when no candidate is free.
+    /// the target's lines, the 12 px gap kept; a spot wholly in the usable view wins over a
+    /// nearer one that is not. `None` when no candidate is free.
     pub(crate) fn free_spot_near(
         &self,
         existing: &[(i64, i64, i64, i64)],
         size: (i64, i64),
         target: (i64, i64),
     ) -> Option<(i64, i64)> {
-        const GAP: i64 = 12;
-        let (new_w, new_h) = size;
-        let (target_gx, target_gy) = target;
-        let overlaps = |gx: i64, gy: i64| overlaps_any(existing, (gx, gy, new_w, new_h));
-        // Generate grid-aligned candidate positions flush with existing window edges
-        let mut candidates = Vec::new();
-        for &w1 in existing {
-            // Adjacent flush placements relative to w1
-            candidates.push((w1.2 + GAP, w1.1)); // Right, top-aligned
-            candidates.push((w1.2 + GAP, w1.3 - new_h)); // Right, bottom-aligned
-            candidates.push((w1.0 - new_w - GAP, w1.1)); // Left, top-aligned
-            candidates.push((w1.0 - new_w - GAP, w1.3 - new_h)); // Left, bottom-aligned
-            candidates.push((w1.0, w1.3 + GAP)); // Below, left-aligned
-            candidates.push((w1.2 - new_w, w1.3 + GAP)); // Below, right-aligned
-            candidates.push((w1.0, w1.1 - new_h - GAP)); // Above, left-aligned
-            candidates.push((w1.2 - new_w, w1.1 - new_h - GAP)); // Above, right-aligned
-
-            // Cursor-aligned flush placements relative to w1
-            candidates.push((w1.2 + GAP, target_gy));
-            candidates.push((w1.0 - new_w - GAP, target_gy));
-            candidates.push((target_gx, w1.3 + GAP));
-            candidates.push((target_gx, w1.1 - new_h - GAP));
-
-            // Grid intersections with other windows
-            for &w2 in existing {
-                candidates.push((w1.2 + GAP, w2.1));
-                candidates.push((w1.0, w2.3 + GAP));
-                candidates.push((w1.0 - new_w - GAP, w2.1));
-                candidates.push((w1.0, w2.1 - new_h - GAP));
-                candidates.push((w1.2 + GAP, w2.3 + GAP));
-            }
-        }
-
-        // a free spot wholly on screen wins over a nearer one that is not (a window an app opens
-        // by itself does not bring the camera to it)
-        let view = self.usable_view();
-        let in_view = |gx: i64, gy: i64| {
-            view.is_some_and(|(x0, y0, x1, y1)| {
-                gx >= x0 && gy >= y0 && gx + new_w <= x1 && gy + new_h <= y1
-            })
-        };
-        candidates
+        let in_view = self.wholly_in_view(size);
+        spot_candidates(existing, existing, size, target)
             .into_iter()
-            .filter(|&(gx, gy)| !overlaps(gx, gy))
+            .filter(|&(gx, gy)| !overlaps_any(existing, (gx, gy, size.0, size.1)))
             .min_by_key(|&(gx, gy)| {
-                let dx = (gx - target_gx) as i128;
-                let dy = (gy - target_gy) as i128;
+                let dx = (gx - target.0) as i128;
+                let dy = (gy - target.1) as i128;
                 (!in_view(gx, gy), dx * dx + dy * dy)
             })
+    }
+
+    /// [`Core::free_spot_near`] among the spots touching one of the rects `around` (the gap
+    /// kept), free of all of `existing`. Among spots about as near, one whose edges line up with
+    /// a neighbour's is preferred (owner, 2026-11-22): the same top or bottom edge beside it,
+    /// the same left or right edge above or below it, each worth `ALIGN` px of distance.
+    fn free_spot_beside(
+        &self,
+        around: &[(i64, i64, i64, i64)],
+        existing: &[(i64, i64, i64, i64)],
+        size: (i64, i64),
+        target: (i64, i64),
+    ) -> Option<(i64, i64)> {
+        const ALIGN: i64 = 32;
+        let (w, h) = size;
+        // `r` is within the gap of the spot at `(x, y)` on one axis and overlaps it on the other:
+        // (beside it in a row, above or below it in a column)
+        let beside = |r: &(i64, i64, i64, i64), x: i64, y: i64| {
+            let dx = (r.0 - (x + w)).max(x - r.2);
+            let dy = (r.1 - (y + h)).max(y - r.3);
+            (dx <= GAP && dy < 0, dy <= GAP && dx < 0)
+        };
+        let touches = |x: i64, y: i64| {
+            around.iter().any(|r| {
+                let (row, column) = beside(r, x, y);
+                row || column
+            })
+        };
+        let aligned = |x: i64, y: i64| {
+            existing
+                .iter()
+                .map(|r| match beside(r, x, y) {
+                    (true, _) => i64::from(r.1 == y) + i64::from(r.3 == y + h),
+                    (_, true) => i64::from(r.0 == x) + i64::from(r.2 == x + w),
+                    _ => 0,
+                })
+                .max()
+                .unwrap_or(0)
+        };
+        let in_view = self.wholly_in_view(size);
+        spot_candidates(around, existing, size, target)
+            .into_iter()
+            .filter(|&(x, y)| !overlaps_any(existing, (x, y, w, h)) && touches(x, y))
+            .min_by_key(|&(x, y)| {
+                let near = ((x - target.0) as f64).hypot((y - target.1) as f64);
+                (!in_view(x, y), near.round() as i64 - ALIGN * aligned(x, y))
+            })
+    }
+
+    /// Whether a window of `size` at a spot lies wholly in the usable view (a window an app
+    /// opens by itself does not bring the camera to it).
+    fn wholly_in_view(&self, size: (i64, i64)) -> impl Fn(i64, i64) -> bool {
+        let view = self.usable_view();
+        move |x, y| {
+            view.is_some_and(|(x0, y0, x1, y1)| {
+                x >= x0 && y >= y0 && x + size.0 <= x1 && y + size.1 <= y1
+            })
+        }
     }
 
     /// Owner, 2026-10-31: a window back from fullscreen never pushes its neighbours and never
@@ -3256,6 +3314,48 @@ fn keep_in_range(start: i64, size: i64, low: i64, high: i64) -> i64 {
 pub(crate) fn beside_all(existing: &[(i64, i64, i64, i64)], target: (i64, i64)) -> (i64, i64) {
     let right = existing.iter().map(|r| r.2).max().unwrap_or(target.0);
     (right.saturating_add(12).max(target.0), target.1)
+}
+
+/// Spots for a window of `size` flush with the edges of the rects `around` (the gap kept), at
+/// `target`'s lines and at the corners where `existing` rects' edges cross: the cluster search's
+/// candidates, free or not.
+fn spot_candidates(
+    around: &[(i64, i64, i64, i64)],
+    existing: &[(i64, i64, i64, i64)],
+    size: (i64, i64),
+    target: (i64, i64),
+) -> Vec<(i64, i64)> {
+    let (new_w, new_h) = size;
+    let (target_gx, target_gy) = target;
+    // Generate grid-aligned candidate positions flush with existing window edges
+    let mut candidates = Vec::new();
+    for &w1 in around {
+        // Adjacent flush placements relative to w1
+        candidates.push((w1.2 + GAP, w1.1)); // Right, top-aligned
+        candidates.push((w1.2 + GAP, w1.3 - new_h)); // Right, bottom-aligned
+        candidates.push((w1.0 - new_w - GAP, w1.1)); // Left, top-aligned
+        candidates.push((w1.0 - new_w - GAP, w1.3 - new_h)); // Left, bottom-aligned
+        candidates.push((w1.0, w1.3 + GAP)); // Below, left-aligned
+        candidates.push((w1.2 - new_w, w1.3 + GAP)); // Below, right-aligned
+        candidates.push((w1.0, w1.1 - new_h - GAP)); // Above, left-aligned
+        candidates.push((w1.2 - new_w, w1.1 - new_h - GAP)); // Above, right-aligned
+
+        // Cursor-aligned flush placements relative to w1
+        candidates.push((w1.2 + GAP, target_gy));
+        candidates.push((w1.0 - new_w - GAP, target_gy));
+        candidates.push((target_gx, w1.3 + GAP));
+        candidates.push((target_gx, w1.1 - new_h - GAP));
+
+        // Grid intersections with other windows
+        for &w2 in existing {
+            candidates.push((w1.2 + GAP, w2.1));
+            candidates.push((w1.0, w2.3 + GAP));
+            candidates.push((w1.0 - new_w - GAP, w2.1));
+            candidates.push((w1.0, w2.1 - new_h - GAP));
+            candidates.push((w1.2 + GAP, w2.3 + GAP));
+        }
+    }
+    candidates
 }
 
 /// `(x, y, w, h)` comes within the 12 px tiling gap of one of the rects `(x0, y0, x1, y1)`.
@@ -7394,5 +7494,334 @@ mod tests {
             Some(w2),
             "unfocused w1 remapping without user action raised itself over focused w2"
         );
+    }
+
+    /// New windows under PLACEMENT_POLICY="cluster" (owner, 2026-11-22): on screen, beside the
+    /// cluster nearest the pointer; the first in a view in its middle; never moving another.
+    mod opening_beside_a_cluster {
+        use super::*;
+        use crate::PhysicalEvent;
+        use crate::layer::{Anchors, KeyboardInteractivity, Layer, LayerState};
+        use crate::navigation::{PersistedCameras, ZoomFeel};
+        use crate::output::tests::key as okey;
+        use crate::pointer::PointerState;
+
+        /// A Core with one 1920 x 1080 screen at scale 1 whose camera is at `at` and `zoom`, and
+        /// its input port (in a struct: no function returns an authority value).
+        struct Desk {
+            c: Core,
+            i: crate::InputPort,
+        }
+
+        fn desk(zoom: f64, at: (i64, i64)) -> Desk {
+            let centre = CanvasPos {
+                x: at.0 * Q16_ONE,
+                y: at.1 * Q16_ONE,
+            };
+            let cameras = PersistedCameras::from_entries(vec![(okey("A"), centre, zoom)]).unwrap();
+            let (mut c, i, _, mut t) = Core::new(cameras);
+            c.set_placement_policy(PlacementPolicy::ClusterTiling);
+            c.output_connected(
+                &mut t,
+                OutputDescriptor {
+                    key: okey("A"),
+                    mode: (1920, 1080),
+                    transform: Transform::Normal,
+                    scale_120: 120,
+                    refresh_mhz: 60_000,
+                },
+            )
+            .unwrap();
+            Desk { c, i }
+        }
+
+        fn win(k: u64, w: i32, h: i32, mapped: bool) -> SurfaceTree {
+            SurfaceTree {
+                geometry: LocalRect {
+                    loc: LocalPoint::default(),
+                    size: LocalSize { w, h },
+                },
+                surfaces: vec![SnapshotSurface {
+                    key: key(k),
+                    role: SurfaceRole::Root,
+                    size: if mapped {
+                        LocalSize { w, h }
+                    } else {
+                        LocalSize::default()
+                    },
+                    mapped,
+                    input: InputRegion::Infinite,
+                    frame_requested: false,
+                }],
+            }
+        }
+
+        /// Opens a `w` x `h` window by itself (nothing focused or moved for it) and returns it
+        /// with its window-geometry rect `(x0, y0, x1, y1)`.
+        fn open(c: &mut Core, k: u64, w: i32, h: i32) -> (ElementId, (i64, i64, i64, i64)) {
+            let id = c.toplevel_created();
+            c.toplevel_committed(id, win(k, w, h, false)).unwrap();
+            c.toplevel_committed(id, win(k, w, h, true)).unwrap();
+            let a = c.stage().anchor(id).unwrap();
+            (id, (a.x, a.y, a.x + i64::from(w), a.y + i64::from(h)))
+        }
+
+        /// A window opened and then moved to `at`, as the user leaves windows on the Canvas.
+        fn put(c: &mut Core, k: u64, w: i32, h: i32, at: (i64, i64)) -> ElementId {
+            let (id, _) = open(c, k, w, h);
+            let mut fx = Vec::new();
+            c.place_by_user(id, CanvasPoint { x: at.0, y: at.1 }, &mut fx)
+                .unwrap();
+            id
+        }
+
+        fn pointer_at(c: &mut Core, p: (f64, f64)) {
+            let output = c.outputs.first().unwrap().id;
+            c.pointer = PointerState::Located { output, p };
+        }
+
+        /// `r` on the screen in screen px, as the VM's everyday test reads it: the camera's
+        /// centre and zoom, the screen's middle at (960, 540).
+        fn on_screen(c: &Core, r: (i64, i64, i64, i64)) -> (f64, f64, f64, f64) {
+            let centre = c.cameras().center(0).unwrap();
+            let zoom = c.cameras().zoom(0).unwrap();
+            let s = |v: i64, mid: f64, q: i64| (v as f64 - q as f64 / Q16_ONE as f64) * zoom + mid;
+            (
+                s(r.0, 960.0, centre.x),
+                s(r.1, 540.0, centre.y),
+                s(r.2, 960.0, centre.x),
+                s(r.3, 540.0, centre.y),
+            )
+        }
+
+        fn wholly_on(s: (f64, f64, f64, f64), x1: f64) -> bool {
+            s.0 >= 0.0 && s.1 >= 0.0 && s.2 <= x1 && s.3 <= 1080.0
+        }
+
+        /// `a` lies within the 12 px gap of `b` on one axis and overlaps it on the other.
+        fn touching(a: (i64, i64, i64, i64), b: (i64, i64, i64, i64)) -> bool {
+            let dx = (b.0 - a.2).max(a.0 - b.2);
+            let dy = (b.1 - a.3).max(a.1 - b.3);
+            (dx == GAP && dy < 0) || (dy == GAP && dx < 0)
+        }
+
+        fn apart(a: (i64, i64, i64, i64), b: (i64, i64, i64, i64)) -> bool {
+            !overlaps_any(&[b], (a.0, a.1, a.2 - a.0, a.3 - a.1))
+        }
+
+        /// A window that opens while the camera glides (`ZOOM_FEEL` "smooth", the shipped
+        /// default) is kept in the view the camera stops at. It was kept in the view of that
+        /// moment and ended at screen (-3291, -2094), wholly off it.
+        #[test]
+        fn a_window_opening_during_a_glide_is_on_screen_when_the_camera_stops() {
+            let Desk { mut c, mut i } = desk(1.0, (0, 0));
+            c.set_zoom_feel(ZoomFeel::Smooth);
+            let a = put(&mut c, 1, 640, 480, (5000, 3000));
+            c.physical_input_vec(&mut i, PhysicalEvent::RecenterElement { element: a })
+                .unwrap();
+            let output = c.outputs.first().unwrap().id;
+            c.zoom_tick(output, std::time::Duration::from_millis(16));
+            assert_ne!(
+                c.cameras().center(0),
+                c.cameras().effective_value(0).map(|v| v.center),
+                "the camera is still on its way"
+            );
+            let (_, b) = open(&mut c, 2, 400, 300);
+            for k in 2..200 {
+                c.zoom_tick(output, std::time::Duration::from_millis(16 * k));
+            }
+            let s = on_screen(&c, b);
+            assert!(
+                wholly_on(s, 1920.0),
+                "B at screen {s:?} once the camera stopped"
+            );
+        }
+
+        /// The first window in a view opens in the middle of the usable view, wherever the
+        /// pointer rests (an edge, a corner) and wherever the camera is (zoomed out to 0.85 as
+        /// the overview leaves it, in to 1.5, far from the origin). The edge's 300 px strip on
+        /// the right is not usable. It used to open centred on the pointer, kept in the view.
+        #[test]
+        fn the_first_window_in_a_view_opens_in_its_middle() {
+            for zoom in [0.85, 1.0, 1.5] {
+                for at in [(0, 0), (23456, -17890), (-40000, 9000)] {
+                    for p in [(1919.0, 540.0), (0.0, 0.0), (1919.0, 1079.0), (960.0, 0.0)] {
+                        let Desk { mut c, .. } = desk(zoom, at);
+                        let output = c.outputs.first().unwrap().id;
+                        let edge = c.layer_created(Some(output)).unwrap();
+                        let state = LayerState {
+                            layer: Some(Layer::Top),
+                            anchors: Anchors {
+                                top: true,
+                                bottom: true,
+                                left: false,
+                                right: true,
+                            },
+                            size: (300, 0),
+                            margins: (0, 0, 0, 0),
+                            exclusive_zone: 300,
+                            keyboard: KeyboardInteractivity::None,
+                        };
+                        c.layer_committed(edge, state, win(90, 0, 0, false))
+                            .unwrap();
+                        c.layer_committed(edge, state, win(90, 300, 1080, true))
+                            .unwrap();
+                        assert_eq!(c.usable_area(output), Some((0.0, 0.0, 1620.0, 1080.0)));
+                        // a window far away on the Canvas is in no view of this screen
+                        put(&mut c, 1, 400, 300, (at.0 + 90_000, at.1));
+                        pointer_at(&mut c, p);
+                        let (_, r) = open(&mut c, 2, 640, 480);
+                        let s = on_screen(&c, r);
+                        let mid = ((s.0 + s.2) / 2.0, (s.1 + s.3) / 2.0);
+                        assert!(
+                            (mid.0 - 810.0).abs() <= 1.0 && (mid.1 - 540.0).abs() <= 1.0,
+                            "zoom {zoom} camera {at:?} pointer {p:?}: middle at {mid:?}"
+                        );
+                    }
+                }
+            }
+        }
+
+        /// The cluster nearest the pointer gets the window, on its side nearest the pointer.
+        /// Before, a window opened centred on the pointer when that spot was free, touching no
+        /// window (between the two clusters here).
+        #[test]
+        fn a_new_window_opens_beside_the_cluster_nearest_the_pointer() {
+            let Desk { mut c, .. } = desk(1.0, (0, 0));
+            put(&mut c, 1, 400, 300, (-900, -400));
+            put(&mut c, 2, 400, 300, (-900, -88));
+            let right = put(&mut c, 3, 400, 300, (500, -150));
+            let r = (500, -150, 900, 150);
+            // right of the middle, nearer the right window, left of it
+            pointer_at(&mut c, (1100.0, 560.0));
+            let (_, b) = open(&mut c, 4, 300, 200);
+            assert!(touching(b, r), "B {b:?} touches the right window {r:?}");
+            assert!(
+                b.2 <= r.0,
+                "B {b:?} on the right window's side facing the pointer"
+            );
+            assert!(wholly_on(on_screen(&c, b), 1920.0));
+            assert_eq!(
+                c.stage().anchor(right),
+                Some(CanvasPoint { x: 500, y: -150 })
+            );
+        }
+
+        /// The focused window's cluster gets the window when it shows on the screen, wherever
+        /// the pointer rests (on a panel, by a game).
+        #[test]
+        fn the_focused_windows_cluster_comes_first() {
+            let Desk { mut c, mut i } = desk(1.0, (0, 0));
+            let left = put(&mut c, 1, 400, 300, (-900, -150));
+            put(&mut c, 2, 400, 300, (500, -150));
+            c.set_focus(&mut i, Some(left)).unwrap();
+            pointer_at(&mut c, (1900.0, 540.0));
+            let (_, b) = open(&mut c, 3, 300, 200);
+            assert!(
+                touching(b, (-900, -150, -500, 150)),
+                "B {b:?} beside the focused window"
+            );
+        }
+
+        /// Among spots about as near, one in line with its neighbour wins: the pointer 20 px
+        /// below the window's middle row puts the new window level with its top edge.
+        #[test]
+        fn a_spot_in_line_with_a_neighbour_is_preferred() {
+            let Desk { mut c, .. } = desk(1.0, (0, 0));
+            put(&mut c, 1, 400, 300, (-600, -150));
+            // the new window centred on the pointer would start 20 px below A's top
+            pointer_at(&mut c, (960.0 + 300.0, 540.0 + 20.0));
+            let (_, b) = open(&mut c, 2, 400, 300);
+            assert_eq!(
+                (b.0, b.1),
+                (-600 + 412, -150),
+                "beside A, top edges in line"
+            );
+        }
+
+        /// With no free spot wholly on screen the window goes beyond the view, still touching
+        /// the cluster, on its side nearest the pointer; it covers nothing. The VM's five
+        /// 640 x 480 windows on a 1920 x 1080 screen: from the second on none fits beside the
+        /// first in the middle (640 + 12 + 640 px > 960 px to an edge; at most four such windows
+        /// fit on that screen whatever the order).
+        #[test]
+        fn with_no_room_on_screen_a_window_goes_beyond_the_view_beside_the_cluster() {
+            let Desk { mut c, .. } = desk(1.0, (0, 0));
+            let mut rects: Vec<(i64, i64, i64, i64)> = Vec::new();
+            for k in 0..5 {
+                pointer_at(&mut c, (1500.0, 540.0));
+                let (_, r) = open(&mut c, k + 1, 640, 480);
+                if k == 0 {
+                    assert!(
+                        wholly_on(on_screen(&c, r), 1920.0),
+                        "the first {r:?} on screen"
+                    );
+                    assert_eq!(r, (-320, -240, 320, 240), "in the middle");
+                } else {
+                    assert!(
+                        rects.iter().any(|&o| touching(r, o)),
+                        "window {k} {r:?} touches the cluster {rects:?}"
+                    );
+                }
+                assert!(
+                    rects.iter().all(|&o| apart(r, o)),
+                    "window {k} {r:?} covers none"
+                );
+                rects.push(r);
+            }
+            assert!(
+                rects[1].0 > rects[0].2,
+                "the second on the side nearest the pointer"
+            );
+        }
+
+        /// A new window takes only free Canvas: no window moves, whatever the windows around
+        /// it, the pointer or the view (owner, 2026-11-22: "I was already avoiding moving
+        /// existing windows").
+        #[test]
+        fn opening_a_window_moves_no_other_window() {
+            let Desk { mut c, mut i } = desk(0.85, (300, -200));
+            let spots = [
+                (-900, -400),
+                (-470, -400),
+                (-900, -60),
+                (600, 300),
+                (40_000, 0),
+                (-1200, 500),
+            ];
+            let mut ids = Vec::new();
+            for (k, &at) in spots.iter().enumerate() {
+                ids.push(put(&mut c, k as u64 + 1, 420, 330, at));
+            }
+            c.set_focus(&mut i, Some(ids[3])).unwrap();
+            let pointers = [(0.0, 0.0), (1919.0, 1079.0), (960.0, 540.0), (100.0, 900.0)];
+            for (n, size) in [
+                (500, 400),
+                (1200, 900),
+                (2400, 1400),
+                (300, 200),
+                (800, 700),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                pointer_at(&mut c, pointers[n % pointers.len()]);
+                let before: Vec<_> = ids.iter().map(|&e| c.stage().anchor(e)).collect();
+                let (id, r) = open(&mut c, 100 + n as u64, size.0, size.1);
+                let after: Vec<_> = ids.iter().map(|&e| c.stage().anchor(e)).collect();
+                assert_eq!(before, after, "opening a {size:?} window moved none");
+                for &e in &ids {
+                    let (a, t) = (c.stage().anchor(e).unwrap(), c.stage().tree(e).unwrap());
+                    let o = (
+                        a.x,
+                        a.y,
+                        a.x + i64::from(t.geometry.size.w),
+                        a.y + i64::from(t.geometry.size.h),
+                    );
+                    assert!(apart(r, o), "the {size:?} window {r:?} covers {o:?}");
+                }
+                ids.push(id);
+            }
+        }
     }
 }

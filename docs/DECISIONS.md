@@ -126,7 +126,9 @@ these by date, e.g. "(owner, 2026-10-24)".
 - **A dialog opens over its parent** whatever the placement policy (2026-10-24).
 - **An app's next window takes the place of the one that just closed** (2026-10-25: Steam's
   login window becoming the main window), if that place is still in view.
-- **Cluster placement by default**: a new window goes to the next free spot beside the others.
+- **Cluster placement by default**: a new window goes to the next free spot beside the others:
+  since 2026-11-22 beside the focused window's cluster or the one nearest the pointer, on screen
+  when there is room; the first window in a view in its middle. No window moves for it.
   With `CLUSTER_SORT` "app" (2026-11-21, off by default) beside its own app's window when one is
   in view.
 

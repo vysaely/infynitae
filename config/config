@@ -130,7 +130,8 @@ FOCUS_CYCLE_NAVIGATE="1"
 PLACEMENT_POLICY="cluster"
     # Where a new window goes
     # default: cluster
-    #   cluster    next free spot beside the others
+    #   cluster    beside the windows nearest the pointer, on screen; the first one in the
+    #              middle of the view
     #    center    the middle of the view
     #    origin    the canvas origin
 

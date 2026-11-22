@@ -1038,8 +1038,8 @@ mod tests {
     }
 
     /// CLUSTER_SORT "app": a new window of an app with a window in view opens right of it, the
-    /// gap kept, instead of at the view's centre; not when that window is out of view, and not
-    /// with the setting off.
+    /// gap kept, instead of beside the cluster nearest the view's middle; not when that window is
+    /// out of view, and not with the setting off.
     #[test]
     fn cluster_sort_app_opens_beside_the_apps_window() {
         let centre_spot = |sort: &str, far: bool| {
@@ -1054,12 +1054,13 @@ mod tests {
             d.c.toplevel_committed(id, win(3, 400, 300, true)).unwrap();
             anchor(&d.c, id)
         };
-        // the view's centre, as every window opens without the setting (the pointer is not on
-        // the screen)
-        assert_eq!(centre_spot("off", false), (-200, -150));
-        assert_eq!(centre_spot("tidy", false), (-200, -150));
+        // without the setting, beside the cluster nearest the view's middle (the pointer is not
+        // on the screen): foot's window, right of it at the middle's height
+        assert_eq!(centre_spot("off", false), (-900 + 412, -150));
+        assert_eq!(centre_spot("tidy", false), (-900 + 412, -150));
         assert_eq!(centre_spot("app", false), (-900 + 412, -400));
         assert_eq!(centre_spot("tidy app", false), (-900 + 412, -400));
-        assert_eq!(centre_spot("app", true), (-200, -150));
+        // foot's window out of view: beside the other one, left of it, bottom edges in line
+        assert_eq!(centre_spot("app", true), (600 - 412, 400 - 300));
     }
 }
