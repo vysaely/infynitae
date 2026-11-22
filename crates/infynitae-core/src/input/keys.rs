@@ -171,6 +171,9 @@ pub enum KeyAction {
     /// the focused window's cluster tidied, then in a grid, then in columns, at each press
     /// (`arrange`)
     ArrangeCluster,
+    /// Super+Shift+G (2026-11-22): the focused window's cluster by app, every window at its own
+    /// size, one row per app, as wide as it needs (`arrange`, `ClusterLayout::ByApp`)
+    ArrangeClusterByApp,
     /// A user command from the config (`EXEC_<NAME>="CHORD:command"`), by its index in the
     /// adapter's command list.
     Exec(u16),
@@ -397,6 +400,7 @@ pub const ACTION_NAMES: &[(&str, KeyAction)] = &[
     ("BACK", KeyAction::ViewportRestore),
     ("WINDOW_MENU", KeyAction::WindowMenu),
     ("CLUSTER_LAYOUT", KeyAction::ArrangeCluster),
+    ("CLUSTER_BY_APP", KeyAction::ArrangeClusterByApp),
 ];
 
 /// [`resolve_key_binding`] with the user's bindings first: a chord of theirs wins (also over a
@@ -545,8 +549,12 @@ pub fn resolve_key_binding(
     }
     // Super+G: the focused window's cluster arranged, the next layout at each press; exactly
     // Logo, never during interaction
-    if key == KEY_G && mods.logo && !mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
-        return Some(KeyAction::ArrangeCluster);
+    if key == KEY_G && mods.logo && !mods.ctrl && !mods.alt && !interaction_active {
+        return Some(if mods.shift {
+            KeyAction::ArrangeClusterByApp
+        } else {
+            KeyAction::ArrangeCluster
+        });
     }
     // Super+W: the app launcher; exactly Logo, never during interaction
     if key == KEY_W && mods.logo && !mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
@@ -1280,15 +1288,20 @@ mod tests {
             resolve_key_binding(KEY_G, mods(true, false, false, false), true),
             None
         );
+        assert_eq!(
+            resolve_key_binding(KEY_G, mods(true, false, false, true), false),
+            Some(KeyAction::ArrangeClusterByApp),
+            "Super+Shift+G: by app"
+        );
         for m in [
             mods(false, false, false, false),
-            mods(true, false, false, true),
             mods(true, true, false, false),
             mods(true, false, true, false),
         ] {
             assert_eq!(resolve_key_binding(KEY_G, m, false), None, "{m:?}");
         }
         assert!(ACTION_NAMES.contains(&("CLUSTER_LAYOUT", KeyAction::ArrangeCluster)));
+        assert!(ACTION_NAMES.contains(&("CLUSTER_BY_APP", KeyAction::ArrangeClusterByApp)));
     }
 
     /// The owner's keys of 2026-10-31 ("often used on the left hand, rare on the right"): Super+S

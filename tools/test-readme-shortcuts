@@ -51,6 +51,7 @@ ACTION_KEYWORDS = {
     "ToggleRecording": ["recording", "record"],
     "ReloadShell": ["reload"],
     "ArrangeCluster": ["arrange", "cluster"],
+    "ArrangeClusterByApp": ["by app"],
 }
 
 def resolve_key_binding(key, logo, shift, alt, ctrl):
@@ -76,8 +77,8 @@ def resolve_key_binding(key, logo, shift, alt, ctrl):
             return "FocusSlot"
         if logo and shift and not ctrl and not alt:
             return "FocusClusterSlot"
-    if key == "G" and logo and not shift and not ctrl and not alt:
-        return "ArrangeCluster"
+    if key == "G" and logo and not ctrl and not alt:
+        return "ArrangeClusterByApp" if shift else "ArrangeCluster"
     if key == "W" and logo and not shift and not ctrl and not alt:
         return "ToggleLauncher"
     if key == "L" and logo and not shift and not ctrl and not alt:

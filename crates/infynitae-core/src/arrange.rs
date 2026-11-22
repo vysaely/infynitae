@@ -27,6 +27,10 @@ pub enum ClusterLayout {
     Tidy,
     Grid,
     Columns,
+    /// Super+Shift+G (owner, 2026-11-22): every window at its own size, one row per app, rows as
+    /// wide as they need (not squeezed into one view: an app with a minimum size such as Discord
+    /// keeps it). Not in the Super+G cycle.
+    ByApp,
 }
 
 impl ClusterLayout {
@@ -36,6 +40,7 @@ impl ClusterLayout {
             "tidy" => Some(ClusterLayout::Tidy),
             "grid" => Some(ClusterLayout::Grid),
             "columns" => Some(ClusterLayout::Columns),
+            "app" | "by-app" => Some(ClusterLayout::ByApp),
             _ => None,
         }
     }
@@ -44,7 +49,7 @@ impl ClusterLayout {
         match self {
             ClusterLayout::Tidy => ClusterLayout::Grid,
             ClusterLayout::Grid => ClusterLayout::Columns,
-            ClusterLayout::Columns => ClusterLayout::Tidy,
+            ClusterLayout::Columns | ClusterLayout::ByApp => ClusterLayout::Tidy,
         }
     }
 }
@@ -111,6 +116,26 @@ pub(crate) fn tidy(sizes: &[(i64, i64)], origin: (i64, i64), width: i64) -> Vec<
         .iter()
         .map(|&(w, h)| {
             if x > origin.0 && x + w > origin.0 + width {
+                (x, y, row_h) = (origin.0, y + row_h + GAP, 0);
+            }
+            let cell = Cell { x, y, w, h };
+            x += w + GAP;
+            row_h = row_h.max(h);
+            cell
+        })
+        .collect()
+}
+
+/// By app: `sizes` in order at their own sizes, left to right from `origin`, a new row where
+/// `apps` changes; rows `GAP` apart, as high as their tallest window, as wide as they need.
+pub(crate) fn by_app(sizes: &[(i64, i64)], apps: &[&str], origin: (i64, i64)) -> Vec<Cell> {
+    let (mut x, mut y, mut row_h) = (origin.0, origin.1, 0);
+    sizes
+        .iter()
+        .zip(apps)
+        .enumerate()
+        .map(|(i, (&(w, h), app))| {
+            if i > 0 && apps[i - 1] != *app {
                 (x, y, row_h) = (origin.0, y + row_h + GAP, 0);
             }
             let cell = Cell { x, y, w, h };
@@ -238,7 +263,24 @@ impl Core {
         out: &mut Vec<Effect>,
     ) -> Option<(i64, i64, i64, i64)> {
         let (ids, rects): (Vec<ElementId>, Vec<Cell>) = self.arranged(members).into_iter().unzip();
-        let order = reading_order(&rects);
+        let mut order = reading_order(&rects);
+        // by app: each app's windows together, the apps in the order their first window reads
+        let app_of = |i: usize| -> String {
+            self.stage
+                .meta(ids[i])
+                .and_then(|m| m.app_id.clone())
+                .unwrap_or_default()
+        };
+        if layout == ClusterLayout::ByApp {
+            let mut firsts: Vec<String> = Vec::new();
+            for &i in &order {
+                let a = app_of(i);
+                if !firsts.contains(&a) {
+                    firsts.push(a);
+                }
+            }
+            order.sort_by_key(|&i| firsts.iter().position(|a| *a == app_of(i)));
+        }
         let origin = (
             rects.iter().map(|r| r.x).min()?,
             rects.iter().map(|r| r.y).min()?,
@@ -251,6 +293,12 @@ impl Core {
             }
             ClusterLayout::Grid => grid(ids.len(), origin, room),
             ClusterLayout::Columns => columns(ids.len(), origin, room),
+            ClusterLayout::ByApp => {
+                let sizes: Vec<_> = order.iter().map(|&i| (rects[i].w, rects[i].h)).collect();
+                let apps: Vec<String> = order.iter().map(|&i| app_of(i)).collect();
+                let apps: Vec<&str> = apps.iter().map(String::as_str).collect();
+                by_app(&sizes, &apps, origin)
+            }
         };
         let children: Vec<(ElementId, ElementId)> = self
             .stage
@@ -367,12 +415,43 @@ impl Core {
         Some(centred_in(*cell, (i64::from(size.w), i64::from(size.h))))
     }
 
-    /// `id` drew a frame under the configure that asked for `acked`: a layout's cell is done
-    /// with once its size was acknowledged, whatever size the app drew.
-    pub(crate) fn layout_answered(&mut self, id: ElementId, acked: Option<crate::geom::LocalSize>) {
-        self.layout_cells.retain(|(e, cell)| {
-            *e != id || acked.is_none_or(|s| (i64::from(s.w), i64::from(s.h)) != (cell.w, cell.h))
-        });
+    /// `id` drew a frame of `drawn` size under the configure that asked for `acked`: a layout's
+    /// cell is done with once its size was acknowledged, whatever size the app drew. A window
+    /// that kept a size bigger than its cell (an app's minimum, such as Discord's width) would
+    /// cover its neighbours: once the last window of the layout has answered, its cluster is
+    /// tidied at the sizes the windows took, so none covers another (owner, 2026-11-22).
+    pub(crate) fn layout_answered(
+        &mut self,
+        id: ElementId,
+        acked: Option<crate::geom::LocalSize>,
+        drawn: crate::geom::LocalSize,
+        out: &mut Vec<Effect>,
+    ) {
+        let Some(s) = acked else { return };
+        let Some(k) = self
+            .layout_cells
+            .iter()
+            .position(|(e, c)| *e == id && (i64::from(s.w), i64::from(s.h)) == (c.w, c.h))
+        else {
+            return;
+        };
+        let (_, cell) = self.layout_cells.remove(k);
+        if i64::from(drawn.w) > cell.w || i64::from(drawn.h) > cell.h {
+            self.layout_overflow = Some(id);
+        }
+        let Some(over) = self.layout_overflow else {
+            return;
+        };
+        if self.stage.mapped(over).is_none() {
+            self.layout_overflow = None;
+            return;
+        }
+        let cluster = self.cluster_for_element(over);
+        if self.layout_cells.iter().any(|(e, _)| cluster.contains(e)) {
+            return;
+        }
+        self.layout_overflow = None;
+        self.arrange(&cluster, ClusterLayout::Tidy, out);
     }
 
     /// `CLUSTER_SORT` "app": where a new window of an app goes when the app already has a window
@@ -582,6 +661,28 @@ mod tests {
 
     /// Columns: side by side, the full height, the width shared with the gap.
     #[test]
+    fn by_app_gives_each_app_a_row_at_own_sizes() {
+        let cells = by_app(
+            &[(900, 600), (900, 600), (1200, 800), (900, 600)],
+            &["game", "game", "chat", "chat"],
+            (0, 0),
+        );
+        assert_eq!(cells[0], cell(0, 0, 900, 600));
+        assert_eq!(cells[1], cell(912, 0, 900, 600), "same app: same row");
+        assert_eq!(
+            cells[2],
+            cell(0, 612, 1200, 800),
+            "another app: the next row"
+        );
+        assert_eq!(cells[3], cell(1212, 612, 900, 600));
+        // no width limit: ten windows stay in one row
+        let ten = by_app(&[(900, 600); 10], &["game"; 10], (0, 0));
+        assert!(ten.iter().all(|c| c.y == 0));
+        assert_eq!(ten[9].x, 9 * 912);
+        assert_eq!(ClusterLayout::parse("app"), Some(ClusterLayout::ByApp));
+    }
+
+    #[test]
     fn columns_share_the_width_at_full_height() {
         let cells = columns(3, (5, 6), (1896, 1032));
         assert_eq!(
@@ -682,6 +783,41 @@ mod tests {
         // B draws a frame of the old size before it acknowledged: still centred
         d.c.toplevel_committed(b, win(2, 400, 300, true)).unwrap();
         assert_eq!(anchor(&d.c, b), (954 + 271, 111));
+    }
+
+    /// Columns where one window keeps a bigger width than its cell (an app's minimum width):
+    /// once both have answered, the cluster is tidied at the sizes they took and nothing covers
+    /// anything (owner, 2026-11-22).
+    #[test]
+    fn a_window_bigger_than_its_cell_does_not_cover_its_neighbour() {
+        let mut d = desk();
+        let a = open(&mut d, 1, "a", (400, 300), (-500, -200));
+        let b = open(&mut d, 2, "chat", (400, 300), (0, -200));
+        let mut fx = Vec::new();
+        assert!(d.c.arrange_cluster(b, Some(ClusterLayout::Columns), None, &mut fx));
+        let (cw, ch) = asked(&fx, a).unwrap();
+        let cell_size = Some(LocalSize { w: cw, h: ch });
+        // A takes its cell; B acknowledges and stays wider than the cell
+        d.c.toplevel_committed(a, win(1, cw, ch, true)).unwrap();
+        d.c.toplevel_size_drawn(a, cell_size, LocalSize { w: cw, h: ch });
+        d.c.toplevel_committed(b, win(2, cw + 300, ch, true))
+            .unwrap();
+        assert!(
+            !all_apart(&[rect(&d.c, a), rect(&d.c, b)]),
+            "centred over its neighbour"
+        );
+        d.c.toplevel_size_drawn(b, cell_size, LocalSize { w: cw + 300, h: ch });
+        assert!(
+            all_apart(&[rect(&d.c, a), rect(&d.c, b)]),
+            "tidied: {:?} {:?}",
+            rect(&d.c, a),
+            rect(&d.c, b)
+        );
+        assert_eq!(
+            rect(&d.c, b).w,
+            i64::from(cw) + 300,
+            "nothing asked to shrink again"
+        );
     }
 
     /// Columns: two windows side by side, each half the room's width and its full height.
@@ -798,6 +934,32 @@ mod tests {
         d.c.shell_command(&mut d.s, cmd).unwrap();
         assert_eq!(anchor(&d.c, a), (-900, -500));
         assert_eq!(anchor(&d.c, b), (-900 + 412, -500));
+    }
+
+    /// Super+Shift+G (owner, 2026-11-22): sizes kept, nothing asked to resize, one row per app.
+    #[test]
+    fn by_app_keeps_sizes_and_groups_apps() {
+        let mut d = desk();
+        let a = open(&mut d, 1, "game", (900, 600), (-900, -500));
+        let b = open(&mut d, 2, "chat", (1200, 800), (-700, -450));
+        let c = open(&mut d, 3, "game", (900, 600), (-500, -400));
+        d.c.set_focus(&mut d.i, Some(b)).unwrap();
+        let mut fx = Vec::new();
+        assert!(d.c.arrange_cluster(b, Some(ClusterLayout::ByApp), None, &mut fx));
+        for e in [a, b, c] {
+            assert_eq!(asked(&fx, e), None, "no window is asked for another size");
+        }
+        assert_eq!(rect(&d.c, a), cell(-900, -500, 900, 600));
+        assert_eq!(
+            rect(&d.c, c),
+            cell(-900 + 912, -500, 900, 600),
+            "game beside game"
+        );
+        assert_eq!(
+            rect(&d.c, b),
+            cell(-900, -500 + 612, 1200, 800),
+            "chat on the next row"
+        );
     }
 
     /// Four windows in a row; B closes, then C is minimized: the others move only with
