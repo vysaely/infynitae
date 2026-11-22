@@ -535,6 +535,14 @@ pub struct Core {
     /// The window under the pointer at the last motion: hover moves the focus only when this
     /// changes, so a focus moved by keyboard stays until the pointer really goes somewhere.
     hover_seen: Option<stage::ElementId>,
+    /// The window the keyboard chose (Super+arrow, Super+Tab, Super+1..9, the window list, a
+    /// window opened after a key opened the launcher or an app), until the pointer next moves:
+    /// while it holds the focus, a window action by key acts on it wherever the pointer is
+    /// (owner, 2026-11-22: "the last used device has the priority over the window").
+    keyed_focus: Option<stage::ElementId>,
+    /// A key opened the launcher or started an app and the pointer has not moved since: the next
+    /// window to map is one the keyboard chose.
+    key_opened: bool,
     /// Whether focus cycling (Super+Tab) moves the camera to the focused window.
     pub focus_cycle_navigate: bool,
     /// Super+Enter action mode: Maximize (fill usable viewport) vs Fit (camera zoom).
@@ -676,6 +684,8 @@ impl Core {
                 focus_follows_mouse: false,
                 focus_follows_mouse_strict: false,
                 hover_seen: None,
+                keyed_focus: None,
+                key_opened: false,
                 focus_cycle_navigate: false,
                 enter_mode: EnterMode::default(),
                 presentation_suppressed: Vec::new(),

@@ -95,6 +95,9 @@ impl Core {
                     .panning()
                     .is_some()
                     .then(authority::Authorized::mint);
+                // the hand is on the mouse again: keyed window actions follow the pointer's rule
+                self.keyed_focus = None;
+                self.key_opened = false;
                 self.pointer_motion(proof, delta, delta_unaccel, time_us, out);
                 self.physical_input_activity = true;
                 Ok(())
@@ -935,6 +938,7 @@ impl Core {
                 }
                 // what is under the pointer now is not a crossing: the camera moved, not the hand
                 self.hover_seen = self.hovered_window();
+                self.keyed_focus = self.focus.target();
                 return;
             }
             // M22 cancel: no revert, owned buttons stay owned; the interaction terminates as at
@@ -1018,7 +1022,10 @@ impl Core {
                 return;
             }
             KeyAction::WindowMenu => {
-                if let Some(id) = self.hovered_window() {
+                if let Some(id) = self
+                    .hovered_window()
+                    .filter(|_| self.keyed_choice().is_none())
+                {
                     self.raise_and_focus(id, out);
                     if let PointerState::Located { p, .. } = self.pointer {
                         self.window_menu = Some((id, p));
@@ -1040,10 +1047,22 @@ impl Core {
                 .into_iter()
                 .collect(),
             KeyAction::ToggleWindowList => vec![Effect::ToggleWindowList],
-            KeyAction::ToggleLauncher => vec![Effect::ToggleLauncher],
-            KeyAction::SpawnTerminal => vec![Effect::SpawnTerminal],
-            KeyAction::SpawnFileManager => vec![Effect::SpawnFileManager],
-            KeyAction::SpawnSystemMonitor => vec![Effect::SpawnSystemMonitor],
+            KeyAction::ToggleLauncher => {
+                self.key_opened = true;
+                vec![Effect::ToggleLauncher]
+            }
+            KeyAction::SpawnTerminal => {
+                self.key_opened = true;
+                vec![Effect::SpawnTerminal]
+            }
+            KeyAction::SpawnFileManager => {
+                self.key_opened = true;
+                vec![Effect::SpawnFileManager]
+            }
+            KeyAction::SpawnSystemMonitor => {
+                self.key_opened = true;
+                vec![Effect::SpawnSystemMonitor]
+            }
             KeyAction::SpawnScreenshot => vec![Effect::SpawnScreenshot],
             KeyAction::SpawnRegionScreenshot => vec![Effect::SpawnRegionScreenshot],
             KeyAction::ToggleOverview => {
@@ -1485,6 +1504,7 @@ impl Core {
         }
         // what is under the pointer now is not a crossing: the camera moved, not the hand
         self.hover_seen = self.hovered_window();
+        self.keyed_focus = Some(element);
     }
 
     /// Raises `element` and gives it keyboard focus, as a user's pick of that window.
@@ -1519,6 +1539,7 @@ impl Core {
             return;
         };
         self.show_chosen(primary, out);
+        self.keyed_focus = Some(primary);
         let raised = self.raise_by_user(primary);
         out.extend(
             self.focus
@@ -2280,10 +2301,11 @@ impl Core {
 
     /// The window Super+Shift+C closes: the focused one; with strict focus only while it is under the
     /// pointer, so a key pressed over empty canvas closes nothing (focus can be stale there: the
-    /// canvas moved under a still pointer).
+    /// canvas moved under a still pointer), unless the keyboard chose it.
     fn close_target(&mut self) -> Option<crate::stage::ElementId> {
         let focused = self.focus.target()?;
-        if self.focus_follows_mouse
+        if self.keyed_choice().is_none()
+            && self.focus_follows_mouse
             && self.focus_follows_mouse_strict
             && matches!(self.pointer, PointerState::Located { .. })
             && self.hovered_window() != Some(focused)
@@ -2291,6 +2313,12 @@ impl Core {
             return None;
         }
         Some(focused)
+    }
+
+    /// The focused window, when the keyboard chose it and the pointer has not moved since.
+    fn keyed_choice(&self) -> Option<crate::stage::ElementId> {
+        self.keyed_focus
+            .filter(|&id| self.focus.target() == Some(id))
     }
 
     /// One motion of a pan (F-PAN-1): the camera moves by the accumulated delta; the pointer stays.
@@ -6033,6 +6061,13 @@ mod tests {
     /// Maps `n` 400x300 windows on `c` (output `a` connected) and returns them; `press` below
     /// is a key press or release with the modifiers the seat would report after it.
     fn map_windows(c: &mut Core, a: OutputId, n: u64) -> Vec<crate::stage::ElementId> {
+        let ws = (1..=n).map(|k| map_window(c, k)).collect();
+        c.render_list(a).unwrap();
+        ws
+    }
+
+    /// Maps one 400x300 window whose surface key is `k`.
+    fn map_window(c: &mut Core, k: u64) -> crate::stage::ElementId {
         use crate::geom::{LocalPoint, LocalRect, LocalSize};
         use crate::snapshot::{InputRegion, SnapshotSurface, SurfaceKey, SurfaceRole, SurfaceTree};
         use std::num::NonZeroU64;
@@ -6054,16 +6089,10 @@ mod tests {
                 frame_requested: false,
             }],
         };
-        let ws = (1..=n)
-            .map(|k| {
-                let w = c.toplevel_created();
-                c.toplevel_committed(w, win(k, false)).unwrap();
-                c.toplevel_committed(w, win(k, true)).unwrap();
-                w
-            })
-            .collect();
-        c.render_list(a).unwrap();
-        ws
+        let w = c.toplevel_created();
+        c.toplevel_committed(w, win(k, false)).unwrap();
+        c.toplevel_committed(w, win(k, true)).unwrap();
+        w
     }
 
     fn press(c: &mut Core, i: &mut crate::InputPort, key: u32, pressed: bool, logo: bool) {
@@ -6788,6 +6817,204 @@ mod tests {
         assert_eq!(c.focus().target(), Some(ws[1]), "nothing that way: no move");
         arrow(&mut c, &mut i, KEY_LEFT);
         assert_eq!(c.focus().target(), Some(ws[0]));
+    }
+
+    /// Keyboard only with strict focus (owner, 2026-11-22: "the last used device has the priority
+    /// over the window"): three windows apart, the pointer still over empty canvas in the top left
+    /// corner, ws[0] focused.
+    fn keyboard_only_strict(
+        c: &mut Core,
+        i: &mut crate::InputPort,
+        t: &mut crate::OutputLifecycleToken,
+    ) -> (OutputId, Vec<crate::stage::ElementId>) {
+        let (a, _) = c.output_connected(t, desc("A")).unwrap();
+        c.set_focus_follows_mouse(true);
+        c.set_focus_follows_mouse_strict(true);
+        let ws = map_windows(c, a, 3);
+        let mut fx = Vec::new();
+        c.place_by_user(ws[1], crate::geom::CanvasPoint { x: 6000, y: 0 }, &mut fx)
+            .unwrap();
+        c.place_by_user(ws[2], crate::geom::CanvasPoint { x: -6000, y: 0 }, &mut fx)
+            .unwrap();
+        c.place_by_user(ws[0], crate::geom::CanvasPoint { x: 0, y: 0 }, &mut fx)
+            .unwrap();
+        c.set_focus(i, Some(ws[0])).unwrap();
+        c.pointer = PointerState::Located {
+            output: a,
+            p: (10.0, 10.0),
+        };
+        c.render_list(a).unwrap();
+        c.hover_seen = c.hovered_window();
+        assert_eq!(c.hover_seen, None, "the pointer is over empty canvas");
+        (a, ws)
+    }
+
+    /// Super+`key` (with Shift if `shift`), through the physical key path; the frame is drawn
+    /// after it, as the next output frame would.
+    fn super_chord(
+        c: &mut Core,
+        i: &mut crate::InputPort,
+        a: OutputId,
+        key: u32,
+        shift: bool,
+    ) -> Vec<Effect> {
+        use crate::input::keys::{KEY_LEFTMETA, KEY_LEFTSHIFT};
+        let mut ev = |c: &mut Core, key: u32, pressed: bool, logo: bool, shift: bool| {
+            c.physical_input_vec(
+                i,
+                crate::PhysicalEvent::KeyboardKey {
+                    key,
+                    pressed,
+                    modifiers: Modifiers {
+                        logo,
+                        shift,
+                        ..Modifiers::default()
+                    },
+                    mods_changed: key == KEY_LEFTMETA || key == KEY_LEFTSHIFT,
+                    time_us: 1000,
+                },
+            )
+            .unwrap()
+        };
+        ev(c, KEY_LEFTMETA, true, true, false);
+        if shift {
+            ev(c, KEY_LEFTSHIFT, true, true, true);
+        }
+        let fx = ev(c, key, true, true, shift);
+        ev(c, key, false, true, shift);
+        if shift {
+            ev(c, KEY_LEFTSHIFT, false, true, false);
+        }
+        ev(c, KEY_LEFTMETA, false, false, false);
+        c.render_list(a).unwrap();
+        fx
+    }
+
+    /// Super+arrow with the pointer left over empty canvas: Super+Shift+C and Super+Shift+Delete
+    /// act on the window the keyboard went to. A mouse motion gives the pointer the priority
+    /// again: over empty canvas they act on nothing, as before.
+    #[test]
+    fn a_window_chosen_by_key_is_closed_by_key_with_strict_focus() {
+        use crate::input::keys::{KEY_C, KEY_DELETE, KEY_RIGHT};
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let (a, ws) = keyboard_only_strict(&mut c, &mut i, &mut t);
+
+        super_chord(&mut c, &mut i, a, KEY_RIGHT, false);
+        assert_eq!(c.focus().target(), Some(ws[1]));
+        assert_eq!(
+            c.hovered_window(),
+            None,
+            "the pointer is still over empty canvas"
+        );
+        let fx = super_chord(&mut c, &mut i, a, KEY_C, true);
+        assert!(fx.contains(&Effect::CloseRequest(ws[1])), "{fx:?}");
+        let fx = super_chord(&mut c, &mut i, a, KEY_DELETE, true);
+        assert!(fx.contains(&Effect::ForceClose(ws[1])), "{fx:?}");
+
+        mouse_move(&mut c, &mut i, (1.0, 1.0));
+        c.render_list(a).unwrap();
+        assert_eq!(
+            c.focus().target(),
+            Some(ws[1]),
+            "no crossing: the focus stays"
+        );
+        let fx = super_chord(&mut c, &mut i, a, KEY_C, true);
+        assert!(
+            !fx.iter().any(|e| matches!(e, Effect::CloseRequest(_))),
+            "after a mouse motion over empty canvas nothing closes: {fx:?}"
+        );
+        let fx = super_chord(&mut c, &mut i, a, KEY_DELETE, true);
+        assert!(
+            !fx.iter().any(|e| matches!(e, Effect::ForceClose(_))),
+            "{fx:?}"
+        );
+    }
+
+    /// Super+Tab and Super+1..9 choose by key as Super+arrow does.
+    #[test]
+    fn super_tab_and_super_slot_choose_the_close_target_by_key() {
+        use crate::input::keys::{KEY_1, KEY_C};
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let (a, ws) = keyboard_only_strict(&mut c, &mut i, &mut t);
+        c.set_focus_cycle_navigate(true);
+        c.set_focus(&mut i, Some(ws[1])).unwrap();
+        c.set_focus(&mut i, Some(ws[0])).unwrap();
+
+        super_tab(&mut c, &mut i);
+        c.render_list(a).unwrap();
+        assert_eq!(c.focus().target(), Some(ws[1]));
+        assert_eq!(c.hovered_window(), None);
+        let fx = super_chord(&mut c, &mut i, a, KEY_C, true);
+        assert!(
+            fx.contains(&Effect::CloseRequest(ws[1])),
+            "Super+Tab: {fx:?}"
+        );
+
+        super_chord(&mut c, &mut i, a, KEY_1, false);
+        assert_eq!(c.focus().target(), Some(ws[0]));
+        assert_eq!(c.hovered_window(), None);
+        let fx = super_chord(&mut c, &mut i, a, KEY_C, true);
+        assert!(fx.contains(&Effect::CloseRequest(ws[0])), "Super+1: {fx:?}");
+    }
+
+    /// The window menu by key shows for the window the keyboard chose, not for one the camera
+    /// brought under the still pointer; after a mouse motion it is the hovered window again.
+    #[test]
+    fn the_window_menu_by_key_follows_the_keyboard_choice() {
+        use crate::input::keys::KEY_3;
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let (a, ws) = keyboard_only_strict(&mut c, &mut i, &mut t);
+        // ws[1] just right of ws[2]: centred on ws[2], the camera brings ws[1] under the pointer
+        let mut fx = Vec::new();
+        c.place_by_user(ws[1], crate::geom::CanvasPoint { x: -5400, y: 0 }, &mut fx)
+            .unwrap();
+        let (w, h) = c.output(a).unwrap().logical_extent();
+        c.pointer = PointerState::Located {
+            output: a,
+            p: (w / 2.0 + 500.0, h / 2.0),
+        };
+        c.render_list(a).unwrap();
+        c.hover_seen = c.hovered_window();
+
+        super_chord(&mut c, &mut i, a, KEY_3, false);
+        assert_eq!(c.focus().target(), Some(ws[2]));
+        assert_eq!(
+            c.hovered_window(),
+            Some(ws[1]),
+            "the camera moved, not the hand"
+        );
+        c.apply_key_action(crate::input::keys::KeyAction::WindowMenu, None, &mut fx);
+        assert_eq!(c.window_menu().map(|(id, _)| id), Some(ws[2]));
+        assert_eq!(
+            c.focus().target(),
+            Some(ws[2]),
+            "the focus stays where the keys put it"
+        );
+
+        mouse_move(&mut c, &mut i, (1.0, 1.0));
+        c.render_list(a).unwrap();
+        c.apply_key_action(crate::input::keys::KeyAction::WindowMenu, None, &mut fx);
+        assert_eq!(c.window_menu().map(|(id, _)| id), Some(ws[1]));
+    }
+
+    /// A window opened after the launcher was opened by key (Super+W, then Enter in it) is chosen
+    /// by key: Super+Shift+C closes it with the pointer still over empty canvas.
+    #[test]
+    fn a_window_opened_from_the_launcher_by_key_is_closed_by_key() {
+        use crate::input::keys::{KEY_C, KEY_W};
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let (a, _) = keyboard_only_strict(&mut c, &mut i, &mut t);
+        let fx = super_chord(&mut c, &mut i, a, KEY_W, false);
+        assert!(fx.contains(&Effect::ToggleLauncher), "{fx:?}");
+        let opened = map_window(&mut c, 4);
+        let mut fx = Vec::new();
+        c.place_by_user(opened, crate::geom::CanvasPoint { x: 600, y: 600 }, &mut fx)
+            .unwrap();
+        c.set_focus(&mut i, Some(opened)).unwrap();
+        c.render_list(a).unwrap();
+        assert_eq!(c.hovered_window(), None);
+        let fx = super_chord(&mut c, &mut i, a, KEY_C, true);
+        assert!(fx.contains(&Effect::CloseRequest(opened)), "{fx:?}");
     }
 
     /// Attention first (owner, 2026-10-31): a window that opened without the focus is where
