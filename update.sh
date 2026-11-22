@@ -111,7 +111,8 @@ JOBS=$(build_jobs)
 echo "==> Building ($JOBS jobs)..."
 cargo build --release -p infynitae -j "$JOBS"
 
-# 5. the programs, into ~/.local/bin (a running compositor keeps its old file until it restarts)
+# 5. the programs, into ~/.local/bin (a running compositor keeps its old file until it restarts;
+#    the compositor's file is replaced only when it changed: COMPOSITOR_CHANGED)
 install_programs "$REPO_DIR"
 
 # 6. the session scripts, when this source is not ~/infynitae itself
@@ -132,8 +133,11 @@ if pgrep -x infynitae >/dev/null 2>&1; then
     echo "==> Restarting the helpers (windows stay open)..."
     "$HOME/.local/bin/infynitae-reload" settings wallpaper edge portal polkit || true
     echo "    The replay recorder keeps running; infynitae-reload recorder restarts it (clears its buffer)."
-    "$HOME/.local/bin/infynitae-reload" status | tail -1
 fi
 
 echo ""
-echo "==> Infynitae is up to date. A new compositor runs from its next start (Ctrl+Alt+Backspace)."
+if [ "$COMPOSITOR_CHANGED" = false ]; then
+    echo "==> Infynitae is up to date. The compositor did not change: nothing needs a restart."
+else
+    echo "==> Infynitae is up to date. The new compositor runs from the next login or reboot."
+fi

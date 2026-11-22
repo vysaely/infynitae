@@ -258,7 +258,14 @@ install_programs() {
     put() {
         install -m 755 "$1" "$2.new" && mv -f "$2.new" "$2" || warn "Could not install $2"
     }
-    put "$src/${CARGO_TARGET_DIR:-target}/release/infynitae" "$bin/infynitae"
+    # the compositor only when its content changed: a running one then still runs the installed
+    # file, and COMPOSITOR_CHANGED tells infynitae-update whether a new start brings anything
+    if cmp -s "$src/${CARGO_TARGET_DIR:-target}/release/infynitae" "$bin/infynitae"; then
+        COMPOSITOR_CHANGED=false
+    else
+        COMPOSITOR_CHANGED=true
+        put "$src/${CARGO_TARGET_DIR:-target}/release/infynitae" "$bin/infynitae"
+    fi
     while read -r from to; do
         [ -n "$from" ] && put "$src/$from" "$bin/$to"
     done <<'LIST'

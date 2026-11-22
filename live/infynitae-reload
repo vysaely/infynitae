@@ -418,7 +418,7 @@ status() {
     # the compositor's file on disk was replaced since it started: a restart picks up the update
     exe=$(readlink "/proc/$(pgrep -u "$(id -u)" -x infynitae | head -1)/exe" 2>/dev/null)
     case "$exe" in
-        *" (deleted)") echo "compositor: an updated binary is installed; Ctrl+Alt+Backspace loads it" ;;
+        *" (deleted)") echo "compositor: an updated binary is installed; it runs from the next login or reboot" ;;
         *) echo "compositor: running the installed binary" ;;
     esac
 }
