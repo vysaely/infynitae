@@ -117,6 +117,11 @@ these by date, e.g. "(owner, 2026-10-24)".
   "strict"`, the owner's choice: "strict is really nice"): leaving a game for the canvas lets go
   of its keyboard and cursor at once. `sloppy` keeps the focus over empty canvas, `click` only
   changes it on a click.
+- **A window chosen by key takes the window keys until the mouse moves** (2026-11-22, owner: "the
+  last used device has the priority over the window"): after Super+arrow, Super+Tab, Super+1..9,
+  the window list or a window opened after the launcher was opened by key, Super+Shift+C, force
+  close and the window menu by key act on that window wherever the pointer is. A mouse motion
+  gives back today's rule: with strict focus, nothing over empty canvas.
 - **Only windows you opened take focus and move the camera** (2026-10-24, `FOCUS_ON_OPEN` /
   `TELEPORT_ON_OPEN="user"`): windows from your shortcuts, your launcher or a command in the
   focused terminal; a popup an app opens by itself appears quietly.

@@ -1711,6 +1711,10 @@ impl Core {
                 self.stage.set_state(id, Lifecycle::Mapped).map_err(stale)?;
                 self.stage.raise(id);
                 self.opening = Some((id, self.focus.target()));
+                if self.key_opened {
+                    self.key_opened = false;
+                    self.keyed_focus = Some(id);
+                }
                 // a grant made before this map takes its output now (A-3)
                 out.extend(self.take_output(id));
             }
