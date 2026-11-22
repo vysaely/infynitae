@@ -132,3 +132,67 @@ if [ -n "$leftover_temps" ]; then
 fi
 
 echo "ok Finding 26: reload_screenshare uses safe temp file with cleanup trap"
+
+# ---- The reload parts for settings once read only at start: battery-limit (the real
+# live/battery-limit on a battery folder of the test's own), autorotate, and portal (systemctl is a
+# stand-in: xdg-desktop-portal is restarted only when a routing file is newer than its start)
+parts="$tmp/parts"
+mkdir -p "$parts/bin" "$parts/ps/BAT0" "$parts/home/.config/xdg-desktop-portal" \
+    "$parts/home/.local/share/xdg-desktop-portal/portals"
+for f in first spawn stop_helper reload_battery_limit reload_autorotate reload_portal; do
+    sed -n "/^$f() {/,/^}/p" "$here/live/infynitae-reload" > "$parts/fn_$f"
+done
+(
+    LIVE="$here/live" BIN_DIR="$parts/none" LOG="$parts/helpers.log" HOME="$parts/home"
+    export INFYNITAE_POWER_SUPPLY="$parts/ps" PATH="$parts/bin:$PATH"
+    . "$parts/fn_first"
+    . "$parts/fn_reload_battery_limit"
+    . "$parts/fn_reload_autorotate"
+    . "$parts/fn_reload_portal"
+    # the helpers are not started here: what would be is written down
+    spawn() { echo "spawn ${1##*/}" >> "$parts/calls"; }
+    stop_helper() { echo "stop $1" >> "$parts/calls"; }
+    fail() { echo "FAIL $*"; exit 1; }
+
+    echo 100 > "$parts/ps/BAT0/charge_control_end_threshold"
+    BATTERY_LIMIT=80
+    [ "$(reload_battery_limit)" = "battery-limit: set to 80" ] || fail "battery-limit: 80 not set"
+    [ "$(cat "$parts/ps/BAT0/charge_control_end_threshold")" = 80 ] || fail "battery-limit: threshold not 80"
+    [ "$(reload_battery_limit)" = "battery-limit: 80" ] || fail "battery-limit: set again"
+    BATTERY_LIMIT=off
+    [ "$(reload_battery_limit)" = "battery-limit: set to off" ] || fail "battery-limit: off not set"
+    [ "$(cat "$parts/ps/BAT0/charge_control_end_threshold")" = 100 ] || fail "battery-limit: threshold not 100"
+    rm "$parts/ps/BAT0/charge_control_end_threshold"
+    [ "$(reload_battery_limit)" = "battery-limit: this machine has none" ] || fail "battery-limit: no support"
+
+    printf '#!/bin/sh\n' > "$parts/bin/monitor-sensor"
+    chmod +x "$parts/bin/monitor-sensor"
+    : > "$parts/calls"
+    AUTO_ROTATE=auto
+    [ "$(reload_autorotate)" = "autorotate: restarted" ] || fail "autorotate: not restarted"
+    AUTO_ROTATE=false
+    [ "$(reload_autorotate)" = "autorotate: stopped (AUTO_ROTATE is off)" ] || fail "autorotate: not stopped"
+    [ "$(cat "$parts/calls")" = "stop autorotate
+spawn autorotate
+stop autorotate" ] || fail "autorotate: calls were $(cat "$parts/calls")"
+
+    # systemctl: xdg-desktop-portal active since second 2000 (a program; the function an earlier
+    # check defined would hide it)
+    unset -f systemctl
+    printf '#!/bin/sh\ncase "$*" in\n  *show*) echo @2000 ;;\n  *is-active*) exit 0 ;;\n  *restart*) echo restart >> "%s" ;;\nesac\n' \
+        "$parts/systemctl.log" > "$parts/bin/systemctl"
+    chmod +x "$parts/bin/systemctl"
+    conf="$HOME/.config/xdg-desktop-portal/infynitae-portals.conf"
+    pfile="$HOME/.local/share/xdg-desktop-portal/portals/infynitae.portal"
+    : > "$conf"
+    : > "$pfile"
+    touch -d @1000 "$conf" "$pfile"
+    reload_portal > "$parts/out"
+    [ ! -f "$parts/systemctl.log" ] || fail "portal: restarted with files older than its start"
+    touch -d @3000 "$conf"
+    reload_portal > "$parts/out"
+    [ "$(cat "$parts/systemctl.log")" = restart ] || fail "portal: not restarted after a routing change"
+    grep -qx "portal: xdg-desktop-portal restarted (its backends changed)" "$parts/out" \
+        || fail "portal: said $(cat "$parts/out")"
+) || exit 1
+echo "ok reload parts: battery-limit, autorotate, and portal on a routing change"

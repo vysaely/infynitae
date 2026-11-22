@@ -479,12 +479,12 @@ OSK="auto"
 
 BATTERY_LIMIT="off"
     # The battery stops charging at this % (it wears more slowly). Laptops that support it;
-    # also in the control menu (Super+A), where a change applies at once [restart]
+    # also in the control menu (Super+A), where a change applies at once [reload]
     # default: off
     #   off    to full  · e.g. "80"
 
 AUTO_ROTATE="auto"
-    # Turn the laptop's own screen with the device (convertibles; needs iio-sensor-proxy) [restart]
+    # Turn the laptop's own screen with the device (convertibles; needs iio-sensor-proxy) [reload]
     # default: auto
     # options: auto  · false
     #AUTO_ROTATE_INVERT="true"   swaps 90 and 270, for a sensor mounted the other way round
@@ -501,7 +501,8 @@ OUTPUT_LAYOUT="left-to-right"
     # default: left-to-right
     # options: left-to-right  · right-to-left
 
-# Per screen (its name, '-' written as '_'), e.g. for DP-1; _SCALE on save, the others [restart]:
+# Per screen (its name, '-' written as '_'), e.g. for DP-1 [save]; a removed _TRANSFORM line
+# leaves the screen turned as it is until the next start:
 #   OUTPUT_DP_1_MODE="2560x1440"  OUTPUT_DP_1_RATE="144"  OUTPUT_DP_1_SCALE="1.25"
 #   OUTPUT_DP_1_TRANSFORM="90"    a turned screen: normal, 90, 180, 270 (counter-clockwise),
 #                                 flipped, flipped-90, flipped-180, flipped-270. While running:
@@ -827,7 +828,7 @@ ALLOW_LOCK=""
 
 REMOTE_DESKTOP="false"
     # Remote desktop apps (AnyDesk, GNOME's clients) get the screen and, once you allow it,
-    # the keyboard and mouse (the RemoteDesktop portal). RustDesk uses it too when on [restart]
+    # the keyboard and mouse (the RemoteDesktop portal). RustDesk uses it too when on [reload]
     # default: false
     # options: false  · true
 

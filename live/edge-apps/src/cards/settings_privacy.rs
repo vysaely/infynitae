@@ -84,7 +84,7 @@ pub const TABLE: &[Setting] = &[
         name: "Remote desktop",
         says: "",
         control: ON_OFF,
-        after: After::Restart,
+        after: After::Reload("portal"),
         more: true,
         needs: &[],
     },

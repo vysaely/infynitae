@@ -860,7 +860,7 @@ fn mode_change_command(
     let qo = sq(output);
     let qnew = sq(new_mode);
     let qold = sq(old_mode);
-    let write = change_command(key, old_cfg, new_cfg, After::Restart);
+    let write = change_command(key, old_cfg, new_cfg, After::Save);
     format!(
         "wlr-randr --output {qo} --mode {qnew} >/dev/null 2>&1 || exit 1; \
          {}; \
@@ -879,7 +879,7 @@ fn wlr_and_write_command(
     old_cfg: Option<&str>,
     new_cfg: &str,
 ) -> String {
-    let write = change_command(key, old_cfg, new_cfg, After::Restart);
+    let write = change_command(key, old_cfg, new_cfg, After::Save);
     format!(
         "wlr-randr --output {} {flag} {} >/dev/null 2>&1 && {{ {write}; }}",
         sq(output),
@@ -2518,7 +2518,7 @@ mod tests {
             "OUTPUT_DP_1_SCALE",
             None,
             "1.25",
-            After::Restart
+            After::Save
         )));
         assert!(!card.restarted.contains("OUTPUT_DP_1_SCALE"));
 
