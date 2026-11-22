@@ -53,17 +53,22 @@ fn index(signal: i32) -> Option<usize> {
     }
 }
 
-/// The signal handler: one byte to every registered write end, nothing else. It touches only
-/// atomics and `send`, both async-signal-safe, and preserves `errno` for the interrupted code.
-#[allow(unsafe_code)]
+/// The signal handler: [`notify`] for the signal, nothing else.
 extern "C" fn on_signal(signal: libc::c_int) {
     let Some(i) = index(signal) else { return };
+    notify(&WRITE_ENDS[i]);
+}
+
+/// One byte to every write end in `slots`, nothing else: the signal handler's work. It touches
+/// only atomics and `send`, both async-signal-safe, and preserves `errno` for the interrupted code.
+#[allow(unsafe_code)]
+fn notify(slots: &[AtomicI32; SLOTS]) {
     // SAFETY: `__errno_location` returns this thread's errno; `send` is async-signal-safe and is
     // given a one-byte buffer that lives for the call. A descriptor is never closed after it was
     // registered (module doc), so `fd` is an open socket of this process or −1 (skipped).
     unsafe {
         let errno = *libc::__errno_location();
-        for slot in &WRITE_ENDS[i] {
+        for slot in slots {
             let fd = slot.load(Ordering::SeqCst);
             if fd >= 0 {
                 let byte = 0u8;
@@ -105,14 +110,24 @@ fn install(signal: i32, i: usize) -> io::Result<()> {
 
 /// One stream notified on a signal; dropping it ends the notification.
 pub(crate) struct Registration {
-    signal: usize,
-    slot: usize,
+    slot: &'static AtomicI32,
 }
 
 impl Drop for Registration {
     fn drop(&mut self) {
-        WRITE_ENDS[self.signal][self.slot].store(-1, Ordering::SeqCst);
+        self.slot.store(-1, Ordering::SeqCst);
     }
+}
+
+/// Puts `fd` in a free slot of `slots`; `None` if all are taken.
+fn claim(slots: &'static [AtomicI32; SLOTS], fd: i32) -> Option<Registration> {
+    slots
+        .iter()
+        .find(|s| {
+            s.compare_exchange(-1, fd, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+        })
+        .map(|slot| Registration { slot })
 }
 
 /// From now on `signal` writes one byte to `notify` (the write end of a stream whose other end
@@ -120,25 +135,16 @@ impl Drop for Registration {
 pub(crate) fn register(signal: i32, notify: UnixStream) -> io::Result<Registration> {
     let i = index(signal).ok_or_else(|| io::Error::other(format!("signal {signal} not served")))?;
     notify.set_nonblocking(true)?;
-    let fd = notify.as_raw_fd();
-    let slot = WRITE_ENDS[i]
-        .iter()
-        .position(|s| {
-            s.compare_exchange(-1, fd, Ordering::SeqCst, Ordering::SeqCst)
-                .is_ok()
-        })
-        .ok_or_else(|| {
-            io::Error::other(format!(
-                "more than {SLOTS} registrations of signal {signal}"
-            ))
-        })?;
-    if let Err(e) = install(signal, i) {
-        WRITE_ENDS[i][slot].store(-1, Ordering::SeqCst);
-        return Err(e);
-    }
+    let registration = claim(&WRITE_ENDS[i], notify.as_raw_fd()).ok_or_else(|| {
+        io::Error::other(format!(
+            "more than {SLOTS} registrations of signal {signal}"
+        ))
+    })?;
+    // on an error the registration is dropped (its slot freed) before `notify` is closed
+    install(signal, i)?;
     // never closed (module doc): the descriptor stays this process's for its lifetime
     let _ = notify.into_raw_fd();
-    Ok(Registration { signal: i, slot })
+    Ok(registration)
 }
 
 #[cfg(test)]
@@ -146,20 +152,24 @@ mod tests {
     use super::*;
     use std::io::Read;
 
+    /// On slots of its own: with the process's SIGCHLD slots, every child that exits in this test
+    /// process (other tests spawn many) wrote a second byte, about once in 200 runs; a call to
+    /// `on_signal` for SIGTERM or SIGINT would end every session other tests run meanwhile.
     #[test]
     fn a_signal_writes_one_byte_to_every_registered_stream_and_none_after_the_registration_ends() {
+        static SLOTS_OF_THIS_TEST: [AtomicI32; SLOTS] = empty();
         let (mut a, a_notify) = UnixStream::pair().unwrap();
         let (mut b, b_notify) = UnixStream::pair().unwrap();
         a.set_nonblocking(true).unwrap();
         b.set_nonblocking(true).unwrap();
-        let ra = register(SIGCHLD, a_notify).unwrap();
-        let rb = register(SIGCHLD, b_notify).unwrap();
-        on_signal(SIGCHLD);
+        let ra = claim(&SLOTS_OF_THIS_TEST, a_notify.as_raw_fd()).unwrap();
+        let rb = claim(&SLOTS_OF_THIS_TEST, b_notify.as_raw_fd()).unwrap();
+        notify(&SLOTS_OF_THIS_TEST);
         let mut buf = [0u8; 8];
         assert_eq!(a.read(&mut buf).unwrap(), 1);
         assert_eq!(b.read(&mut buf).unwrap(), 1);
         drop(ra);
-        on_signal(SIGCHLD);
+        notify(&SLOTS_OF_THIS_TEST);
         assert!(
             a.read(&mut buf).is_err(),
             "an ended registration is not notified"

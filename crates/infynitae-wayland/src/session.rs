@@ -925,6 +925,20 @@ mod tests {
 
     use smithay::reexports::calloop::EventLoop;
 
+    /// Held by the tests whose sessions reap children no one registered: ending a session with
+    /// children ends and reaps every such child of the process (`ownership::end_session_tree`), so
+    /// it took the orphan of `an_adopted_orphan_is_reaped_without_exec_command` before that
+    /// test's own session could, about once in 300 runs of the three together. The compositor
+    /// hosts one session per process.
+    static UNOWNED_CHILDREN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn unowned_children() -> std::sync::MutexGuard<'static, ()> {
+        // a test that failed holding it has reported its failure already
+        UNOWNED_CHILDREN
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     /// A session with no client and no child: after its first frame it has no deadline, so its
     /// loop sleeps until an event; with a duration limit the only deadline is that limit.
     #[test]
@@ -1036,6 +1050,7 @@ mod tests {
     /// `Session::new`) still ends the client it started: none outlives the session (2026-10-20).
     #[test]
     fn a_session_dropped_without_shutdown_ends_its_client() {
+        let _unowned = unowned_children();
         let display: Display<WaylandState> = Display::new().unwrap();
         let event_loop: EventLoop<()> = EventLoop::try_new().unwrap();
         let options = SessionOptions {
@@ -1178,6 +1193,7 @@ mod tests {
     /// environment may well have one).
     #[test]
     fn a_session_client_gets_the_sessions_x_display_or_none() {
+        let _unowned = unowned_children();
         for (n, x_display) in [None, Some(":42".to_string())].into_iter().enumerate() {
             let dir = std::env::temp_dir().join(format!(
                 "infynitae-session-display-{}-{n}",
@@ -1321,6 +1337,7 @@ mod tests {
 
     #[test]
     fn an_adopted_orphan_is_reaped_without_exec_command() {
+        let _unowned = unowned_children();
         let (mut session, mut state, mut event_loop) = session("orphan", None);
         // as a shortcut does: the compositor started a process of its own
         state.spawned_children = true;
