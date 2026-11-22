@@ -1,6 +1,6 @@
 # The edge in Rust (2026-11-09)
 
-State 2026-11-13: `live/edge-rs` stays the default (`EDGE_IMPL="rust"`, `live/edge-pick`) and is frozen while `live/edge-apps` (`docs/EDGE_APPS.md`) replaces it; the C edge stays as `EDGE_IMPL="c"` until the owner says so (stage 6).
+State 2026-11-22: `live/edge-apps` (`docs/EDGE_APPS.md`) is the default (`EDGE_IMPL="apps"`, `live/edge-pick`) and draws the desktop's widgets too; `live/edge-rs` is frozen and still picked by `EDGE_IMPL="rust"` (the only edge that arranges widgets in place); the C edge stays as `EDGE_IMPL="c"` until the owner says so (stage 6).
 
 The owner asked for the edge (`live/edge/infynitae-edge.c`, about 6,100 lines of C) to be rewritten in Rust
 with the new module design, the old one removed after, keeping what makes it ours: panels of modules

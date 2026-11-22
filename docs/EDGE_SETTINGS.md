@@ -44,7 +44,8 @@ Not cards, and why:
   playback levels (shown only while streams play). The config has no sound key.
 - **Keys** (`BIND_*`, `EXEC_*`, `GLOBAL_SHORTCUTS`). Changing a key needs the edge to hear a held chord,
   and `Event` (`card.rs:190`) carries typed text only. Left to the file until the owner asks for it.
-- **Panels.** `PANEL_*`, `WIDGETS` and `FAVORITES` are changed by editing a panel, as now.
+- **Panels.** `PANEL_*` and `FAVORITES` are changed by editing a panel, as now; `WIDGETS` in the
+  config file (the edge from apps does not arrange widgets in place).
 
 ## 2. Needed before any card (the core and `settings.sh`, one change each)
 
