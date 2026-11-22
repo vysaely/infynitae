@@ -1,0 +1,150 @@
+#!/bin/sh
+# tools/test-xkill: live/infynitae-xkill (Super+Shift+Delete on an X11 window) with the X tools
+# stubbed and real processes standing for the session:
+# - the process comes from the X server's answer (infynitae-xres-pid), never from _NET_WM_PID alone
+# - only a process below the session's root is ended; the satellite and what runs under it never
+# - the process and what it started are killed
+set -u
+
+REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
+TMP=$(mktemp -d "/tmp/infynitae-test-xkill.XXXXXX")
+pids_to_end=""
+trap 'kill -KILL $pids_to_end 2>/dev/null; rm -rf "$TMP"' EXIT INT TERM
+
+BIN="$TMP/bin"
+mkdir -p "$BIN" "$TMP/props" "$TMP/xres"
+cp "$REPO_DIR/live/infynitae-xkill" "$BIN/infynitae-xkill"
+# the windows: one id per file in props/ (xprop's output) and xres/ (the server's answer)
+cat << 'EOF' > "$BIN/xwininfo"
+#!/bin/sh
+for f in "$STUB/props"/*; do [ -e "$f" ] && echo "     $(basename "$f") \"w\": ()  10x10+0+0"; done
+EOF
+cat << 'EOF' > "$BIN/xprop"
+#!/bin/sh
+cat "$STUB/props/$2" 2>/dev/null
+EOF
+cat << 'EOF' > "$BIN/infynitae-xres-pid"
+#!/bin/sh
+for w; do echo "$w $(cat "$STUB/xres/$w" 2>/dev/null || echo -)"; done
+EOF
+chmod +x "$BIN"/*
+
+fail=0
+check() {
+    if [ "$2" = "$3" ]; then
+        echo "ok   $1"
+    else
+        echo "FAIL $1: expected '$3', got '$2'"
+        fail=1
+    fi
+}
+
+# window ID CLASS TITLE NET_WM_PID XRES_PID ("-" for none)
+window() {
+    {
+        echo "WM_CLASS(STRING) = \"$2\", \"$2\""
+        echo "_NET_WM_NAME(UTF8_STRING) = \"$3\""
+        [ "$4" = - ] || echo "_NET_WM_PID(CARDINAL) = $4"
+    } > "$TMP/props/$1"
+    if [ "$5" = - ]; then rm -f "$TMP/xres/$1"; else echo "$5" > "$TMP/xres/$1"; fi
+}
+clear_windows() { rm -f "$TMP/props"/* "$TMP/xres"/*; }
+
+xkill() {
+    env -i PATH="$BIN:/usr/bin:/bin" STUB="$TMP" DISPLAY=:99 "$@"
+}
+dry() {
+    out=$(xkill INFYNITAE_XKILL_DRY=1 "$BIN/infynitae-xkill" "$@" 2>"$TMP/err")
+    rc=$?
+    echo "$rc:$out"
+}
+
+children() { echo $(cat /proc/"$1"/task/*/children 2>/dev/null); }
+# waits until $1 has $2 children (the shells below start theirs in the background)
+wait_children() {
+    i=0
+    while [ "$(children "$1" | wc -w)" -lt "$2" ] && [ $i -lt 100 ]; do
+        sleep 0.05
+        i=$((i + 1))
+    done
+}
+
+# the session: a root with an app (which started a helper of its own) and a stand-in for the
+# satellite (a shell under that name) with an X client of its own; one process outside
+cp "$(command -v sh)" "$TMP/xwayland-satellite"
+sh -c 'sh -c "sleep 600 & wait" & "$0" -c "sleep 600 & wait" & wait' "$TMP/xwayland-satellite" &
+session=$!
+sleep 600 &
+outside=$!
+pids_to_end="$session $outside"
+wait_children "$session" 2
+for c in $(children "$session"); do
+    wait_children "$c" 1
+    case "$(basename "$(readlink "/proc/$c/exe")")" in
+        xwayland-satellite) satellite=$c ;;
+        *) app=$c ;;
+    esac
+done
+app_helper=$(children "$app")
+under_satellite=$(children "$satellite")
+pids_to_end="$pids_to_end $app $app_helper $satellite $under_satellite"
+
+window 0x400001 Game "Game" 1 "$app"
+check "the X server's process is ended, with what it started; the app's own claim is not used" \
+    "$(dry game "Game" "$session")" "0:$app $app_helper"
+check "  and the two disagreeing is logged" \
+    "$(grep -c "says process 1, the X server says $app" "$TMP/err")" 1
+
+window 0x400001 Game "Game" "$app" -
+check "_NET_WM_PID alone is not trusted" "$(dry game "Game" "$session")" "1:"
+
+window 0x400001 Game "Game" - "$outside"
+check "a process outside the session is left" "$(dry game "Game" "$session")" "3:"
+window 0x400001 Game "Game" - "$satellite"
+check "the satellite is left" "$(dry game "Game" "$session")" "3:"
+window 0x400001 Game "Game" - "$under_satellite"
+check "a process under the satellite is left" "$(dry game "Game" "$session")" "3:"
+window 0x400001 Game "Game" - "$session"
+check "the session's root itself is left" "$(dry game "Game" "$session")" "3:"
+
+clear_windows
+window 0x400001 Game "Game" - "$app"
+window 0x400002 Game "Game" - "$app_helper"
+check "a match started by another match counts as that one" \
+    "$(dry game "Game" "$session")" "0:$app $app_helper"
+window 0x400002 Game "Game" - "$outside"
+check "two separate processes: nothing is killed" "$(dry game "Game" "$session")" "1:"
+clear_windows
+
+window 0x400001 Game "Game" - "$app"
+check "another title does not match" "$(dry game "Game 2" "$session")" "1:"
+check "an empty app id matches nothing" "$(dry "" "Game" "$session")" "1:"
+check "without the session's process nothing is done" "$(dry game "Game")" "2:"
+rc=0
+env -i PATH="$BIN:/usr/bin:/bin" STUB="$TMP" INFYNITAE_XKILL_DRY=1 \
+    "$BIN/infynitae-xkill" game Game "$session" >/dev/null 2>&1 || rc=$?
+check "without a display nothing is done" "$rc" 2
+mv "$BIN/infynitae-xres-pid" "$TMP/xres-pid.off"
+check "without infynitae-xres-pid nothing is done" "$(dry game "Game" "$session")" "2:"
+mv "$TMP/xres-pid.off" "$BIN/infynitae-xres-pid"
+
+# the kill itself: the app and its helper end, the rest of the session stays
+rc=0
+xkill "$BIN/infynitae-xkill" game "Game" "$session" || rc=$?
+check "the real run succeeds" "$rc" 0
+gone() {
+    i=0
+    while [ $i -lt 100 ]; do
+        state=$(awk '{ sub(/^.*\) /, ""); print $1 }' "/proc/$1/stat" 2>/dev/null)
+        [ -z "$state" ] || [ "$state" = Z ] && { echo yes; return; }
+        sleep 0.05
+        i=$((i + 1))
+    done
+    echo no
+}
+check "  the app is gone" "$(gone "$app")" yes
+check "  its helper is gone" "$(gone "$app_helper")" yes
+check "  the satellite stays" "$(kill -0 "$satellite" 2>/dev/null && echo yes)" yes
+check "  the process outside stays" "$(kill -0 "$outside" 2>/dev/null && echo yes)" yes
+
+exit $fail

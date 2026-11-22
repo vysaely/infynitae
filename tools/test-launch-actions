@@ -159,6 +159,40 @@ env -i HOME="$HOMEDIR" PATH="$BIN:/usr/bin:/bin" XDG_RUNTIME_DIR="$RUN" CALL_LOG
     sh -c "sh '$REPO_DIR/live/launch.sh' brightness-up" 2>"$TMP/b_err" || rc=$?
 check "brightness-up with max_brightness=0 does not divide by zero" "$(grep -c 'division by 0' "$TMP/b_err" 2>/dev/null || true)" 0
 
+# force-close-x11: infynitae-xkill gets the session's root (launch.sh's parent; the trailing ":"
+# keeps the shell from exec-ing launch.sh in its own place), and a window
+# whose process was not ended is said in a notification
+cat << 'EOF' > "$HOMEDIR/.local/bin/infynitae-xkill"
+#!/bin/sh
+echo "xkill: $*" >> "$CALL_LOG"
+exit "$XKILL_RC"
+EOF
+chmod +x "$HOMEDIR/.local/bin/infynitae-xkill"
+cat << 'EOF' > "$BIN/notify-send"
+#!/bin/sh
+echo "notify: $*" >> "$CALL_LOG"
+EOF
+chmod +x "$BIN/notify-send"
+force_close_x11() {
+    env -i HOME="$HOMEDIR" PATH="$BIN:/usr/bin:/bin" XDG_RUNTIME_DIR="$RUN" CALL_LOG="$LOG" \
+        ENABLE_EDGE=false INFYNITAE_SETTINGS_APPLIED=1 XKILL_RC="$1" \
+        sh -c 'echo $$; sh "$0" force-close-x11 game "The Game"; :' "$REPO_DIR/live/launch.sh" \
+        2>/dev/null || true
+}
+: > "$LOG"
+root=$(force_close_x11 0)
+check "force-close-x11 passes the app, the title and the session's root" \
+    "$(grep '^xkill:' "$LOG")" "xkill: game The Game $root"
+check "  ended: nothing to say" "$(grep -c '^notify:' "$LOG" || true)" 0
+: > "$LOG"
+force_close_x11 1 >/dev/null
+check "  no process found: a notification says so" "$(grep '^notify:' "$LOG")" \
+    "notify: -a Infynitae Could not end The Game No single process was found for its window. It was asked to close."
+: > "$LOG"
+force_close_x11 3 >/dev/null
+check "  outside the session: a notification says so" \
+    "$(grep -c '^notify: .*not one this session started' "$LOG" || true)" 1
+
 # remember-window: a per-window toggle kept in the config for the window's app
 remember() {
     env -i HOME="$HOMEDIR" PATH="$BIN:/usr/bin:/bin" XDG_RUNTIME_DIR="$RUN" ENABLE_EDGE=false \

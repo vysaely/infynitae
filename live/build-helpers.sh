@@ -83,6 +83,8 @@ sh "$LIVE/edge-pick" "$BIN" || FAILED="$FAILED infynitae-edge"
 build infynitae-record-stream "wayland-client" \
     "$LIVE/record/infynitae-record-stream.c" "$LIVE/record/wlr-screencopy-protocol.c" -- -pthread -lrt
 build_rust infynitae-shot "$LIVE/shot-rs"
+# the process of an X11 window, from the X server (infynitae-xkill)
+build infynitae-xres-pid "xcb xcb-res" "$LIVE/xres/infynitae-xres-pid.c"
 # the Wayland socket of a sandboxed Windows program (live/windows-run)
 build_rust infynitae-sandbox-socket "$LIVE/sandbox-socket"
 

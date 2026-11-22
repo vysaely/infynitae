@@ -287,8 +287,20 @@ GM_ARGS
         ;;
     force-close-x11)
         # Super+Shift+Delete on an X11 window: its own process, found from the X11 window (all X11
-        # windows share xwayland-satellite's connection)
-        "$HOME/.local/bin/infynitae-xkill" "$2" "$3"
+        # windows share xwayland-satellite's connection), and only one inside the session: the
+        # compositor started this script, so its process is the session's root
+        rc=0
+        "$HOME/.local/bin/infynitae-xkill" "$2" "$3" "$PPID" || rc=$?
+        case "$rc" in
+            0) why="" ;;
+            3) why="Its process is not one this session started, so it was left running." ;;
+            2) why="Finding its process needs xprop and infynitae-xres-pid (infynitae-update builds it)." ;;
+            *) why="No single process was found for its window." ;;
+        esac
+        if [ -n "$why" ] && command -v notify-send >/dev/null 2>&1; then
+            notify-send -a Infynitae "Could not end ${3:-${2:-the window}}" \
+                "$why It was asked to close." 2>/dev/null || true
+        fi
         ;;
     region-screenshot)
         # Super+S (Super+Shift+R too): Interactive region screenshot of the moment the key was
