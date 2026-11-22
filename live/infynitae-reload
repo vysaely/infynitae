@@ -220,7 +220,7 @@ reload_edge() {
 reload_restore() {
     stop_matching infynitae "watch"
     stop_helper infynitae-restore
-    if is_true "${SESSION_RESTORE:-true}" || [ "${SESSION_RESTORE:-}" = restart ]; then
+    if is_true "${SESSION_RESTORE:-restart}" || [ "${SESSION_RESTORE:-restart}" = restart ]; then
         r=$(first "$BIN_DIR/infynitae-restore" "$LIVE/infynitae-restore")
         if [ -n "$r" ]; then
             "$r" save >/dev/null 2>&1 || true

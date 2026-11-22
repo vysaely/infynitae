@@ -92,9 +92,9 @@ mkdir -p "$H_FALLBACK/.config/infynitae"
 : > "$H_FALLBACK/.config/infynitae/config"
 apply "$H_FALLBACK"
 look_fb="$H_FALLBACK/.cache/infynitae/look"
-check "fallback look uses #111317 card and e6 opacity" \
+check "fallback look uses #111317 card and ff opacity (solid, the default since 2026-11-22)" \
     "$(grep -E '^LOOK_CARD=|^LOOK_CARD_AA=|^LOOK_TEXT=|^LOOK_SMALL_RADIUS=' "$look_fb" | tr '\n' ' ')" \
-    'LOOK_CARD="#111317" LOOK_CARD_AA="e6" LOOK_TEXT="#eef2f8" LOOK_SMALL_RADIUS="4" '
+    'LOOK_CARD="#111317" LOOK_CARD_AA="ff" LOOK_TEXT="#eef2f8" LOOK_SMALL_RADIUS="4" '
 
 H3="$TMP/h3"
 mkdir -p "$H3/.local/bin" "$H3/.config/infynitae" "$H3/.config/mako" "$H3/.config/fuzzel" \

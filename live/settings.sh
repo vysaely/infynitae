@@ -155,7 +155,7 @@ LOOK_END
 
     if [ -z "$LOOK_MUTED" ] || [ -z "$LOOK_ON_ACCENT" ] || [ -z "$LOOK_ACCENT_TEXT" ] || [ -z "$LOOK_ALERT" ] || [ "$look_got_card_aa" != true ]; then
         IFS=' ' read -r look_aa look_muted look_on_acc look_acc_text look_alert << EOF
-$(LC_ALL=C awk -v card="${LOOK_CARD#\#}" -v text="${LOOK_TEXT#\#}" -v acc="${LOOK_ACCENT#\#}" -v op="${CARD_OPACITY:-90}" -v scheme="${COLOR_SCHEME:-prefer-dark}" '
+$(LC_ALL=C awk -v card="${LOOK_CARD#\#}" -v text="${LOOK_TEXT#\#}" -v acc="${LOOK_ACCENT#\#}" -v op="${CARD_OPACITY:-100}" -v scheme="${COLOR_SCHEME:-prefer-dark}" '
     function abs(v) { return (v < 0) ? -v : v }
     function max3(a, b, c,   m) { m = (a > b) ? a : b; return (m > c) ? m : c }
     function h(s, i) { return index("0123456789abcdef", tolower(substr(s, i, 1))) - 1 }
@@ -711,7 +711,7 @@ apply_settings() {
     esac
 
     # THEME_FROM_WALLPAPER: a new wallpaper (path or file changed) gives the theme its colours
-    case "${THEME_FROM_WALLPAPER:-false}" in
+    case "${THEME_FROM_WALLPAPER:-accent}" in
         accent|all|shuffle|true|1|yes|on)
             twf_what=all
             case "$THEME_FROM_WALLPAPER" in accent|shuffle) twf_what="$THEME_FROM_WALLPAPER" ;; esac

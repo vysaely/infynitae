@@ -835,7 +835,8 @@ fn session_restore_from(env_val: Option<&str>, config_content: Option<&str>) -> 
             }
         }
     }
-    Mode::Always
+    // the shipped default since 2026-11-22: a reboot comes up clean (owner)
+    Mode::Restart
 }
 
 /// This boot's id: the kernel makes a new one at every boot. `None` where it cannot be read.
@@ -1589,7 +1590,7 @@ mod tests {
 
     #[test]
     fn session_restore_from_respects_env_and_config_bool_tokens() {
-        assert_eq!(session_restore_from(None, None), Mode::Always);
+        assert_eq!(session_restore_from(None, None), Mode::Restart);
         assert_eq!(
             session_restore_from(Some("off"), Some("SESSION_RESTORE=1")),
             Mode::Off
@@ -1602,7 +1603,7 @@ mod tests {
             session_restore_from(None, Some("SESSION_RESTORE=NO\n")),
             Mode::Off
         );
-        assert_eq!(session_restore_from(None, Some("OTHER=1\n")), Mode::Always);
+        assert_eq!(session_restore_from(None, Some("OTHER=1\n")), Mode::Restart);
         assert_eq!(
             session_restore_from(None, Some("SESSION_RESTORE=\"restart\"\n")),
             Mode::Restart

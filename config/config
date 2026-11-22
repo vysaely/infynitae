@@ -97,9 +97,9 @@ FOCUS_FOLLOWS_MOUSE="strict"
     #    sloppy    hover focuses; kept over empty canvas
     #    click     only a click focuses
 
-FOCUS_ON_OPEN="priority"
+FOCUS_ON_OPEN="user"
     # Whether a new window takes the focus
-    # default: priority
+    # default: user
     #   priority    unless you are busy: windows you opened always do; with Do Not Disturb
     #               (Super+A) no other does; a fullscreen game or video keeps it (only its own
     #               dialogs get in). A held window asks for attention instead
@@ -234,9 +234,9 @@ THEME_SCHEME="yours"
     #   monochrome   greys only (light or dark per COLOR_SCHEME)
     #   neutral · tonal · vibrant · expressive   built from ACCENT, more colour each
 
-CARD_OPACITY="90"
+CARD_OPACITY="100"
     # How solid the panels' and widgets' cards are, in % [reload]
-    # default: 90
+    # default: 100
     # options: 20 to 100
 
 SWITCH_LOOK="rows"
@@ -283,9 +283,9 @@ DIRECT_SCANOUT="true"
     # default: true
     # options: true  · false
 
-TEARING="always"
+TEARING="true"
     # A fullscreen game shows each frame at once (lowest latency, a visible tear line)
-    # default: always
+    # default: true (as Windows: the game's own vsync setting decides)
     #   always   every window that has the screen to itself (fullscreen, or filling it), without
     #            asking; Super+Shift+O turns it off for one window
     #    true    when it asks (vsync off) or after Super+Shift+O on its window
@@ -402,12 +402,12 @@ THEME_SYNC="true"
     # default: true
     # options: true  · false
 
-THEME_FROM_WALLPAPER="false"
+THEME_FROM_WALLPAPER="accent"
     # Take the colours above from the wallpaper whenever it changes: the accent (ACCENT)
     # alone, the accent plus backgrounds and borders ("all"), or a random candidate accent from
     # the wallpaper on each wallpaper change ("shuffle", never at login). Once, by hand:
     # infynitae-settings wallpaper-colors [accent|all|accents|shuffle]
-    # default: false
+    # default: accent (nothing happens until a wallpaper is set)
     # options: false  · accent  · all  · shuffle
 
 WALLPAPER=""
@@ -563,10 +563,10 @@ XWAYLAND="true"
     # default: true
     # options: true  · false
 
-SESSION_RESTORE="true"
+SESSION_RESTORE="restart"
     # Save and reopen the apps that were open, where they were [reload]
     # restart: only after the compositor restarts, never after the PC restarts
-    # default: true
+    # default: restart
     # options: true  · restart  · false
 
 START_TERMINAL="true"
@@ -647,9 +647,9 @@ EDGE_IMPL="apps"
     # default: apps
     # options: apps  · rust  · c
 
-EDGE_POSITION="top"
+EDGE_POSITION="bottom"
     # The edge the built-in panels open from, unless their PANEL_ line says another [reload]
-    # default: top
+    # default: bottom
     # options: top  · bottom
 
 EDGE_CONTROL_SIDE="right"

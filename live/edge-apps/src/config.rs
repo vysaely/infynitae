@@ -613,7 +613,7 @@ impl Config {
     }
 
     pub fn from_text(text: &str) -> Config {
-        let mut side = Side::Top;
+        let mut side = Side::Bottom;
         let mut ctrl_align: i8 = 1;
         let mut c = Config {
             panels: Vec::new(),
@@ -633,7 +633,7 @@ impl Config {
             scheme: "yours".into(),
             notifications: "auto".into(),
             tray_card: "menu".into(),
-            opacity: 0.90, // 90 % until CARD_BLUR exists: 70 % without blur reads as see-through
+            opacity: 1.0, // solid since 2026-11-22: readable over any wallpaper
             switch_look: "rows".into(),
             monitor_log_dir: None,
         };

@@ -309,7 +309,8 @@ mod tests {
                 0x13 as f64 / 255.0
             )
         );
-        assert!((t.card.3 - 0.90).abs() < 1e-9);
+        // the shipped default is solid (CARD_OPACITY 100 since 2026-11-22)
+        assert!((t.card.3 - 1.0).abs() < 1e-9);
     }
 
     #[test]
