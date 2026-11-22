@@ -577,6 +577,9 @@ pub struct Core {
     /// Windows a layout asked for another size, with their cell, until they answer
     /// (`Core::laid_out_anchor`).
     layout_cells: Vec<(stage::ElementId, arrange::Cell)>,
+    /// A window of the last layout kept a size bigger than its cell: its cluster is tidied once
+    /// every window of the layout has answered (`Core::layout_answered`).
+    layout_overflow: Option<stage::ElementId>,
     /// The cluster the layout key arranged last (by the window it was pressed on) and the layout:
     /// the next press there takes the next layout.
     last_layout: Option<(stage::ElementId, arrange::ClusterLayout)>,
@@ -688,6 +691,7 @@ impl Core {
                 closed_windows: Vec::new(),
                 cluster_sort: arrange::ClusterSort::default(),
                 layout_cells: Vec::new(),
+                layout_overflow: None,
                 last_layout: None,
                 teleport_on_open: false,
                 physical_input_activity: false,

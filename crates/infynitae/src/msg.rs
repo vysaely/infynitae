@@ -101,7 +101,7 @@ fn first_output() -> u64 {
 
 fn usage() -> ExitCode {
     eprintln!(
-        "Usage: infynitae msg snapshot | focus <inst> <elem> | navigate <x> <y> [zoom] | navigate element <inst> <elem> | place <name> | restore [output] | shortcut <name> | overview | lock | night-light [on|off] | keyboard-layout | osk [on|off] | capture-chord | layers [app] | arrange tidy|grid|columns [<inst> <elem>]"
+        "Usage: infynitae msg snapshot | focus <inst> <elem> | navigate <x> <y> [zoom] | navigate element <inst> <elem> | place <name> | restore [output] | shortcut <name> | overview | lock | night-light [on|off] | keyboard-layout | osk [on|off] | capture-chord | layers [app] | arrange tidy|grid|columns|app [<inst> <elem>]"
     );
     ExitCode::from(2)
 }

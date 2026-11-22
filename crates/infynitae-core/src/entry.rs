@@ -190,6 +190,7 @@ impl Core {
                                     | KeyAction::FocusSlot(_)
                                     | KeyAction::FocusClusterSlot(_)
                                     | KeyAction::ArrangeCluster
+                                    | KeyAction::ArrangeClusterByApp
                                     | KeyAction::FocusNext
                                     | KeyAction::FocusDirection(_)
                                     | KeyAction::ToggleOverview
@@ -990,6 +991,17 @@ impl Core {
             KeyAction::ArrangeCluster => {
                 if let Some(id) = self.focus.target() {
                     self.arrange_cluster(id, None, proof, out);
+                }
+                return;
+            }
+            KeyAction::ArrangeClusterByApp => {
+                if let Some(id) = self.focus.target() {
+                    self.arrange_cluster(
+                        id,
+                        Some(crate::arrange::ClusterLayout::ByApp),
+                        proof,
+                        out,
+                    );
                 }
                 return;
             }
