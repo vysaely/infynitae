@@ -659,7 +659,7 @@ pub fn run_headless_with(
                         .core()
                         .focus()
                         .target()
-                        .is_some_and(|f| state.is_same_client(new_id, f));
+                        .is_some_and(|f| state.started_by_app_of(new_id, f));
                 let result = if shown {
                     state.core_mut().show_opened(&mut input_port, new_id)
                 } else {
