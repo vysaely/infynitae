@@ -116,6 +116,8 @@ these by date, e.g. "(owner, 2026-10-24)".
 - **An app's next window takes the place of the one that just closed** (2026-10-25: Steam's
   login window becoming the main window), if that place is still in view.
 - **Cluster placement by default**: a new window goes to the next free spot beside the others.
+  With `CLUSTER_SORT` "app" (2026-11-21, off by default) beside its own app's window when one is
+  in view.
 
 ## Screen and session
 
@@ -221,3 +223,10 @@ these by date, e.g. "(owner, 2026-10-24)".
   fullscreen"; 2026-11-09 to 11-10 it shrank into the free part of the screen instead). Resizing a maximized window
   ends the maximize. New windows still open in free space, and a window that grows by itself
   still moves itself off its neighbours.
+- **Cluster layouts, when asked** (2026-11-21, owner: "cluster layouts" and "some auto sorting
+  cluster mechanic"): the exception to the rule above, always on the person's asking. Super+G
+  (Super+Shift+Space, the key first suggested, keeps the zoom of Super+Space) arranges the focused
+  window's cluster, tidy, grid or columns at each press, and `infynitae msg arrange` does one
+  layout for the edge. `CLUSTER_SORT` keeps clusters in order without a key, off by default:
+  "tidy" closes the gap a closed or minimized window leaves, "app" opens a new window beside its
+  app's window in view. docs/WINDOWS.md "Cluster layouts".

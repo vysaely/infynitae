@@ -16,7 +16,7 @@
 
 use infynitae_core::output::OutputId;
 use infynitae_core::stage::ElementRef;
-use infynitae_core::{Core, NavigateTo, ShellCommand, ShellError, ShellStream};
+use infynitae_core::{ClusterLayout, Core, NavigateTo, ShellCommand, ShellError, ShellStream};
 
 use crate::json::{self, Value};
 
@@ -273,6 +273,19 @@ fn request(v: &Value, core: &Core) -> Result<Request, RequestError> {
         }
         "close_element" | "close" => Request::Command(ShellCommand::CloseElement {
             element: element("element")?,
+        }),
+        // `{"cmd": "arrange", "layout": "tidy"|"grid"|"columns", "element"?}`: the cluster of the
+        // window named, else of the focused one
+        "arrange" => Request::Command(ShellCommand::ArrangeCluster {
+            element: match v.get("element") {
+                None | Some(Value::Null) => None,
+                Some(e) => Some(element_of(Some(e)).ok_or(Invalid)?),
+            },
+            layout: v
+                .get("layout")
+                .and_then(Value::as_str)
+                .and_then(ClusterLayout::parse)
+                .ok_or(Invalid)?,
         }),
         _ => return Err(RequestError::UnknownCommand),
     })

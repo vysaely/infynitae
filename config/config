@@ -134,6 +134,13 @@ PLACEMENT_POLICY="cluster"
     #    center    the middle of the view
     #    origin    the canvas origin
 
+CLUSTER_SORT="off"
+    # Windows near each other (a cluster) kept in order by themselves; Super+G arranges one by hand
+    # default: off   (no window moves another unless you ask)
+    #   tidy        when a window closes or is minimized, the others in its cluster close the gap
+    #   app         a new window opens beside its app's window in view instead of at the pointer
+    #   "tidy app"  both
+
 KEEP_ON_TOP="Picture-in-Picture, Picture in picture"
     # Windows kept on top of the others from the moment they open, by title or app id, comma
     # separated: they open in the view's bottom right corner and keep their place on the screen
@@ -907,13 +914,14 @@ UPDATE_SIGNING_KEY=""
 #           Super+Shift+BackSpace  reload
 #   Windows: Super+Enter  maximize or fit    Super+Shift+Enter  fullscreen
 #           Super+Shift+Space  centre, keep the zoom    Super+Shift+K  keep on top
+#           Super+G  arrange the cluster: tidy, grid, columns
 #   Old keys kept as aliases: Super+Shift+R (region screenshot), Super+Shift+T (tearing),
 #   Super+Alt+R (record).
 # Give an action other keys (all its built-in ones are freed), or free them with "none":
 #   BIND_<ACTION>="CHORD[,CHORD]"       e.g. BIND_TERMINAL="SUPER+RETURN"
 #   FOCUS_NEXT FOCUS_LEFT FOCUS_RIGHT FOCUS_UP FOCUS_DOWN OVERVIEW WINDOWS LAUNCHER TERMINAL FILE_MANAGER SYSTEM_MONITOR SCREENSHOT REGION_SCREENSHOT RELOAD LOCK
 #   CLIPBOARD CONTROL PRIVACY IDLE_INHIBIT TEARING SAVE_REPLAY RECORD FIT FULLSCREEN KEEP_ON_TOP CLOSE
-#   FORCE_CLOSE RECENTER RECENTER_KEEP_ZOOM BACK WINDOW_MENU
+#   FORCE_CLOSE RECENTER RECENTER_KEEP_ZOOM BACK WINDOW_MENU CLUSTER_LAYOUT
 # Run a command:
 #   EXEC_<NAME>="CHORD:command"         e.g. EXEC_BROWSER="SUPER+B:firefox"
 # Chord: SUPER CTRL ALT SHIFT (exactly those held) + one key: A-Z 0-9 F1-F12 RETURN SPACE TAB

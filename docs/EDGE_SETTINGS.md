@@ -273,6 +273,7 @@ names in `/usr/share/X11/xkb/rules/evdev.lst` is a later step.
 | M Dragging the canvas | Pick | `PAN_MODE` | Pointer moves with it `free`, Pointer stays `grab`, Grip `rts` | save |
 | M Pan out of fullscreen | Switch | `FULLSCREEN_PAN` | | save |
 | M Keep on top | Text | `KEEP_ON_TOP` | Titles or apps, with commas | save |
+| M Windows near each other | Pick | `CLUSTER_SORT` | Stay where they are `off`, Close the gap a window leaves `tidy`, Open beside their app `app`, Both `tidy app` | save |
 
 ### `settings/defaults` (`cards/settings_apps.rs`)
 

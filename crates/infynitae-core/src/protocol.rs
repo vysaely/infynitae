@@ -543,6 +543,7 @@ impl Core {
         {
             self.held_sizes.retain(|(e, _)| *e != id);
         }
+        self.layout_answered(id, acked);
     }
 
     /// F-PRESENT-1: the presentation view of the mapped fullscreen element of `model`'s output.
@@ -811,6 +812,7 @@ impl Core {
     fn drop_fullscreen(&mut self, id: ElementId) {
         // nor is it held to a size or maximized: its next map starts at its own size
         self.held_sizes.retain(|(e, _)| *e != id);
+        self.layout_cells.retain(|(e, _)| *e != id);
         self.returning.retain(|e| *e != id);
         self.maximized.retain(|(e, _)| *e != id);
         self.maximized_at.retain(|(e, _)| *e != id);
@@ -1098,6 +1100,8 @@ impl Core {
         anchor: CanvasPoint,
         out: &mut Vec<Effect>,
     ) -> Result<(), ProtocolError> {
+        // where the user puts it wins over a layout's cell it has not answered yet
+        self.layout_cells.retain(|(e, _)| *e != id);
         self.place_by_shell(id, anchor, out)
     }
 
@@ -1112,6 +1116,7 @@ impl Core {
         let (anchor, tree) = (self.stage.anchor(id)?, self.stage.tree(id)?);
         let size = (tree.geometry.size.w, tree.geometry.size.h);
         self.resized_out_of_maximize(id);
+        self.layout_cells.retain(|(e, _)| *e != id);
         self.resize = Some(ResizeTrack {
             element: id,
             left,
@@ -1595,6 +1600,11 @@ impl Core {
                 if let Some(anchor) = self.resize_committed(id, tree.geometry.size, out) {
                     self.stage.place(id, anchor).map_err(stale)?;
                 }
+                // a window a layout asked for a size is centred in its cell at the size it drew
+                let laid_out = self.laid_out_anchor(id, tree.geometry.size);
+                if let Some(at) = laid_out {
+                    self.stage.place(id, at).map_err(stale)?;
+                }
                 // An element that left fullscreen without ever having been a window is placed at
                 // its first windowed presentation (P9b): the first commit after it acknowledged a
                 // configure without the fullscreen state, whatever its size. Frames committed
@@ -1648,6 +1658,7 @@ impl Core {
                     let maximized = self.maximized.iter().any(|(e, _)| *e == id);
                     if !asked
                         && !resizing
+                        && laid_out.is_none()
                         && !maximized
                         && let Some(at) = self.self_resized(id, old, new)
                     {
@@ -1683,6 +1694,7 @@ impl Core {
             }
             (Lifecycle::Mapped, false) => {
                 // null-buffer commit: unmap; identity and anchor kept, snapshot dropped
+                let rest = self.cluster_left_by(id);
                 self.cancel_element_touches(id, out);
                 self.input.interaction.orphan_element(id);
                 if self.resize.is_some_and(|r| r.element == id) {
@@ -1701,6 +1713,7 @@ impl Core {
                 // M1: "fullscreen dropped (M9)"; the client must request it again after a remap
                 self.drop_fullscreen(id);
                 out.extend(self.lose_focus_target(id, &live));
+                self.tidy_after_leave(&rest, out);
             }
         }
         self.membership_pass_element(id, out);
@@ -1784,6 +1797,8 @@ impl Core {
     /// dead client gets no leave: its membership rows are dropped silently. Target loss triggers
     /// successor focus transition (K7, M11).
     pub fn toplevel_destroyed(&mut self, id: ElementId) -> Vec<Effect> {
+        // destroyed while mapped (an unmap first tidied already)
+        let rest = self.cluster_left_by(id);
         self.remember_closed(id);
         self.maximize_on_map.retain(|&e| e != id);
         self.scales.remove(id);
@@ -1811,6 +1826,7 @@ impl Core {
         let live: Vec<ElementId> = self.focusable_elements();
         fx.extend(self.lose_focus_target(id, &live));
         self.drop_fullscreen(id);
+        self.tidy_after_leave(&rest, &mut fx);
         let ended: Vec<OutputId> = before
             .iter()
             .filter(|(_, p)| *p == Some(id))
@@ -2130,8 +2146,10 @@ impl Core {
 
         let center_gx = center_anchor.x;
         let center_gy = center_anchor.y;
-        let (target_gx, target_gy) = if let pointer::PointerState::Located { output: ptr_out, p } =
-            self.pointer
+        // CLUSTER_SORT "app": beside its app's window in view instead of at the pointer
+        let (target_gx, target_gy) = if let Some(beside) = self.beside_own_app(id) {
+            beside
+        } else if let pointer::PointerState::Located { output: ptr_out, p } = self.pointer
             && ptr_out == output.id
             && ((p.0 - extent.0 / 2.0).abs() > 1.0 || (p.1 - extent.1 / 2.0).abs() > 1.0)
         {
@@ -2455,6 +2473,7 @@ impl Core {
         {
             return out;
         }
+        let rest = self.cluster_left_by(id);
         if self.stage.set_minimized(id, true).is_err() {
             return out;
         }
@@ -2470,6 +2489,7 @@ impl Core {
         // the window now focused may have asked for a pointer lock or confine: it starts now, not
         // at the next motion (AUDIT_FOCUS_HOVER improvement 10)
         out.extend(self.reconcile_constraints());
+        self.tidy_after_leave(&rest, &mut out);
         out
     }
 

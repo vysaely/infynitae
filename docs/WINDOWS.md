@@ -14,11 +14,11 @@ usable area less the 12 px gap on each side.
 | Step | Where | What |
 | :--- | :--- | :--- |
 | Initial configure | `protocol.rs` `committed` (AwaitingInitialCommit) | 0x0 (the app chooses), `configure_bounds` = the room (INV-PROTO-1), a scale hint before it (M15). |
-| First map | `protocol.rs` `first_map_anchor` | A notification: bottom right of the usable view. A child (dialog, or an app's second window that names a parent), whatever its size: centred over the parent, which it may cover, as it may its own app's other windows; never another app's: one that would goes to the nearest spot free of them (Discord's main window, a child of its small updater). The next window of an app whose window just closed, with no key press, button press or touch since (an app swapping its own windows): its place. Else by `PLACEMENT_POLICY`: `cluster` (the default in the config; owner rule 2026-10-31, F-PLACE-1) centres it on the pointer, kept inside the usable view; if that spot is not free, the nearest free spot (12 px gap kept), one wholly on screen first, else the nearest on the Canvas. It never overlaps or moves another window: one rule after every path above (but notifications and the `center` policy) moves a spot that would cover another app's window to the nearest free one. `center` centres it in the usable view. |
+| First map | `protocol.rs` `first_map_anchor` | A notification: bottom right of the usable view. A child (dialog, or an app's second window that names a parent), whatever its size: centred over the parent, which it may cover, as it may its own app's other windows; never another app's: one that would goes to the nearest spot free of them (Discord's main window, a child of its small updater). The next window of an app whose window just closed, with no key press, button press or touch since (an app swapping its own windows): its place. Else by `PLACEMENT_POLICY`: `cluster` (the default in the config; owner rule 2026-10-31, F-PLACE-1) centres it on the pointer, kept inside the usable view; if that spot is not free, the nearest free spot (12 px gap kept), one wholly on screen first, else the nearest on the Canvas. With `CLUSTER_SORT` "app" (off by default) a window whose app already has a window in the first screen's view aims right of the newest such window (12 px gap) instead of at the pointer, then the same free-spot search. It never overlaps or moves another window: one rule after every path above (but notifications and the `center` policy) moves a spot that would cover another app's window to the nearest free one. `center` centres it in the usable view. |
 | Starts fullscreen or as large as a screen | `protocol.rs` `toplevel_request`, `fullscreen_map_spot`; `launch.rs` `opened_by_user` | A game (Roblox through Mocktail, a Steam game through Proton or SDL) takes the screen it opens on (2026-11-19). One that asks for fullscreen before it shows, or a frame after (mapped last, nothing pressed or touched and the focus not moved since), is granted it and takes the focus; it keeps a place on the Canvas that covers no other window, where it shows when it steps aside; at its first windowed frame it is placed as any new window. One that opens exactly as large as a screen is not offered the room. Either counts as a window the user opened (FOCUS_ON_OPEN and TELEPORT_ON_OPEN "user"): it takes the focus and the camera goes to it, so it fills the screen from its free spot and moves no other window. Until then such a game, started by a launcher long before its window showed, opened unfocused, its request was declined, and it stayed a window wherever the free space was, over or beside other windows. |
 | Too large | `handlers.rs` `fit_opening_window`, `protocol.rs` `place_opening_at_size` | A window that maps larger than the room (Chromium/Electron at a saved size, X11 through xwayland-satellite) is offered the room and placed again for that size by the same free-space rule; nothing is pushed (until 2026-10-31 it took the middle of the view and pushed the others aside). A window the user opened brings the camera to it (TELEPORT_ON_OPEN). |
 | Grew by itself | `protocol.rs` `self_resized` | An app that grows its window by itself pushes nothing: if the new size reaches no new window it stays; else it keeps its right, bottom or both edges, or its centre, the first that is free; else it moves to the nearest free spot (2026-10-31). |
-| Grew to a size asked for | `protocol.rs` `committed` | A maximize, a resize of any kind (Super+right drag, an app's edge, three fingers, a scaled cluster) or a session restore's size moves only that window; no other window moves, the window may cover them (owner, 2026-11-06; until then a maximize or a resize pushed the row aside). A maximized window stays where the maximize put it. |
+| Grew to a size asked for | `protocol.rs` `committed` | A maximize, a resize of any kind (Super+right drag, an app's edge, three fingers, a scaled cluster, a cluster layout's cell) or a session restore's size moves only that window; no other window moves, the window may cover them (owner, 2026-11-06; until then a maximize or a resize pushed the row aside). A maximized window stays where the maximize put it. |
 
 Everything above uses the **first** screen: its camera, usable area and room, whichever screen
 the pointer is on.
@@ -49,11 +49,29 @@ next window switch.
 | Touch: three fingers | Move or resize the window under them (see the touch design notes). |
 | Super+Tab | Flip between the last two windows (one asking for attention first); with `FOCUS_CYCLE_NAVIGATE` centre the camera on it. |
 | Super+1..9 / Super+Shift+1..9 | Focus window / cluster N (creation order), raise, centre the camera (zoom 1) / frame the cluster. |
+| Super+G | Arrange the focused window's cluster: tidy, then grid, then columns at each press (below). |
 | Click | Focus and raise the window under the pointer. |
 | Super+Space / Super+Shift+Space | Centre the focused window in the usable area at zoom 1 / at the current zoom. A window as large as the whole screen is lined up with it at zoom 1; only a window larger than the screen is zoomed out until it fits, with a 12 px margin (2026-11-06). Super+1..9, a two-finger double tap and TELEPORT_ON_OPEN centre the same way. |
 
 A focus change sends a configure to the window losing and the one gaining focus (`activated`);
 with held sizes it no longer changes their size.
+
+## Cluster layouts
+
+A cluster is the windows within 300 px of each other (`Core::clusters`). These are the only
+times one window's change moves other windows, and each is the person's asking: a key, a shell
+command, or a setting they turned on (owner, 2026-11-21; `crates/infynitae-core/src/arrange.rs`).
+
+| Asked by | What |
+| :--- | :--- |
+| Super+G (`BIND_CLUSTER_LAYOUT`), `infynitae msg arrange tidy\|grid\|columns [inst elem]` | The focused window's cluster (a dialog's: its parent's; nothing when the focused window is fullscreen or kept on top), arranged once from the cluster's top-left corner, which stays; the camera frames the result on the pointer's screen, at zoom 1 at most. The key takes the next layout at each press on the same cluster, tidy first. The room is the pointer's screen's usable area at zoom 1 less 12 px on each side (1896 x 1056 on 1920 x 1080). **Tidy**: own sizes, in reading order (rows from the top, left to right), rows as wide as the room, 12 px apart. **Grid**: equal cells filling the room; the column count gives the squarest cell, each empty cell counted against it (two windows on a wide screen side by side, four in 2 x 2). **Columns**: side by side, the room's full height. |
+| `CLUSTER_SORT` "tidy" (off by default) | A window of a cluster closes or is minimized: the rest of its cluster is tidied, the gap closes. The camera stays. Not for a dialog, not during a drag. |
+
+A layout asks a window for its cell's size by configure, held like a resize (INV-PROTO-1); it
+ends a maximize. Until the app answers, each of its frames is centred in the cell, so an app that
+keeps its size sits in the middle of its cell. A Super+drag or a resize on it first ends that.
+Fullscreen, minimized, kept-on-top and notification windows and dialogs are left out; a dialog
+moves with its parent.
 
 ## Screens
 
@@ -84,5 +102,6 @@ reopens at every login, `false` saves nothing.
 fullscreen windows across 1920x1080, 1366x768, 2560x1440 at 1/1.5/2, 3840x2160 at 2, portrait,
 and every change between them; unplug; Super+Shift+Enter moves nothing), `t1_protocol_bounds`
 (room, oversize fit), `t1_fit_constraints`, `t1_fit_bindings`, `t1_window_slots`,
-`t1_window_drag`, `t1_fullscreen`, `t1_transform`, `t1_outputs`. Free space (new windows near
+`t1_window_drag`, `t1_fullscreen`, `t1_transform`, `t1_outputs`, `t1_cluster_layout` (Super+G);
+the layouts and `CLUSTER_SORT` also in `crates/infynitae-core/src/arrange.rs`. Free space (new windows near
 the cursor, self-resize, back from fullscreen in every way): `t1_window_states` too.
