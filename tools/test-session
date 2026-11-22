@@ -144,3 +144,78 @@ echo "ok Finding 21: spaced paths and commands in NOTIFICATIONS and TERMINAL exe
     done
 )
 echo "ok infy_on: accepts 1 true yes on TRUE True and nothing else"
+
+# ---- 5. Owner, 2026-11-22: the compositor's main thread is raised with reset-on-fork, so what it
+# starts later begins at normal priority; real-time when allowed, else normal with the same flag
+HOME5="$TMP/home5"
+mkdir -p "$HOME5/.local/bin" "$TMP/bin5"
+PRIO_LOG="$TMP/prio.log"
+cp "$(command -v sh)" "$TMP/bin5/infynitae"
+for tool in chrt renice; do
+    cat > "$TMP/bin5/$tool" <<EOF
+#!/bin/sh
+echo "$tool \$*" >> "$PRIO_LOG"
+case " \$* " in *" -r "*) [ -n "\${NO_RT:-}" ] && exit 1 ;; esac
+exit 0
+EOF
+    chmod +x "$TMP/bin5/$tool"
+done
+session_as_compositor() {
+    : > "$PRIO_LOG"
+    (
+        export HOME="$HOME5" WAYLAND_DISPLAY="wayland-test" START_TERMINAL="false" START_LOCKED="0"
+        export PATH="$TMP/bin5:$PATH" "$@"
+        # the parent is named like the compositor: $PPID of session.sh
+        "$TMP/bin5/infynitae" -c 'echo $$ > "$1"; sh "$2" >/dev/null 2>&1; :' sh "$TMP/root5" \
+            "$SESSION_SCRIPT"
+    ) || true
+    root=$(cat "$TMP/root5")
+}
+expect_log() {
+    if [ "$(cat "$PRIO_LOG")" != "$2" ]; then
+        echo "FAIL $1: expected '$2', got '$(cat "$PRIO_LOG")'"
+        exit 1
+    fi
+    echo "ok $1"
+}
+session_as_compositor
+expect_log "the compositor's thread: nice -10, real-time 2, reset on fork" \
+    "$(printf 'renice -n -10 -p %s\nchrt -R -r -p 2 %s' "$root" "$root")"
+session_as_compositor NO_RT=1
+expect_log "  without real-time rights: normal priority, reset on fork" \
+    "$(printf 'renice -n -10 -p %s\nchrt -R -r -p 2 %s\nchrt -R -o -p 0 %s' "$root" "$root" "$root")"
+
+# ---- 6. Owner, 2026-11-22: the kernel ends an app before the desktop when memory runs out: what
+# session.sh starts gets an out-of-memory score of 300, the lock screen started on sleep keeps the
+# desktop's
+HOME6="$TMP/home6"
+mkdir -p "$HOME6/.local/bin"
+read -r base < /proc/self/oom_score_adj
+app_score=$base
+[ "$base" -lt 300 ] && app_score=300
+cat > "$HOME6/.local/bin/infynitae-sleep-lock" <<EOF
+#!/bin/sh
+cat /proc/self/oom_score_adj > "$TMP/sleep_lock_oom"
+EOF
+cat > "$HOME6/.local/bin/app-term" <<EOF
+#!/bin/sh
+cat /proc/self/oom_score_adj > "$TMP/term_oom"
+EOF
+chmod +x "$HOME6/.local/bin/infynitae-sleep-lock" "$HOME6/.local/bin/app-term"
+(
+    export HOME="$HOME6" WAYLAND_DISPLAY="wayland-test" START_LOCKED="0" SESSION_RESTORE="false"
+    export START_TERMINAL="true" TERMINAL="$HOME6/.local/bin/app-term" LOCK_WHEN_AWAY="true"
+    sh "$SESSION_SCRIPT" >/dev/null 2>&1
+) || true
+i=0
+while [ ! -s "$TMP/sleep_lock_oom" ] && [ $i -lt 100 ]; do sleep 0.05; i=$((i + 1)); done
+if [ "$(cat "$TMP/term_oom")" != "$app_score" ]; then
+    echo "FAIL an app session.sh starts: score $(cat "$TMP/term_oom"), expected $app_score"
+    exit 1
+fi
+echo "ok an app session.sh starts gets out-of-memory score $app_score (the desktop has $base)"
+if [ "$(cat "$TMP/sleep_lock_oom")" != "$base" ]; then
+    echo "FAIL the sleep lock: score $(cat "$TMP/sleep_lock_oom"), expected $base"
+    exit 1
+fi
+echo "ok   the lock screen started on sleep keeps the desktop's $base"

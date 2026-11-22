@@ -12,6 +12,14 @@ fi
 # env.sh loaded the user's config (live/config.sh) and resolved WAYLAND_DISPLAY, DISPLAY and
 # XAUTHORITY; a second copy of both ran here on every Super+key until 2026-11-06
 
+# When memory runs out, the kernel ends an app before the desktop (session.sh, 1c): what an
+# action opens gets an out-of-memory score of 300; the lock screen keeps the desktop's
+if [ "$ACTION" != lock-screen ]; then
+    oom=""
+    read -r oom < /proc/self/oom_score_adj 2>/dev/null || true
+    [ -n "$oom" ] && [ "$oom" -lt 300 ] && { echo 300 > /proc/self/oom_score_adj; } 2>/dev/null
+fi
+
 # Allow complete user-script overrides in ~/.config/infynitae/launch.sh if present
 USER_SCRIPT="$HOME/.config/infynitae/launch.sh"
 if [ -x "$USER_SCRIPT" ]; then

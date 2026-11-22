@@ -160,6 +160,22 @@ env -i HOME="$HOMEDIR" PATH="$BIN:/usr/bin:/bin" XDG_RUNTIME_DIR="$RUN" CALL_LOG
     sh -c "sh '$REPO_DIR/live/launch.sh' brightness-up" 2>"$TMP/b_err" || rc=$?
 check "brightness-up with max_brightness=0 does not divide by zero" "$(grep -c 'division by 0' "$TMP/b_err" 2>/dev/null || true)" 0
 
+# out-of-memory score: what an action opens gets 300, the lock screen keeps the desktop's
+read -r base_oom < /proc/self/oom_score_adj
+app_oom=$base_oom
+[ "$base_oom" -lt 300 ] && app_oom=300
+cat << 'EOF' > "$BIN/oom-probe"
+#!/bin/sh
+echo "oom: $(cat /proc/self/oom_score_adj)" >> "$CALL_LOG"
+EOF
+chmod +x "$BIN/oom-probe"
+: > "$LOG"
+run_action terminal "" TERMINAL="oom-probe"
+check "an app opened by key gets out-of-memory score $app_oom" "$(grep '^oom:' "$LOG")" "oom: $app_oom"
+: > "$LOG"
+run_action lock-screen "" SCREEN_LOCKER="oom-probe"
+check "  the lock screen keeps the desktop's $base_oom" "$(grep '^oom:' "$LOG")" "oom: $base_oom"
+
 # force-close-x11: infynitae-xkill gets the session's root (launch.sh's parent; the trailing ":"
 # keeps the shell from exec-ing launch.sh in its own place), and a window
 # whose process was not ended is said in a notification

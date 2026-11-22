@@ -13,14 +13,18 @@ fi
 # 0. The compositor's own thread runs ahead of apps (nice -10, the most the gamemode group's limit
 # allows without root): if it is starved, every window stutters with it. Only its main thread is
 # raised; the apps this script starts stay at nice 0.
-# With real-time rights (the realtime group: `ulimit -r` above 0) the same thread also gets
-# round-robin real-time priority 2, as KWin does through rtkit: a busy CPU (a build, a training
-# run) can no longer delay a frame or input. Low on purpose: audio (PipeWire, about 88) and the
-# kernel's own threads still come first, and the kernel's real-time limit keeps 5% for the rest.
+# With real-time rights (`ulimit -r` 2 or more: the realtime group the installer adds the user
+# to, from realtime-privileges) the same thread also gets round-robin real-time priority 2, as
+# KWin does through rtkit: a busy CPU (a build, a training run) can no longer delay a frame or
+# input. Low on purpose: audio (PipeWire, about 88) and the kernel's own threads still come
+# first, and the kernel's real-time limit keeps 5% for the rest. Both with reset-on-fork: what
+# the compositor starts later (every app opened by key, the satellite, its own threads) begins at
+# normal priority. Without it those inherited real-time priority 2 and competed with the
+# compositor (seen 2026-11-22: kitty, qemu, the edge and the satellite at RR 2).
 if [ "$(cat /proc/$PPID/comm 2>/dev/null)" = "infynitae" ]; then
     renice -n -10 -p "$PPID" >/dev/null 2>&1 || true
-    if [ "$(ulimit -r 2>/dev/null || echo 0)" != 0 ] && command -v chrt >/dev/null 2>&1; then
-        chrt -r -p 2 "$PPID" >/dev/null 2>&1 || true
+    if command -v chrt >/dev/null 2>&1; then
+        chrt -R -r -p 2 "$PPID" >/dev/null 2>&1 || chrt -R -o -p 0 "$PPID" >/dev/null 2>&1 || true
     fi
 fi
 
@@ -101,6 +105,17 @@ if infy_on "${START_LOCKED:-0}" || [ "$1" = "--lock" ] \
         kill -TERM "$PPID" 2>/dev/null
         exit 1
     fi
+fi
+
+# 1c. When memory runs out, the kernel ends an app before the desktop. A process cannot lower its
+# out-of-memory score below the one it started with (that needs root), so the desktop keeps the
+# score it was given (the compositor, this script so far, the lock screen) and what this script
+# starts from here on gets 300: the kernel then counts 30% of the memory against an app
+# (oom_score_adj; launch.sh does the same for what a shortcut opens).
+DESKTOP_OOM=""
+read -r DESKTOP_OOM < /proc/self/oom_score_adj 2>/dev/null || true
+if [ -n "$DESKTOP_OOM" ] && [ "$DESKTOP_OOM" -lt 300 ]; then
+    echo 300 > /proc/self/oom_score_adj 2>/dev/null || true
 fi
 
 # 2. Synchronize Wayland & D-Bus environment for Portals, PipeWire, and screensharing
@@ -274,7 +289,11 @@ esac
 if infy_on "${LOCK_WHEN_AWAY:-${SLEEP_LOCK:-true}}"; then
     SLEEP_LOCK_BIN=$(infy_bin infynitae-sleep-lock || true)
     if [ -n "$SLEEP_LOCK_BIN" ]; then
-        "$SLEEP_LOCK_BIN" >/dev/null 2>&1 &
+        # the lock screen it starts keeps the desktop's out-of-memory score (1c)
+        (
+            [ -n "$DESKTOP_OOM" ] && echo "$DESKTOP_OOM" > /proc/self/oom_score_adj 2>/dev/null
+            exec "$SLEEP_LOCK_BIN"
+        ) >/dev/null 2>&1 &
     fi
 fi
 
