@@ -1263,6 +1263,8 @@ impl WaylandState {
                     .map_or(true, |v| parse_bool(&v).unwrap_or(true));
                 let mut hardware_cursor = true;
                 let mut touch_edge_swipe = true;
+                // off without a CLUSTER_SORT line, as in a config from before the setting
+                let mut cluster_sort = infynitae_core::ClusterSort::default();
                 let mut overlay_planes = false;
                 let mut wine_transparency = true;
                 let mut frame_guard = DEFAULT_FRAME_GUARD;
@@ -1428,6 +1430,9 @@ impl WaylandState {
                             }
                             "TOUCH_EDGE_SWIPE" => {
                                 touch_edge_swipe = parse_bool(val).unwrap_or(true);
+                            }
+                            "CLUSTER_SORT" => {
+                                cluster_sort = infynitae_core::ClusterSort::parse(val);
                             }
                             "KEEP_ON_TOP" => {
                                 self.core
@@ -1636,6 +1641,7 @@ impl WaylandState {
                 self.direct_scanout = Some(direct_scanout);
                 self.hardware_cursor = hardware_cursor;
                 self.core.set_touch_edge_swipe(touch_edge_swipe);
+                self.core.set_cluster_sort(cluster_sort);
                 self.overlay_planes = overlay_planes;
                 self.wine_transparency = wine_transparency;
                 self.frame_guard_percent = frame_guard;
@@ -2975,6 +2981,47 @@ mod key_binding_config_tests {
             state.latency_mode,
             super::frame_schedule::LatencyMode::Direct
         );
+    }
+
+    /// CLUSTER_SORT (2026-11-21): its words on reload, and off again without the line.
+    #[test]
+    fn reload_config_reads_and_resets_cluster_sort() {
+        use infynitae_core::ClusterSort;
+        use smithay::reexports::wayland_server::Display;
+        let temp = super::cursor::TestTempDir::new("wl_cluster_sort");
+        let cfg_dir = temp.path().join(".config/infynitae");
+        std::fs::create_dir_all(&cfg_dir).unwrap();
+        let cfg = cfg_dir.join("config");
+
+        let (core, _, _, _) =
+            infynitae_core::Core::new(infynitae_core::navigation::PersistedCameras::default());
+        let display: Display<super::WaylandState> = Display::new().unwrap();
+        let mut state = super::WaylandState::new(&display.handle(), core);
+        state.set_config_home(temp.path().to_path_buf());
+        assert_eq!(state.core().cluster_sort(), ClusterSort::default());
+
+        std::fs::write(&cfg, "CLUSTER_SORT=\"tidy app\"\n").unwrap();
+        state.reload_config();
+        let both = ClusterSort {
+            tidy: true,
+            app: true,
+        };
+        assert_eq!(state.core().cluster_sort(), both);
+
+        std::fs::write(&cfg, "CLUSTER_SORT=\"off\"\n").unwrap();
+        state.reload_config();
+        assert_eq!(state.core().cluster_sort(), ClusterSort::default());
+
+        // as the Settings card writes it (live/settings.sh set: single quotes)
+        std::fs::write(&cfg, "CLUSTER_SORT='tidy app'\n").unwrap();
+        state.reload_config();
+        assert_eq!(state.core().cluster_sort(), both);
+
+        std::fs::write(&cfg, "CLUSTER_SORT=\"tidy app\"\n").unwrap();
+        state.reload_config();
+        std::fs::write(&cfg, "").unwrap();
+        state.reload_config();
+        assert_eq!(state.core().cluster_sort(), ClusterSort::default());
     }
 
     #[test]

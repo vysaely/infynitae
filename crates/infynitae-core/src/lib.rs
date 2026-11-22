@@ -325,7 +325,7 @@ pub enum EntryError {
     InvalidEvent,
 }
 
-pub use arrange::ClusterLayout;
+pub use arrange::{ClusterLayout, ClusterSort};
 pub use protocol::PlacementPolicy;
 
 /// Action taken on Super+Enter: toggle fitting the camera to the window (`Fit`), or toggle
@@ -572,6 +572,8 @@ pub struct Core {
     /// touch forgets them: a window opened after one is the user's, and opens near the cursor
     /// (owner, 2026-11-03).
     closed_windows: Vec<(String, geom::CanvasPoint)>,
+    /// `CLUSTER_SORT` (`arrange`): off unless the config turns it on.
+    cluster_sort: arrange::ClusterSort,
     /// Windows a layout asked for another size, with their cell, until they answer
     /// (`Core::laid_out_anchor`).
     layout_cells: Vec<(stage::ElementId, arrange::Cell)>,
@@ -684,6 +686,7 @@ impl Core {
                 window_menu: None,
                 toplevel_parents: Vec::new(),
                 closed_windows: Vec::new(),
+                cluster_sort: arrange::ClusterSort::default(),
                 layout_cells: Vec::new(),
                 last_layout: None,
                 teleport_on_open: false,

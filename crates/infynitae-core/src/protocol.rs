@@ -1694,6 +1694,7 @@ impl Core {
             }
             (Lifecycle::Mapped, false) => {
                 // null-buffer commit: unmap; identity and anchor kept, snapshot dropped
+                let rest = self.cluster_left_by(id);
                 self.cancel_element_touches(id, out);
                 self.input.interaction.orphan_element(id);
                 if self.resize.is_some_and(|r| r.element == id) {
@@ -1712,6 +1713,7 @@ impl Core {
                 // M1: "fullscreen dropped (M9)"; the client must request it again after a remap
                 self.drop_fullscreen(id);
                 out.extend(self.lose_focus_target(id, &live));
+                self.tidy_after_leave(&rest, out);
             }
         }
         self.membership_pass_element(id, out);
@@ -1795,6 +1797,8 @@ impl Core {
     /// dead client gets no leave: its membership rows are dropped silently. Target loss triggers
     /// successor focus transition (K7, M11).
     pub fn toplevel_destroyed(&mut self, id: ElementId) -> Vec<Effect> {
+        // destroyed while mapped (an unmap first tidied already)
+        let rest = self.cluster_left_by(id);
         self.remember_closed(id);
         self.maximize_on_map.retain(|&e| e != id);
         self.scales.remove(id);
@@ -1822,6 +1826,7 @@ impl Core {
         let live: Vec<ElementId> = self.focusable_elements();
         fx.extend(self.lose_focus_target(id, &live));
         self.drop_fullscreen(id);
+        self.tidy_after_leave(&rest, &mut fx);
         let ended: Vec<OutputId> = before
             .iter()
             .filter(|(_, p)| *p == Some(id))
@@ -2141,8 +2146,10 @@ impl Core {
 
         let center_gx = center_anchor.x;
         let center_gy = center_anchor.y;
-        let (target_gx, target_gy) = if let pointer::PointerState::Located { output: ptr_out, p } =
-            self.pointer
+        // CLUSTER_SORT "app": beside its app's window in view instead of at the pointer
+        let (target_gx, target_gy) = if let Some(beside) = self.beside_own_app(id) {
+            beside
+        } else if let pointer::PointerState::Located { output: ptr_out, p } = self.pointer
             && ptr_out == output.id
             && ((p.0 - extent.0 / 2.0).abs() > 1.0 || (p.1 - extent.1 / 2.0).abs() > 1.0)
         {
@@ -2466,6 +2473,7 @@ impl Core {
         {
             return out;
         }
+        let rest = self.cluster_left_by(id);
         if self.stage.set_minimized(id, true).is_err() {
             return out;
         }
@@ -2481,6 +2489,7 @@ impl Core {
         // the window now focused may have asked for a pointer lock or confine: it starts now, not
         // at the next motion (AUDIT_FOCUS_HOVER improvement 10)
         out.extend(self.reconcile_constraints());
+        self.tidy_after_leave(&rest, &mut out);
         out
     }
 

@@ -1,6 +1,8 @@
 //! Cluster layouts (owner, 2026-11-21): the windows of a cluster (`Core::clusters`, windows
 //! within 300 px of each other) arranged once when the person asks (a key, `infynitae msg
-//! arrange`).
+//! arrange`), and kept arranged by `CLUSTER_SORT` when they turn it on. These are the only
+//! paths on which one window's change moves other windows (docs/DECISIONS.md, 2026-11-06 and
+//! 2026-11-21).
 //!
 //! - tidy: the windows at their own sizes, in reading order, packed in rows as wide as the usable
 //!   view at zoom 1, 12 px apart;
@@ -44,6 +46,32 @@ impl ClusterLayout {
             ClusterLayout::Grid => ClusterLayout::Columns,
             ClusterLayout::Columns => ClusterLayout::Tidy,
         }
+    }
+}
+
+/// `CLUSTER_SORT`: what is kept arranged without a key. Both off by default: no window moves
+/// another unless the person asks (owner, 2026-11-06).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ClusterSort {
+    /// "tidy": a cluster is tidied again after one of its windows closes or is minimized.
+    pub tidy: bool,
+    /// "app": a new window opens beside its app's newest window in the first screen's view.
+    pub app: bool,
+}
+
+impl ClusterSort {
+    /// The config's words, any of "tidy" and "app" separated by spaces or commas; "off", an empty
+    /// value or other words turn nothing on.
+    pub fn parse(value: &str) -> ClusterSort {
+        let mut sort = ClusterSort::default();
+        for word in value.split([' ', ',', '\t']) {
+            match word.to_ascii_lowercase().as_str() {
+                "tidy" => sort.tidy = true,
+                "app" => sort.app = true,
+                _ => {}
+            }
+        }
+        sort
     }
 }
 
@@ -149,6 +177,15 @@ pub(crate) fn centred_in(cell: Cell, size: (i64, i64)) -> crate::geom::CanvasPoi
 }
 
 impl Core {
+    /// `CLUSTER_SORT`, read on save like the other placement keys.
+    pub fn set_cluster_sort(&mut self, sort: ClusterSort) {
+        self.cluster_sort = sort;
+    }
+
+    pub fn cluster_sort(&self) -> ClusterSort {
+        self.cluster_sort
+    }
+
     /// The windows of `members` a layout moves, with their places: mapped, shown, windowed, on
     /// the Canvas (not kept on top), not a notification and not a child of a mapped window.
     fn arranged(&self, members: &[ElementId]) -> Vec<(ElementId, Cell)> {
@@ -293,6 +330,28 @@ impl Core {
         true
     }
 
+    /// `CLUSTER_SORT` "tidy", before `id` closes or is minimized: the rest of its cluster, to be
+    /// tidied once it has left (`tidy_after_leave`). Empty when the setting is off, `id` is not a
+    /// window a layout arranges (a dialog leaves no gap) or a drag is on.
+    pub(crate) fn cluster_left_by(&self, id: ElementId) -> Vec<ElementId> {
+        if !self.cluster_sort.tidy
+            || self.input.interaction.active()
+            || self.arranged(&[id]).is_empty()
+        {
+            return Vec::new();
+        }
+        let mut rest = self.cluster_for_element(id);
+        rest.retain(|&e| e != id);
+        rest
+    }
+
+    /// The windows `cluster_left_by` named, tidied: the gap closes. The camera stays.
+    pub(crate) fn tidy_after_leave(&mut self, rest: &[ElementId], out: &mut Vec<Effect>) {
+        if !rest.is_empty() {
+            self.arrange(rest, ClusterLayout::Tidy, out);
+        }
+    }
+
     /// A commit of a window a layout asked for a size: the anchor that centres the size it drew
     /// in its cell, until it answers that configure (`layout_answered`).
     pub(crate) fn laid_out_anchor(
@@ -310,6 +369,36 @@ impl Core {
         self.layout_cells.retain(|(e, cell)| {
             *e != id || acked.is_none_or(|s| (i64::from(s.w), i64::from(s.h)) != (cell.w, cell.h))
         });
+    }
+
+    /// `CLUSTER_SORT` "app": where a new window of an app goes when the app already has a window
+    /// in the first screen's view: right of the newest such window, the gap kept (the free-space
+    /// search moves it on from there if that spot is taken).
+    pub(crate) fn beside_own_app(&self, id: ElementId) -> Option<(i64, i64)> {
+        if !self.cluster_sort.app {
+            return None;
+        }
+        let output = self.outputs().first()?.id;
+        let app = self.stage.meta(id)?.app_id.as_deref()?.to_ascii_lowercase();
+        let same = self
+            .stage
+            .mapped_in_creation_order()
+            .into_iter()
+            .rev()
+            .find(|&e| {
+                e != id
+                    && !self.stage.is_minimized(e)
+                    && !self.stage.is_above(e)
+                    && self.fullscreen_of(e).is_none()
+                    && self
+                        .stage
+                        .meta(e)
+                        .and_then(|m| m.app_id.as_deref())
+                        .is_some_and(|a| a.eq_ignore_ascii_case(&app))
+                    && self.view_covers(output, e)
+            })?;
+        let (a, t) = (self.stage.anchor(same)?, self.stage.tree(same)?);
+        Some((a.x + i64::from(t.geometry.size.w) + GAP, a.y))
     }
 }
 
@@ -501,6 +590,33 @@ mod tests {
         );
     }
 
+    #[test]
+    fn cluster_sort_reads_its_words() {
+        assert_eq!(ClusterSort::parse("off"), ClusterSort::default());
+        assert_eq!(ClusterSort::parse(""), ClusterSort::default());
+        assert_eq!(
+            ClusterSort::parse("tidy"),
+            ClusterSort {
+                tidy: true,
+                app: false
+            }
+        );
+        assert_eq!(
+            ClusterSort::parse("Tidy app"),
+            ClusterSort {
+                tidy: true,
+                app: true
+            }
+        );
+        assert_eq!(
+            ClusterSort::parse("app,tidy"),
+            ClusterSort {
+                tidy: true,
+                app: true
+            }
+        );
+    }
+
     /// Tidy on a real Core: three overlapping windows end up apart with the gap, at their own
     /// sizes, in reading order, from the cluster's top-left corner; no size is asked.
     #[test]
@@ -672,5 +788,106 @@ mod tests {
         d.c.shell_command(&mut d.s, cmd).unwrap();
         assert_eq!(anchor(&d.c, a), (-900, -500));
         assert_eq!(anchor(&d.c, b), (-900 + 412, -500));
+    }
+
+    /// Four windows in a row; B closes, then C is minimized: the others move only with
+    /// CLUSTER_SORT "tidy", each time closing the gap the window left.
+    #[test]
+    fn cluster_sort_tidy_closes_the_gap_a_window_leaves() {
+        for sort in ["off", "app", "tidy", "tidy app"] {
+            let mut d = desk();
+            d.c.set_cluster_sort(ClusterSort::parse(sort));
+            let a = open(&mut d, 1, "a", (400, 300), (-900, 0));
+            let b = open(&mut d, 2, "b", (400, 300), (-488, 0));
+            let c = open(&mut d, 3, "c", (400, 300), (-76, 0));
+            let e = open(&mut d, 4, "e", (400, 300), (336, 0));
+            let tidy = sort.contains("tidy");
+            // B closes: its client unmaps it, then destroys it
+            d.c.toplevel_committed(b, win(2, 400, 300, false)).unwrap();
+            d.c.toplevel_destroyed(b);
+            assert_eq!(anchor(&d.c, a), (-900, 0), "{sort}");
+            let want = if tidy {
+                [(-488, 0), (-76, 0)]
+            } else {
+                [(-76, 0), (336, 0)]
+            };
+            assert_eq!(
+                [anchor(&d.c, c), anchor(&d.c, e)],
+                want,
+                "{sort}: after B closed"
+            );
+            // C is minimized
+            d.c.set_focus(&mut d.i, Some(c)).unwrap();
+            d.c.client_minimize(c);
+            assert!(d.c.stage().is_minimized(c));
+            assert_eq!(anchor(&d.c, a), (-900, 0), "{sort}");
+            let want = if tidy { (-488, 0) } else { (336, 0) };
+            assert_eq!(anchor(&d.c, e), want, "{sort}: E after C was minimized");
+        }
+    }
+
+    /// A window destroyed while still mapped tidies too, and one minimized by the shell; a
+    /// dialog closing over its parent moves nothing.
+    #[test]
+    fn cluster_sort_tidy_on_destroy_and_not_for_a_dialog() {
+        let mut d = desk();
+        d.c.set_cluster_sort(ClusterSort::parse("tidy"));
+        let a = open(&mut d, 1, "a", (400, 300), (-700, 0));
+        let b = open(&mut d, 2, "b", (400, 300), (-200, 0));
+        let dialog = open(&mut d, 3, "b", (200, 100), (-100, 100));
+        d.c.set_toplevel_parent(dialog, Some(b));
+        d.c.toplevel_destroyed(dialog);
+        assert_eq!(anchor(&d.c, b), (-200, 0), "a dialog leaves no gap");
+        d.c.toplevel_destroyed(a);
+        assert_eq!(
+            anchor(&d.c, b),
+            (-200, 0),
+            "B alone is its cluster's corner"
+        );
+        let c = open(&mut d, 4, "c", (400, 300), (300, 0));
+        d.c.toplevel_destroyed(b);
+        assert_eq!(anchor(&d.c, c), (300, 0));
+        let e = open(&mut d, 5, "e", (400, 300), (-300, 0));
+        d.c.toplevel_destroyed(e);
+        assert_eq!(anchor(&d.c, c), (300, 0), "C keeps its corner");
+        let f = open(&mut d, 6, "f", (400, 300), (712, 0));
+        let g = open(&mut d, 7, "g", (400, 300), (1300, 0));
+        d.c.toplevel_destroyed(f);
+        assert_eq!(anchor(&d.c, g), (712, 0), "G closes the gap F left");
+        // minimized from a taskbar or the edge (the shell's command)
+        let h = open(&mut d, 8, "h", (400, 300), (1300, 0));
+        let element = ElementRef {
+            instance: d.c.stage().instance(),
+            element: g,
+        };
+        d.c.shell_command(&mut d.s, ShellCommand::MinimizeElement { element })
+            .unwrap();
+        assert_eq!(anchor(&d.c, h), (712, 0), "H closes the gap G left");
+    }
+
+    /// CLUSTER_SORT "app": a new window of an app with a window in view opens right of it, the
+    /// gap kept, instead of at the view's centre; not when that window is out of view, and not
+    /// with the setting off.
+    #[test]
+    fn cluster_sort_app_opens_beside_the_apps_window() {
+        let centre_spot = |sort: &str, far: bool| {
+            let mut d = desk();
+            d.c.set_cluster_sort(ClusterSort::parse(sort));
+            let x = if far { 5000 } else { -900 };
+            let _ = open(&mut d, 1, "foot", (400, 300), (x, -400));
+            let _ = open(&mut d, 2, "other", (300, 200), (600, 200));
+            let id = d.c.toplevel_created();
+            d.c.toplevel_metadata(id, None, Some("foot")).unwrap();
+            d.c.toplevel_committed(id, win(3, 400, 300, false)).unwrap();
+            d.c.toplevel_committed(id, win(3, 400, 300, true)).unwrap();
+            anchor(&d.c, id)
+        };
+        // the view's centre, as every window opens without the setting (the pointer is not on
+        // the screen)
+        assert_eq!(centre_spot("off", false), (-200, -150));
+        assert_eq!(centre_spot("tidy", false), (-200, -150));
+        assert_eq!(centre_spot("app", false), (-900 + 412, -400));
+        assert_eq!(centre_spot("tidy app", false), (-900 + 412, -400));
+        assert_eq!(centre_spot("app", true), (-200, -150));
     }
 }

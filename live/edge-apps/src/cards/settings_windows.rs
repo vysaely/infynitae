@@ -147,6 +147,20 @@ pub const TABLE: &[Setting] = &[
         more: true,
         needs: &[],
     },
+    Setting {
+        key: "CLUSTER_SORT",
+        name: "Windows near each other",
+        says: "Super+G arranges them by hand",
+        control: Control::Pick(&[
+            ("off", "Stay where they are"),
+            ("tidy", "Close the gap a window leaves"),
+            ("app", "Open beside their app"),
+            ("tidy app", "Both"),
+        ]),
+        after: After::Save,
+        more: true,
+        needs: &[],
+    },
 ];
 
 #[cfg(test)]
