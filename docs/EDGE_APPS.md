@@ -527,7 +527,7 @@ Kept as in `live/edge-rs/src/wayland.rs`, which was measured and fixed over seve
   the edge.
 - **Keyboard**: opened by key, exclusive until the keyboard arrives, then on demand, so a window the
   pointer goes to or clicks can take it while the panel stays open; a click on the panel takes it back.
-  Opened by hover, on demand until a click inside. Editing or a question: exclusive.
+  Opened by hover, on demand, a click inside included (owner, 2026-11-22). Editing or a question: exclusive.
 - **Taller than the screen**: a panel scrolls in its one column (wheel, touchpad, keys), editing too
   (owner 2026-11-22; columns side by side were tried and dropped).
 - **Under a fullscreen window**: the closed surface is unmapped (no buffer), so the window can be shown

@@ -407,7 +407,6 @@ pub struct Shell {
     pub open_output: Option<OutputId>,
     ask_output: Option<OutputId>,
     pub opened_by_hover: bool,
-    pub clicked_inside: bool,
     /// A panel opened by its key has had the keyboard: from then on it holds it on demand, so a
     /// window the pointer goes to or clicks can take it (the panel stays open meanwhile).
     pub keyboard_held: bool,
@@ -519,7 +518,6 @@ impl Shell {
             open_output: None,
             ask_output: None,
             opened_by_hover: false,
-            clicked_inside: false,
             hover_open: None,
             hover_close: None,
             pointer: None,
@@ -927,7 +925,6 @@ impl Shell {
             return false;
         }
         self.opened_by_hover = false;
-        self.clicked_inside = false;
         self.keyboard_held = false;
         self.hover_open = None;
         self.hover_close = None;
@@ -1295,7 +1292,6 @@ impl Shell {
         self.panel_scroll = 0.0;
         self.reset_keys(idx);
         self.opened_by_hover = by_hover;
-        self.clicked_inside = false;
         self.keyboard_held = false;
         self.hover_open = None;
         self.hover_close = None;
@@ -1343,7 +1339,6 @@ impl Shell {
         self.selected = None;
         self.keyboard = false;
         self.opened_by_hover = false;
-        self.clicked_inside = false;
         self.keyboard_held = false;
         self.hover_open = None;
         self.hover_close = None;
@@ -1975,12 +1970,11 @@ impl Shell {
             return self.close();
         }
         self.hover_close = None;
-        let promoted = self.opened_by_hover && !std::mem::replace(&mut self.clicked_inside, true);
         let Some((ci, hit)) = self.hit_at_on(output, (x, y)) else {
             if button == Button::Right {
-                return self.offer_edit(idx, x, y) || promoted;
+                return self.offer_edit(idx, x, y);
             }
-            return promoted;
+            return false;
         };
         if button == Button::Left {
             self.pressed = Some((output, ci, hit));
@@ -1995,9 +1989,9 @@ impl Shell {
             },
         );
         if !used && button == Button::Right && self.open == Some(idx) {
-            return self.offer_edit(idx, x, y) || promoted;
+            return self.offer_edit(idx, x, y);
         }
-        used || promoted
+        used
     }
 
     #[cfg(test)]
