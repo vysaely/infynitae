@@ -19,6 +19,7 @@ for name, how in (("hover", None), ("key", "control")):
     if "panel" not in d: continue
     p = d["panel"]; (os.environ.get("NOIN") or click_at(p[0] + p[2] / 2, p[1] + 20)); wait(0.4)
     point_at("alacritty"); click(); wait(0.4)
+    chord("ctrl+c"); wait(0.2)  # a clean shell line: an Escape left from the case before would join the first key
     text(f"touch /tmp/kbd-{name}\n"); wait(1.0)
     check(f"{name}: typing after a click on the terminal reaches it", os.path.exists(f"/tmp/kbd-{name}"), "panel " + boxes().get("state", "?"))
     shot(f"kbd-{name}")
