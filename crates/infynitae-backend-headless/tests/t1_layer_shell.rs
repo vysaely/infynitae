@@ -428,3 +428,93 @@ fn audit_layers_unmap_before_first_buffer_never_configures_on_remap() {
         "layer waiting to remap after pre-first-buffer unmap must receive configure"
     );
 }
+
+/// The edge's panel opened by its key, as the edge does it: one layer surface over the whole
+/// output, its input region the panel's box. It asks for the keyboard exclusively when it opens
+/// and on demand once the keyboard has come. A click on a window then gives the window the
+/// keyboard, and the first key typed reaches the window. In the test VM (2026-11-22) a terminal
+/// clicked after `infynitae-edge control` got "ouch" for "touch"; this sequence passes, so the
+/// compositor routes the key right whenever the edge has asked on demand.
+fn key_opened_panel_then_a_click_on_the_window(click_inside: bool) {
+    let mut r = setup();
+    r.ls.state.core_mut().set_focus_follows_mouse(true);
+    r.ls.state.core_mut().set_focus_follows_mouse_strict(true);
+    r.map_w();
+    // W at screen (560, 255)–(1360, 855): the pointer goes onto it and clicks
+    r.motion((-200.0, 0.0));
+    r.button(BTN_LEFT, true, none());
+    r.button(BTN_LEFT, false, none());
+    assert_eq!(r.ls.probe.kb.active.as_deref(), Some("W"));
+    let (edge, size) = layer(
+        &mut r,
+        "edge",
+        Layer::Top,
+        Anchor::Top | Anchor::Bottom | Anchor::Left | Anchor::Right,
+        (0, 0),
+        -1,
+        KeyboardInteractivity::None,
+    );
+    assert_eq!(size, (1920, 1080));
+    let qh = r.ls.qh.clone();
+    r.ls.probe.input_region(&qh, edge, &[(true, (0, 0, 0, 0))]);
+    r.ls.pump();
+    // to empty canvas at (300, 300): strict focus leaves W
+    r.motion((-460.0, -240.0));
+    // the panel opens at (1540, 680)–(1920, 1080)
+    r.ls.probe
+        .layer_of(edge)
+        .set_keyboard_interactivity(KeyboardInteractivity::Exclusive);
+    r.ls.probe
+        .input_region(&qh, edge, &[(true, (1540, 680, 380, 400))]);
+    r.ls.probe.frame_and_draw(&qh, edge);
+    r.ls.pump();
+    r.frame();
+    assert_eq!(r.ls.probe.kb.active.as_deref(), Some("edge"));
+    // the keyboard came: from now on on demand
+    r.ls.probe
+        .layer_of(edge)
+        .set_keyboard_interactivity(KeyboardInteractivity::OnDemand);
+    r.ls.probe.frame_and_draw(&qh, edge);
+    r.ls.pump();
+    r.frame();
+    assert_eq!(r.ls.probe.kb.active.as_deref(), Some("edge"));
+    if click_inside {
+        // (300, 300) → (1730, 700)
+        r.motion((1430.0, 400.0));
+        r.button(BTN_LEFT, true, none());
+        r.button(BTN_LEFT, false, none());
+        assert_eq!(r.ls.probe.kb.active.as_deref(), Some("edge"));
+        r.motion((-1430.0, -400.0));
+    }
+    // (300, 300) → (760, 540) on W, and a click on it
+    r.motion((460.0, 240.0));
+    r.button(BTN_LEFT, true, none());
+    r.button(BTN_LEFT, false, none());
+    let before = r.ls.probe.kb_log.len();
+    r.t += 1000;
+    infynitae_backend_headless::keyboard_key(&mut r.ls.state, &mut r.ls.input, 20, true, r.t)
+        .expect("key");
+    r.ls.pump();
+    assert_eq!(
+        r.ls.probe.kb_log[before..],
+        ["wl_keyboard.key 20 pressed"],
+        "{:?}",
+        r.ls.probe.kb_log
+    );
+    assert_eq!(
+        r.ls.probe.kb.active.as_deref(),
+        Some("W"),
+        "the first key after the click is the window's: {:?}",
+        r.ls.probe.kb_log
+    );
+}
+
+#[test]
+fn a_click_on_a_window_after_a_key_opened_panel_gets_the_first_key() {
+    key_opened_panel_then_a_click_on_the_window(false);
+}
+
+#[test]
+fn a_click_on_a_window_after_a_click_in_a_key_opened_panel_gets_the_first_key() {
+    key_opened_panel_then_a_click_on_the_window(true);
+}
