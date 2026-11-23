@@ -14,6 +14,8 @@ VM's helper scripts in ~/g (feat.py, everyday.py) and the edge installed as ~/.l
     sudo -E python3 ptime.py      key to first frame and Escape to closed, in ms
     sudo -E python3 pask.py [EDGE] `infynitae-edge ask` end to end: a choice by keys and by click, a
                                   text, a secret, a cancel; the asker gets the answer and ends (7)
+    sudo -E python3 pkbd.py [EDGE] typing into a terminal clicked while a panel is open, by hover and
+                                  by key; NOIN=1 skips the click inside the panel (4)
 
 Each prints PASS or FAIL per check and a SUMMARY line. They read the edge's INFYNITAE_EDGE_BOXES
 dump (the panel's, each module's and the edit bar's boxes after every drawing).
