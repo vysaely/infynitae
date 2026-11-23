@@ -51,8 +51,10 @@ fn tree(root: &WlSurface, popup: Option<(LocalPoint, LocalPoint)>, out: &mut Vec
                 .unwrap_or((None, false));
             let mut attributes = states.cached_state.get::<SurfaceAttributes>();
             let attributes = attributes.current();
-            // committed callbacks accumulate in current state until completed
-            let frame_requested = !attributes.frame_callbacks.is_empty();
+            // committed callbacks accumulate in current state until completed; a FIFO barrier
+            // is lifted where they complete, so one waiting is a requested frame too (`fifo`)
+            let frame_requested =
+                !attributes.frame_callbacks.is_empty() || crate::fifo::barrier_waiting(states);
             let input = match attributes.input_region.as_ref() {
                 None => InputRegion::Infinite,
                 Some(r) => InputRegion::Ops(

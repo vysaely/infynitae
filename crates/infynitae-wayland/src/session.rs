@@ -549,8 +549,8 @@ impl Session {
         self.fallback = deadline.map(|d| Instant::now() + d.saturating_sub(now));
     }
 
-    /// Arms the wake-up for a frame held back until `deadline` (LATENCY, on the presentation
-    /// clock whose current time is `now`), or disarms it.
+    /// Arms the wake-up for a frame held back until `deadline` (LATENCY, or a commit timed for a
+    /// coming refresh; on the presentation clock whose current time is `now`), or disarms it.
     pub fn set_render_deadline(&mut self, deadline: Option<Duration>, now: Duration) {
         self.render_at = deadline.map(|d| Instant::now() + d.saturating_sub(now));
     }

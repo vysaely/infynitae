@@ -32,7 +32,7 @@ use infynitae_core::{Core, InputPort, OutputLifecycleToken, PhysicalEvent};
 use infynitae_wayland::display_settings::{DisplayChange, parse_transform};
 use infynitae_wayland::output_management::{HeadChange, HeadInfo, HeadMode};
 use infynitae_wayland::session::{Session, SessionOptions};
-use infynitae_wayland::{WaylandState, convert, log_line};
+use infynitae_wayland::{FrameDone, WaylandState, convert, log_line};
 
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::allocator::gbm::{GbmAllocator, GbmBufferFlags, GbmDevice};
@@ -1752,6 +1752,8 @@ pub fn run_console_with(
     }
 
     data.state.enable_frame_waits();
+    let device = data.drm.device_fd().clone();
+    data.state.enable_explicit_sync(&device);
     if data.state.latency_stats {
         scanout_log::install();
     }
@@ -1984,6 +1986,13 @@ pub fn run_console_with(
             }
         }
         turn.mark("shell socket");
+        // commits timed for now apply, whoever holds them (a hidden window, a screen not drawing)
+        if data
+            .state
+            .apply_due_timed_commits(infynitae_wayland::presentation_clock_now())
+        {
+            data.session.request_frame();
+        }
         data.session.dispatch(&mut data.state);
         turn.mark("client requests");
         // a new buffer is what a rest must not hold back: it goes to the very next refresh
@@ -2205,6 +2214,14 @@ pub fn run_console_with(
         if data.state.core().zoom_gliding() {
             data.session.request_frame();
         }
+        // a commit timed for a coming refresh goes into the frame started in the refresh before it
+        if data.screens.iter().any(|s| {
+            data.state
+                .next_timed_commit(Some(s.id))
+                .is_some_and(|t| s.schedule.start_to_show_at(t) <= now)
+        }) {
+            data.session.request_frame();
+        }
         if (data.session.frame_due() || has_screencopy || deferred_due) && data.active {
             // what this turn's input made goes to the clients first: a game reads its mouse motion
             // now, not after the compositor's own drawing (review 2026-11-12)
@@ -2214,7 +2231,22 @@ pub fn run_console_with(
         }
         let now = infynitae_wayland::presentation_clock_now();
         let next_deferred = data.screens.iter().filter_map(|s| s.deferred).min();
-        data.session.set_render_deadline(next_deferred, now);
+        // a timed commit: the start of the frame it goes into, and its own time (applied then
+        // whatever the screens do)
+        let next_timed = data
+            .screens
+            .iter()
+            .filter_map(|s| {
+                let t = data.state.next_timed_commit(Some(s.id))?;
+                Some(s.schedule.start_to_show_at(t)).filter(|start| *start > now)
+            })
+            .chain(data.state.next_timed_commit(None))
+            .min();
+        let deadline = match (next_deferred, next_timed) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        data.session.set_render_deadline(deadline, now);
         latency_summary(&mut data);
         turn.mark("latency summary");
 
@@ -2532,6 +2564,8 @@ fn render(data: &mut LoopData, turn: &mut TurnClock) {
         }
 
         turn.mark("frame schedule");
+        // commits timed up to the refresh this frame reaches go into it
+        data.state.apply_timed_commits_for(id, glide_at);
         data.state.zoom_tick(id, glide_at);
         if locked {
             data.state.set_fitted_window(id, None);
@@ -3602,23 +3636,38 @@ fn apply_virtual_input(data: &mut LoopData) {
 fn watch_frame_waits(data: &mut LoopData) {
     use smithay::reexports::calloop::Interest;
     for wait in data.state.take_frame_waits() {
-        let (dmabuf, ready, client) = wait.into_parts();
-        let source = match dmabuf.generate_blocker(Interest::READ) {
-            Ok((_, source)) => source,
-            Err(_) => {
-                // finished already
-                ready.store(true, std::sync::atomic::Ordering::Release);
-                data.state.frame_ready(&client);
-                continue;
-            }
-        };
+        let (done, ready, client) = wait.into_parts();
         let (flag, who) = (ready.clone(), client.clone());
-        let inserted = data.loop_handle.insert_source(source, move |_, _, data| {
-            flag.store(true, std::sync::atomic::Ordering::Release);
-            data.state.frame_ready(&who);
-            Ok(())
-        });
-        if inserted.is_err() {
+        let inserted = match done {
+            FrameDone::Buffer(dmabuf) => match dmabuf.generate_blocker(Interest::READ) {
+                Ok((_, source)) => data
+                    .loop_handle
+                    .insert_source(source, move |_, _, data| {
+                        flag.store(true, std::sync::atomic::Ordering::Release);
+                        data.state.frame_ready(&who);
+                        Ok(())
+                    })
+                    .is_ok(),
+                // finished already
+                Err(_) => false,
+            },
+            FrameDone::Acquire(point) => match point.generate_blocker() {
+                Ok((_, source)) => data
+                    .loop_handle
+                    .insert_source(source, move |_, _, data| {
+                        flag.store(true, std::sync::atomic::Ordering::Release);
+                        data.state.frame_ready(&who);
+                        Ok(())
+                    })
+                    .is_ok(),
+                Err(e) => {
+                    // the frame is shown as it is rather than holding the window forever
+                    log_line!("[infynitae] Explicit sync: cannot wait for a frame: {e}");
+                    false
+                }
+            },
+        };
+        if !inserted {
             ready.store(true, std::sync::atomic::Ordering::Release);
             data.state.frame_ready(&client);
         }

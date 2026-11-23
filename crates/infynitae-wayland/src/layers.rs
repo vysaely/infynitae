@@ -197,14 +197,15 @@ impl WaylandState {
         };
         let frame = self.core.layer_frame(output);
         for e in frame.above.iter().chain(frame.below.iter()) {
-            if let Some(surface) = self.registry.surface(e.surface) {
+            if let Some(surface) = self.registry.surface(e.surface).cloned() {
                 smithay::desktop::utils::send_frames_surface_tree(
-                    surface,
+                    &surface,
                     &o,
                     now,
                     None,
                     |_, _| Some(o.clone()),
                 );
+                self.lift_fifo_barriers(&surface);
             }
         }
     }

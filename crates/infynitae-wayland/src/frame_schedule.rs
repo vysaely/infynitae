@@ -371,6 +371,23 @@ impl FrameSchedule {
         now + self.until_next_refresh(now)
     }
 
+    /// The earliest start of a frame that reaches the screen at or after `t` ([`Self::shown_at`]):
+    /// the refresh before the first one at or after `t`. A commit timed for `t` may go into a frame
+    /// started then, and into none before (`commit_timing`).
+    pub fn start_to_show_at(&self, t: Duration) -> Duration {
+        let period = self.period.max(Duration::from_micros(1));
+        match self.last_vblank {
+            Some(last) if t > last => {
+                // the first refresh at or after t is last + k periods, k >= 1
+                let k = (t - last).as_nanos().div_ceil(period.as_nanos());
+                last + Duration::from_nanos((period.as_nanos() * (k - 1)) as u64)
+            }
+            // no refresh seen, or t is not after the last one: a frame started now is shown a
+            // period later at most, which is after t
+            _ => t.saturating_sub(period),
+        }
+    }
+
     /// LATENCY off: a frame that would start too close to the refresh's end waits until just after
     /// it (with the newest buffers then), as a late start only misses the refresh and blocks the
     /// next frame too. Only near a refresh seen lately: long after the last one its time is a guess.
@@ -971,6 +988,36 @@ mod tests {
             assert_eq!(s.shown_at(start), t + P);
         }
         assert_eq!(s.shown_at(t + P * 2 + P / 3), t + P * 3);
+    }
+
+    #[test]
+    fn a_frame_for_a_time_starts_in_the_refresh_before_it() {
+        let mut s = FrameSchedule::new(LatencyMode::Off, P);
+        let t = Duration::from_secs(5);
+        s.vblank(t);
+        let ns = Duration::from_nanos(1);
+        for target in [
+            t + ns,
+            t + P / 3,
+            t + P,
+            t + P + ns,
+            t + P * 3 + P / 2,
+            t + P * 4,
+        ] {
+            let start = s.start_to_show_at(target);
+            assert!(s.shown_at(start) >= target, "{target:?}: shown before it");
+            // a start before the last refresh is in the past: only later ones are compared
+            if start > t {
+                assert!(
+                    s.shown_at(start - ns) < target,
+                    "{target:?}: a frame started earlier would make it too"
+                );
+            }
+        }
+        assert_eq!(s.start_to_show_at(t + P / 3), t);
+        assert_eq!(s.start_to_show_at(t + P * 3 + P / 2), t + P * 3);
+        // a time at or before the last refresh: any frame started now is in time
+        assert!(s.start_to_show_at(t) <= t);
     }
 
     #[test]
