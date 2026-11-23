@@ -133,10 +133,10 @@ struct OutputSurface {
     configured: bool,
     mapped_closed: bool,
     clear_pending: bool,
-    /// a fullscreen window is on this screen: closed, the surface is unmapped, so the window can
-    /// be shown directly (scanout, tearing)
+    /// a fullscreen window is on this screen: closed, the surface goes below the windows
+    /// (`below`), so the window can be shown directly (scanout, tearing)
     fullscreen_under: bool,
-    unmapped: bool,
+    below: bool,
     dirty: bool,
     frame_pending: bool,
 }
@@ -245,29 +245,16 @@ impl OutputSurface {
 
     fn apply_mode(&mut self, qh: &QueueHandle<App>, compositor: &CompositorState, shell: &Shell) {
         let show_here = shell.visible_on(self.id);
-        if !show_here && self.fullscreen_under {
-            if !self.unmapped {
-                // a null buffer unmaps a layer surface; it maps again after a commit and its configure
-                self.layer.wl_surface().attach(None, 0, 0);
-                self.layer.commit();
-                self.unmapped = true;
-                self.configured = false;
-                self.mapped_closed = false;
-                self.clear_pending = false;
-                self.dirty = false;
-                self.frame_pending = false;
-                self.committed_box = None;
-                self.last_viewport_dest = None;
-                for slot in self.slots.iter_mut().flatten() {
-                    slot.prev_box = None;
-                }
-            }
-            return;
-        }
-        if self.unmapped {
-            self.unmapped = false;
-            self.layer.commit();
-            return;
+        let below = !show_here && self.fullscreen_under;
+        if below != self.below {
+            // Below the windows the buffer stays attached, so the compositor keeps its copy on
+            // the GPU: over a fullscreen window it draws no Bottom layer, and a window that fills
+            // the screen is opaque and hides it. Until 2026-11-23 the surface was unmapped (null
+            // buffer); each time it mapped again its whole buffer was uploaded again, 7-10 ms in
+            // a slow "layers above" turn (session log, 2026-11-22).
+            self.layer
+                .set_layer(if below { Layer::Bottom } else { Layer::Top });
+            self.below = below;
         }
         if !self.configured || self.width == 0 || self.height == 0 {
             return;
@@ -1020,7 +1007,7 @@ impl App {
             mapped_closed: false,
             clear_pending: false,
             fullscreen_under: false,
-            unmapped: false,
+            below: false,
             dirty: false,
             frame_pending: false,
         });

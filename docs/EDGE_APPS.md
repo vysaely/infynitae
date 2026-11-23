@@ -530,8 +530,9 @@ Kept as in `live/edge-rs/src/wayland.rs`, which was measured and fixed over seve
   Opened by hover, on demand, a click inside included (owner, 2026-11-22). Editing or a question: exclusive.
 - **Taller than the screen**: a panel scrolls in its one column (wheel, touchpad, keys), editing too
   (owner 2026-11-22; columns side by side were tried and dropped).
-- **Under a fullscreen window**: the closed surface is unmapped (no buffer), so the window can be shown
-  directly (`wayland.rs:237-262`; the reason is in the comment at 160-164).
+- **Under a fullscreen window**: the closed surface moves to the Bottom layer, below the windows, so the
+  window can be shown directly; its buffer stays, so the compositor need not upload it again when the
+  window leaves (`apply_mode` in `wayland.rs`; until 2026-11-23 it was unmapped, 7-10 ms each time).
 - **Buffers and damage**: two shm buffers per surface; each frame clears and redraws the panel's box and
   damages that box, the box this buffer held before, and the box last committed (`wayland.rs:319-343`,
   `403-711`, damage at `692-702`). Known cost, kept for now: a hover change redraws the whole panel, not
