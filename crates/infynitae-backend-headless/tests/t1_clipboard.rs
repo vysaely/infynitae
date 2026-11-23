@@ -444,13 +444,33 @@ fn a_drag_moves_from_one_window_onto_another_and_drops_there() {
     use common::input::{BTN_LEFT, Rig, none};
     let mut r = Rig::x8();
     let qh = r.ls.qh.clone();
-    // V (200 x 150) opens where the placement puts it; the pointer stays on W
+    // V (200 x 150), moved beside W; the pointer stays on W
     let vi = r.ls.probe.toplevel(&qh, "V", (200, 150), 0);
     r.ls.pump();
     r.ls.probe.draw(&qh, vi);
     r.ls.pump();
     r.frame();
     let v = *r.ls.state.core().stage().mapped_elements().last().unwrap();
+    // beside W, not under it (pressing W to start the drag raises W)
+    let element = infynitae_core::stage::ElementRef {
+        instance: r.ls.state.core().stage().instance(),
+        element: v,
+    };
+    let fx =
+        r.ls.state
+            .core_mut()
+            .shell_command(
+                &mut r.ls.shell,
+                infynitae_core::ShellCommand::MoveElement {
+                    element,
+                    to: (450.0, -100.0),
+                    stream: infynitae_core::ShellStream::Atomic,
+                },
+            )
+            .unwrap();
+    r.ls.state.apply(&fx);
+    r.ls.pump();
+    r.frame();
     let _source = start_drag(&mut r);
     r.motion((5.0, 0.0));
     assert!(
