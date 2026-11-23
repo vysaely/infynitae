@@ -150,7 +150,7 @@ pub const TABLE: &[Setting] = &[
     Setting {
         key: "CLUSTER_SORT",
         name: "Windows near each other",
-        says: "Super+G arranges them by hand",
+        says: "Super+Shift+G sorts them by hand",
         control: Control::Pick(&[
             ("off", "Stay where they are"),
             ("tidy", "Close the gap a window leaves"),

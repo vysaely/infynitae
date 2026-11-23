@@ -1,14 +1,14 @@
-//! Super+G (2026-11-23): the focused window's cluster in a spiral around it, then in tiles, then
-//! in a line, at each press, with real clients: the windows move, sizes are asked by configure
-//! for tiles and the line, and the spiral keeps every size and the focused window's place.
+//! Cluster layouts (2026-11-23; `infynitae msg arrange`, no default key): the focused window's
+//! cluster in a spiral around it, then in tiles, then in a line, with real clients: the windows
+//! move, sizes are asked by configure for tiles and the line, and the spiral keeps every size and
+//! the focused window's place.
 
 mod common;
 
 use common::Lockstep;
 use common::input::*;
-use infynitae_backend_headless::keyboard_key;
 use infynitae_core::ShellCommand;
-use infynitae_core::input::keys::{KEY_G, KEY_LEFTMETA};
+use infynitae_core::arrange::ClusterLayout;
 use infynitae_core::stage::{ElementId, ElementRef};
 
 fn open(r: &mut Rig, label: &'static str, size: (i32, i32)) -> (ElementId, usize) {
@@ -27,17 +27,20 @@ fn rect(r: &Rig, id: ElementId) -> (i64, i64, i32, i32) {
     (a.x, a.y, s.w, s.h)
 }
 
-fn super_g(r: &mut Rig) {
-    for (key, pressed) in [
-        (KEY_LEFTMETA, true),
-        (KEY_G, true),
-        (KEY_G, false),
-        (KEY_LEFTMETA, false),
-    ] {
-        r.t += 1000;
-        keyboard_key(&mut r.ls.state, &mut r.ls.input, key, pressed, r.t).expect("key");
-        r.ls.pump();
-    }
+fn arrange(r: &mut Rig, layout: ClusterLayout) {
+    let fx =
+        r.ls.state
+            .core_mut()
+            .shell_command(
+                &mut r.ls.shell,
+                ShellCommand::ArrangeCluster {
+                    element: None,
+                    layout,
+                },
+            )
+            .unwrap();
+    r.ls.state.apply(&fx);
+    r.ls.pump();
     r.frame();
 }
 
@@ -51,7 +54,7 @@ fn asked_since(r: &Rig, from: usize, idx: usize) -> Option<(i32, i32)> {
 }
 
 #[test]
-fn super_g_cycles_spiral_tiles_and_line() {
+fn arrange_spiral_tiles_and_line() {
     let mut r = Rig::new(Lockstep::new(Some(a_1080())));
     // four windows opened centred in the view (the policy here): one over the other
     let (a, ia) = open(&mut r, "A", (500, 400));
@@ -74,7 +77,7 @@ fn super_g_cycles_spiral_tiles_and_line() {
 
     // spiral: A stays, the others around it at their own sizes, 12 px apart at least
     let from = r.ls.probe.toplevel_configures.len();
-    super_g(&mut r);
+    arrange(&mut r, ClusterLayout::Spiral);
     assert_eq!(rect(&r, a), (-250, -200, 500, 400));
     let rects: Vec<_> = [a, b, c, d].iter().map(|&e| rect(&r, e)).collect();
     for (k, x) in rects.iter().enumerate() {
@@ -96,7 +99,7 @@ fn super_g_cycles_spiral_tiles_and_line() {
 
     // tiles: the usable view (1896 x 1056) in quarters of 942 x 522, each asked by configure
     let from = r.ls.probe.toplevel_configures.len();
-    super_g(&mut r);
+    arrange(&mut r, ClusterLayout::Tiles);
     for i in [ia, ib, ic, id] {
         assert_eq!(asked_since(&r, from, i), Some((942, 522)));
     }
@@ -117,7 +120,7 @@ fn super_g_cycles_spiral_tiles_and_line() {
     // line: each asked for the usable height and the width of its shape at that height
     let before: Vec<_> = [a, b, c, d].iter().map(|&e| rect(&r, e)).collect();
     let from = r.ls.probe.toplevel_configures.len();
-    super_g(&mut r);
+    arrange(&mut r, ClusterLayout::Line);
     for (k, i) in [ia, ib, ic, id].into_iter().enumerate() {
         let (_, _, w, h) = before[k];
         let want = ((i64::from(w) * 1056 / i64::from(h)).max(64) as i32, 1056);

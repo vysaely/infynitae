@@ -36,7 +36,7 @@ pub enum ClusterLayout {
     Tidy,
     /// Super+Shift+G (owner, 2026-11-22): every window at its own size, one row per app, rows as
     /// wide as they need (not squeezed into one view: an app with a minimum size such as Discord
-    /// keeps it). Not in the Super+G cycle.
+    /// keeps it). Not in the layout key's cycle.
     ByApp,
 }
 
@@ -475,7 +475,7 @@ impl Core {
         Some((x0, y0, x1 - x0, y1 - y0))
     }
 
-    /// The layout key (Super+G) and `infynitae msg arrange`: `around`'s cluster (its
+    /// The layout key (`BIND_CLUSTER_LAYOUT`, no default) and `infynitae msg arrange`: `around`'s cluster (its
     /// parent's, for a child) arranged by `layout`, or by the layout after the one this cluster
     /// got last (spiral first). With `proof`, the camera frames the result. False when nothing was
     /// arranged, and when `around` is a window a layout leaves out (a fullscreen game focused:

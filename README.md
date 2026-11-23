@@ -74,7 +74,6 @@ right.
 | `Super + Left drag` | Move a window |
 | `Super + Right drag` | Resize a window |
 | `Super + Shift + Left / Right drag` | Move / resize a whole cluster |
-| `Super + G` | Arrange the focused window's cluster: spiral, then tiles, then line at each press |
 | `Super + Shift + G` | Sort the focused window's cluster by app: one row per app, every window at its own size |
 | `Super + Middle drag` | Pan the canvas |
 | `Super + Shift + Wheel` | Zoom the canvas |
