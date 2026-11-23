@@ -168,8 +168,8 @@ pub enum KeyAction {
     /// Opens the window menu for the window under the pointer (or the focused window).
     WindowMenu,
     /// Super+G (2026-11-21; Super+Shift+Space, the one suggested, keeps the zoom of Super+Space):
-    /// the focused window's cluster tidied, then in a grid, then in columns, at each press
-    /// (`arrange`)
+    /// the focused window's cluster in a spiral around it, then in tiles, then in a line, at each
+    /// press (2026-11-23, `arrange`)
     ArrangeCluster,
     /// Super+Shift+G (2026-11-22): the focused window's cluster by app, every window at its own
     /// size, one row per app, as wide as it needs (`arrange`, `ClusterLayout::ByApp`)

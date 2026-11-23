@@ -916,7 +916,7 @@ UPDATE_SIGNING_KEY=""
 #           Super+Shift+BackSpace  reload
 #   Windows: Super+Enter  maximize or fit    Super+Shift+Enter  fullscreen
 #           Super+Shift+Space  centre, keep the zoom    Super+Shift+K  keep on top
-#           Super+G  arrange the cluster: tidy, grid, columns, box, ring
+#           Super+G  arrange the cluster: spiral, tiles, line
 #     Super+Shift+G  sort the cluster by app: a row per app, sizes kept
 #   Old keys kept as aliases: Super+Shift+R (region screenshot), Super+Shift+T (tearing),
 #   Super+Alt+R (record).

@@ -1,6 +1,6 @@
-//! Super+G (2026-11-21): the focused window's cluster tidied, then in a grid, then in columns, at
-//! each press, with real clients: the windows move, sizes are asked by configure, a client that
-//! keeps its size is centred in its cell, and the camera frames the tidied cluster.
+//! Super+G (2026-11-23): the focused window's cluster in a spiral around it, then in tiles, then
+//! in a line, at each press, with real clients: the windows move, sizes are asked by configure
+//! for tiles and the line, and the spiral keeps every size and the focused window's place.
 
 mod common;
 
@@ -51,7 +51,7 @@ fn asked_since(r: &Rig, from: usize, idx: usize) -> Option<(i32, i32)> {
 }
 
 #[test]
-fn super_g_cycles_tidy_grid_and_columns() {
+fn super_g_cycles_spiral_tiles_and_line() {
     let mut r = Rig::new(Lockstep::new(Some(a_1080())));
     // four windows opened centred in the view (the policy here): one over the other
     let (a, ia) = open(&mut r, "A", (500, 400));
@@ -72,62 +72,42 @@ fn super_g_cycles_tidy_grid_and_columns() {
     r.ls.state.apply(&fx);
     r.ls.pump();
 
-    // tidy: one row from A's corner, 12 px apart, sizes kept; the camera frames the row
+    // spiral: A stays, the others around it at their own sizes, 12 px apart at least
     let from = r.ls.probe.toplevel_configures.len();
     super_g(&mut r);
     assert_eq!(rect(&r, a), (-250, -200, 500, 400));
-    assert_eq!(rect(&r, b), (262, -200, 400, 300));
-    assert_eq!(rect(&r, c), (674, -200, 300, 200));
-    assert_eq!(rect(&r, d), (986, -200, 200, 150));
+    let rects: Vec<_> = [a, b, c, d].iter().map(|&e| rect(&r, e)).collect();
+    for (k, x) in rects.iter().enumerate() {
+        for y in &rects[k + 1..] {
+            let apart = x.0 + i64::from(x.2) + 12 <= y.0
+                || y.0 + i64::from(y.2) + 12 <= x.0
+                || x.1 + i64::from(x.3) + 12 <= y.1
+                || y.1 + i64::from(y.3) + 12 <= x.1;
+            assert!(apart, "{x:?} {y:?}");
+        }
+    }
     for i in [ia, ib, ic, id] {
         let asked = asked_since(&r, from, i);
         assert!(
             asked.is_none_or(|s| s == (0, 0)),
-            "tidy asked {i} for {asked:?}"
+            "spiral asked {i} for {asked:?}"
         );
     }
-    for _ in 0..240 {
-        if !r.ls.state.core().zoom_gliding() {
-            break;
-        }
-        r.frame();
-    }
-    let camera = r.ls.state.core().cameras();
-    let (centre, zoom) = (camera.center(0).unwrap(), camera.zoom(0).unwrap());
-    // the row spans x -250..1186, y -200..200: its centre, at zoom 1
-    assert_eq!((centre.x >> 16, centre.y >> 16, zoom), (468, 0, 1.0));
 
-    // grid: 2 x 2 cells of 942 x 522; the clients are asked for them and, until they draw it,
-    // centred in their cells; B draws the cell's size and fills its cell
+    // tiles: the usable view (1896 x 1056) in quarters of 942 x 522, each asked by configure
     let from = r.ls.probe.toplevel_configures.len();
     super_g(&mut r);
     for i in [ia, ib, ic, id] {
         assert_eq!(asked_since(&r, from, i), Some((942, 522)));
     }
-    assert_eq!(rect(&r, a), (-250 + 221, -200 + 61, 500, 400));
-    assert_eq!(rect(&r, c), (-250 + 321, 334 + 161, 300, 200));
-    let qh = r.ls.qh.clone();
-    r.ls.probe.surfaces[ib].size = (942, 522);
-    r.ls.probe.draw(&qh, ib);
-    r.ls.pump();
-    r.frame();
-    assert_eq!(rect(&r, b), (704, -200, 942, 522));
 
-    // columns: side by side from the corner the windows have now (A's x, B's y), the usable
-    // height, in reading order
+    // line: each asked for the usable height and the width of its shape at that height
+    let before: Vec<_> = [a, b, c, d].iter().map(|&e| rect(&r, e)).collect();
     let from = r.ls.probe.toplevel_configures.len();
     super_g(&mut r);
-    for i in [ia, ib, ic, id] {
-        assert_eq!(asked_since(&r, from, i), Some((465, 1056)));
+    for (k, i) in [ia, ib, ic, id].into_iter().enumerate() {
+        let (_, _, w, h) = before[k];
+        let want = ((i64::from(w) * 1056 / i64::from(h)).max(64) as i32, 1056);
+        assert_eq!(asked_since(&r, from, i), Some(want), "{i}");
     }
-    let xs: Vec<i64> = [a, b, c, d].iter().map(|&e| rect(&r, e).0).collect();
-    assert_eq!(
-        xs,
-        vec![
-            -29 + (465 - 500) / 2,
-            448 + (465 - 942) / 2,
-            925 + 82,
-            1402 + 132
-        ]
-    );
 }
