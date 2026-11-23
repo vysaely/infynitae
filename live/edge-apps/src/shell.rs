@@ -644,9 +644,8 @@ impl Shell {
         if self.editing() {
             return rooms;
         }
-        let avail = (h - 2.0 * MARGIN).max(0.0);
-        let (_, _, content_h) = self.layout_panel_with(ps, w, h, &rooms);
-        let mut over = content_h - avail;
+        let (pbox, _, content_h) = self.layout_panel_with(ps, w, h, &rooms);
+        let mut over = content_h - pbox.3;
         if over <= 0.0 {
             return rooms;
         }
@@ -735,6 +734,15 @@ impl Shell {
         // Taller than the screen: one column that scrolls (owner, 2026-11-22: "expected it to scroll
         // down for other widgets and not them being on the side"); editing the same.
         let avail = (h - 2.0 * MARGIN).max(0.0);
+        // Scrolling, the panel runs from the screen's top to its bottom and the cards pass under
+        // both edges; the margin stays before the first card and after the last (owner,
+        // 2026-11-23: "should be at the edge of the screen not a lil higher").
+        let edge_to_edge = !editing && content_h > avail;
+        let (lead, content_h, avail) = if edge_to_edge {
+            (MARGIN, content_h + 2.0 * MARGIN, h)
+        } else {
+            (0.0, content_h, avail)
+        };
         let tw = pw;
         let ph = content_h.min(avail);
         let p = &ps.panel;
@@ -750,13 +758,16 @@ impl Shell {
         }
         .max(MARGIN);
         let (ox, oy) = match p.side {
+            Side::Left if edge_to_edge => (MARGIN, 0.0),
+            Side::Right if edge_to_edge => (w - tw - MARGIN, 0.0),
+            _ if edge_to_edge => (along, 0.0),
             Side::Top => (along, MARGIN),
             Side::Bottom => (along, h - ph - MARGIN),
             Side::Left => (MARGIN, along),
             Side::Right => (w - tw - MARGIN, along),
         };
         let mut out = Vec::new();
-        let mut y = strip;
+        let mut y = lead + strip;
         for (row, rh) in rows.iter().zip(&heights) {
             if row.len() == 2 {
                 let half = (pw - GAP) / 2.0;
@@ -3426,7 +3437,10 @@ impl Shell {
         }
         if max_scroll > 0.0 {
             let sb_cx = self.cx(Size::M, None, above);
-            crate::ui::scrollbar(cr, &sb_cx, pbox, content_h, scroll);
+            // the bar keeps the margin from the screen's edges (the panel runs edge to edge)
+            let m = if pbox.3 >= h { MARGIN } else { 0.0 };
+            let view = (pbox.0, pbox.1 + m, pbox.2, pbox.3 - 2.0 * m);
+            crate::ui::scrollbar(cr, &sb_cx, view, content_h - 2.0 * m, scroll);
         }
         cr.restore().ok();
         if editing {
@@ -3744,8 +3758,9 @@ mod tests {
             .position(|p| p.panel.name == "control")
             .unwrap();
         let (one, _, h1) = sh.layout_local(idx, 1920.0, 1080.0);
-        // a screen too short for the cards: the same one column, the panel as tall as the screen
-        // allows, the rest reached by scrolling (owner, 2026-11-22: no second column)
+        // a screen too short for the cards: the same one column, the panel from the screen's top
+        // to its bottom, the rest reached by scrolling (owner, 2026-11-22: no second column;
+        // 2026-11-23: to the screen's edge)
         let h = h1 * 0.7 + 2.0 * MARGIN;
         let (pbox, rects, content_h) = sh.layout_local(idx, 1920.0, h);
         assert!(
@@ -3753,15 +3768,19 @@ mod tests {
             "one column: {rects:?}"
         );
         assert_eq!(pbox.2, one.2, "the panel keeps its width");
-        assert!((pbox.3 - (h - 2.0 * MARGIN)).abs() < 0.5);
+        assert_eq!((pbox.1, pbox.3), (0.0, h), "edge to edge");
+        assert_eq!(
+            rects[0].1 .1, MARGIN,
+            "the first card a margin below the top"
+        );
         assert!(content_h > pbox.3, "more than the panel shows");
         assert!((pbox.0 + pbox.2 - (1920.0 - MARGIN)).abs() < 0.5);
-        // scrolled to the end, the last card ends at the panel's bottom
+        // scrolled to the end, the last card ends a margin above the screen's bottom
         sh.panel_scroll = content_h - pbox.3;
         let (_, on_screen) = sh.layout(idx, 1920.0, h);
         let last = on_screen.last().unwrap().1;
         assert!(
-            (last.1 + last.3 - (pbox.1 + pbox.3)).abs() < 0.5,
+            (last.1 + last.3 - (h - MARGIN)).abs() < 0.5,
             "{last:?} {pbox:?}"
         );
     }
@@ -5037,9 +5056,10 @@ mod tests {
         assert!(sh.open_panel(idx, false, Instant::now()));
         sh.open_ms = f64::INFINITY;
 
-        // Screen narrower and shorter than the 380 px panel.
+        // Screen narrower and shorter than the 380 px panel: it scrolls from the screen's top to
+        // its bottom.
         let (pbox, _, content_h) = sh.layout_local(idx, 320.0, 240.0);
-        assert_eq!(pbox, (24.0, 24.0, 272.0, 192.0));
+        assert_eq!(pbox, (24.0, 0.0, 272.0, 240.0));
         assert!(content_h > pbox.3);
 
         let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 320, 240).unwrap();
