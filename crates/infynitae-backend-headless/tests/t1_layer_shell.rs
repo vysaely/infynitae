@@ -518,3 +518,121 @@ fn a_click_on_a_window_after_a_key_opened_panel_gets_the_first_key() {
 fn a_click_on_a_window_after_a_click_in_a_key_opened_panel_gets_the_first_key() {
     key_opened_panel_then_a_click_on_the_window(true);
 }
+
+/// The edge's closed surface under a fullscreen window, hidden one of two ways and shown again
+/// when the window leaves fullscreen. Returns whether the surface still had its texture when it
+/// was shown again, before the next frame was made.
+fn edge_hidden_under_fullscreen_keeps_its_texture(unmap: bool) -> bool {
+    use infynitae_wayland::convert;
+    use smithay::backend::renderer::Renderer;
+    use smithay::backend::renderer::pixman::{PixmanRenderer, PixmanTexture};
+    use smithay::backend::renderer::utils::RendererSurfaceStateUserData;
+
+    let mut r = setup();
+    r.map_w();
+    // W is focused: it may go fullscreen
+    r.button(BTN_LEFT, true, none());
+    r.button(BTN_LEFT, false, none());
+    let (edge, size) = layer(
+        &mut r,
+        "edge",
+        Layer::Top,
+        Anchor::Top | Anchor::Bottom | Anchor::Left | Anchor::Right,
+        (0, 0),
+        -1,
+        KeyboardInteractivity::None,
+    );
+    assert_eq!(size, (1920, 1080));
+    let o = r.ls.output();
+    let key = r.ls.state.core().layer_frame(o).above[0].surface;
+    let mut renderer = PixmanRenderer::new().expect("pixman");
+    let ctx = renderer.context_id();
+    let has_texture = |r: &Rig| {
+        let surface =
+            r.ls.state
+                .registry()
+                .surface(key)
+                .expect("the edge's surface");
+        smithay::wayland::compositor::with_states(surface, |states| {
+            states
+                .data_map
+                .get::<RendererSurfaceStateUserData>()
+                .is_some_and(|d| {
+                    d.lock()
+                        .unwrap()
+                        .texture::<PixmanTexture>(ctx.clone())
+                        .is_some()
+                })
+        })
+    };
+    convert::output_elements(&mut r.ls.state, &mut renderer, o).expect("elements");
+    assert!(has_texture(&r), "the first frame made its texture");
+
+    let toplevel = r.ls.probe.by_label("W").toplevel.clone().unwrap();
+    toplevel.set_fullscreen(None);
+    r.ls.pump();
+    r.frame();
+    assert!(
+        r.ls.state.core().presentation(o).is_some(),
+        "W is fullscreen"
+    );
+    if unmap {
+        r.ls.probe.unmap(edge);
+    } else {
+        r.ls.probe.layer_of(edge).set_layer(Layer::Bottom);
+        r.ls.probe.surfaces[edge].wl.commit();
+    }
+    r.ls.pump();
+    r.frame();
+    let frame = r.ls.state.core().layer_frame(o);
+    assert!(
+        frame
+            .above
+            .iter()
+            .chain(&frame.below)
+            .all(|e| e.surface != key),
+        "nothing of the edge is drawn over the fullscreen window"
+    );
+    convert::output_elements(&mut r.ls.state, &mut renderer, o).expect("elements");
+
+    toplevel.unset_fullscreen();
+    r.ls.pump();
+    r.frame();
+    assert!(r.ls.state.core().presentation(o).is_none());
+    if unmap {
+        // as the edge did until 2026-11-23: a commit to map again, the configure, a clear buffer
+        r.ls.probe.layer_configures.clear();
+        r.ls.probe.surfaces[edge].wl.commit();
+        r.ls.pump();
+        assert!(
+            r.ls.probe.layer_configures.iter().any(|(i, _)| *i == edge),
+            "the commit after the null buffer is answered with a configure"
+        );
+        r.ls.probe.draw(&r.ls.qh.clone(), edge);
+    } else {
+        r.ls.probe.layer_of(edge).set_layer(Layer::Top);
+        r.ls.probe.surfaces[edge].wl.commit();
+    }
+    r.ls.pump();
+    r.frame();
+    assert!(
+        r.ls.state
+            .core()
+            .layer_frame(o)
+            .above
+            .iter()
+            .any(|e| e.surface == key),
+        "the edge is over the canvas again"
+    );
+    has_texture(&r)
+}
+
+/// Moved to the Bottom layer under a fullscreen window, the edge's surface keeps its buffer and
+/// its texture: shown again, nothing is uploaded. Unmapped (a null buffer), as the edge did until
+/// 2026-11-23, it lost both, and its whole 1920x1080 buffer was uploaded again, 7-10 ms in a slow
+/// "layers above" turn each time a fullscreen window left (session log, 2026-11-22).
+#[test]
+fn the_edge_moved_below_a_fullscreen_window_keeps_its_texture() {
+    assert!(edge_hidden_under_fullscreen_keeps_its_texture(false));
+    assert!(!edge_hidden_under_fullscreen_keeps_its_texture(true));
+}
