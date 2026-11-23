@@ -5056,9 +5056,10 @@ mod tests {
         assert!(sh.open_panel(idx, false, Instant::now()));
         sh.open_ms = f64::INFINITY;
 
-        // Screen narrower and shorter than the 380 px panel.
+        // Screen narrower and shorter than the 380 px panel: it scrolls from the screen's top to
+        // its bottom.
         let (pbox, _, content_h) = sh.layout_local(idx, 320.0, 240.0);
-        assert_eq!(pbox, (24.0, 24.0, 272.0, 192.0));
+        assert_eq!(pbox, (24.0, 0.0, 272.0, 240.0));
         assert!(content_h > pbox.3);
 
         let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 320, 240).unwrap();
