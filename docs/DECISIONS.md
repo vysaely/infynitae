@@ -245,6 +245,7 @@ these by date, e.g. "(owner, 2026-10-24)".
   cluster mechanic"): the exception to the rule above, always on the person's asking. Super+G
   (Super+Shift+Space, the key first suggested, keeps the zoom of Super+Space) arranges the focused
   window's cluster, spiral, tiles or line at each press (2026-11-23, owner, in place of tidy, grid and columns), and `infynitae msg arrange` does one
-  layout for the edge. `CLUSTER_SORT` keeps clusters in order without a key, off by default:
+  layout for the edge. Super+G lost its default on 2026-11-23 (owner: "remove super g and keep
+  only super shift g"): Super+Shift+G sorts by app, the layouts stay on `BIND_CLUSTER_LAYOUT`. `CLUSTER_SORT` keeps clusters in order without a key, off by default:
   "tidy" closes the gap a closed or minimized window leaves, "app" opens a new window beside its
   app's window in view. docs/WINDOWS.md "Cluster layouts".

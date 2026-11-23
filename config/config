@@ -136,7 +136,7 @@ PLACEMENT_POLICY="cluster"
     #    origin    the canvas origin
 
 CLUSTER_SORT="off"
-    # Windows near each other (a cluster) kept in order by themselves; Super+G arranges one by hand
+    # Windows near each other (a cluster) kept in order by themselves; Super+Shift+G sorts one by hand
     # default: off   (no window moves another unless you ask)
     #   tidy        when a window closes or is minimized, the others in its cluster close the gap
     #   app         a new window opens beside its app's window in view instead of at the pointer
@@ -916,7 +916,6 @@ UPDATE_SIGNING_KEY=""
 #           Super+Shift+BackSpace  reload
 #   Windows: Super+Enter  maximize or fit    Super+Shift+Enter  fullscreen
 #           Super+Shift+Space  centre, keep the zoom    Super+Shift+K  keep on top
-#           Super+G  arrange the cluster: spiral, tiles, line
 #     Super+Shift+G  sort the cluster by app: a row per app, sizes kept
 #   Old keys kept as aliases: Super+Shift+R (region screenshot), Super+Shift+T (tearing),
 #   Super+Alt+R (record).

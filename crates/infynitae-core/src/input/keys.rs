@@ -167,9 +167,9 @@ pub enum KeyAction {
     RecenterKeepZoom,
     /// Opens the window menu for the window under the pointer (or the focused window).
     WindowMenu,
-    /// Super+G (2026-11-21; Super+Shift+Space, the one suggested, keeps the zoom of Super+Space):
+    /// No default key since 2026-11-23 (owner: "remove super g"), bound by `BIND_CLUSTER_LAYOUT`:
     /// the focused window's cluster in a spiral around it, then in tiles, then in a line, at each
-    /// press (2026-11-23, `arrange`)
+    /// press (`arrange`)
     ArrangeCluster,
     /// Super+Shift+G (2026-11-22): the focused window's cluster by app, every window at its own
     /// size, one row per app, as wide as it needs (`arrange`, `ClusterLayout::ByApp`)
@@ -547,14 +547,10 @@ pub fn resolve_key_binding(
             return Some(KeyAction::FocusClusterSlot(s));
         }
     }
-    // Super+G: the focused window's cluster arranged, the next layout at each press; exactly
-    // Logo, never during interaction
-    if key == KEY_G && mods.logo && !mods.ctrl && !mods.alt && !interaction_active {
-        return Some(if mods.shift {
-            KeyAction::ArrangeClusterByApp
-        } else {
-            KeyAction::ArrangeCluster
-        });
+    // Super+Shift+G: the focused window's cluster by app; exactly Logo+Shift, never during
+    // interaction. Super+G alone has no default (owner, 2026-11-23): `BIND_CLUSTER_LAYOUT`.
+    if key == KEY_G && mods.logo && mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
+        return Some(KeyAction::ArrangeClusterByApp);
     }
     // Super+W: the app launcher; exactly Logo, never during interaction
     if key == KEY_W && mods.logo && !mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
@@ -1276,16 +1272,17 @@ mod tests {
         assert!(ACTION_NAMES.contains(&("CLIPBOARD", KeyAction::ClipboardHistory)));
     }
 
-    /// Super+G arranges the cluster (2026-11-21): exactly Logo, never during an interaction;
-    /// `BIND_CLUSTER_LAYOUT` names it.
+    /// Super+Shift+G sorts the cluster by app, never during an interaction; Super+G alone has no
+    /// default since 2026-11-23, the layouts stay bindable by `BIND_CLUSTER_LAYOUT`.
     #[test]
-    fn super_g_arranges_the_cluster() {
+    fn super_shift_g_sorts_the_cluster_and_super_g_is_free() {
         assert_eq!(
             resolve_key_binding(KEY_G, mods(true, false, false, false), false),
-            Some(KeyAction::ArrangeCluster)
+            None,
+            "Super+G: no default"
         );
         assert_eq!(
-            resolve_key_binding(KEY_G, mods(true, false, false, false), true),
+            resolve_key_binding(KEY_G, mods(true, false, false, true), true),
             None
         );
         assert_eq!(
