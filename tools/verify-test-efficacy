@@ -1646,9 +1646,10 @@ CONTROLS = [
     ("clipboard: a selection whose owner quit is not cleared", f"{WAYLAND}/handlers.rs",
      "            smithay::wayland::selection::data_device::clear_data_device_selection(\n                &self.dh, &self.seat,\n            );\n", "",
      "infynitae-backend-headless", ["--test", "t1_clipboard"], "a_quitting_owner_clears_the_selection"),
-    ("clipboard: a client's drag is not refused (Smithay's DnD grab takes the pointer)", f"{WAYLAND}/handlers.rs",
-     "        self.drag_started = true;\n", "",
-     "infynitae-backend-headless", ["--test", "t1_clipboard"], "a_drag_started_on_a_real_press_is_refused"),
+    ("drag-and-drop: a drag is not delivered where Core routes the pointer (no window is offered it)", f"{WAYLAND}/pointer.rs",
+     "                ptr.motion(self, focus, &event);",
+     "                ptr.motion(self, if grabbed { None } else { focus }, &event);",
+     "infynitae-backend-headless", ["--test", "t1_clipboard"], "a_drag_within_one_window_holds_until_the_release_and_drops_there"),
     # ---- orderly shutdown (2026-10-16): SIGTERM/SIGINT end the loop; children see no blocked mask
     ("shutdown: SIGINT is not handled (the default action kills the compositor)", f"{WAYLAND}/session.rs",
      "            signals::register(SIGINT, notify)?,\n", "            signals::register(SIGTERM, notify)?,\n",
