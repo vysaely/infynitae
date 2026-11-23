@@ -16,6 +16,8 @@ VM's helper scripts in ~/g (feat.py, everyday.py) and the edge installed as ~/.l
                                   text, a secret, a cancel; the asker gets the answer and ends (7)
     sudo -E python3 pkbd.py [EDGE] typing into a terminal clicked while a panel is open, by hover and
                                   by key; NOIN=1 skips the click inside the panel (4)
+    sudo -E python3 pfs.py EDGE    fullscreen on and off 5 times; the panel opens by key after each; counts
+                                  null-buffer unmaps and layer changes in the edge's Wayland log (1)
 
 Each prints PASS or FAIL per check and a SUMMARY line. They read the edge's INFYNITAE_EDGE_BOXES
 dump (the panel's, each module's and the edit bar's boxes after every drawing).
