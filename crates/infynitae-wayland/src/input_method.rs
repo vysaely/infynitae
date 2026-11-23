@@ -102,14 +102,16 @@ impl WaylandState {
         now: std::time::Duration,
     ) {
         self.input_method.popups.retain(|p| p.alive());
-        for p in &self.input_method.popups {
+        for i in 0..self.input_method.popups.len() {
+            let surface = self.input_method.popups[i].wl_surface().clone();
             smithay::desktop::utils::send_frames_surface_tree(
-                p.wl_surface(),
+                &surface,
                 output,
                 now,
                 None,
                 |_, _| Some(output.clone()),
             );
+            self.lift_fifo_barriers(&surface);
         }
     }
 }

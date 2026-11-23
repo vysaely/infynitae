@@ -475,6 +475,13 @@ pub fn run_nested_with(
             data.session.flush();
         }
 
+        // a commit timed for now applies; the host's refresh times are not known here
+        if data
+            .state
+            .apply_due_timed_commits(infynitae_wayland::presentation_clock_now())
+        {
+            data.session.request_frame();
+        }
         if data.session.frame_due() {
             if data.host.may_submit() {
                 render_and_present(&mut data);
@@ -489,6 +496,8 @@ pub fn run_nested_with(
         let now = infynitae_wayland::presentation_clock_now();
         let deadline = data.state.frame_fallback(now);
         data.session.set_fallback_deadline(deadline, now);
+        data.session
+            .set_render_deadline(data.state.next_timed_commit(None), now);
         let idle_deadline = data.state.idle_notify_check(now);
         data.session.set_idle_deadline(idle_deadline, now);
         let asked = data.state.not_responding_check(now);

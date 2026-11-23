@@ -593,8 +593,9 @@ impl WaylandState {
     }
 
     /// A vblank of `output` at `now`: the requested frame callbacks of each element complete
-    /// once, and its pending presentation feedback is presented with `sync_output` = `output`
-    /// (INV-FRAME-1, INV-FRAME-2, INV-FRAME-5). `elements` comes from `Core::frame_tick_into`.
+    /// once, its pending presentation feedback is presented with `sync_output` = `output`
+    /// (INV-FRAME-1, INV-FRAME-2, INV-FRAME-5) and its FIFO barriers are lifted (`fifo`).
+    /// `elements` comes from `Core::frame_tick_into`.
     pub fn complete_frames(&mut self, output: OutputId, elements: &[ElementId], now: Duration) {
         let Some(h) = self.handle(output) else { return };
         let (o, refresh) = (
@@ -622,6 +623,9 @@ impl WaylandState {
                 wp_presentation_feedback::Kind::empty(),
             );
             window.send_frame(&o, now, None, |_, _| Some(o.clone()));
+        }
+        for id in elements {
+            self.lift_window_barriers(*id);
         }
     }
 

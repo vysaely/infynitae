@@ -14,12 +14,14 @@
 
 pub mod background;
 pub mod capture_indicator;
+mod commit_timing;
 pub mod convert;
 pub mod corners;
 pub mod cursor;
 pub mod desk;
 pub mod display_settings;
 pub mod extension;
+mod fifo;
 pub mod fitted;
 pub mod frame_schedule;
 mod frames;
@@ -48,6 +50,7 @@ pub mod session;
 mod shortcuts_inhibit;
 mod signals;
 mod snapshot;
+mod syncobj;
 pub mod tearing;
 pub mod trust;
 pub mod virtual_input;
@@ -56,6 +59,7 @@ mod x11_keys;
 pub mod xwayland;
 
 pub use handlers::ACTIVATION_TOKENS_KEPT;
+pub use handlers::FrameDone;
 pub use keyboard::PreemptionStrategy;
 pub use pointer::{TabletAxes, TabletEvent, TabletPadDescriptor, tablet_tool_button};
 
@@ -346,6 +350,18 @@ pub struct WaylandState {
     idle_inhibit: idle_inhibit::IdleInhibit,
     /// Fullscreen games' frames shown at once (`tearing`).
     tearing: tearing::Tearing,
+    #[expect(
+        dead_code,
+        reason = "owns the wp_fifo_manager_v1 global for the state's lifetime"
+    )]
+    fifo: smithay::wayland::fifo::FifoManagerState,
+    /// Commits held until the time they are to be shown at (`commit_timing`).
+    commit_timing: commit_timing::CommitTiming,
+    /// Explicit sync, when the backend's GPU supports it (`syncobj`).
+    syncobj: Option<smithay::wayland::drm_syncobj::DrmSyncobjState>,
+    /// Clients whose held commits may apply: FIFO barriers lifted, commit times reached
+    /// ([`Self::apply_released`]).
+    released: Vec<smithay::reexports::wayland_server::Client>,
     /// Each finger's last location sent (`touch`: a cancel needs it).
     touch_last: Vec<(u32, infynitae_core::geom::CanvasPos)>,
     /// Lock-surface touch slots `(slot, (x, y))` for cancelling stationary fingers on the lock.
@@ -819,6 +835,10 @@ impl WaylandState {
                 >(display, trust.gate(Cap::Windows).filter()),
             idle_inhibit: idle_inhibit::IdleInhibit::new(display),
             tearing: tearing::Tearing::new(display),
+            fifo: fifo::global(display),
+            commit_timing: commit_timing::CommitTiming::new(display),
+            syncobj: None,
+            released: Vec::new(),
             touch_last: Vec::new(),
             lock_touch_last: Vec::new(),
             tablet_manager: smithay::wayland::tablet_manager::TabletManagerState::new::<Self>(
@@ -1032,6 +1052,24 @@ impl WaylandState {
             .blocker_cleared(self, &dh);
     }
 
+    /// The commits held for the clients in `released` apply, each client's once. Not while a
+    /// frame tick or an effect is being applied: a commit applied runs the commit handler.
+    pub(crate) fn apply_released(&mut self) {
+        if self.released.is_empty() {
+            return;
+        }
+        use smithay::wayland::compositor::CompositorHandler;
+        let dh = self.dh.clone();
+        let mut released = std::mem::take(&mut self.released);
+        for client in released.drain(..) {
+            self.client_compositor_state(&client)
+                .blocker_cleared(self, &dh);
+        }
+        // the storage is kept (INV-ALLOC-1); a commit applied above may have released more
+        released.append(&mut self.released);
+        self.released = released;
+    }
+
     /// The format and modifier of the buffer `id` shows, when it is a dmabuf.
     pub fn window_buffer_format(
         &self,
@@ -1174,6 +1212,8 @@ impl WaylandState {
         if let Some(o) = self.smithay_output(output).cloned() {
             self.complete_input_method_frames(&o, now);
         }
+        // after every completion above: a held commit that applies now asks for its next frame
+        self.apply_released();
     }
 
     /// The colour the empty Canvas is cleared to on this backend's target.

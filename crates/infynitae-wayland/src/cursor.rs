@@ -748,20 +748,22 @@ impl WaylandState {
     /// The frame callbacks of the cursor surface complete with the output's frame (an animated
     /// cursor advances).
     pub(crate) fn complete_cursor_frames(
-        &self,
+        &mut self,
         output: &smithay::output::Output,
         now: std::time::Duration,
     ) {
         if let CursorImageStatus::Surface(surface) = &self.cursor
             && surface.is_alive()
         {
+            let surface = surface.clone();
             smithay::desktop::utils::send_frames_surface_tree(
-                surface,
+                &surface,
                 output,
                 now,
                 None,
                 |_, _| Some(output.clone()),
             );
+            self.lift_fifo_barriers(&surface);
         }
     }
 }

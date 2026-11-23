@@ -40,7 +40,7 @@ fn complete_tree(root: &WlSurface, time_ms: u32) {
 
 impl WaylandState {
     /// Completes the withheld callbacks of an unobserved element, at `now` on the presentation
-    /// clock: its root tree and every popup tree, once.
+    /// clock: its root tree and every popup tree, once; its FIFO barriers are lifted with them.
     pub fn complete_withheld(&mut self, element: ElementId, now: Duration) {
         let Some(root) = self.window_surface(element) else {
             return;
@@ -50,6 +50,7 @@ impl WaylandState {
         for (popup, _) in PopupManager::popups_for_surface(&root) {
             complete_tree(popup.wl_surface(), time_ms);
         }
+        self.lift_window_barriers(element);
     }
 
     /// The element whose popup holds the active popup grab: the one client a `popup_done`
@@ -87,6 +88,8 @@ impl WaylandState {
         for element in self.core.frame_fallback(now) {
             self.complete_withheld(element, now);
         }
+        // the commits held by barriers the kick or the fallback lifted
+        self.apply_released();
         self.core.frame_fallback_deadline()
     }
 }

@@ -309,11 +309,13 @@ pub fn bring_into_view(
     state.with_effects(|core, fx| core.bring_into_view(port, element, fx))
 }
 
-/// A virtual vblank of `output` at `now` (monotonic): the backend produces the output's frame
-/// with the test renderer (recording its ProjectionFrame, so hit-testing reads what was shown,
-/// INV-HIT-1); then Core's frame clock decides which observed elements complete, and the adapter
-/// completes their callbacks and presents their feedback.
+/// A virtual vblank of `output` at `now` (monotonic): the commits timed up to `now` of the
+/// windows it clocks apply; the backend produces the output's frame with the test renderer
+/// (recording its ProjectionFrame, so hit-testing reads what was shown, INV-HIT-1); then Core's
+/// frame clock decides which observed elements complete, and the adapter completes their
+/// callbacks and presents their feedback.
 pub fn vblank(state: &mut WaylandState, output: OutputId, now: Duration) {
+    state.apply_timed_commits_for(output, now);
     state.zoom_tick(output, now);
     // an output without a view has no frame to produce; the frame clock still ticks
     let _ = render_frame(state, &mut DummyRenderer, output);
@@ -712,6 +714,9 @@ pub fn run_headless_with(
             session.flush();
         }
 
+        if state.apply_due_timed_commits(infynitae_wayland::presentation_clock_now()) {
+            session.request_frame();
+        }
         if session.frame_due() {
             vblank(
                 &mut state,
@@ -729,6 +734,7 @@ pub fn run_headless_with(
         // pending (INV-IDLE-1)
         let now = infynitae_wayland::presentation_clock_now();
         session.set_fallback_deadline(state.frame_fallback(now), now);
+        session.set_render_deadline(state.next_timed_commit(None), now);
         session.set_idle_deadline(state.idle_notify_check(now), now);
         session.set_not_responding_deadline(state.not_responding_check(now), now);
         let anim_due = state.cursor_animation_due(now);

@@ -418,6 +418,7 @@ impl WaylandState {
         smithay::desktop::utils::send_frames_surface_tree(&surface, &o, now, None, |_, _| {
             Some(o.clone())
         });
+        self.lift_fifo_barriers(&surface);
     }
 
     /// The lock surface's size for `output`: the output's logical size.
