@@ -1625,9 +1625,39 @@ pub fn run_console_with(
         .insert_source(
             Generic::new(libinput.clone(), Interest::READ, Mode::Level),
             |_, _, data| {
+                // input runs inside the loop's wait, which the turn's clock leaves out: timed here
+                // so a device that is slow to add shows as a slow turn too
+                let began = std::time::Instant::now();
+                let mut turn = if data.state.latency_stats {
+                    TurnClock::new(began)
+                } else {
+                    TurnClock::off()
+                };
+                // libinput opens a new device and reads its udev properties in here
                 let _ = data.libinput.dispatch();
+                turn.mark("libinput");
                 while let Some(event) = data.libinput.next() {
+                    let added = matches!(
+                        event,
+                        smithay::reexports::input::Event::Device(
+                            smithay::reexports::input::event::DeviceEvent::Added(_)
+                        )
+                    );
                     dispatch_libinput_event(data, event);
+                    turn.mark(if added {
+                        "device setup"
+                    } else {
+                        "input events"
+                    });
+                }
+                if turn.is_enabled() {
+                    let now = std::time::Instant::now();
+                    let threshold = slow_turn_threshold(&data.screens);
+                    let busy = now.saturating_duration_since(began);
+                    data.loop_busy_max = data.loop_busy_max.max(busy);
+                    if let Some(line) = data.slow_turn.record_at(&turn, busy, threshold, now) {
+                        log_line!("{line}");
+                    }
                 }
                 data.session.request_frame();
                 Ok(PostAction::Continue)
