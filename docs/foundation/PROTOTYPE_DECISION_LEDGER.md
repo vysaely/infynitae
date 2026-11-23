@@ -180,7 +180,7 @@ Each row carries forward one row of the Phase A table above, which stays unchang
 
 ### PL-23 — Data device
 - **Class (Phase A, unchanged):** ADAPT
-- **Effective consequence:** clipboard plumbing follows ActiveElementFocus; drag-and-drop is refused (OB-59)
+- **Effective consequence:** clipboard plumbing follows ActiveElementFocus; drag-and-drop follows Core's pointer routing (OB-59, 2026-11-23)
 - **Justified by:** INV-INPUT-1, INV-INPUT-8
 - **ADR:** ADR-07
 

@@ -16,6 +16,7 @@ use infynitae_backend_headless::set_focus;
 use infynitae_core::stage::ElementId;
 use infynitae_wayland::ClientState;
 use wayland_client::backend::WaylandError;
+use wayland_client::protocol::wl_data_device_manager;
 use wayland_client::protocol::wl_registry::WlRegistry;
 use wayland_client::{Connection, EventQueue, QueueHandle};
 
@@ -335,25 +336,17 @@ fn the_primary_selection_follows_the_keyboard_focus() {
     assert_eq!(out, b"middle click");
 }
 
-/// Drag-and-drop is not offered. A client that starts a drag on the implicit grab of a real
-/// button press (the only serial Smithay accepts) has it refused at once: its source is
-/// cancelled, no drag offer is made, and pointer delivery keeps following Core — the next motion
-/// enters the window again and the release reaches it.
-#[test]
-fn a_drag_started_on_a_real_press_is_refused() {
-    use common::input::{BTN_LEFT, Rig, none};
-    let mut r = Rig::x8();
+/// Starts a drag of `text/plain` from W on the held left press (the only serial Smithay accepts),
+/// with no icon; returns the source.
+fn start_drag(
+    r: &mut common::input::Rig,
+) -> wayland_client::protocol::wl_data_source::WlDataSource {
+    use common::input::{BTN_LEFT, none};
     let registry = r.ls.registry().clone();
     let qh = r.ls.qh.clone();
     r.ls.probe.bind_clipboard(&registry, &qh);
     r.ls.pump();
     r.button(BTN_LEFT, true, none());
-    assert_eq!(
-        r.ls.probe.ptr.last().map(String::as_str),
-        Some("frame"),
-        "{:?}",
-        r.ls.probe.ptr
-    );
     assert!(r.ls.probe.ptr.iter().any(|l| l == "button 272 pressed"));
     let serial = r.ls.probe.last_serial;
     let source =
@@ -363,40 +356,129 @@ fn a_drag_started_on_a_real_press_is_refused() {
             .unwrap()
             .create_data_source(&qh, ());
     source.offer("text/plain".into());
+    source.set_actions(
+        wl_data_device_manager::DndAction::Copy | wl_data_device_manager::DndAction::Move,
+    );
     let device = r.ls.probe.clipboard.device.clone().unwrap();
     let origin = r.ls.probe.surfaces[0].wl.clone();
     device.start_drag(Some(&source), &origin, None, serial);
     r.ls.pump();
+    source
+}
+
+/// The target takes the drag it was offered: `text/plain`, moved.
+fn accept_drag(r: &mut common::input::Rig) {
+    let (offer, serial) = r.ls.probe.clipboard.drag.clone().expect("a drag offer");
+    offer.accept(serial, Some("text/plain".into()));
+    offer.set_actions(
+        wl_data_device_manager::DndAction::Move,
+        wl_data_device_manager::DndAction::Move,
+    );
+    r.ls.pump();
+}
+
+/// Drag-and-drop within one window (owner, 2026-11-23: Discord's server list could not be
+/// reordered; it was refused since 2026-10-16). The drag holds while the button does: each motion
+/// reaches the window as a drag motion, the release drops there, and the source learns the drop
+/// was performed; afterwards the pointer is the window's again.
+#[test]
+fn a_drag_within_one_window_holds_until_the_release_and_drops_there() {
+    use common::input::{BTN_LEFT, Rig, none};
+    let mut r = Rig::x8();
+    let _source = start_drag(&mut r);
     assert!(
-        r.ls.probe.clipboard.log.contains(&"cancelled".to_string()),
-        "the drag's source is cancelled: {:?}",
+        !r.ls.probe.clipboard.log.contains(&"cancelled".to_string()),
+        "the drag is not cancelled: {:?}",
         r.ls.probe.clipboard.log
     );
+    r.motion((10.0, 0.0));
     assert!(
-        !r.ls
-            .probe
+        r.ls.probe
             .clipboard
             .log
             .iter()
-            .any(|l| l.starts_with("enter")),
-        "no drag offer: {:?}",
+            .any(|l| l.starts_with("dnd enter W ")),
+        "{:?}",
         r.ls.probe.clipboard.log
     );
-    // Smithay's drag grab had cleared the pointer focus (one `leave`); the next routed motion
-    // enters the window again at the pointer's position, and the release is delivered
-    let n = r.ls.probe.ptr.len();
-    assert_eq!(r.ls.probe.ptr[n - 2..], ["leave W", "frame"]);
-    let m = r.mark();
+    accept_drag(&mut r);
     r.motion((10.0, 0.0));
+    r.motion((0.0, 10.0));
+    let log = &r.ls.probe.clipboard.log;
+    let motions = log.iter().filter(|l| l.starts_with("dnd motion ")).count();
+    assert!(motions >= 2, "the drag follows the pointer: {log:?}");
+    assert!(log.contains(&"target text/plain".to_string()), "{log:?}");
+    // no button reaches the window as a pointer event while it drags
+    let m = r.mark();
     r.button(BTN_LEFT, false, none());
-    assert_eq!(
-        r.since(m),
-        vec![
-            "enter W 640,520",
-            "relative 10,0 unaccel 9,0",
-            "frame",
-            "button 272 released",
-            "frame"
-        ]
+    assert!(
+        !r.since(m).contains(&"button 272 released"),
+        "{:?}",
+        r.since(m)
     );
+    let log = &r.ls.probe.clipboard.log;
+    assert!(log.contains(&"dnd drop".to_string()), "{log:?}");
+    assert!(log.contains(&"dnd_drop_performed".to_string()), "{log:?}");
+    assert!(!log.contains(&"cancelled".to_string()), "{log:?}");
+    // the drag is over: the pointer is W's again at the next motion, and a press reaches it
+    r.motion((10.0, 0.0));
+    let m = r.mark();
+    r.button(BTN_LEFT, true, none());
+    r.button(BTN_LEFT, false, none());
+    let after = r.since(m);
+    assert!(after.contains(&"button 272 pressed"), "{after:?}");
+    assert!(after.contains(&"button 272 released"), "{after:?}");
+    assert!(
+        r.ls.probe
+            .ptr
+            .iter()
+            .rev()
+            .any(|l| l.starts_with("enter W ")),
+        "{:?}",
+        r.ls.probe.ptr
+    );
+}
+
+/// A drag goes where Core routes the pointer: from W onto V, opened over W, it leaves W and enters
+/// V, and the release drops on V.
+#[test]
+fn a_drag_moves_from_one_window_onto_another_and_drops_there() {
+    use common::input::{BTN_LEFT, Rig, none};
+    let mut r = Rig::x8();
+    let qh = r.ls.qh.clone();
+    // V (200 x 150) opens centred, over the middle of W; the pointer is on W, off V
+    r.ls.probe.toplevel(&qh, "V", (200, 150), 0);
+    r.ls.pump();
+    r.frame();
+    let _source = start_drag(&mut r);
+    r.motion((5.0, 0.0));
+    assert!(
+        r.ls.probe
+            .clipboard
+            .log
+            .iter()
+            .any(|l| l.starts_with("dnd enter W ")),
+        "{:?}",
+        r.ls.probe.clipboard.log
+    );
+    // onto V: canvas (30, 20), V-local (130, 95)
+    r.motion((-205.0, -200.0));
+    let log = &r.ls.probe.clipboard.log;
+    let leave = log.iter().position(|l| l == "dnd leave");
+    let enter_v = log.iter().position(|l| l.starts_with("dnd enter V "));
+    assert!(
+        leave.is_some() && enter_v.is_some() && leave < enter_v,
+        "W left, then V entered: {log:?}"
+    );
+    accept_drag(&mut r);
+    r.motion((1.0, 0.0));
+    r.button(BTN_LEFT, false, none());
+    let log = &r.ls.probe.clipboard.log;
+    let enter_v = log
+        .iter()
+        .rposition(|l| l.starts_with("dnd enter V "))
+        .unwrap();
+    let drop = log.iter().position(|l| l == "dnd drop");
+    assert!(drop.is_some_and(|d| d > enter_v), "dropped on V: {log:?}");
+    assert!(log.contains(&"dnd_drop_performed".to_string()), "{log:?}");
 }

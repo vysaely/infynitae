@@ -1554,6 +1554,57 @@ where
         return Ok(());
     };
     let px = |v: f64| (v * scale).round() as i32;
+    cursor_image_elements(state, renderer, cursor_status, p, scale, k, out)?;
+    // the icon of a drag the client holds, under the cursor, moved by its attach offsets
+    if let Some(icon) = state.drag_icon.as_ref().filter(|i| i.surface.is_alive()) {
+        let size = with_states(&icon.surface, |states| {
+            states
+                .data_map
+                .get::<RendererSurfaceStateUserData>()
+                .and_then(|d| d.lock().unwrap_or_else(|e| e.into_inner()).view())
+                .map(|v| v.dst)
+                .unwrap_or_default()
+        });
+        let x0 = px(p.0 + f64::from(icon.offset.0));
+        let y0 = px(p.1 + f64::from(icon.offset.1));
+        let rect = PhysicalRect {
+            x0: i64::from(x0),
+            y0: i64::from(y0),
+            x1: i64::from(x0 + px(f64::from(size.w))),
+            y1: i64::from(y0 + px(f64::from(size.h))),
+        };
+        let el = with_states(&icon.surface, |states| {
+            WaylandSurfaceRenderElement::from_surface(
+                renderer,
+                &icon.surface,
+                states,
+                Point::from((f64::from(x0), f64::from(y0))),
+                1.0,
+                Kind::Unspecified,
+            )
+        })?;
+        if let Some(el) = el {
+            out.push(OutputElement::Surface(CanonicalRect::new(el, rect, k)));
+        }
+    }
+    Ok(())
+}
+
+/// The cursor image's element at `p` (output logical), front-most first.
+fn cursor_image_elements<R>(
+    state: &WaylandState,
+    renderer: &mut R,
+    cursor_status: &CursorImageStatus,
+    p: (f64, f64),
+    scale: f64,
+    k: f64,
+    out: &mut Vec<OutputElement<R>>,
+) -> Result<(), R::Error>
+where
+    R: Renderer + ImportAll + ImportMem,
+    R::TextureId: Send + Clone + 'static,
+{
+    let px = |v: f64| (v * scale).round() as i32;
     match cursor_status {
         CursorImageStatus::Hidden => {}
         CursorImageStatus::Named(icon) if icon.name() == "none" => {}

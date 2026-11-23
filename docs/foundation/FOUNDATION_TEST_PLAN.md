@@ -781,15 +781,15 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 
 ### OB-59
 - **Status:** OPEN
-- **Item:** Drag-and-drop under INV-INPUT-2. The clipboard (data device and primary selection) is supported; drag-and-drop is refused — a client's `start_drag` is cancelled (its source receives `cancelled`, no drag offer is made) and pointer delivery keeps following Core — and INV-INPUT-2 names a drag as a protocol transfer. A decision and an implementation are needed for: which pointer interaction owns a drag, how ownership and the implicit grab interact with compositor interactions (M22) and pointer constraints (INV-INPUT-5), drag icons on a zoomed camera (INV-RENDER-1), and drops across outputs
-- **Owner:** architecture (INV-INPUT-2, M22) via change control, then adapter (data device) + core input
-- **Evidence available:** the clipboard integration (owner decision 2026-10-19: clipboard yes, drag-and-drop stays refused); T1 `t1_clipboard::a_drag_started_on_a_real_press_is_refused` (source cancelled, no offer, the next motion routed by Core)
-- **Pass criterion:** an architecture decision on drag ownership under INV-INPUT-2; T1 production tests for a drag within one client, between two clients and across outputs, with seeded controls; until then the refusal test stays
-- **Destination:** DECISION (then T1 production tests, pass criterion)
-- **May be closed by:** architecture change control and T1 production tests
+- **Item:** Drag-and-drop under INV-INPUT-2. Decided (owner, 2026-11-23: Discord's server list could not be reordered under the refusal): drag-and-drop is offered. Smithay accepts `start_drag` only on the implicit grab of a press the client owns, so the drag is a protocol transfer of a client-owned button (INV-INPUT-2); during it each motion goes where Core routes it, as data device events, and the release, still the client's (OBJ-25), drops there. The icon is drawn under the cursor. Left: a T1 test of a drag across outputs
+- **Owner:** adapter (data device) + core input
+- **Evidence available:** T1 `t1_clipboard::a_drag_within_one_window_holds_until_the_release_and_drops_there`, `t1_clipboard::a_drag_moves_from_one_window_onto_another_and_drops_there`
+- **Pass criterion:** T1 production test of a drag across outputs
+- **Destination:** T1
+- **May be closed by:** T1 production test
 - **Dependencies:** clipboard integration
-- **Blocks:** any drag-and-drop support claim
-- **Origin:** owner decision 2026-10-19 (clipboard integration; C12.F17.11)
+- **Blocks:** none
+- **Origin:** owner decision 2026-10-19 (clipboard integration; C12.F17.11); offered 2026-11-23
 <!-- /living -->
 
 ## 3. Test inventory (canonical `TST-*`)

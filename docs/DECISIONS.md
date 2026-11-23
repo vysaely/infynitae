@@ -249,3 +249,7 @@ these by date, e.g. "(owner, 2026-10-24)".
   only super shift g"): Super+Shift+G sorts by app, the layouts stay on `BIND_CLUSTER_LAYOUT`. `CLUSTER_SORT` keeps clusters in order without a key, off by default:
   "tidy" closes the gap a closed or minimized window leaves, "app" opens a new window beside its
   app's window in view. docs/WINDOWS.md "Cluster layouts".
+- **Drag-and-drop is offered** (2026-11-23, owner: Discord's server list "doesnt hold the mouse";
+  refused since 2026-10-16). An app drags only while you hold a press on it; the drag goes to the
+  window under the pointer and drops there at the release, and the app's drag icon follows the
+  pointer. Apps under xwayland-satellite drag the same way. OB-59 in the foundation test plan.

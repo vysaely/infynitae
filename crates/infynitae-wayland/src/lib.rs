@@ -426,8 +426,8 @@ pub struct WaylandState {
         Option<ClientId>,
         Option<ObjectId>,
     )>,
-    /// A client started a drag (Smithay installed its DnD grab); `refuse_client_drags` ends it.
-    drag_started: bool,
+    /// The icon of the drag a client holds (`start_drag`), drawn at the pointer until the drop.
+    pub(crate) drag_icon: Option<pointer::DragIcon>,
     /// `xdg_activation_v1` (B10.7, INV-INPUT-9, W-SM-8).
     activation: XdgActivationState,
     /// Who may use the privileged globals (`trust`, `ALLOW_*`).
@@ -867,7 +867,7 @@ impl WaylandState {
             selection_owners: [None, None],
             selection_sources: [None, None],
             data_control_owner: None,
-            drag_started: false,
+            drag_icon: None,
             activation: XdgActivationState::new::<Self>(display),
             _security_context: smithay::wayland::security_context::SecurityContextState::new::<
                 Self,
