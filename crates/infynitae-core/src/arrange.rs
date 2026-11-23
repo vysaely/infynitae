@@ -4,12 +4,17 @@
 //! paths on which one window's change moves other windows (docs/DECISIONS.md, 2026-11-06 and
 //! 2026-11-21).
 //!
-//! - tidy: the windows at their own sizes, in reading order, packed in rows as wide as the usable
-//!   view at zoom 1, 12 px apart;
-//! - grid: equal cells, the columns chosen so that a cell is as square as the view allows;
-//! - columns: side by side, each the usable height.
+//! The key's layouts (owner, 2026-11-23, in place of tidy, grid and columns):
+//! - spiral: own sizes; the focused window stays and the others, the biggest first, are put
+//!   around it, each at the free spot nearest to it, so the cluster grows out from it;
+//! - tiles: the usable view at zoom 1 split in two along its longer side, again and again, until
+//!   each window has a tile, all of about the same area; the focused window gets the first;
+//! - line: one row, each window as high as the usable view, its shape kept.
 //!
-//! The cluster's top-left corner stays where it is. Fullscreen, minimized, kept-on-top and
+//! Tidy (own sizes, reading order, rows as wide as the usable view) is not on the key: it closes
+//! the gap a window leaves under `CLUSTER_SORT` "tidy" and tidies a layout a window would not fit.
+//!
+//! Tiles and line start at the cluster's top-left corner; spiral keeps the focused window's place. Fullscreen, minimized, kept-on-top and
 //! notification windows and children (dialogs) are left out; a child moves with its parent.
 
 use crate::Core;
@@ -21,12 +26,14 @@ pub(crate) const GAP: i64 = 12;
 /// The smallest cell side a layout asks a window for (the cluster scale's smallest size).
 const MIN_SIDE: i64 = 64;
 
-/// One of the layouts, in the order the key cycles them.
+/// One of the layouts; the key cycles spiral, tiles and line.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ClusterLayout {
+    Spiral,
+    Tiles,
+    Line,
+    /// `CLUSTER_SORT` "tidy" and `infynitae msg arrange tidy`; not on the key.
     Tidy,
-    Grid,
-    Columns,
     /// Super+Shift+G (owner, 2026-11-22): every window at its own size, one row per app, rows as
     /// wide as they need (not squeezed into one view: an app with a minimum size such as Discord
     /// keeps it). Not in the Super+G cycle.
@@ -37,9 +44,10 @@ impl ClusterLayout {
     /// The layout's name as `infynitae msg arrange` takes it.
     pub fn parse(name: &str) -> Option<ClusterLayout> {
         match name.trim().to_ascii_lowercase().as_str() {
+            "spiral" => Some(ClusterLayout::Spiral),
+            "tiles" => Some(ClusterLayout::Tiles),
+            "line" => Some(ClusterLayout::Line),
             "tidy" => Some(ClusterLayout::Tidy),
-            "grid" => Some(ClusterLayout::Grid),
-            "columns" => Some(ClusterLayout::Columns),
             "app" | "by-app" => Some(ClusterLayout::ByApp),
             _ => None,
         }
@@ -47,9 +55,11 @@ impl ClusterLayout {
 
     fn next(self) -> ClusterLayout {
         match self {
-            ClusterLayout::Tidy => ClusterLayout::Grid,
-            ClusterLayout::Grid => ClusterLayout::Columns,
-            ClusterLayout::Columns | ClusterLayout::ByApp => ClusterLayout::Tidy,
+            ClusterLayout::Spiral => ClusterLayout::Tiles,
+            ClusterLayout::Tiles => ClusterLayout::Line,
+            ClusterLayout::Line | ClusterLayout::Tidy | ClusterLayout::ByApp => {
+                ClusterLayout::Spiral
+            }
         }
     }
 }
@@ -146,49 +156,153 @@ pub(crate) fn by_app(sizes: &[(i64, i64)], apps: &[&str], origin: (i64, i64)) ->
         .collect()
 }
 
-/// Grid: `n` equal cells filling `room` from `origin`, row by row. The column count is the one
-/// whose cell is closest to a square, each empty cell counted against it as `1/n` (so four
-/// windows on a wide view get two by two, not three by two with two cells empty); the fewer
-/// columns on a tie.
-pub(crate) fn grid(n: usize, origin: (i64, i64), room: (i64, i64)) -> Vec<Cell> {
-    if n == 0 {
-        return Vec::new();
-    }
-    let side = |total: i64, k: i64| ((total - (k - 1) * GAP) / k).max(MIN_SIDE);
-    let shape = |cols: usize| {
-        let rows = n.div_ceil(cols);
-        let (w, h) = (side(room.0, cols as i64), side(room.1, rows as i64));
-        let empty = (rows * cols - n) as f64 / n as f64;
-        (w as f64 / h as f64).ln().abs() + empty
-    };
-    let cols = (1..=n)
-        .min_by(|&a, &b| shape(a).total_cmp(&shape(b)))
-        .unwrap_or(1);
-    let rows = n.div_ceil(cols);
-    let (w, h) = (side(room.0, cols as i64), side(room.1, rows as i64));
-    (0..n)
-        .map(|i| Cell {
-            x: origin.0 + (i % cols) as i64 * (w + GAP),
-            y: origin.1 + (i / cols) as i64 * (h + GAP),
-            w,
-            h,
-        })
-        .collect()
+/// `a` and `b` at least `GAP` apart on one axis.
+fn clear(a: &Cell, b: &Cell) -> bool {
+    a.x + a.w + GAP <= b.x
+        || b.x + b.w + GAP <= a.x
+        || a.y + a.h + GAP <= b.y
+        || b.y + b.h + GAP <= a.y
 }
 
-/// Columns: `n` cells side by side from `origin`, sharing `room`'s width, each its full height.
-pub(crate) fn columns(n: usize, origin: (i64, i64), room: (i64, i64)) -> Vec<Cell> {
-    if n == 0 {
+/// Spiral: `sizes` at their own sizes; `centre`'s window stays at `at` and the others, the
+/// biggest (by area) first and else in `sizes`' order, each go to the free spot nearest to its
+/// middle: beside a window already placed, the gap between, lined up with one of its edges or
+/// its middle. Distance counts across as `aspect` times less than up and down, so the cluster
+/// grows in the screen's shape; on a tie the spot first clockwise from the top. Cells in
+/// `sizes`' order.
+pub(crate) fn spiral(
+    sizes: &[(i64, i64)],
+    centre: usize,
+    at: (i64, i64),
+    aspect: f64,
+) -> Vec<Cell> {
+    let mut cells = vec![
+        Cell {
+            x: 0,
+            y: 0,
+            w: 0,
+            h: 0
+        };
+        sizes.len()
+    ];
+    let Some(&(cw, ch)) = sizes.get(centre) else {
         return Vec::new();
+    };
+    cells[centre] = Cell {
+        x: at.0,
+        y: at.1,
+        w: cw,
+        h: ch,
+    };
+    let (mx, my) = (at.0 as f64 + cw as f64 / 2.0, at.1 as f64 + ch as f64 / 2.0);
+    let mut rest: Vec<usize> = (0..sizes.len()).filter(|&i| i != centre).collect();
+    rest.sort_by_key(|&i| std::cmp::Reverse(sizes[i].0 * sizes[i].1));
+    let mut placed = vec![cells[centre]];
+    for i in rest {
+        let (w, h) = sizes[i];
+        let mut spots = Vec::new();
+        for p in &placed {
+            let xs = [p.x, p.x + p.w - w, p.x + (p.w - w) / 2];
+            let ys = [p.y, p.y + p.h - h, p.y + (p.h - h) / 2];
+            for x in xs {
+                spots.push((x, p.y - GAP - h));
+                spots.push((x, p.y + p.h + GAP));
+            }
+            for y in ys {
+                spots.push((p.x - GAP - w, y));
+                spots.push((p.x + p.w + GAP, y));
+            }
+        }
+        let rank = |&(x, y): &(i64, i64)| {
+            let dx = (x as f64 + w as f64 / 2.0 - mx) / aspect;
+            let dy = y as f64 + h as f64 / 2.0 - my;
+            // clockwise from the top: 0 straight up, growing to the right
+            let turn = dx.atan2(-dy).rem_euclid(std::f64::consts::TAU);
+            (dx * dx + dy * dy, turn)
+        };
+        let best = spots
+            .into_iter()
+            .filter(|&(x, y)| {
+                let c = Cell { x, y, w, h };
+                placed.iter().all(|p| clear(&c, p))
+            })
+            .min_by(|a, b| {
+                let (ra, rb) = (rank(a), rank(b));
+                ra.0.total_cmp(&rb.0).then(ra.1.total_cmp(&rb.1))
+            });
+        // a spot beside the outermost window is always free, so there is always a best
+        let (x, y) = best.unwrap_or((at.0, at.1 - GAP - h));
+        cells[i] = Cell { x, y, w, h };
+        placed.push(cells[i]);
     }
-    let w = ((room.0 - (n as i64 - 1) * GAP) / n as i64).max(MIN_SIDE);
-    let h = room.1.max(MIN_SIDE);
-    (0..n)
-        .map(|i| Cell {
-            x: origin.0 + i as i64 * (w + GAP),
+    cells
+}
+
+/// Tiles: `room` from `origin` split in two halves along its longer side, the gap between, the
+/// first half for half the windows rounded down and the second for the rest, again in each half
+/// until each window has its own tile (three windows: one half and two quarters). The first
+/// window gets the first tile (left or top). Tiles in order.
+pub(crate) fn tiles(n: usize, origin: (i64, i64), room: (i64, i64)) -> Vec<Cell> {
+    fn split(n: usize, r: Cell, out: &mut Vec<Cell>) {
+        if n <= 1 {
+            out.push(r);
+            return;
+        }
+        let first = n / 2;
+        let part = |side: i64| ((side - GAP) / 2).max(MIN_SIDE);
+        let (a, b) = if r.w >= r.h {
+            let w = part(r.w);
+            (
+                Cell { w, ..r },
+                Cell {
+                    x: r.x + w + GAP,
+                    w: (r.w - w - GAP).max(MIN_SIDE),
+                    ..r
+                },
+            )
+        } else {
+            let h = part(r.h);
+            (
+                Cell { h, ..r },
+                Cell {
+                    y: r.y + h + GAP,
+                    h: (r.h - h - GAP).max(MIN_SIDE),
+                    ..r
+                },
+            )
+        };
+        split(first, a, out);
+        split(n - first, b, out);
+    }
+    let mut out = Vec::with_capacity(n);
+    if n > 0 {
+        let room = Cell {
+            x: origin.0,
             y: origin.1,
-            w,
-            h,
+            w: room.0,
+            h: room.1,
+        };
+        split(n, room, &mut out);
+    }
+    out
+}
+
+/// Line: `sizes` in one row from `origin`, the gap between, each `height` high and as wide as
+/// its shape at that height (at least `MIN_SIDE`).
+pub(crate) fn line(sizes: &[(i64, i64)], origin: (i64, i64), height: i64) -> Vec<Cell> {
+    let mut x = origin.0;
+    sizes
+        .iter()
+        .map(|&(w, h)| {
+            let w = (w * height / h.max(1)).max(MIN_SIDE);
+            let cell = Cell {
+                x,
+                y: origin.1,
+                w,
+                h: height,
+            };
+            x += w + GAP;
+            cell
         })
         .collect()
 }
@@ -252,7 +366,8 @@ impl Core {
         Some((fit(w), fit(h)))
     }
 
-    /// Arranges `members` by `layout` from their top-left corner. A window whose cell has
+    /// Arranges `members` by `layout` (spiral around `first`, tiles giving it the first tile;
+    /// without it, around or to the biggest window). A window whose cell has
     /// another size is asked for it and centred in the cell at the size it has now; its commits
     /// keep it centred until it answers (`laid_out_anchor`). Its children move with it. Returns
     /// the cells' bounding box `(x, y, w, h)`, or `None` when no window is arranged.
@@ -260,6 +375,7 @@ impl Core {
         &mut self,
         members: &[ElementId],
         layout: ClusterLayout,
+        first: Option<ElementId>,
         out: &mut Vec<Effect>,
     ) -> Option<(i64, i64, i64, i64)> {
         let (ids, rects): (Vec<ElementId>, Vec<Cell>) = self.arranged(members).into_iter().unzip();
@@ -286,15 +402,26 @@ impl Core {
             rects.iter().map(|r| r.y).min()?,
         );
         let room = self.layout_room()?;
+        // the window the layout starts from: `first`, else the biggest
+        let lead = ids
+            .iter()
+            .position(|&e| Some(e) == first)
+            .or_else(|| (0..rects.len()).max_by_key(|&i| rects[i].w * rects[i].h))?;
+        if layout == ClusterLayout::Tiles {
+            order.retain(|&i| i != lead);
+            order.insert(0, lead);
+        }
+        let sizes: Vec<_> = order.iter().map(|&i| (rects[i].w, rects[i].h)).collect();
         let cells = match layout {
-            ClusterLayout::Tidy => {
-                let sizes: Vec<_> = order.iter().map(|&i| (rects[i].w, rects[i].h)).collect();
-                tidy(&sizes, origin, room.0)
+            ClusterLayout::Tidy => tidy(&sizes, origin, room.0),
+            ClusterLayout::Spiral => {
+                let centre = order.iter().position(|&i| i == lead)?;
+                let at = (rects[lead].x, rects[lead].y);
+                spiral(&sizes, centre, at, room.0 as f64 / room.1.max(1) as f64)
             }
-            ClusterLayout::Grid => grid(ids.len(), origin, room),
-            ClusterLayout::Columns => columns(ids.len(), origin, room),
+            ClusterLayout::Tiles => tiles(ids.len(), origin, room),
+            ClusterLayout::Line => line(&sizes, origin, room.1),
             ClusterLayout::ByApp => {
-                let sizes: Vec<_> = order.iter().map(|&i| (rects[i].w, rects[i].h)).collect();
                 let apps: Vec<String> = order.iter().map(|&i| app_of(i)).collect();
                 let apps: Vec<&str> = apps.iter().map(String::as_str).collect();
                 by_app(&sizes, &apps, origin)
@@ -350,7 +477,7 @@ impl Core {
 
     /// The layout key (Super+G) and `infynitae msg arrange`: `around`'s cluster (its
     /// parent's, for a child) arranged by `layout`, or by the layout after the one this cluster
-    /// got last (tidy first). With `proof`, the camera frames the result. False when nothing was
+    /// got last (spiral first). With `proof`, the camera frames the result. False when nothing was
     /// arranged, and when `around` is a window a layout leaves out (a fullscreen game focused:
     /// the windows hidden behind it stay as they are).
     pub(crate) fn arrange_cluster(
@@ -369,10 +496,10 @@ impl Core {
         }
         let layout = layout.unwrap_or(match self.last_layout {
             Some((e, last)) if e == around => last.next(),
-            _ => ClusterLayout::Tidy,
+            _ => ClusterLayout::Spiral,
         });
         let cluster = self.cluster_for_element(around);
-        let Some(bounds) = self.arrange(&cluster, layout, out) else {
+        let Some(bounds) = self.arrange(&cluster, layout, Some(around), out) else {
             return false;
         };
         self.last_layout = Some((around, layout));
@@ -397,11 +524,18 @@ impl Core {
         rest
     }
 
-    /// The windows `cluster_left_by` named, tidied: the gap closes. The camera stays.
+    /// The windows `cluster_left_by` named, arranged again: the gap closes. A cluster the key
+    /// arranged last keeps that layout (around the same window when it is still there); any other
+    /// is tidied. The camera stays.
     pub(crate) fn tidy_after_leave(&mut self, rest: &[ElementId], out: &mut Vec<Effect>) {
-        if !rest.is_empty() {
-            self.arrange(rest, ClusterLayout::Tidy, out);
+        if rest.is_empty() {
+            return;
         }
+        let (layout, first) = match self.last_layout {
+            Some((e, l)) if l != ClusterLayout::ByApp && rest.contains(&e) => (l, Some(e)),
+            _ => (ClusterLayout::Tidy, None),
+        };
+        self.arrange(rest, layout, first, out);
     }
 
     /// A commit of a window a layout asked for a size: the anchor that centres the size it drew
@@ -451,7 +585,7 @@ impl Core {
             return;
         }
         self.layout_overflow = None;
-        self.arrange(&cluster, ClusterLayout::Tidy, out);
+        self.arrange(&cluster, ClusterLayout::Tidy, None, out);
     }
 
     /// `CLUSTER_SORT` "app": where a new window of an app goes when the app already has a window
@@ -635,31 +769,74 @@ mod tests {
         assert!(all_apart(&cells));
     }
 
-    /// Grid: two windows side by side on a landscape view, stacked on a portrait one; four in
-    /// two by two; cells equal, filling the room, the gap between.
+    /// Tiles: halves along the longer side; three windows get a half and two quarters, the first
+    /// the half; 25 tiles fill the room without touching.
     #[test]
-    fn grid_picks_rows_and_columns_from_count_and_shape() {
-        let room = (1896, 1032);
-        let two = grid(2, (0, 0), room);
-        assert_eq!(two, vec![cell(0, 0, 942, 1032), cell(954, 0, 942, 1032)]);
-        let portrait = grid(2, (0, 0), (1032, 1896));
+    fn tiles_split_the_room_in_halves() {
+        let room = (1896, 1056);
+        assert_eq!(
+            tiles(3, (10, 20), room),
+            vec![
+                cell(10, 20, 942, 1056),
+                cell(10 + 954, 20, 942, 522),
+                cell(10 + 954, 20 + 534, 942, 522)
+            ]
+        );
+        let portrait = tiles(2, (0, 0), (1056, 1896));
         assert_eq!(
             portrait,
-            vec![cell(0, 0, 1032, 942), cell(0, 954, 1032, 942)]
+            vec![cell(0, 0, 1056, 942), cell(0, 954, 1056, 942)]
         );
-        let four = grid(4, (10, 20), room);
-        assert_eq!(four[0], cell(10, 20, 942, 510));
-        assert_eq!(four[3], cell(10 + 954, 20 + 522, 942, 510));
-        assert!(all_apart(&four));
-        let five = grid(5, (0, 0), room);
-        assert!(all_apart(&five));
-        assert!(five.iter().all(|c| (c.w, c.h) == (five[0].w, five[0].h)));
-        let right = five.iter().map(|c| c.x + c.w).max().unwrap();
-        let bottom = five.iter().map(|c| c.y + c.h).max().unwrap();
-        assert!(right <= 1896 && bottom <= 1032, "inside the room");
+        let many = tiles(25, (0, 0), room);
+        assert_eq!(many.len(), 25);
+        assert!(all_apart(&many));
+        assert!(many.iter().all(|c| c.x + c.w <= 1896 && c.y + c.h <= 1056));
+        assert!(tiles(0, (0, 0), room).is_empty());
     }
 
-    /// Columns: side by side, the full height, the width shared with the gap.
+    /// Line: one row, the room's height, each window's shape kept.
+    #[test]
+    fn line_keeps_shapes_at_full_height() {
+        let cells = line(&[(400, 300), (160, 90), (300, 600)], (5, 6), 1056);
+        assert_eq!(
+            cells,
+            vec![
+                cell(5, 6, 1408, 1056),
+                cell(5 + 1420, 6, 1877, 1056),
+                cell(5 + 1420 + 1889, 6, 528, 1056)
+            ]
+        );
+    }
+
+    /// Spiral: the centre window stays, the others keep their sizes and gather around it, the
+    /// cluster wider than high on a wide screen.
+    #[test]
+    fn spiral_grows_around_the_centre_window() {
+        // four mains and twenty-one small windows, as the owner runs them
+        let mut sizes = vec![(160, 90); 4];
+        sizes.extend([(64, 48); 21]);
+        let cells = spiral(&sizes, 2, (300, -40), 1896.0 / 1056.0);
+        assert_eq!(cells[2], cell(300, -40, 160, 90), "the centre stays");
+        assert!(all_apart(&cells));
+        for (c, s) in cells.iter().zip(&sizes) {
+            assert_eq!((c.w, c.h), *s, "sizes kept");
+        }
+        let x0 = cells.iter().map(|c| c.x).min().unwrap();
+        let x1 = cells.iter().map(|c| c.x + c.w).max().unwrap();
+        let y0 = cells.iter().map(|c| c.y).min().unwrap();
+        let y1 = cells.iter().map(|c| c.y + c.h).max().unwrap();
+        assert!(x1 - x0 > y1 - y0, "wider than high: {x0} {y0} {x1} {y1}");
+        // around the centre: as far left of it as right, give or take a column
+        let (left, right) = (300 - x0, x1 - 460);
+        assert!((left - right).abs() <= 200, "{left} {right}");
+        // the big windows are next to the centre
+        for c in &cells[..4] {
+            let near = (c.x - 300).abs() <= 172 && (c.y + 40).abs() <= 102;
+            assert!(near, "{c:?}");
+        }
+        assert!(spiral(&[], 0, (0, 0), 1.0).is_empty());
+    }
+
     #[test]
     fn by_app_gives_each_app_a_row_at_own_sizes() {
         let cells = by_app(
@@ -680,19 +857,6 @@ mod tests {
         assert!(ten.iter().all(|c| c.y == 0));
         assert_eq!(ten[9].x, 9 * 912);
         assert_eq!(ClusterLayout::parse("app"), Some(ClusterLayout::ByApp));
-    }
-
-    #[test]
-    fn columns_share_the_width_at_full_height() {
-        let cells = columns(3, (5, 6), (1896, 1032));
-        assert_eq!(
-            cells,
-            vec![
-                cell(5, 6, 624, 1032),
-                cell(5 + 636, 6, 624, 1032),
-                cell(5 + 1272, 6, 624, 1032)
-            ]
-        );
     }
 
     #[test]
@@ -744,24 +908,26 @@ mod tests {
         );
     }
 
-    /// Grid: four windows get 2 x 2 cells of the room (942 x 522), asked as configures. Until a
-    /// window answers it is centred in its cell; one that draws the cell size sits at the cell's
-    /// corner; one that keeps its own size stays centred, and its cell is then done with.
+    /// Tiles: four windows get quarters of the room (942 x 522), asked as configures, the one
+    /// pressed on the first. Until a window answers it is centred in its tile; one that draws the
+    /// tile's size sits at its corner; one that keeps its own size stays centred, and its tile is
+    /// then done with.
     #[test]
-    fn grid_sizes_windows_to_cells_and_centres_the_ones_that_refuse() {
+    fn tiles_size_windows_and_centre_the_ones_that_refuse() {
         let mut d = desk();
         let a = open(&mut d, 1, "a", (400, 300), (0, 0));
         let b = open(&mut d, 2, "b", (400, 300), (420, 10));
         let c = open(&mut d, 3, "c", (400, 300), (0, 330));
         let e = open(&mut d, 4, "e", (300, 200), (430, 340));
         let mut fx = Vec::new();
-        assert!(d.c.arrange_cluster(a, Some(ClusterLayout::Grid), None, &mut fx));
+        assert!(d.c.arrange_cluster(a, Some(ClusterLayout::Tiles), None, &mut fx));
         for id in [a, b, c, e] {
             assert_eq!(asked(&fx, id), Some((942, 522)), "{id:?}");
         }
+        // reading order a, b, c, e: the left half for a and b, the right for c and e
         assert_eq!(anchor(&d.c, a), (271, 111));
-        assert_eq!(anchor(&d.c, b), (954 + 271, 111));
-        assert_eq!(anchor(&d.c, c), (271, 534 + 111));
+        assert_eq!(anchor(&d.c, b), (271, 534 + 111));
+        assert_eq!(anchor(&d.c, c), (954 + 271, 111));
         assert_eq!(anchor(&d.c, e), (954 + 321, 534 + 161));
         // A draws the cell's size
         d.c.toplevel_committed(a, win(1, 942, 522, true)).unwrap();
@@ -782,10 +948,10 @@ mod tests {
         assert!(d.c.layout_cells.iter().all(|(x, _)| *x != a && *x != e));
         // B draws a frame of the old size before it acknowledged: still centred
         d.c.toplevel_committed(b, win(2, 400, 300, true)).unwrap();
-        assert_eq!(anchor(&d.c, b), (954 + 271, 111));
+        assert_eq!(anchor(&d.c, b), (271, 534 + 111));
     }
 
-    /// Columns where one window keeps a bigger width than its cell (an app's minimum width):
+    /// Tiles where one window keeps a bigger width than its tile (an app's minimum width):
     /// once both have answered, the cluster is tidied at the sizes they took and nothing covers
     /// anything (owner, 2026-11-22).
     #[test]
@@ -794,7 +960,7 @@ mod tests {
         let a = open(&mut d, 1, "a", (400, 300), (-500, -200));
         let b = open(&mut d, 2, "chat", (400, 300), (0, -200));
         let mut fx = Vec::new();
-        assert!(d.c.arrange_cluster(b, Some(ClusterLayout::Columns), None, &mut fx));
+        assert!(d.c.arrange_cluster(b, Some(ClusterLayout::Tiles), None, &mut fx));
         let (cw, ch) = asked(&fx, a).unwrap();
         let cell_size = Some(LocalSize { w: cw, h: ch });
         // A takes its cell; B acknowledges and stays wider than the cell
@@ -820,20 +986,52 @@ mod tests {
         );
     }
 
-    /// Columns: two windows side by side, each half the room's width and its full height.
+    /// Tiles: two windows side by side, each half the room's width and its full height, the one
+    /// pressed on at the left.
     #[test]
-    fn columns_fill_the_usable_height() {
+    fn tiles_fill_the_usable_view() {
         let mut d = desk();
         let a = open(&mut d, 1, "a", (400, 300), (-500, -200));
         let b = open(&mut d, 2, "b", (400, 300), (0, -200));
         let mut fx = Vec::new();
-        assert!(d.c.arrange_cluster(b, Some(ClusterLayout::Columns), None, &mut fx));
+        assert!(d.c.arrange_cluster(b, Some(ClusterLayout::Tiles), None, &mut fx));
         assert_eq!(asked(&fx, a), Some((942, 1056)));
         assert_eq!(asked(&fx, b), Some((942, 1056)));
         d.c.toplevel_committed(a, win(1, 942, 1056, true)).unwrap();
         d.c.toplevel_committed(b, win(2, 942, 1056, true)).unwrap();
-        assert_eq!(rect(&d.c, a), cell(-500, -200, 942, 1056));
-        assert_eq!(rect(&d.c, b), cell(-500 + 954, -200, 942, 1056));
+        assert_eq!(rect(&d.c, b), cell(-500, -200, 942, 1056));
+        assert_eq!(rect(&d.c, a), cell(-500 + 954, -200, 942, 1056));
+    }
+
+    /// Spiral on a real Core: the window pressed on stays, nothing is asked to resize, and under
+    /// `CLUSTER_SORT` "tidy" the cluster is spiralled again around it when another closes.
+    #[test]
+    fn spiral_keeps_the_pressed_window_and_stays_a_spiral() {
+        let mut d = desk();
+        d.c.set_cluster_sort(ClusterSort::parse("tidy"));
+        let a = open(&mut d, 1, "a", (400, 300), (-900, -500));
+        let b = open(&mut d, 2, "b", (500, 400), (-700, -450));
+        let c = open(&mut d, 3, "c", (300, 200), (-1000, -100));
+        let e = open(&mut d, 4, "e", (300, 200), (-800, -150));
+        let mut fx = Vec::new();
+        assert!(d.c.arrange_cluster(a, Some(ClusterLayout::Spiral), None, &mut fx));
+        assert_eq!(rect(&d.c, a), cell(-900, -500, 400, 300));
+        let all = [a, b, c, e].map(|x| rect(&d.c, x));
+        assert!(all_apart(&all), "{all:?}");
+        assert!(
+            fx.iter()
+                .all(|f| !matches!(f, Effect::ToplevelConfigureSize { .. })),
+            "spiral keeps sizes: {fx:?}"
+        );
+        d.c.toplevel_destroyed(b);
+        assert_eq!(rect(&d.c, a), cell(-900, -500, 400, 300), "A stays");
+        let rest = [a, c, e].map(|x| rect(&d.c, x));
+        assert!(all_apart(&rest), "{rest:?}");
+        // the gap B left is closed: C and E are next to A
+        let a_mid = rest[0].x + rest[0].w / 2;
+        for r in &rest[1..] {
+            assert!((r.x + r.w / 2 - a_mid).abs() < 600, "{r:?}");
+        }
     }
 
     /// Kept-on-top, minimized and fullscreen windows are left where they are; a dialog moves with
@@ -882,16 +1080,16 @@ mod tests {
         // pressed on the fullscreen window or the one kept on top: nothing is arranged
         let (q_at, p_at) = (anchor(&d.c, q), anchor(&d.c, p));
         for e in [full, top] {
-            assert!(!d.c.arrange_cluster(e, Some(ClusterLayout::Grid), None, &mut fx));
+            assert!(!d.c.arrange_cluster(e, Some(ClusterLayout::Tiles), None, &mut fx));
         }
         assert_eq!((anchor(&d.c, q), anchor(&d.c, p)), (q_at, p_at));
         // pressed on the dialog, its parent's cluster is arranged
-        assert!(d.c.arrange_cluster(dialog, Some(ClusterLayout::Columns), None, &mut fx));
+        assert!(d.c.arrange_cluster(dialog, Some(ClusterLayout::Tiles), None, &mut fx));
         assert_eq!(asked(&fx, p), Some((942, 1056)));
         assert_eq!(asked(&fx, dialog), None);
     }
 
-    /// The key's cycle: tidy, grid, columns, tidy again; another cluster starts at tidy.
+    /// The key's cycle: spiral, tiles, line, spiral again; another cluster starts at spiral.
     #[test]
     fn the_layout_key_cycles() {
         let mut d = desk();
@@ -906,14 +1104,14 @@ mod tests {
         assert_eq!(
             layouts,
             [
-                ClusterLayout::Tidy,
-                ClusterLayout::Grid,
-                ClusterLayout::Columns,
-                ClusterLayout::Tidy
+                ClusterLayout::Spiral,
+                ClusterLayout::Tiles,
+                ClusterLayout::Line,
+                ClusterLayout::Spiral
             ]
         );
         assert!(d.c.arrange_cluster(b, None, None, &mut fx));
-        assert_eq!(d.c.last_layout, Some((b, ClusterLayout::Tidy)));
+        assert_eq!(d.c.last_layout, Some((b, ClusterLayout::Spiral)));
     }
 
     /// The shell's command: the focused window's cluster without an element; refused with no

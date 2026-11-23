@@ -12,7 +12,7 @@
 //! infynitae msg shortcut <name>                 a global shortcut (mute, deafen, …) to apps
 //! infynitae msg overview                        pick a window from a menu and go to it
 //! infynitae msg layers [app]                    every window's surfaces and where they are drawn
-//! infynitae msg arrange <layout> [inst elem]    tidy, grid or columns: the focused window's
+//! infynitae msg arrange <layout> [inst elem]    spiral, tiles, line, tidy or app: the focused window's
 //!                                               cluster, or that window's
 //! ```
 
@@ -101,7 +101,7 @@ fn first_output() -> u64 {
 
 fn usage() -> ExitCode {
     eprintln!(
-        "Usage: infynitae msg snapshot | focus <inst> <elem> | navigate <x> <y> [zoom] | navigate element <inst> <elem> | place <name> | restore [output] | shortcut <name> | overview | lock | night-light [on|off] | keyboard-layout | osk [on|off] | capture-chord | layers [app] | arrange tidy|grid|columns|app [<inst> <elem>]"
+        "Usage: infynitae msg snapshot | focus <inst> <elem> | navigate <x> <y> [zoom] | navigate element <inst> <elem> | place <name> | restore [output] | shortcut <name> | overview | lock | night-light [on|off] | keyboard-layout | osk [on|off] | capture-chord | layers [app] | arrange spiral|tiles|line|tidy|app [<inst> <elem>]"
     );
     ExitCode::from(2)
 }
@@ -432,7 +432,7 @@ pub fn run(args: &[String]) -> ExitCode {
         },
         Some("arrange") => {
             let layout = match args.get(1).map(String::as_str) {
-                Some(l @ ("tidy" | "grid" | "columns")) => l,
+                Some(l @ ("spiral" | "tiles" | "line" | "tidy" | "app")) => l,
                 _ => return usage(),
             };
             let element = match (args.len(), num(2), num(3)) {
