@@ -101,6 +101,19 @@ fn super_g_cycles_spiral_tiles_and_line() {
         assert_eq!(asked_since(&r, from, i), Some((942, 522)));
     }
 
+    // the clients draw their tiles' size, as apps do (the cluster stays one: 12 px apart)
+    let qh = r.ls.qh.clone();
+    for i in [ia, ib, ic, id] {
+        r.ls.probe.surfaces[i].size = (942, 522);
+        r.ls.probe.draw(&qh, i);
+    }
+    r.ls.pump();
+    r.frame();
+    for e in [a, b, c, d] {
+        let (_, _, w, h) = rect(&r, e);
+        assert_eq!((w, h), (942, 522));
+    }
+
     // line: each asked for the usable height and the width of its shape at that height
     let before: Vec<_> = [a, b, c, d].iter().map(|&e| rect(&r, e)).collect();
     let from = r.ls.probe.toplevel_configures.len();
