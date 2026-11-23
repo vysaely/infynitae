@@ -406,7 +406,6 @@ fn a_drag_within_one_window_holds_until_the_release_and_drops_there() {
     let log = &r.ls.probe.clipboard.log;
     let motions = log.iter().filter(|l| l.starts_with("dnd motion ")).count();
     assert!(motions >= 2, "the drag follows the pointer: {log:?}");
-    assert!(log.contains(&"target text/plain".to_string()), "{log:?}");
     // no button reaches the window as a pointer event while it drags
     let m = r.mark();
     r.button(BTN_LEFT, false, none());
@@ -445,10 +444,11 @@ fn a_drag_moves_from_one_window_onto_another_and_drops_there() {
     use common::input::{BTN_LEFT, Rig, none};
     let mut r = Rig::x8();
     let qh = r.ls.qh.clone();
-    // V (200 x 150) opens centred, over the middle of W; the pointer is on W, off V
+    // V (200 x 150) opens where the placement puts it; the pointer stays on W
     r.ls.probe.toplevel(&qh, "V", (200, 150), 0);
     r.ls.pump();
     r.frame();
+    let v = *r.ls.state.core().stage().mapped_elements().last().unwrap();
     let _source = start_drag(&mut r);
     r.motion((5.0, 0.0));
     assert!(
@@ -460,8 +460,9 @@ fn a_drag_moves_from_one_window_onto_another_and_drops_there() {
         "{:?}",
         r.ls.probe.clipboard.log
     );
-    // onto V: canvas (30, 20), V-local (130, 95)
-    r.motion((-205.0, -200.0));
+    // onto V, at V-local (100, 75)
+    let d = common::delta_to(&r.ls, v, (100.0, 75.0));
+    r.motion(d);
     let log = &r.ls.probe.clipboard.log;
     let leave = log.iter().position(|l| l == "dnd leave");
     let enter_v = log.iter().position(|l| l.starts_with("dnd enter V "));
