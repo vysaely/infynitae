@@ -432,7 +432,76 @@ where
     R: Renderer + ImportAll + ImportMem,
     R::TextureId: Send + Clone + 'static,
 {
-    render_elements_opt(renderer, registry, entries, k, |_| false, |_| None)
+    render_elements_opt(renderer, registry, entries, k, |_| false, |_| None, None)
+}
+
+/// The surface whose element took longest to make in a timed frame, and how long: making it
+/// uploads or imports the surface's new buffer, the work inside a slow "layers above" or "windows".
+pub type SlowestSurface = Option<(infynitae_core::snapshot::SurfaceKey, std::time::Duration)>;
+
+impl WaylandState {
+    /// Keeps the slower of `slowest` and the one noted earlier this turn (another screen's frame).
+    pub(crate) fn note_slowest_surface(&mut self, slowest: SlowestSurface) {
+        if let Some((_, took)) = slowest
+            && self.slowest_surface.is_none_or(|(_, t)| took > t)
+        {
+            self.slowest_surface = slowest;
+        }
+    }
+
+    /// The surface slowest to make into an element since the last call, when it took 1 ms or
+    /// more: its program, its buffer's kind and size, and the time, for a slow turn's log line.
+    pub fn take_slowest_surface(&mut self) -> Option<String> {
+        let (key, took) = self.slowest_surface.take()?;
+        if took < std::time::Duration::from_millis(1) {
+            return None;
+        }
+        let ms = took.as_secs_f64() * 1000.0;
+        let Some(surface) = self.registry.surface(key) else {
+            return Some(format!("a surface closed since, {ms:.1} ms"));
+        };
+        let program = surface
+            .client()
+            .and_then(|c| {
+                c.get_data::<crate::ClientState>()
+                    .and_then(|s| s.identity().map(|i| i.app_name()))
+            })
+            .unwrap_or_else(|| "an app".to_string());
+        let buffer = with_states(surface, |states| {
+            let data = states.data_map.get::<RendererSurfaceStateUserData>()?;
+            let data = data.lock().unwrap_or_else(|e| e.into_inner());
+            let buffer = data.buffer()?;
+            let kind = match smithay::backend::renderer::buffer_type(buffer) {
+                Some(smithay::backend::renderer::BufferType::Shm) => "shm",
+                Some(smithay::backend::renderer::BufferType::Dma) => "dmabuf",
+                _ => "other",
+            };
+            let size = smithay::backend::renderer::buffer_dimensions(buffer)?;
+            Some(format!("{kind} {}x{}", size.w, size.h))
+        });
+        Some(match buffer {
+            Some(b) => format!("{program}, {b} buffer, {ms:.1} ms"),
+            None => format!("{program}, no buffer now, {ms:.1} ms"),
+        })
+    }
+}
+
+/// `make` for `surface`'s element, timed into `slowest` when it is given.
+fn timed<T>(
+    slowest: &mut Option<&mut SlowestSurface>,
+    surface: infynitae_core::snapshot::SurfaceKey,
+    make: impl FnOnce() -> T,
+) -> T {
+    let Some(slot) = slowest.as_mut() else {
+        return make();
+    };
+    let start = std::time::Instant::now();
+    let out = make();
+    let took = start.elapsed();
+    if slot.is_none_or(|(_, t)| took > t) {
+        **slot = Some((surface, took));
+    }
+    out
 }
 
 /// Render elements with optional forced transparency predicate per element.
@@ -443,6 +512,7 @@ pub fn render_elements_opt<R, F, C>(
     k: f64,
     force_transparent: F,
     clip: C,
+    mut slowest: Option<&mut SlowestSurface>,
 ) -> Result<Vec<(FrameEntry, SurfaceElement<R>)>, R::Error>
 where
     R: Renderer + ImportAll + ImportMem,
@@ -452,7 +522,9 @@ where
 {
     let mut out = Vec::with_capacity(entries.len());
     for e in entries {
-        if let Some(el) = surface_element(renderer, registry, e)? {
+        if let Some(el) = timed(&mut slowest, e.surface, || {
+            surface_element(renderer, registry, e)
+        })? {
             let ft = force_transparent(e.element);
             out.push((
                 e.clone(),
@@ -540,6 +612,7 @@ pub fn layer_render_elements<R>(
     registry: &SurfaceRegistry,
     entries: &[infynitae_core::layer::LayerEntry],
     k: f64,
+    mut slowest: Option<&mut SlowestSurface>,
 ) -> Result<Vec<SurfaceElement<R>>, R::Error>
 where
     R: Renderer + ImportAll + ImportMem,
@@ -550,15 +623,17 @@ where
         let Some(surface) = registry.surface(e.surface) else {
             continue;
         };
-        let el = with_states(surface, |states| {
-            WaylandSurfaceRenderElement::from_surface(
-                renderer,
-                surface,
-                states,
-                projected_to_smithay_physical(e.location),
-                1.0,
-                Kind::Unspecified,
-            )
+        let el = timed(&mut slowest, e.surface, || {
+            with_states(surface, |states| {
+                WaylandSurfaceRenderElement::from_surface(
+                    renderer,
+                    surface,
+                    states,
+                    projected_to_smithay_physical(e.location),
+                    1.0,
+                    Kind::Unspecified,
+                )
+            })
         })?;
         if let Some(el) = el {
             out.push(CanonicalRect::new(el, e.rect, k));
@@ -793,6 +868,8 @@ where
     }
     let layers = state.core.layer_frame(output);
     let mut elements = Vec::new();
+    let timing = mark.is_some();
+    let mut slowest: SlowestSurface = None;
     mark_phase(&mut mark, "frame list");
     // A fullscreen tearing game with a locked pointer owns raw mouse deltas; leave any stale
     // unhidden cursor off the cursor plane so direct scanout can flip asynchronously.
@@ -823,10 +900,16 @@ where
     input_method_popups(state, renderer, &entries, view.k, &mut elements)
         .map_err(RenderOutputError::Renderer)?;
     elements.extend(
-        layer_render_elements(renderer, &state.registry, &layers.above, view.k)
-            .map_err(RenderOutputError::Renderer)?
-            .into_iter()
-            .map(OutputElement::Surface),
+        layer_render_elements(
+            renderer,
+            &state.registry,
+            &layers.above,
+            view.k,
+            timing.then_some(&mut slowest),
+        )
+        .map_err(RenderOutputError::Renderer)?
+        .into_iter()
+        .map(OutputElement::Surface),
     );
     mark_phase(&mut mark, "layers above");
     state.rounding.clear();
@@ -838,22 +921,33 @@ where
         view.scale,
         (i64::from(view.size.0), i64::from(view.size.1)),
         &mut elements,
+        timing.then_some(&mut slowest),
     )
     .map_err(RenderOutputError::Renderer)?;
     mark_phase(&mut mark, "windows");
     elements.extend(
-        layer_render_elements(renderer, &state.registry, &layers.below, view.k)
-            .map_err(RenderOutputError::Renderer)?
-            .into_iter()
-            .map(OutputElement::Surface),
+        layer_render_elements(
+            renderer,
+            &state.registry,
+            &layers.below,
+            view.k,
+            timing.then_some(&mut slowest),
+        )
+        .map_err(RenderOutputError::Renderer)?
+        .into_iter()
+        .map(OutputElement::Surface),
     );
     drop_empty(&mut elements, view.k);
     mark_phase(&mut mark, "layers below");
+    if timing {
+        state.note_slowest_surface(slowest);
+    }
     Ok((elements, view.k))
 }
 
 /// The windows' elements, front to back: each window's surfaces, cut to its geometry
 /// (CLIP_TO_GEOMETRY), with its border right behind them, in front of the windows behind it.
+#[allow(clippy::too_many_arguments)]
 fn window_elements<R>(
     state: &mut WaylandState,
     renderer: &mut R,
@@ -862,6 +956,7 @@ fn window_elements<R>(
     scale: f64,
     view: (i64, i64),
     elements: &mut Vec<OutputElement<R>>,
+    slowest: Option<&mut SlowestSurface>,
 ) -> Result<(), R::Error>
 where
     R: Renderer + ImportAll + ImportMem,
@@ -894,6 +989,7 @@ where
             k,
             force_transparent,
             clip,
+            slowest,
         )?
     };
     // a window's surfaces are consecutive, front to back (its popups first); its border goes right
@@ -1187,7 +1283,7 @@ where
             .map_err(RenderOutputError::Renderer)?;
     }
     elements.extend(
-        layer_render_elements(renderer, &state.registry, &layers.above, view.k)
+        layer_render_elements(renderer, &state.registry, &layers.above, view.k, None)
             .map_err(RenderOutputError::Renderer)?
             .into_iter()
             .map(OutputElement::Surface),
@@ -1201,10 +1297,11 @@ where
         view.scale,
         (i64::from(view.size.0), i64::from(view.size.1)),
         &mut elements,
+        None,
     )
     .map_err(RenderOutputError::Renderer)?;
     elements.extend(
-        layer_render_elements(renderer, &state.registry, &layers.below, view.k)
+        layer_render_elements(renderer, &state.registry, &layers.below, view.k, None)
             .map_err(RenderOutputError::Renderer)?
             .into_iter()
             .map(OutputElement::Surface),

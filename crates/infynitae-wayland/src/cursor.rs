@@ -8,6 +8,7 @@
 //! `convert`'s (INV-COORD-4); this module keeps what the client asked for.
 
 use std::collections::{HashMap, HashSet};
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use smithay::backend::allocator::Fourcc;
@@ -130,17 +131,100 @@ impl LoadedCursor {
     }
 }
 
-/// Selects the image closest to `target_size` in nominal or actual size.
-///
-/// Ties take the first matching frame in file order (frame 0).
-pub(crate) fn best_cursor_image(
-    images: &[xcursor::parser::Image],
-    target_size: u32,
-) -> Option<&xcursor::parser::Image> {
-    images.iter().min_by_key(|img| {
-        let s = if img.size > 0 { img.size } else { img.width };
-        (s as i64 - target_size as i64).abs()
-    })
+/// An Xcursor table-of-contents entry of this type is an image; its subtype is the nominal size.
+const XCURSOR_IMAGE: u32 = 0xfffd_0002;
+
+/// The frames of the nominal size nearest `target_size` (ties: the first in the file) from an
+/// Xcursor file. The table of contents gives each image's size and place, so only that size is
+/// read: Adwaita's `progress` holds 360 images in 4.7 MB, 60 of them at 24 px. Reading all of it
+/// took 5.3 to 6.6 ms on the owner's PC, the 24 px frames alone 0.14 to 0.19 ms (2026-11-23), on
+/// the compositor's thread at the shape's first use. A file whose nominal sizes are 0 keeps the
+/// frames as wide as its first.
+fn read_cursor(r: &mut (impl Read + Seek), target_size: u32) -> std::io::Result<LoadedCursor> {
+    use std::io::{Error, ErrorKind};
+    let mut word = [0u8; 4];
+    let mut u32_le = |r: &mut dyn Read| -> std::io::Result<u32> {
+        r.read_exact(&mut word)?;
+        Ok(u32::from_le_bytes(word))
+    };
+    let invalid = |what: &str| Error::new(ErrorKind::InvalidData, what.to_string());
+    let mut magic = [0u8; 4];
+    r.read_exact(&mut magic)?;
+    if &magic != b"Xcur" {
+        return Err(invalid("not an Xcursor file"));
+    }
+    let header = u32_le(r)?;
+    let _version = u32_le(r)?;
+    let ntoc = u32_le(r)?;
+    r.seek(SeekFrom::Start(header.into()))?;
+    let mut images = Vec::new();
+    for _ in 0..ntoc {
+        let (kind, size, pos) = (u32_le(r)?, u32_le(r)?, u32_le(r)?);
+        if kind == XCURSOR_IMAGE {
+            images.push((size, pos));
+        }
+    }
+    let nominal = images
+        .iter()
+        .map(|&(size, _)| size)
+        .min_by_key(|&size| (i64::from(size) - i64::from(target_size)).abs())
+        .ok_or_else(|| invalid("no images"))?;
+    let mut frames: Vec<CursorFrame> = Vec::new();
+    for &(_, pos) in images.iter().filter(|&&(size, _)| size == nominal) {
+        r.seek(SeekFrom::Start(pos.into()))?;
+        let mut h = [0u32; 9];
+        for v in &mut h {
+            *v = u32_le(r)?;
+        }
+        let [
+            chunk_header,
+            kind,
+            size,
+            version,
+            width,
+            height,
+            xhot,
+            yhot,
+            delay,
+        ] = h;
+        // the checks libXcursor makes (file.c, `_XcursorReadImage`)
+        if chunk_header != 36 || kind != XCURSOR_IMAGE || size != nominal || version != 1 {
+            return Err(invalid("bad image header"));
+        }
+        if width == 0 || height == 0 || width > 0x7fff || height > 0x7fff {
+            return Err(invalid("bad image size"));
+        }
+        if xhot > width || yhot > height {
+            return Err(invalid("hotspot outside the image"));
+        }
+        if nominal == 0
+            && frames
+                .first()
+                .is_some_and(|f| f.image.width != width as i32)
+        {
+            continue;
+        }
+        let mut pixels = vec![0u8; (width * height * 4) as usize];
+        r.read_exact(&mut pixels)?;
+        frames.push(CursorFrame {
+            image: LoadedImage {
+                buffer: MemoryRenderBuffer::from_slice(
+                    &pixels,
+                    Fourcc::Argb8888,
+                    (width as i32, height as i32),
+                    1,
+                    Transform::Normal,
+                    None,
+                ),
+                width: width as i32,
+                height: height as i32,
+                xhot: xhot as i32,
+                yhot: yhot as i32,
+            },
+            delay_ms: if delay == 0 { 50 } else { delay },
+        });
+    }
+    Ok(LoadedCursor::new(frames))
 }
 
 /// Common alias names for X11 / CSS cursor shapes.
@@ -410,54 +494,11 @@ impl CursorThemeManager {
         None
     }
 
+    /// The cursor in the file at `path`; `None` when it cannot be read or is not a valid Xcursor
+    /// file, so the lookup goes on to the next name or theme.
     fn load_file(path: &Path, target_size: u32) -> Option<LoadedCursor> {
-        let data = std::fs::read(path).ok()?;
-        let images = xcursor::parser::parse_xcursor(&data)?;
-        Self::load_from_parsed_images(&images, target_size)
-    }
-
-    pub(crate) fn load_from_parsed_images(
-        images: &[xcursor::parser::Image],
-        target_size: u32,
-    ) -> Option<LoadedCursor> {
-        let best = best_cursor_image(images, target_size)?;
-        let nominal_size = best.size;
-        let frames: Vec<CursorFrame> = images
-            .iter()
-            .filter(|img| {
-                if nominal_size > 0 {
-                    img.size == nominal_size
-                } else {
-                    img.size == 0 && img.width == best.width
-                }
-            })
-            .map(|img| {
-                let delay_ms = if img.delay == 0 { 50 } else { img.delay };
-                CursorFrame {
-                    image: LoadedImage {
-                        buffer: MemoryRenderBuffer::from_slice(
-                            &img.pixels_rgba,
-                            Fourcc::Argb8888,
-                            (img.width as i32, img.height as i32),
-                            1,
-                            Transform::Normal,
-                            None,
-                        ),
-                        width: img.width as i32,
-                        height: img.height as i32,
-                        xhot: img.xhot as i32,
-                        yhot: img.yhot as i32,
-                    },
-                    delay_ms,
-                }
-            })
-            .collect();
-
-        if frames.is_empty() {
-            None
-        } else {
-            Some(LoadedCursor::new(frames))
-        }
+        let file = std::fs::File::open(path).ok()?;
+        read_cursor(&mut std::io::BufReader::new(file), target_size).ok()
     }
 }
 
@@ -811,26 +852,86 @@ mod tests {
             (24, 24, 24, (2, 3), 0, &img24_pix),
             (48, 48, 48, (4, 6), 0, &img48_pix),
         ]);
-        let parsed = xcursor::parser::parse_xcursor(&data).expect("valid xcursor");
-        assert_eq!(parsed.len(), 2);
+        let pick = |target| {
+            let cur = read_cursor(&mut std::io::Cursor::new(&data), target).expect("image");
+            assert_eq!(cur.frames().len(), 1);
+            cur.frames()[0].image.clone()
+        };
 
         // Target 24 picks 24x24
-        let pick24 = best_cursor_image(&parsed, 24).expect("image");
-        assert_eq!(pick24.size, 24);
+        let pick24 = pick(24);
         assert_eq!(pick24.width, 24);
         assert_eq!(pick24.xhot, 2);
         assert_eq!(pick24.yhot, 3);
 
         // Target 48 (e.g. 24 on a 2x scale) picks 48x48
-        let pick48 = best_cursor_image(&parsed, 48).expect("image");
-        assert_eq!(pick48.size, 48);
+        let pick48 = pick(48);
         assert_eq!(pick48.width, 48);
         assert_eq!(pick48.xhot, 4);
         assert_eq!(pick48.yhot, 6);
 
         // Target 40 picks 48 (distance 8 vs 16)
-        let pick40 = best_cursor_image(&parsed, 40).expect("image");
-        assert_eq!(pick40.size, 48);
+        assert_eq!(pick(40).width, 48);
+    }
+
+    /// Reads counted, so a test sees how much of the file a load touched.
+    struct Counted<R> {
+        inner: R,
+        read: usize,
+    }
+
+    impl<R: Read> Read for Counted<R> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let n = self.inner.read(buf)?;
+            self.read += n;
+            Ok(n)
+        }
+    }
+
+    impl<R: Seek> Seek for Counted<R> {
+        fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+            self.inner.seek(pos)
+        }
+    }
+
+    /// An animated cursor in several sizes (Adwaita's `progress`: 6 sizes of 60 frames): only the
+    /// frames of the size in use are read, the pixels of the others never.
+    #[test]
+    fn a_load_reads_only_the_size_in_use() {
+        let small = vec![0x11; 24 * 24 * 4];
+        let big = vec![0x22; 96 * 96 * 4];
+        let mut images: Vec<TestCursorImageDesc<'_>> = Vec::new();
+        for _ in 0..3 {
+            images.push((24, 24, 24, (1, 1), 30, small.as_slice()));
+        }
+        for _ in 0..3 {
+            images.push((96, 96, 96, (4, 4), 30, big.as_slice()));
+        }
+        let data = make_xcursor_file(&images);
+        let mut file = Counted {
+            inner: std::io::Cursor::new(&data),
+            read: 0,
+        };
+        let cur = read_cursor(&mut file, 24).expect("loaded");
+        assert_eq!(cur.frames().len(), 3);
+        assert!(cur.frames().iter().all(|f| f.image.width == 24));
+        // header, table of contents, three 24 px chunks: no byte of a 96 px image
+        let expected = 16 + 6 * 12 + 3 * (36 + small.len());
+        assert_eq!(file.read, expected, "of {} bytes", data.len());
+    }
+
+    #[test]
+    fn a_bad_file_is_refused() {
+        let pix = vec![0x11; 4 * 4 * 4];
+        let good = make_xcursor_file(&[(4, 4, 4, (1, 1), 0, &pix)]);
+        let read = |bytes: &[u8]| read_cursor(&mut std::io::Cursor::new(bytes), 4).is_ok();
+        assert!(read(&good));
+        assert!(!read(b"not a cursor"));
+        let mut hot_outside = good.clone();
+        // the image chunk starts after the 16-byte header and one 12-byte entry; xhot is its 7th word
+        hot_outside[28 + 24..28 + 28].copy_from_slice(&5u32.to_le_bytes());
+        assert!(!read(&hot_outside));
+        assert!(!read(&good[..good.len() - 1]), "pixels cut short");
     }
 
     #[test]
@@ -964,10 +1065,7 @@ mod tests {
             (24, 24, 24, (2, 2), 200u32, pix1.as_slice()),
             (24, 24, 24, (3, 3), 300u32, pix2.as_slice()),
         ]);
-        let parsed = xcursor::parser::parse_xcursor(&data).expect("valid xcursor");
-        assert_eq!(parsed.len(), 3);
-
-        let cur = CursorThemeManager::load_from_parsed_images(&parsed, 24).expect("loaded cursor");
+        let cur = read_cursor(&mut std::io::Cursor::new(&data), 24).expect("loaded cursor");
         assert!(cur.is_animated());
         assert_eq!(cur.frames().len(), 3);
         assert_eq!(cur.total_delay_ms(), 600);
@@ -1088,8 +1186,7 @@ mod tests {
             (24, 24, 24, (1, 1), 0u32, pix0.as_slice()),
             (24, 24, 24, (2, 2), 0u32, pix1.as_slice()),
         ]);
-        let parsed = xcursor::parser::parse_xcursor(&data).expect("valid xcursor");
-        let cur = CursorThemeManager::load_from_parsed_images(&parsed, 24).expect("loaded");
+        let cur = read_cursor(&mut std::io::Cursor::new(&data), 24).expect("loaded");
         assert!(cur.is_animated());
         assert_eq!(cur.frames().len(), 2);
         // Delay 0 counts as 50ms so nothing spins
@@ -1115,8 +1212,7 @@ mod tests {
     fn single_image_is_not_animated_due_is_none() {
         let pix = vec![0x11; 24 * 24 * 4];
         let data = make_xcursor_file(&[(24, 24, 24, (2, 3), 100u32, pix.as_slice())]);
-        let parsed = xcursor::parser::parse_xcursor(&data).expect("valid xcursor");
-        let cur = CursorThemeManager::load_from_parsed_images(&parsed, 24).expect("loaded");
+        let cur = read_cursor(&mut std::io::Cursor::new(&data), 24).expect("loaded");
         assert!(!cur.is_animated());
 
         use std::time::Duration;

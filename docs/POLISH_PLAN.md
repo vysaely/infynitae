@@ -552,13 +552,13 @@ Ranked by expected gain. None of the gains is measured; each item says how to me
 
 ### 5.4 Each settings change stalls the compositor
 
-- **Wrong.** Nine slow turns name "config and idle", two at 92 ms: about 15 refreshes
-  without a frame. That step holds the config reload (`drm:1712-1746`, `wl/lib.rs:1070`
-  onward), a second read of the same file (`drm:1726-1741`) and the start of `config-check`
-  (`wl/outputs.rs:342-344`). Which of them is slow is not confirmed.
-- **Change.** A mark after each of the three; then move the slow one off the turn or skip
-  it when its keys did not change. With 4.4 there are also fewer writes.
-- **Size** S to find, S to M to fix. **Risk** low.
+- **Found (2026-11-23).** The marks after the config reload, `config-check` and the second read
+  are in place; in the session log of 2026-11-22, 21 config changes made none of them slow. The
+  two "config and idle" turns of 94 and 95 ms each follow "Inactivity timeout reached": the
+  screens turning off at idle, where `compositor.clear()` waits for the kernel's modeset
+  (`clear_state`, a blocking atomic commit). Nobody is looking at the screen then; left as it is.
+- That step now has its own marks: "capture indicator", "config watch", "screen off",
+  "auto-lock", "idle check".
 
 ### 5.5 The edge fetches everything every 2 s
 

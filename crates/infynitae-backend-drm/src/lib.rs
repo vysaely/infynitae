@@ -1821,6 +1821,7 @@ pub fn run_console_with(
         data.last_turn_slow = busy >= threshold;
         if turn_started.is_some() {
             data.loop_busy_max = data.loop_busy_max.max(busy);
+            turn.surface = data.state.take_slowest_surface();
             if let Some(line) = data.slow_turn.record_at(&turn, busy, threshold, now) {
                 log_line!("{line}");
             }
@@ -1856,6 +1857,7 @@ pub fn run_console_with(
         if data.state.capture_notice(std::time::Instant::now()) {
             data.state.announce_hidden_capture();
         }
+        turn.mark("capture indicator");
         // Watches ~/.config/infynitae/config for changes and reloads settings
         if data.last_config_check.elapsed() >= Duration::from_millis(250) {
             data.last_config_check = std::time::Instant::now();
@@ -1898,6 +1900,7 @@ pub fn run_console_with(
                     data.last_config_mtime = Some(mtime);
                 }
             }
+            turn.mark("config watch");
 
             // Idle sleep and auto-lock check (skipped when idle is inhibited)
             if !data.dpms_active
@@ -1920,6 +1923,8 @@ pub fn run_console_with(
                 data.state.set_all_outputs_power_mode(
                     infynitae_wayland::output_power::OutputPowerMode::Off,
                 );
+                // `clear` waits for the kernel to turn each screen off (a blocking modeset)
+                turn.mark("screen off");
                 if data.idle_auto_lock {
                     // an error here is a child someone else reaped: it is not running, or the screen
                     // would never lock again after the first failure
@@ -1958,10 +1963,11 @@ pub fn run_console_with(
                             Err(e) => log_line!("[infynitae] Auto-lock could not start: {e}"),
                         }
                     }
+                    turn.mark("auto-lock");
                 }
             }
         }
-        turn.mark("config and idle");
+        turn.mark("idle check");
         if let Some(ext) = extension.as_mut() {
             ext.set_locked(data.state.is_locked());
             let (fx, changed) = ext.service(data.state.core_mut());
@@ -2221,6 +2227,7 @@ pub fn run_console_with(
         turn.mark("idle notify");
         let asked = data.state.not_responding_check(now);
         data.session.set_not_responding_deadline(asked, now);
+        turn.mark("not responding");
         let anim_due = data.state.cursor_animation_due(now);
         data.session.set_cursor_animation_due(anim_due);
         turn.mark("cursor animation");
@@ -2623,7 +2630,21 @@ fn render(data: &mut LoopData, turn: &mut TurnClock) {
         let render_result =
             s.compositor
                 .render_frame(&mut data.renderer, &elements, clear, frame_flags);
-        turn.mark("render_frame");
+        // a slow one says whether the GPU drew it: most of the 63 turns of 50 to 437 ms on
+        // 2026-11-22 came in the same stretches as slow capture draws or GPU relief
+        turn.mark(match &render_result {
+            Ok(r) if r.is_empty => "render_frame, nothing new",
+            Ok(r)
+                if matches!(
+                    r.primary_element,
+                    smithay::backend::drm::compositor::PrimaryPlaneElement::Element(_)
+                ) =>
+            {
+                "render_frame, scanned out"
+            }
+            Ok(_) => "render_frame, composited",
+            Err(_) => "render_frame, failed",
+        });
         let queued = match render_result {
             Ok(result) if !result.is_empty => {
                 use smithay::backend::drm::compositor::PrimaryPlaneElement;
@@ -3618,6 +3639,8 @@ fn core_presentation_format(
 struct TurnClock {
     last: Option<std::time::Instant>,
     phases: Vec<(&'static str, Duration)>,
+    /// The surface slowest to make into an element this turn (`take_slowest_surface`).
+    surface: Option<String>,
 }
 
 /// Fallback slow-turn threshold when no physical screen is connected.
@@ -3637,6 +3660,7 @@ impl TurnClock {
         Self {
             last: Some(start),
             phases: Vec::with_capacity(20),
+            surface: None,
         }
     }
 
@@ -3645,6 +3669,7 @@ impl TurnClock {
         Self {
             last: None,
             phases: Vec::new(),
+            surface: None,
         }
     }
 
@@ -3686,8 +3711,12 @@ impl TurnClock {
         if rest >= Duration::from_millis(1) {
             out.push(format!("other {:.1} ms", rest.as_secs_f64() * 1000.0));
         }
+        let surface = self
+            .surface
+            .as_ref()
+            .map_or_else(String::new, |s| format!("; slowest surface {s}"));
         Some(format!(
-            "[infynitae] Slow turn {:.1} ms: {}",
+            "[infynitae] Slow turn {:.1} ms: {}{surface}",
             busy.as_secs_f64() * 1000.0,
             out.join(", ")
         ))
@@ -4915,6 +4944,26 @@ mod tests {
                 .as_deref(),
             Some(
                 "[infynitae] Slow turn 60.5 ms: render 40.0 ms, client requests 15.0 ms, other 5.0 ms"
+            )
+        );
+    }
+
+    /// A slow "layers above" or "windows" says which surface took the time.
+    #[test]
+    fn a_slow_turn_names_its_slowest_surface() {
+        use std::time::Duration;
+        let mut c = super::TurnClock::new(std::time::Instant::now());
+        c.phases = vec![("layers above", Duration::from_millis(7))];
+        c.surface = Some("infynitae-edge-apps, shm 1920x1080 buffer, 6.9 ms".into());
+        assert_eq!(
+            c.slow_parts(Duration::from_millis(7), super::SLOW_TURN_FALLBACK),
+            None
+        );
+        assert_eq!(
+            c.slow_parts(Duration::from_millis(8), super::SLOW_TURN_FALLBACK)
+                .as_deref(),
+            Some(
+                "[infynitae] Slow turn 8.0 ms: layers above 7.0 ms, other 1.0 ms; slowest surface infynitae-edge-apps, shm 1920x1080 buffer, 6.9 ms"
             )
         );
     }
