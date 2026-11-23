@@ -73,7 +73,6 @@ impl Other {
                 .dispatch_clients(&mut ls.state)
                 .expect("dispatch");
             ls.state.clear_orphaned_selections();
-            ls.state.refuse_client_drags();
             ls.display.flush_clients().expect("flush");
             if handled == 0 && served == 0 {
                 idle += 1;

@@ -2208,7 +2208,6 @@ impl Lockstep {
             infynitae_backend_headless::apply_virtual_input(&mut self.state, &mut self.input);
             self.state.settle_unlock();
             self.state.clear_orphaned_selections();
-            self.state.refuse_client_drags();
             self.state.apply_due_timed_commits(self.now);
             frame_fallback(&mut self.state, self.now);
             self.state.set_current_time(self.now);

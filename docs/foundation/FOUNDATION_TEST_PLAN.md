@@ -783,7 +783,7 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 - **Status:** OPEN
 - **Item:** Drag-and-drop under INV-INPUT-2. Decided (owner, 2026-11-23: Discord's server list could not be reordered under the refusal): drag-and-drop is offered. Smithay accepts `start_drag` only on the implicit grab of a press the client owns, so the drag is a protocol transfer of a client-owned button (INV-INPUT-2); during it each motion goes where Core routes it, as data device events, and the release, still the client's (OBJ-25), drops there. The icon is drawn under the cursor. Left: a T1 test of a drag across outputs
 - **Owner:** adapter (data device) + core input
-- **Evidence available:** T1 `t1_clipboard::a_drag_within_one_window_holds_until_the_release_and_drops_there`, `t1_clipboard::a_drag_moves_from_one_window_onto_another_and_drops_there`
+- **Evidence available:** T1 `t1_clipboard::a_drag_within_one_window_holds_until_the_release_and_drops_there`, `t1_clipboard::a_drag_moves_from_one_window_onto_another_and_drops_there`, `audit_input_lifecycle::a_drag_from_one_client_drops_on_another_without_an_unmatched_release`
 - **Pass criterion:** T1 production test of a drag across outputs
 - **Destination:** T1
 - **May be closed by:** T1 production test
