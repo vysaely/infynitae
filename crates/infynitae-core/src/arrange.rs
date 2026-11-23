@@ -7,7 +7,11 @@
 //! - tidy: the windows at their own sizes, in reading order, packed in rows as wide as the usable
 //!   view at zoom 1, 12 px apart;
 //! - grid: equal cells, the columns chosen so that a cell is as square as the view allows;
-//! - columns: side by side, each the usable height.
+//! - columns: side by side, each the usable height;
+//! - box (owner, 2026-11-23): own sizes, the biggest first, in centred rows that make a block as
+//!   close to the view's shape as the sizes allow;
+//! - ring (owner, 2026-11-23): the big windows boxed in the middle, the smaller ones on an ellipse
+//!   around them, the first at the top, clockwise.
 //!
 //! The cluster's top-left corner stays where it is. Fullscreen, minimized, kept-on-top and
 //! notification windows and children (dialogs) are left out; a child moves with its parent.
@@ -27,6 +31,8 @@ pub enum ClusterLayout {
     Tidy,
     Grid,
     Columns,
+    Box,
+    Ring,
     /// Super+Shift+G (owner, 2026-11-22): every window at its own size, one row per app, rows as
     /// wide as they need (not squeezed into one view: an app with a minimum size such as Discord
     /// keeps it). Not in the Super+G cycle.
@@ -40,6 +46,8 @@ impl ClusterLayout {
             "tidy" => Some(ClusterLayout::Tidy),
             "grid" => Some(ClusterLayout::Grid),
             "columns" => Some(ClusterLayout::Columns),
+            "box" => Some(ClusterLayout::Box),
+            "ring" | "circle" => Some(ClusterLayout::Ring),
             "app" | "by-app" => Some(ClusterLayout::ByApp),
             _ => None,
         }
@@ -49,8 +57,18 @@ impl ClusterLayout {
         match self {
             ClusterLayout::Tidy => ClusterLayout::Grid,
             ClusterLayout::Grid => ClusterLayout::Columns,
-            ClusterLayout::Columns | ClusterLayout::ByApp => ClusterLayout::Tidy,
+            ClusterLayout::Columns => ClusterLayout::Box,
+            ClusterLayout::Box => ClusterLayout::Ring,
+            ClusterLayout::Ring | ClusterLayout::ByApp => ClusterLayout::Tidy,
         }
+    }
+
+    /// A layout that keeps every window's size: the one `CLUSTER_SORT` "tidy" keeps a cluster in.
+    fn keeps_sizes(self) -> bool {
+        matches!(
+            self,
+            ClusterLayout::Tidy | ClusterLayout::Box | ClusterLayout::Ring
+        )
     }
 }
 
@@ -193,6 +211,212 @@ pub(crate) fn columns(n: usize, origin: (i64, i64), room: (i64, i64)) -> Vec<Cel
         .collect()
 }
 
+/// `cells` moved so that their bounding box's top-left corner is `origin`.
+fn moved_to(mut cells: Vec<Cell>, origin: (i64, i64)) -> Vec<Cell> {
+    let x0 = cells.iter().map(|c| c.x).min().unwrap_or(0);
+    let y0 = cells.iter().map(|c| c.y).min().unwrap_or(0);
+    for c in &mut cells {
+        c.x += origin.0 - x0;
+        c.y += origin.1 - y0;
+    }
+    cells
+}
+
+/// `sizes` in rows at most `width` wide (a wider window alone), each row centred on the widest
+/// and its windows centred on the row's middle line; rows `GAP` apart. A window less than half
+/// the area of its group's first starts a new group (big and small windows do not share a row),
+/// and a group's rows hold the same number of windows give or take one (four in two by two, not
+/// three and one). Cells in `sizes`' order, from (0, 0).
+fn centred_rows(sizes: &[(i64, i64)], width: i64) -> Vec<Cell> {
+    let area = |i: usize| sizes[i].0 * sizes[i].1;
+    // greedy rows of `group` within `width`, at most `most` windows each
+    let fill = |group: &[usize], most: usize| {
+        let mut rows: Vec<Vec<usize>> = Vec::new();
+        let mut used = 0;
+        for &i in group {
+            match rows.last_mut() {
+                Some(row) if row.len() < most && used + GAP + sizes[i].0 <= width => {
+                    row.push(i);
+                    used += GAP + sizes[i].0;
+                }
+                _ => {
+                    rows.push(vec![i]);
+                    used = sizes[i].0;
+                }
+            }
+        }
+        rows
+    };
+    let mut rows: Vec<Vec<usize>> = Vec::new();
+    let mut start = 0;
+    while start < sizes.len() {
+        let end = (start..sizes.len())
+            .find(|&i| 2 * area(i) < area(start))
+            .unwrap_or(sizes.len());
+        let group: Vec<usize> = (start..end).collect();
+        let n = fill(&group, usize::MAX).len();
+        rows.extend(fill(&group, group.len().div_ceil(n)));
+        start = end;
+    }
+    let row_w =
+        |row: &[usize]| row.iter().map(|&i| sizes[i].0).sum::<i64>() + (row.len() as i64 - 1) * GAP;
+    let widest = rows.iter().map(|r| row_w(r)).max().unwrap_or(0);
+    let mut cells = vec![
+        Cell {
+            x: 0,
+            y: 0,
+            w: 0,
+            h: 0
+        };
+        sizes.len()
+    ];
+    let mut y = 0;
+    for row in &rows {
+        let h = row.iter().map(|&i| sizes[i].1).max().unwrap_or(0);
+        let mut x = (widest - row_w(row)) / 2;
+        for &i in row {
+            let (w, wh) = sizes[i];
+            cells[i] = Cell {
+                x,
+                y: y + (h - wh) / 2,
+                w,
+                h: wh,
+            };
+            x += w + GAP;
+        }
+        y += h + GAP;
+    }
+    cells
+}
+
+/// Box: `sizes` at their own sizes, the biggest (by area) first, in centred rows. The row width
+/// is the one whose block is closest to `room`'s shape, each empty part of the block counted
+/// against it; the narrower on a tie. Cells in `sizes`' order, the block's corner at `origin`.
+pub(crate) fn boxed(sizes: &[(i64, i64)], origin: (i64, i64), room: (i64, i64)) -> Vec<Cell> {
+    if sizes.is_empty() {
+        return Vec::new();
+    }
+    let mut big_first: Vec<usize> = (0..sizes.len()).collect();
+    big_first.sort_by_key(|&i| std::cmp::Reverse(sizes[i].0 * sizes[i].1));
+    let sorted: Vec<(i64, i64)> = big_first.iter().map(|&i| sizes[i]).collect();
+    let aspect = room.0.max(1) as f64 / room.1.max(1) as f64;
+    let area: i64 = sizes.iter().map(|&(w, h)| w * h).sum();
+    // every width at which a row can end: each run of windows from each start
+    let mut widths: Vec<i64> = Vec::new();
+    for start in 0..sorted.len() {
+        let mut w = -GAP;
+        for &(sw, _) in &sorted[start..] {
+            w += sw + GAP;
+            widths.push(w);
+        }
+    }
+    widths.sort_unstable();
+    widths.dedup();
+    let score = |cells: &[Cell]| {
+        let bw = cells.iter().map(|c| c.x + c.w).max().unwrap_or(1).max(1);
+        let bh = cells.iter().map(|c| c.y + c.h).max().unwrap_or(1).max(1);
+        let empty = 1.0 - area as f64 / (bw * bh) as f64;
+        ((bw as f64 / bh as f64) / aspect).ln().abs() + empty
+    };
+    let best = widths
+        .into_iter()
+        .map(|w| centred_rows(&sorted, w))
+        .min_by(|a, b| score(a).total_cmp(&score(b)))
+        .unwrap_or_default();
+    let mut cells = vec![
+        Cell {
+            x: 0,
+            y: 0,
+            w: 0,
+            h: 0
+        };
+        sizes.len()
+    ];
+    for (k, &i) in big_first.iter().enumerate() {
+        cells[i] = best[k];
+    }
+    moved_to(cells, origin)
+}
+
+/// Ring: the windows at least half the area of the biggest boxed in the middle, the others
+/// centred on an ellipse around them in `sizes`' order, the first at the top, clockwise; the
+/// ellipse grows until no two windows are within `GAP` of each other. With only one kind of
+/// window it is a box. Cells in `sizes`' order, the corner of their bounding box at `origin`.
+pub(crate) fn ring(sizes: &[(i64, i64)], origin: (i64, i64), room: (i64, i64)) -> Vec<Cell> {
+    let biggest = sizes.iter().map(|&(w, h)| w * h).max().unwrap_or(0);
+    let (inner, outer): (Vec<usize>, Vec<usize>) =
+        (0..sizes.len()).partition(|&i| 2 * sizes[i].0 * sizes[i].1 >= biggest);
+    if inner.is_empty() || outer.is_empty() {
+        return boxed(sizes, origin, room);
+    }
+    let middle = boxed(
+        &inner.iter().map(|&i| sizes[i]).collect::<Vec<_>>(),
+        (0, 0),
+        room,
+    );
+    let (mw, mh) = (
+        middle.iter().map(|c| c.x + c.w).max().unwrap_or(0),
+        middle.iter().map(|c| c.y + c.h).max().unwrap_or(0),
+    );
+    let (cx, cy) = (mw as f64 / 2.0, mh as f64 / 2.0);
+    let max_w = outer.iter().map(|&i| sizes[i].0).max().unwrap_or(0) as f64;
+    let max_h = outer.iter().map(|&i| sizes[i].1).max().unwrap_or(0) as f64;
+    let n = outer.len() as f64;
+    let around = |grow: f64| -> Vec<Cell> {
+        let rx = (cx + max_w / 2.0 + GAP as f64) * grow;
+        let ry = (cy + max_h / 2.0 + GAP as f64) * grow;
+        outer
+            .iter()
+            .enumerate()
+            .map(|(k, &i)| {
+                let a = -std::f64::consts::FRAC_PI_2 + std::f64::consts::TAU * k as f64 / n;
+                let (w, h) = sizes[i];
+                Cell {
+                    x: (cx + rx * a.cos()).round() as i64 - w / 2,
+                    y: (cy + ry * a.sin()).round() as i64 - h / 2,
+                    w,
+                    h,
+                }
+            })
+            .collect()
+    };
+    let clear = |a: &Cell, b: &Cell| {
+        a.x + a.w + GAP <= b.x
+            || b.x + b.w + GAP <= a.x
+            || a.y + a.h + GAP <= b.y
+            || b.y + b.h + GAP <= a.y
+    };
+    let mut grow = 1.0;
+    let mut placed = around(grow);
+    // a bound, not a guess: each step is 4% bigger; 200 steps reach over 2500 times the start
+    for _ in 0..200 {
+        let free = placed.iter().enumerate().all(|(k, a)| {
+            middle.iter().all(|m| clear(a, m)) && placed[k + 1..].iter().all(|b| clear(a, b))
+        });
+        if free {
+            break;
+        }
+        grow *= 1.04;
+        placed = around(grow);
+    }
+    let mut cells = vec![
+        Cell {
+            x: 0,
+            y: 0,
+            w: 0,
+            h: 0
+        };
+        sizes.len()
+    ];
+    for (k, &i) in inner.iter().enumerate() {
+        cells[i] = middle[k];
+    }
+    for (k, &i) in outer.iter().enumerate() {
+        cells[i] = placed[k];
+    }
+    moved_to(cells, origin)
+}
+
 /// The anchor of a window of `size` centred in `cell` (an app that keeps a size of its own).
 pub(crate) fn centred_in(cell: Cell, size: (i64, i64)) -> crate::geom::CanvasPoint {
     crate::geom::CanvasPoint {
@@ -293,6 +517,14 @@ impl Core {
             }
             ClusterLayout::Grid => grid(ids.len(), origin, room),
             ClusterLayout::Columns => columns(ids.len(), origin, room),
+            ClusterLayout::Box | ClusterLayout::Ring => {
+                let sizes: Vec<_> = order.iter().map(|&i| (rects[i].w, rects[i].h)).collect();
+                if layout == ClusterLayout::Box {
+                    boxed(&sizes, origin, room)
+                } else {
+                    ring(&sizes, origin, room)
+                }
+            }
             ClusterLayout::ByApp => {
                 let sizes: Vec<_> = order.iter().map(|&i| (rects[i].w, rects[i].h)).collect();
                 let apps: Vec<String> = order.iter().map(|&i| app_of(i)).collect();
@@ -397,11 +629,17 @@ impl Core {
         rest
     }
 
-    /// The windows `cluster_left_by` named, tidied: the gap closes. The camera stays.
+    /// The windows `cluster_left_by` named, arranged again: the gap closes. A cluster last put
+    /// in a box or a ring by hand keeps that layout; any other is tidied. The camera stays.
     pub(crate) fn tidy_after_leave(&mut self, rest: &[ElementId], out: &mut Vec<Effect>) {
-        if !rest.is_empty() {
-            self.arrange(rest, ClusterLayout::Tidy, out);
+        if rest.is_empty() {
+            return;
         }
+        let layout = match self.last_layout {
+            Some((e, l)) if l.keeps_sizes() && rest.contains(&e) => l,
+            _ => ClusterLayout::Tidy,
+        };
+        self.arrange(rest, layout, out);
     }
 
     /// A commit of a window a layout asked for a size: the anchor that centres the size it drew
@@ -891,7 +1129,74 @@ mod tests {
         assert_eq!(asked(&fx, dialog), None);
     }
 
-    /// The key's cycle: tidy, grid, columns, tidy again; another cluster starts at tidy.
+    /// Box: sizes kept, the biggest first, rows centred, a block near the room's shape.
+    #[test]
+    fn box_keeps_sizes_and_makes_a_block() {
+        // four mains and twenty-one small windows, as the owner runs them
+        let mut sizes = vec![(160, 90); 4];
+        sizes.extend([(64, 48); 21]);
+        let cells = boxed(&sizes, (-30, 70), (1896, 1056));
+        assert!(all_apart(&cells));
+        for (c, s) in cells.iter().zip(&sizes) {
+            assert_eq!((c.w, c.h), *s, "sizes kept");
+        }
+        let x0 = cells.iter().map(|c| c.x).min().unwrap();
+        let y0 = cells.iter().map(|c| c.y).min().unwrap();
+        assert_eq!((x0, y0), (-30, 70), "the corner stays");
+        let bw = cells.iter().map(|c| c.x + c.w).max().unwrap() - x0;
+        let bh = cells.iter().map(|c| c.y + c.h).max().unwrap() - y0;
+        let shape = bw as f64 / bh as f64;
+        assert!(
+            (1.0..3.0).contains(&shape),
+            "a block, not a strip: {bw} x {bh}"
+        );
+        // the big ones are the top row
+        let top = cells[..4].iter().map(|c| c.y).max().unwrap();
+        assert!(cells[4..].iter().all(|c| c.y > top));
+        assert!(boxed(&[], (0, 0), (1896, 1056)).is_empty());
+    }
+
+    /// Ring: the big windows in the middle, the small ones around them, nothing touching.
+    #[test]
+    fn ring_puts_small_windows_around_the_big_ones() {
+        let mut sizes = vec![(160, 90); 4];
+        sizes.extend([(64, 48); 21]);
+        let cells = ring(&sizes, (100, -200), (1896, 1056));
+        assert!(all_apart(&cells));
+        for (c, s) in cells.iter().zip(&sizes) {
+            assert_eq!((c.w, c.h), *s, "sizes kept");
+        }
+        let x0 = cells.iter().map(|c| c.x).min().unwrap();
+        let y0 = cells.iter().map(|c| c.y).min().unwrap();
+        assert_eq!((x0, y0), (100, -200));
+        let mid = |c: &Cell| (c.x + c.w / 2, c.y + c.h / 2);
+        let (l, t) = (
+            cells[..4].iter().map(|c| c.x).min().unwrap(),
+            cells[..4].iter().map(|c| c.y).min().unwrap(),
+        );
+        let (r, b) = (
+            cells[..4].iter().map(|c| c.x + c.w).max().unwrap(),
+            cells[..4].iter().map(|c| c.y + c.h).max().unwrap(),
+        );
+        for c in &cells[4..] {
+            let (x, y) = mid(c);
+            assert!(
+                !(l..=r).contains(&x) || !(t..=b).contains(&y),
+                "outside the middle"
+            );
+        }
+        // the first small one is at the top, above the middle
+        assert!(cells[4].y + cells[4].h <= t);
+        // one kind of window: a box
+        assert_eq!(
+            ring(&[(64, 48); 5], (0, 0), (1896, 1056)),
+            boxed(&[(64, 48); 5], (0, 0), (1896, 1056))
+        );
+        assert_eq!(ClusterLayout::parse("circle"), Some(ClusterLayout::Ring));
+    }
+
+    /// The key's cycle: tidy, grid, columns, box, ring, tidy again; another cluster starts at
+    /// tidy.
     #[test]
     fn the_layout_key_cycles() {
         let mut d = desk();
@@ -899,7 +1204,7 @@ mod tests {
         let b = open(&mut d, 2, "b", (400, 300), (5000, 0));
         let mut fx = Vec::new();
         let mut layouts = Vec::new();
-        for _ in 0..4 {
+        for _ in 0..6 {
             assert!(d.c.arrange_cluster(a, None, None, &mut fx));
             layouts.push(d.c.last_layout.unwrap().1);
         }
@@ -909,6 +1214,8 @@ mod tests {
                 ClusterLayout::Tidy,
                 ClusterLayout::Grid,
                 ClusterLayout::Columns,
+                ClusterLayout::Box,
+                ClusterLayout::Ring,
                 ClusterLayout::Tidy
             ]
         );
