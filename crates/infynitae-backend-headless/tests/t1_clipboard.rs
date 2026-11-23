@@ -445,7 +445,9 @@ fn a_drag_moves_from_one_window_onto_another_and_drops_there() {
     let mut r = Rig::x8();
     let qh = r.ls.qh.clone();
     // V (200 x 150) opens where the placement puts it; the pointer stays on W
-    r.ls.probe.toplevel(&qh, "V", (200, 150), 0);
+    let vi = r.ls.probe.toplevel(&qh, "V", (200, 150), 0);
+    r.ls.pump();
+    r.ls.probe.draw(&qh, vi);
     r.ls.pump();
     r.frame();
     let v = *r.ls.state.core().stage().mapped_elements().last().unwrap();
