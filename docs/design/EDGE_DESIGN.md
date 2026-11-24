@@ -32,7 +32,7 @@ The pictures are drawn at twice the screen's size; the numbers below are screen 
   playing song, today in the calendar, the selected row, the play/pause button, a running count ("2 new").
   Everything else is text colour or muted. **No filled blocks**: no tiles, no coloured squares behind
   switches.
-- Colours, corners and the scheme come from the theme (`docs/EDGE_RUST.md`, "One look, one set of settings");
+- Colours, corners and the scheme come from the theme (`CORNERS`, `THEME_SCHEME`, `CARD_OPACITY` in `config/config`);
   nothing hard-coded, the accent is whatever the system theme says.
 - Every number and name is real (no placeholders in the running edge). A module with nothing to show hides
   itself; a module whose data is still loading shows its title and one muted line ("Loading"), never "...".

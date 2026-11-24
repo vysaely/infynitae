@@ -1,32 +1,22 @@
 #!/bin/sh
-# Points BIN/infynitae-edge at the edge EDGE_IMPL names (docs/EDGE_RUST.md, stage 6): "apps" (the
-# default) for infynitae-edge-apps (the edge rebuilt from apps, docs/EDGE_APPS.md), "rust" for
-# infynitae-edge-rs, "c" for infynitae-edge-c. The name everything calls (the compositor's panel
-# keys, launch.sh, session.sh, infynitae-reload, format-drive) stays the same. A missing choice
-# falls back to the other edge (the Rust one for apps: binaries installed before the edge from apps
-# was built). An edge installed before the switch (a file named infynitae-edge) is kept as
-# infynitae-edge-c.
+# Points BIN/infynitae-edge at infynitae-edge-apps, the one edge (docs/EDGE_APPS.md). The name
+# everything calls (the compositor's panel keys, launch.sh, session.sh, infynitae-reload,
+# format-drive) stays the same. EDGE_IMPL once chose an older edge ("rust" or "c", deleted
+# 2026-11-24): such a line is named once in the log and the edge from apps runs. Without
+# infynitae-edge-apps (binaries from before it), the link is left as it is.
 #   edge-pick [BIN dir, default ~/.local/bin]
 BIN="${1:-$HOME/.local/bin}"
 cfg="$HOME/.config/infynitae/config"
 impl=$(sed -n 's/^EDGE_IMPL=["'\'']\{0,1\}\([A-Za-z]*\).*/\1/p' "$cfg" 2>/dev/null | tail -n 1)
 case "$impl" in
-    c | C) want=infynitae-edge-c other=infynitae-edge-rs ;;
-    rust | Rust | RUST) want=infynitae-edge-rs other=infynitae-edge-c ;;
-    *) want=infynitae-edge-apps other=infynitae-edge-rs ;;
+    '' | apps | Apps | APPS) ;;
+    *) echo "[edge-pick] EDGE_IMPL=\"$impl\" names an edge that was removed; the edge from apps runs" >&2 ;;
 esac
-if [ -f "$BIN/infynitae-edge" ] && [ ! -L "$BIN/infynitae-edge" ]; then
-    if [ -x "$BIN/infynitae-edge-c" ]; then
-        rm -f "$BIN/infynitae-edge"
-    else
-        mv -f "$BIN/infynitae-edge" "$BIN/infynitae-edge-c"
-    fi
-fi
-[ -x "$BIN/$want" ] || want=$other
+want=infynitae-edge-apps
 if [ ! -x "$BIN/$want" ]; then
-    echo "[edge-pick] no edge built in $BIN" >&2
+    echo "[edge-pick] $want is not built in $BIN" >&2
     exit 1
 fi
 [ "$(readlink "$BIN/infynitae-edge" 2>/dev/null)" = "$want" ] && exit 0
 ln -sfn "$want" "$BIN/infynitae-edge.new" && mv -Tf "$BIN/infynitae-edge.new" "$BIN/infynitae-edge"
-echo "==> The edge is $want (EDGE_IMPL=${impl:-apps})"
+echo "==> The edge is $want"

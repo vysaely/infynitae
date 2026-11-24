@@ -1,5 +1,5 @@
 import json, os, sys, time
-exec(open("/home/tester/pflow.py").read().split("sh(f\"sed -i '/^PANEL_CONTROL=/d' {CFG}; rm -f {BACKUP}\")")[0])
+exec(open("/home/tester/vmlib.py").read())
 # Canvas history and saved places with real input in the VM: jump to a window from the Windows
 # card, then Back returns the camera to where it was; save a place, move away, and jump back to
 # it by its PLACE_ chord and from the Windows card.

@@ -99,7 +99,7 @@ check "fallback look uses #111317 card and ff opacity (solid, the default since 
 H3="$TMP/h3"
 mkdir -p "$H3/.local/bin" "$H3/.config/infynitae" "$H3/.config/mako" "$H3/.config/fuzzel" \
     "$H3/.config/foot" "$H3/.config/kitty" "$H3/.config/alacritty"
-cat > "$H3/.local/bin/infynitae-edge-rs" << 'EOF'
+cat > "$H3/.local/bin/infynitae-edge-apps" << 'EOF'
 #!/bin/sh
 [ "${1:-}" = "--print-theme" ] || exit 1
 cat << 'OUT'
@@ -126,7 +126,7 @@ LOOK_SMALL_RADIUS="7"
 LOOK_FONT="Cantarell"
 OUT
 EOF
-chmod +x "$H3/.local/bin/infynitae-edge-rs"
+chmod +x "$H3/.local/bin/infynitae-edge-apps"
 printf 'SURFACE_COLOR="#111317"\nBORDER_ACTIVE="#7aa2f7"\nTEXT_COLOR="#eef2f8"\nTHEME_SCHEME="tonal"\n' > "$H3/.config/infynitae/config"
 
 # Count awk invocations during apply when --print-theme prints the full palette

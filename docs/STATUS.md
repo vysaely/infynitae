@@ -1,6 +1,6 @@
 # Status
 
-Updated 2026-11-11 (the edge, widgets and the newest window rules: docs/EDGE_RUST.md, docs/DECISIONS.md).
+Updated 2026-11-24 (the two old edges deleted; the edge: docs/EDGE_APPS.md; window rules: docs/DECISIONS.md).
 
 Infynitae is my daily desktop. It is young and has only run on my own machine, so expect rough
 edges on other hardware.
@@ -45,12 +45,11 @@ edges on other hardware.
 
 These pass the test suite but have not run on a real screen or device yet:
 
-- **The edge from apps is the default edge (2026-11-22):** `EDGE_IMPL="apps"` in the shipped config
-  and when unset (`live/edge-apps`, [EDGE_APPS.md](EDGE_APPS.md)), the one the owner runs. It
-  draws the desktop's widgets (`WIDGETS`) now, read as the Rust edge reads them; they are changed
-  in the config, not arranged in place. The widgets are tested against a mock
-  compositor only, not yet on a screen. The Rust edge (`"rust"`) and the C edge (`"c"`) are frozen
-  and still built.
+- **The edge from apps is the only edge (2026-11-24):** `live/edge-apps`
+  ([EDGE_APPS.md](EDGE_APPS.md)), the one the owner runs. The C edge and the Rust edge were
+  deleted; what they did that this one does not is listed in EDGE_APPS.md section 11. It draws
+  the desktop's widgets (`WIDGETS`); they are changed in the config, not arranged in place. The
+  widgets are tested against a mock compositor only, not yet on a screen.
 - **The 2026-11-06 overhaul** (tried as a fresh default user in the test VM, not yet on the
   owner's screen):
   - **Lock screen:** the wallpaper blurred and dimmed behind it, the user's picture

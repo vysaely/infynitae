@@ -1,5 +1,5 @@
 import sys, os, time
-exec(open("/home/tester/pflow.py").read().split("sh(f\"sed -i '/^PANEL_CONTROL=/d' {CFG}; rm -f {BACKUP}\")")[0])
+exec(open("/home/tester/vmlib.py").read())
 # Editing a panel of the edge from apps (live/edge-apps/src/edit.rs) with real input in the VM: a
 # right click starts it, a card's buttons move and remove it, Undo, Add a card adds one, Done saves the
 # PANEL_ line (the old one in panels.backup), Cancel puts it back, Escape saves, a drag moves a card.

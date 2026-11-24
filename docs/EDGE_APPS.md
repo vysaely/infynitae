@@ -5,8 +5,9 @@ ask prompt, panel editing and Add a card in `edit.rs`), stage 2 app cards (calen
 Steam, chat, files, simple), and the Settings cards (`docs/EDGE_SETTINGS.md`, including
 `settings/keys`) are built in `live/edge-apps` with VM scripts in `tools/vm-edge/` (`papps.py`,
 `papps2.py`, `pask.py`, `pedit.py`, `psettings.py`, `pkeys.py`). The desktop's widgets (`WIDGETS`) are
-built too (2026-11-22, `widgets.rs`; below). `EDGE_IMPL="apps"` is the default since 2026-11-22
-(`live/edge-pick`); `"rust"` and `"c"` still pick the frozen edges.
+built too (2026-11-22, `widgets.rs`; below). It is the only edge since 2026-11-24: `live/edge` and
+`live/edge-rs` were deleted (their code is at the tags `edge-c-final` and `edge-rs-final`), and
+`live/edge-pick` links `infynitae-edge` to it.
 
 Desktop widgets (2026-11-22): the `WIDGETS` line as `live/edge-rs` reads it (`module[:look]@x,y,WxH`,
 the old words mapped as in section 1, each switch word a Quick settings card of that one switch at
@@ -100,14 +101,12 @@ panel is edited and saved; the line from before goes to `~/.config/infynitae/pan
 `module@x,y,WxH` (the older editor) is read in order as now (`config.rs:511`). The `WIDGETS` line takes
 the same card words with its places (`steam/games@60,60,380x234`).
 
-Known limit: the Rust edge of today (`EDGE_IMPL="rust"`) does not know words with `/`. Switching back to
-it after a panel was saved by the new edge loses the new cards from that panel until the backup line is
-put back. `live/config-check` must learn the new word form in the same change that adds it.
+`live/config-check` must learn the new word form in the same change that adds it.
 
 ## 2. The crate
 
-`live/edge-apps/`, its own crate and lockfile as `live/edge-rs` is, binary `infynitae-edge-apps`,
-picked by `EDGE_IMPL="apps"` in `live/edge-pick`. Same libraries: smithay-client-toolkit 0.20, cairo and
+`live/edge-apps/`, its own crate and lockfile, binary `infynitae-edge-apps`, linked as
+`infynitae-edge` by `live/edge-pick`. Same libraries: smithay-client-toolkit 0.20, cairo and
 pango 0.20, zbus 5 (blocking), chrono, libc, signal-hook-registry. No new dependency.
 
 ```
@@ -230,8 +229,7 @@ pub trait Source: Send {
 - A source is known by `(provider id, key)`. Two cards that need the same key share one source and one
   fetch.
 - The core starts a source when a panel (or the desktop's widgets) shows a card that lists its key, and
-  stops asking when none does. A closed edge fetches nothing (the "zero cost when closed" rule of
-  `docs/EDGE_RUST.md`).
+  stops asking when none does. A closed edge fetches nothing.
 - Each source has one worker thread while in use. `fetch` results go to the event loop through one
   `calloop::channel::Sender<(SourceId, Data)>`; the loop calls `Card::apply` on each card that lists the
   key and redraws when one returns true. This is today's `spawn_fetch` and `fetch_rx`
@@ -595,7 +593,7 @@ Kept as in `live/edge-rs/src/wayland.rs`, which was measured and fixed over seve
    trait so the four built-in panels work. Edit mode with "Add a card" by app.
 6. `simple.rs` (the brief is below; it is small and the core's "Add a card" needs it).
 
-Stage 1 is done when the four built-in panels work in the VM with `EDGE_IMPL="apps"` and the VM scripts
+Stage 1 is done when the four built-in panels work in the VM with this edge and the VM scripts
 of `tools/vm-edge` pass against it.
 
 ### Stage 2 and later: app cards (agy workers)
@@ -764,3 +762,85 @@ Decided in this document (the owner was not asked; each can be changed before st
 
 Open, cannot be known without trying: marked in the briefs (Steam's running games and covers, players'
 `DesktopEntry`, Telegram's count, Discord's hint, the first week day, recent folders from Qt apps).
+
+## 11. Parity with the old edges (audit, 2026-11-24)
+
+Written before `live/edge-rs` and `live/edge` were deleted (2026-11-24): each thing they did and where
+this edge does it. `rs` is `live/edge-rs/src` at the tag `edge-rs-final`, `c` is
+`live/edge/infynitae-edge.c` at `edge-c-final`, `ea` is `live/edge-apps/src`; a test is a `#[test] fn`
+in the `ea` file named, or a script (the old edges' scripts were deleted with them). Read in the code,
+nothing run.
+
+### Modules and cards
+
+| Feature | Old edges | This edge | Test | Status |
+| :--- | :--- | :--- | :--- | :--- |
+| `PANEL_` lines, old module words | rs/config.rs:744; c:1900-1944 | ea/panel.rs:61-108, ea/config.rs:753 | panel.rs `an_old_line_is_read_as_cards_of_their_apps` | same; each old word becomes a card |
+| App list and launch | rs/modules/apps.rs:1151; c:862 | ea/cards/apps.rs:59, ea/app.rs | apps.rs `list_card_groups_categories_scrolls_and_launches`; VM `papps.py` | same |
+| Recent apps (`~/.local/state/infynitae/recent-apps`) | rs/modules/apps.rs:260; edge/app-search.h:158 | ea/recent.rs:23 (#143) | recent.rs `reads_the_frozen_edges_file_and_skips_bad_lines` | same file |
+| Search | rs/modules/search.rs:32; c:868 | ea/cards/apps.rs:829 | apps.rs `search_ranking_text_events_and_heights` | same |
+| Favorites shown (`FAVORITES`) | rs/modules/favorites.rs:162; c:1935 | ea/config.rs:678, ea/cards/apps.rs:620 | apps.rs `favorites_skips_missing_ids_hides_when_empty_and_respects_sizes` | same |
+| Pin or unpin a favorite from the panel (rewrites `FAVORITES`) | rs/modules/favorites.rs:82-104; c:2040-2054 | none (a Settings row only) | none | missing |
+| Windows: list, focus, close | rs/modules/windows.rs:304; c:1446, 3956 | ea/cards/windows.rs:27, ea/wayland.rs:2279, 1315-1327 | windows.rs `focus_and_close_hits_and_actions` | same (the C edge used `infynitae msg`) |
+| Clipboard: list, copy back, delete one | rs/modules/clipboard.rs:15; c:1505, 4022 | ea/cards/clipboard.rs:28, 316, 321 | clipboard.rs `parses_real_cliphist_output_images_links_home_and_pinned` | same |
+| Clipboard: clear all (`cliphist wipe`) | rs/modules/search.rs:39; c:4459 | none | none | missing |
+| Clock, month calendar | rs/modules/clock.rs:53, calendar.rs:81; c:2578 | ea/cards/calendar.rs:17, 26 | calendar.rs `clock_renders_both_sizes_and_widths_without_hits_or_actions`, `month_arrows_and_today_reset_change_shown_month` | same |
+| Battery level beside the clock (`/sys/class/power_supply/BAT*/capacity`) | c:1397-1417 | none (power_supply is read only for the charge limit, ea/cards/settings_lock.rs:100) | none | missing (C edge only) |
+| Volume, mute, outputs, microphone, each app's level | rs/modules/volume.rs, child.rs:202-505; c:1453, 4365 | ea/cards/sound.rs:111-439 | sound.rs `volume_fetch_minimizes_spawned_commands`, `output_switch_click_sets_default_sink_and_moves_streams`, `mic_switch_mutes_and_slider_sets_source_volume` | same |
+| Music (MPRIS) | rs/modules/media.rs:1641; c:1285 | ea/cards/music.rs:555-761 | music.rs `statuses_and_player_selection_for_untied_and_tied_cards` | same |
+| Wi-Fi: switch, list, join | rs/modules/child.rs:357; c:1449, 4189 | ea/cards/settings.rs:450-663 | settings.rs `saved_networks_match_wireless_ssid_not_profile_name`; VM `pcards.py` | same; the list opens inside the card |
+| VPN rows (`nmcli connection up/down`) | rs/modules/child.rs:324-340 | none | none | missing (Rust edge only) |
+| Bluetooth: switch, list, scan, pair | rs/modules/child.rs:413; c:1451, 4202 | ea/cards/settings.rs:780-1015 | settings.rs `bluetooth_scan_runs_outside_queue_and_stops_concurrent_scans` | same |
+| Power mode | rs/modules/child.rs:676; c:1455, 4310 | ea/cards/settings.rs:1115, 1211 | settings.rs `power_modes_in_order_and_a_click_sets_one` | same (a list, the C edge cycled) |
+| Do not disturb | rs/modules/switches.rs:457-465; c:4292-4308 | ea/cards/quick.rs:155, 215-219 | quick.rs `clicks_switch_at_once_and_run_todays_commands` | different: no `swaync-client` fallback, `makoctl` only |
+| Night light, keyboard layout, screen keyboard | rs/modules/switches.rs:31-39, 472-482; c:1251 | ea/cards/quick.rs:162-165, 423-432 | quick.rs `quick_source_reads_files_in_rust_without_spawning_shell` | same |
+| `SWITCH_LOOK` (rows, icons, tiles) | rs/modules/switches.rs:538-678 | read at ea/config.rs:728, used nowhere | none | different: always rows |
+| Replay: on and off, save a clip, open the folder | rs/modules/child.rs:127-153, switches.rs:508; c:4328-4339 | ea/cards/quick.rs:224-234 | quick.rs `height_counts_rows_and_the_replay_buttons`; VM `pcards.py` | same commands |
+| Drives: list, eject | rs/modules/drives.rs:25, 466 | ea/cards/files.rs:24, 493 | files.rs `parse_mountinfo_and_fstab_picks_exactly_gvfs_show_and_user_removable_mounts` | same |
+| Memory: RAM, top apps, close background apps | rs/modules/memory.rs:17-379 | ea/cards/monitor.rs:35, 240 | monitor.rs `memory_card_status_and_events_with_cx_windows` | same |
+| System: GPU, the lab's line, Pause | rs/modules/system.rs:15-577 | ea/cards/monitor.rs:44, 1175, 1680 | monitor.rs `parses_real_amd_sysfs_and_lab_outputs` | same |
+| Tray items, Activate, the app's own menu (dbusmenu) | rs/modules/tray.rs:735-842; c:618-855 | ea/cards/apps.rs:1156, 1352-1392, ea/cards/tray_menu.rs:81, 133 | apps.rs `background_parser_captures_folder_statuses_and_activation`; tray_menu.rs `a_click_sends_the_entry_and_unsafe_names_send_nothing` | same |
+| Tray menu for apps without one: Open, Quit, Force Kill | rs/modules/tray.rs:98-124, 844-880; c:3973-3986 (`control-menu apps-kill`) | none (the app's card instead) | none | missing |
+| Background apps without a tray icon | c:1457 (`control-menu apps-list`) | none (tray items and capture only, ea/cards/apps.rs:1452-1476) | none | missing (C edge only) |
+| Notifications: server, pop-ups, history, dismiss | rs/notify_server.rs, modules/notify.rs | ea/notify_server.rs:19-267, ea/notify.rs, ea/cards/notifications.rs | notify_server.rs `ids_replace_and_follow_the_synchronous_tag`; notifications.rs `clicks_open_dismiss_and_clear_by_id`; VM `pnotify.py` | same |
+| Notifications card with `NOTIFICATIONS="mako"` (`makoctl list/history`; the C edge asked mako on D-Bus) | rs/modules/notifications.rs:17, 511; c:1137-1230, 4342 | none: the card lists only what this edge's server received (ea/cards/notifications.rs:63) | none | missing |
+| Session: lock, sleep, log out, restart, shut down (confirm) | rs/modules/session.rs:45-83; c:4393-4447 | ea/cards/session.rs:20, 58-75 | session.rs `exact_commands_match_session_module`, `confirm_actions_require_second_press_on_same_button_within_3s` | same |
+| Ask prompt (`infynitae-edge ask`), queued, cancel | rs/modules/ask.rs; c:3860-3935, 5618 | ea/ask.rs:219-371, 588, 899 | ask.rs `cli_args_and_request_formatting_match_c_edge`, `queued_ask_files_and_fifo_removal_advances_queue`; VM `pask.py` | same |
+| Editing a panel: move, size, Add, Undo, Done, `panels.backup` | rs/modules/flow.rs; c:4512-4584 | ea/edit.rs:1542-1563 | edit.rs `save_rewrites_panel_line_adds_missing_line_and_appends_backup`; VM `pedit.py` | same |
+| `PANELS_SNAP`, `PANELS_OVERLAP` (free placement; toggled in edit mode by the C edge) | rs/modules/edit.rs:121-224; c:4663-4667 | read at ea/config.rs:679, used nowhere | none | different: no effect |
+| Hover strips | rs/main.rs; c:105 | ea/wayland.rs:228 | shell.rs `a_hover_panel_opens_from_its_strip_and_closes_when_left` | same |
+| Look: colours, `CORNERS`, `THEME_SCHEME`, `CARD_OPACITY`; `--print-theme` | rs/config.rs:702-719, theme.rs | ea/config.rs:688-723, ea/theme.rs:203 | config.rs `theme_settings_with_their_older_names`; theme.rs `the_look_prints_as_shell_lines` | same |
+| Desktop widgets drawn and clicked (`WIDGETS`) | rs/main.rs:2646 | ea/widgets.rs:33-217 | widgets.rs `widgets_come_from_the_line_only_and_at_their_places`, `a_click_on_a_widget_reaches_its_card_and_beside_it_nothing` | same |
+| Widgets arranged in place (right click or `infynitae-edge widgets`; Done writes `WIDGETS`) | rs/main.rs:800, rs/modules/edit.rs:733; VM `pwidgets.py` | none: "not edited here" (ea/widgets.rs:4; the top of this file) | none | missing (left out on purpose in PR 137) |
+
+### Command line, signals, D-Bus, files
+
+| Feature | Old edges | This edge | Status |
+| :--- | :--- | :--- | :--- |
+| `panel NAME`, `control`, `apps`, `clipboard`, `toggle`/`center`/`open`, `stop`, `ask` | rs/main.rs:321-336; c:516-521, 5881-5896 | ea/main.rs:237-257 | same (callers: live/launch.sh:204-216, 590, 603; crates/infynitae/src/msg.rs; format-drive, automount, screenshare-chooser) |
+| `widgets` | rs/main.rs:332 | read as a panel's name (ea/main.rs:243) | missing, with the editor above |
+| `--render`, `--print-panels` | rs/main.rs:322-324; c:5866-5879 | ea/main.rs:207-222 | same; old words print as new card words |
+| SIGTERM, SIGUSR1, SIGUSR2, SIGRTMIN to +3 | rs/wayland.rs:1969-1978; c:481-487 | ea/wayland.rs:2386-2406 | same; nothing outside the edges sends them |
+| `org.freedesktop.Notifications` (owned) | rs/notify_server.rs:19 | ea/notify_server.rs:19 | same |
+| `org.kde.StatusNotifierWatcher` (owned by the C edge, used by the Rust one) | c:594-755 | ea/tray_watcher.rs:17, 68-96 (#142) | same; tray_watcher.rs `an_item_registers_by_path_or_by_bus_name`, apps.rs `a_tray_app_registers_with_the_edge_s_watcher_and_leaves_with_its_name` |
+| `org.kde.StatusNotifierItem`, `org.ayatana.StatusNotifierItem`, `com.canonical.dbusmenu`, `org.mpris.MediaPlayer2.*` (called) | rs/modules/tray.rs, media.rs; c:618-855, 1285 | ea/cards/apps.rs, tray_menu.rs, music.rs | same |
+| `$XDG_RUNTIME_DIR/infynitae-edge-rs.{pid,panel,ask,ask.N,ask-cancel,features}` | rs/wayland.rs:57-58, modules/ask.rs:18-21 | ea/wayland.rs:72-73, ea/ask.rs:37-40 | same names, kept: crates/infynitae/src/msg.rs, live/launch.sh:319, infynitae-automount:356 and infynitae-format-drive:54 read them |
+| `$XDG_RUNTIME_DIR/infynitae-edge.{pid,panel,ask,features}` | c:490-540 | not written | C edge only; `live/launch.sh`, `infynitae-automount` and `infynitae-format-drive` still read its `features` file beside the new one |
+| `$XDG_RUNTIME_DIR/infynitae/{do-not-disturb,night-light,keyboard-layout,osk-visible,capturing}`, recorder pid files | rs/modules/switches.rs:26-44, tray.rs:135; c:1251-1394 | ea/cards/quick.rs:155-167, ea/cards/apps.rs:1261 | same |
+| `~/.config/infynitae/config` (`PANEL_`, `FAVORITES`, `PANELS_SNAP`/`OVERLAP`, `WIDGETS` written), `panels.backup` | rs/modules/mod.rs:714-726; c:2050, 4518-4667 | ea/edit.rs:1542-1563 (`PANEL_` and backup only) | different: see the missing rows above |
+| `INFYNITAE_EDGE_RENDER_RECT`, `INFYNITAE_EDGE_STATS` (test and debug) | rs/main.rs:2514; c:3737 | none | used only by tools/test-edge-render, which builds the C edge |
+
+### Not carried over (2026-11-24)
+
+The owner deleted the old edges without these; each can be asked for again:
+
+- Clipboard: Clear all (`cliphist wipe`).
+- Do not disturb through `swaync-client` when mako is not running.
+- The battery level beside the clock.
+- Pinning or unpinning a favorite from the panel.
+- `SWITCH_LOOK` (switches as rows, icons or tiles).
+- VPN rows in the Network card.
+- The tray menu for apps without one (Open, Quit, Force Kill).
+- Background apps without a tray icon.
+- The Notifications card when `NOTIFICATIONS="mako"`.
+- Arranging the widgets in place (`infynitae-edge widgets`, `PANELS_SNAP`, `PANELS_OVERLAP`).

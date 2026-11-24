@@ -37,7 +37,7 @@ if [ -z "$picker" ] && [ -x "$edge" ] && [ "$(printf '%s\n' "$sources" | grep -c
     status=$?
     if [ "$status" -eq 0 ] && [ -n "$answer" ]; then
         # each line as the card shows it (control characters as spaces, at most 159 bytes, as
-        # ask_copy in live/edge-rs/src/modules/ask.rs), compared as bytes; the answer comes
+        # ask_copy in live/edge-apps/src/ask.rs), compared as bytes; the answer comes
         # through the environment (awk -v would read backslashes in a title as escapes)
         choice=$(printf '%s\n' "$sources" | ANSWER="$answer" LC_ALL=C awk '
             { s = $0; gsub(/[\001-\037\177]/, " ", s); s = substr(s, 1, 159) }

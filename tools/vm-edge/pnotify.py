@@ -1,5 +1,5 @@
 import sys, os, time, subprocess
-exec(open("/home/tester/pflow.py").read().split("sh(f\"sed -i '/^PANEL_CONTROL=/d' {CFG}; rm -f {BACKUP}\")")[0])
+exec(open("/home/tester/vmlib.py").read())
 # The edge's own notifications (2026-11-13) with real input: it holds the bus name, pop-ups show
 # and go, an action button reaches the sender, the x dismisses, a level replaces itself in place,
 # Do not disturb and a game hold them back, the card lists them, nothing is left on screen.

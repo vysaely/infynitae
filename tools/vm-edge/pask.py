@@ -1,11 +1,10 @@
 import sys, os, time
-exec(open("/home/tester/pflow.py").read().split("sh(f\"sed -i '/^PANEL_CONTROL=/d' {CFG}; rm -f {BACKUP}\")")[0])
+exec(open("/home/tester/vmlib.py").read())
 # `infynitae-edge ask` end to end with real keys and clicks: the asking program gets the answer and
 # ends (a copy of the reply pipe held by the edge once kept it waiting after the answer until the
-# edge exited). The edge to test: the first argument (default infynitae-edge-rs).
-#   sudo -E python3 pask.py [infynitae-edge-rs | infynitae-edge-apps]
+# edge exited).
 BIN = "/home/tester/.local/bin"
-EDGE = f"{BIN}/{sys.argv[1] if len(sys.argv) > 1 else 'infynitae-edge-rs'}"
+EDGE = f"{BIN}/infynitae-edge-apps"
 RUN = "/run/user/1000"
 # patterns anchored at the binary's path: an unanchored one also matched the shell running this
 # script (its command line names the edge) and ended the session

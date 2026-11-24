@@ -214,7 +214,6 @@ pub const FILE_ONLY: &[&str] = &[
     "MONITOR_LOG_DIR",
     "NOTIFICATIONS",
     "ENABLE_EDGE",
-    "EDGE_IMPL",
     "EDGE_POSITION",
     "EDGE_CONTROL_SIDE",
     "FAVORITES",

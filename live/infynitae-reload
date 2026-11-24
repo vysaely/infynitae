@@ -222,8 +222,8 @@ reload_polkit() {
 }
 
 reload_edge() {
-    # EDGE_IMPL (rust or c) may have changed: the name points at the one it names
-    [ -f "$LIVE/edge-pick" ] && sh "$LIVE/edge-pick" "$BIN_DIR" >/dev/null 2>&1
+    # the name points at the edge from apps (an old EDGE_IMPL line is named in the log)
+    [ -f "$LIVE/edge-pick" ] && sh "$LIVE/edge-pick" "$BIN_DIR" >> "$LOG" 2>&1
     p=$(first "$BIN_DIR/infynitae-edge" "$BIN_DIR/infynitae-island")
     stop_helper infynitae-edge
     # its name before 2026-10-31, still running from before an update
@@ -269,7 +269,7 @@ reload_notifications() {
     for d in mako swaync dunst fnott; do
         stop_helper "$d"
     done
-    # the edge (the Rust one) serves them for "auto" and "edge": started again, it asks the bus
+    # the edge serves them for "auto" and "edge": started again, it asks the bus
     # for the name now that the other daemon is gone (and lets it go when told otherwise)
     edge_serves=false
     case "${NOTIFICATIONS:-auto}" in auto|""|edge)

@@ -1,5 +1,5 @@
 import sys, os, time
-exec(open("/home/tester/pflow.py").read().split("sh(f\"sed -i '/^PANEL_CONTROL=/d' {CFG}; rm -f {BACKUP}\")")[0])
+exec(open("/home/tester/vmlib.py").read())
 # Settings cards of the edge from apps (live/edge-apps/src/cards/settings_*.rs) with real input in the
 # VM: a click on a switch, a pick and a word button changes the key in the config (read back with
 # settings.sh get), each change is logged, and About's Undo puts the last one back.

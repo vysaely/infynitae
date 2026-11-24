@@ -1,11 +1,9 @@
 # Files tools/verify-theme-colours does not scan for colour literals: path:reason, one per line.
 # Theme modules: they hold the fallback defaults and the colours derived from the theme.
 live/edge-apps/src/theme.rs:theme module of the edge from apps
-live/edge-rs/src/theme.rs:theme module of the Rust edge
 live/shot-rs/src/look.rs:theme module of the screenshot helper (reads ~/.cache/infynitae/look)
 # Readers of the theme's settings, with their defaults for a config that gives none.
 live/edge-apps/src/config.rs:parses SURFACE_COLOR, TEXT_COLOR, ACCENT; holds their defaults
-live/edge-rs/src/config.rs:parses SURFACE_COLOR, TEXT_COLOR, ACCENT; holds their defaults
 live/polkit/infynitae-polkit.c:build_css reads the config and look file; its defaults are config/config's
 live/portal/settings.c:reads ACCENT for apps; its default is config/config's #7aa2f7
 crates/infynitae-wayland/src/lib.rs:BORDER_ACTIVE and BORDER_INACTIVE until the config is read (config/config's #7aa2f7, #333b54)
@@ -14,7 +12,3 @@ crates/infynitae-wayland/src/convert.rs:CANVAS_COLOR's default (#0b0f14) for a h
 crates/infynitae-backend-drm/src/lib.rs:black behind a fullscreen window, for direct scanout of a window that is not opaque
 live/edge-apps/src/cards/settings_look.rs:the colour picker draws the pure hues, white and black it picks from
 live/wallpaper/infynitae-wallpaper.c:black under the image, seen beside it in the fit and center modes
-# Frozen edges (CI job "Old edges frozen"): a fix needs a pull request labelled edge-fix.
-live/edge/infynitae-edge.c:frozen C edge: the power confirm button's red tint, the grey desktop behind render_to_png
-live/edge-rs/src/modules/media.rs:frozen Rust edge: white play and pause icon on the accent fill
-live/edge-rs/src/modules/notify.rs:frozen Rust edge: a button label's colour used only to measure it

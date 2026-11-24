@@ -100,19 +100,11 @@ impl Capability {
             Capability::Clipboard => &["xwayland-satellite"],
             Capability::Input => &["infynitae-portal"],
             Capability::InputMethod => &[],
-            Capability::Windows => &[
-                "infynitae-edge",
-                "infynitae-edge-rs",
-                "infynitae-edge-c",
-                "infynitae-island",
-            ],
+            Capability::Windows => &["infynitae-edge", "infynitae-island"],
             Capability::Lock => &["infynitae-lock"],
             Capability::Display => &[],
             Capability::Layers => &[
                 "infynitae-edge",
-                // the edge in Rust (docs/EDGE_RUST.md), beside the C one until it replaces it
-                "infynitae-edge-rs",
-                "infynitae-edge-c",
                 "infynitae-island",
                 "infynitae-lock",
                 "infynitae-wallpaper",
@@ -512,18 +504,25 @@ mod tests {
         assert!(!tight.allows(&me(), Capability::Clipboard));
     }
 
-    /// The edge in Rust (docs/EDGE_RUST.md) draws panels and lists windows like the C edge, under
-    /// its own name while both exist; nothing else gains the edge's rights by that name's absence.
+    /// The edge draws panels and lists windows under the name everything starts it by
+    /// (`infynitae-edge`, a link to `infynitae-edge-apps`). The two older edges' names were deleted
+    /// with them: a copy still installed gains no rights by its name.
     #[test]
-    fn the_rust_edge_is_one_of_the_helpers() {
+    fn the_edge_is_one_of_the_helpers() {
         let p = Policy::from_lists(None, [(Capability::Layers, ""), (Capability::Windows, "")]);
-        for name in ["infynitae-edge", "infynitae-edge-rs", "infynitae-edge-c"] {
+        let path = Path::new("/home/someone/.local/bin/infynitae-edge");
+        assert!(p.names(path, Capability::Layers), "layers");
+        assert!(p.names(path, Capability::Windows), "windows");
+        assert!(!p.names(path, Capability::Lock), "lock");
+        for name in [
+            "infynitae-edge-rs",
+            "infynitae-edge-c",
+            "infynitae-edge-rs2",
+        ] {
             let path = Path::new("/home/someone/.local/bin").join(name);
-            assert!(p.names(&path, Capability::Layers), "{name} layers");
-            assert!(p.names(&path, Capability::Windows), "{name} windows");
-            assert!(!p.names(&path, Capability::Lock), "{name} lock");
+            assert!(!p.names(&path, Capability::Layers), "{name} layers");
+            assert!(!p.names(&path, Capability::Windows), "{name} windows");
         }
-        assert!(!p.names(Path::new("/usr/bin/infynitae-edge-rs2"), Capability::Layers));
     }
 
     /// An update writes each helper anew and renames it into place (`live/build-helpers.sh`): the

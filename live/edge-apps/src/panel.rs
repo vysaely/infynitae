@@ -400,7 +400,7 @@ mod tests {
 
     #[test]
     fn the_widgets_line_gives_each_placed_card_at_its_place() {
-        // the edge-rs line of docs/EDGE_RUST.md and config/config, read unchanged
+        // the line in config/config, read unchanged
         assert_eq!(
             widgets("clock:big@60,60,380x150 calendar@60,230,380x330 media@470,60,380x234"),
             vec![

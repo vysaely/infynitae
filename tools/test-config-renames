@@ -12,7 +12,7 @@ mkdir -p "$T/infynitae/live" "$T/infynitae/config" "$T/.config/infynitae" "$T/.l
 cp live/config.sh live/config-renames live/config-check "$T/infynitae/live/"
 cp config/config "$T/infynitae/config/"
 cfg="$T/.config/infynitae/config"
-printf 'ENABLE_ISLAND="false"\nISLAND_EDGE="bottom"\nEDGE_POSITION="top"\nCONTROL_MODULES="x"\nTYPO_SETTING="1"\n' > "$cfg"
+printf 'ENABLE_ISLAND="false"\nISLAND_EDGE="bottom"\nEDGE_POSITION="top"\nCONTROL_MODULES="x"\nTYPO_SETTING="1"\nEDGE_IMPL="rust"\n' > "$cfg"
 fails=0
 check() { if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1: got [$2], want [$3]"; fails=$((fails + 1)); fi; }
 

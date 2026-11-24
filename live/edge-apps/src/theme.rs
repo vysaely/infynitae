@@ -1,4 +1,4 @@
-//! One look for everything the edge draws (docs/EDGE_RUST.md, "One look, one set of settings"):
+//! One look for everything the edge draws (CORNERS, THEME_SCHEME, CARD_OPACITY in config/config):
 //! the colours from the system (SURFACE_COLOR, TEXT_COLOR, ACCENT or BORDER_ACTIVE) or a scheme
 //! built from the accent, light/dark polarity, the corners, the cards' opacity.
 
@@ -215,8 +215,8 @@ impl Theme {
     }
 
     /// The resolved look as shell lines (`--print-theme`), for everything else Infynitae draws or
-    /// configures (GTK, mako, fuzzel, the lock screen, the C helpers): one place decides the look
-    /// (docs/EDGE_RUST.md stage 7). Colours as #rrggbb, their opacity as two hex digits.
+    /// configures (GTK, mako, fuzzel, the lock screen, the C helpers): one place decides the look.
+    /// Colours as #rrggbb, their opacity as two hex digits.
     pub fn shell_lines(&self) -> String {
         let hex = |c: Rgba| {
             let b = |v: f64| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
