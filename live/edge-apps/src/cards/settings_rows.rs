@@ -31,8 +31,6 @@ pub enum Control {
         unit: &'static str,
     },
     /// a whole number with minus and plus
-    #[allow(dead_code)]
-    // Control variant kept until numeric stepper rows move to settings_rows.
     Step { min: i64, max: i64 },
     /// a line of text, asked with the edge's own question
     Text,

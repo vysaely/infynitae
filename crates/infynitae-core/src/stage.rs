@@ -11,7 +11,7 @@ use crate::snapshot::{Extent, SurfaceTree, TreeLayout};
 pub struct ElementId(NonZeroU64);
 
 impl ElementId {
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) const fn new(id: NonZeroU64) -> Self {
         ElementId(id)
     }
