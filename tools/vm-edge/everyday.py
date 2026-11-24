@@ -3,7 +3,7 @@
 compositor's snapshot, the process list and the files, screenshots in ~/results. A throwaway VM only: it kills
 apps and clicks Log Out, Reboot and Power Off. It expects user `tester` with password `tester`, a 1920x1080 or
 smaller screen and the apps it opens. In the VM's session:
-  sudo -E python3 everyday-use-tests [test name ...]
+  sudo -E python3 everyday.py [test name ...]
 Tests ending in SEE-SHOT need a person to look at the screenshot."""
 import fcntl, json, os, re, struct, subprocess, sys, time
 E = dict(os.environ, XDG_RUNTIME_DIR="/run/user/1000", WAYLAND_DISPLAY="wayland-1", DISPLAY=":1",
@@ -141,7 +141,7 @@ def close_keys():
     chord("super+shift+c"); rec("Super+Shift+C closes", bool(until(lambda: not els(), 5)), str(ids()))
     run_bg("mousepad"); until(lambda: has("mousepad")); wait(1); point_at("mousepad"); text("unsaved"); wait(.3)
     chord("super+shift+c"); wait(1.5); shot("close-unsaved"); rec("closing unsaved work: the app can ask", has("mousepad"), str(ids()))
-    chord("super+del"); rec("Super+Delete force closes", bool(until(lambda: not pid_alive("^mousepad"), 5)), str(ids())); wait(.5); close_all()
+    chord("super+shift+del"); rec("Super+Shift+Delete force closes", bool(until(lambda: not pid_alive("^mousepad"), 5)), str(ids())); wait(.5); close_all()
     run_bg("alacritty"); until(lambda: has("alacritty")); wait(1); chord("super+ctrl+shift+c"); wait(1); rec("Super+Ctrl+Shift+C does nothing", has("alacritty")); close_all()
 @test
 def spawn_keys():
@@ -262,7 +262,10 @@ def zoom_overview():
     chord("super+shift+tab"); wait(1.2); shot("overview"); z3 = snap()["outputs"][0]["camera"]["zoom"]; chord("esc"); wait(1); chord("super+shift+tab"); wait(1); chord("super+shift+tab"); wait(1); shot("overview-off"); rec("Super+Shift+Tab overview", "SEE-SHOT", f"zoom in overview {z3}"); close_all()
 @test
 def notifications_real():
-    sh("notify-send -a Tester 'Hello' 'A notification body'"); wait(1); shot("notification"); r = sh("makoctl list 2>&1 | head -3"); rec("a notification shows", "Hello" in r, r[:80] + " / daemon " + sh("pgrep -x mako | head -1"))
+    # the edge serves org.freedesktop.Notifications; notify-send -p prints the id it was given
+    info = sh(f"gdbus call --session --dest org.freedesktop.Notifications --object-path {NOTES} --method org.freedesktop.Notifications.GetServerInformation", 10)
+    i = sh("notify-send -p -a Tester 'Hello' 'A notification body'"); wait(1); shot("notification")
+    rec("a notification shows", "Infynitae" in info and i.isdigit() and int(i) > 0, f"id {i!r} / server {info[:60]}")
     chord("super+w"); wait(.8); shot("notification-with-panel"); chord("esc")
 @test
 def recording_and_clip():
@@ -284,6 +287,12 @@ def typing_without_pointing():
     for i in range(3):
         close_all(); wait(.8); sh("rm -rf ~/.local/share/Mousepad ~/.config/Mousepad; true"); move(-3000, -3000, 30); run_bg("mousepad"); until(lambda: has("mousepad"), 8, .05); wait(1.5); text("hello paste"); wait(.4); chord("ctrl+a"); chord("ctrl+c"); wait(.6); got.append(sh("wl-paste -n 2>/dev/null"))
     rec("typing into a new window with the pointer elsewhere", all(g == "hello paste" for g in got), str(got)); close_all()
+NOTES = "/org/freedesktop/Notifications"
+def dismiss_notes():
+    # the edge numbers notifications from 1: close every one up to a new one's id, so no pop-up covers the menu
+    last = sh("notify-send -p -t 1 -a Tester 'Clearing'")
+    if last.isdigit():
+        sh(f"for i in $(seq 1 {last}); do gdbus call --session --dest org.freedesktop.Notifications --object-path {NOTES} --method org.freedesktop.Notifications.CloseNotification $i >/dev/null 2>&1; done; true", 60)
 def click_menu(x, y):
     W = snap()["outputs"][0]["mode"][0]; chord("super+a"); wait(1); move(-3000, -3000, 30); move(W - 30, 143, 40); wait(.3); click(); wait(1); shot("menu-cleared"); chord("esc"); wait(.5)
     chord("super+a"); wait(1); move(-3000, -3000, 30); move(x, y, 40); wait(.4); shot("menu-hover"); click()
@@ -292,7 +301,7 @@ def menu_logout():
     close_all(); click_menu(1866, 143); wait(1)
 @test
 def menu_reboot():
-    close_all(); sh("makoctl dismiss -a; true"); W = snap()["outputs"][0]["mode"][0]; click_menu(W - 228, 143); wait(1)
+    close_all(); dismiss_notes(); W = snap()["outputs"][0]["mode"][0]; click_menu(W - 228, 143); wait(1)
 @test
 def small_screen():
     W, H = snap()["outputs"][0]["mode"]; run_bg("mousepad"); until(lambda: has("mousepad")); wait(2); chord("super+w"); wait(1); shot("small-launcher"); chord("esc"); chord("super+a"); wait(1); shot("small-control"); chord("esc"); wait(.3); text("x"); chord("ctrl+shift+s"); until(lambda: len(els()) >= 2, 8); wait(1.5); shot("small-dialog")
@@ -300,13 +309,13 @@ def small_screen():
     run_bg("firefox"); until(lambda: has("firefox"), 30, .5); wait(4); shot("small-firefox"); e = [x for x in els() if "firefox" in x["app_id"]][0]; ok, d = on_screen(e); rec("a browser fits the small screen", ok, d); close_all()
 @test
 def usb_drive():
-    r = sh("lsblk -rno NAME,SIZE,MOUNTPOINT,RM | grep -E '^sd' | head -5"); m = sh("findmnt -rno TARGET,SOURCE | grep -E '/run/media|/media' | head -3"); shot("usb-plugged"); rec("a plugged USB drive is mounted", bool(m), f"disks [{r}] mounted [{m}]"); rec("drive notification", "INFO", sh("makoctl history 2>/dev/null | grep -iE 'drive|usb|mount|Notification' | head -3 | cut -c1-90; tail -3 ~/.local/state/infynitae/automount.log 2>/dev/null | cut -c1-110"))
+    r = sh("lsblk -rno NAME,SIZE,MOUNTPOINT,RM | grep -E '^sd' | head -5"); m = sh("findmnt -rno TARGET,SOURCE | grep -E '/run/media|/media' | head -3"); shot("usb-plugged"); rec("a plugged USB drive is mounted", bool(m), f"disks [{r}] mounted [{m}]"); rec("drive notification", "INFO", sh("tail -3 ~/.local/state/infynitae/automount.log 2>/dev/null | cut -c1-110"))
 @test
 def two_screens():
     s = snap(); rec("two screens are seen", len(s["outputs"]) >= 2, str([(o["name"], o["mode"]) for o in s["outputs"]])); shot("two-screens"); run_bg("alacritty"); until(lambda: has("alacritty")); wait(1); shot("two-screens-window"); close_all(); chord("super+w"); wait(1); shot("two-screens-launcher"); chord("esc")
 @test
 def menu_poweroff():
-    close_all(); sh("makoctl dismiss -a; true"); W = snap()["outputs"][0]["mode"][0]; click_menu(W - 141, 143); wait(1)
+    close_all(); dismiss_notes(); W = snap()["outputs"][0]["mode"][0]; click_menu(W - 141, 143); wait(1)
 @test
 def launcher_shows_new_window():
     close_all(); wait(1); run_bg("alacritty"); until(lambda: has("alacritty")); wait(1.5); chord("super+w"); wait(1); text("mousepad"); wait(.4); chord("enter"); until(lambda: has("mousepad"), 8, .1); wait(2); shot("launcher-second-window"); e = [x for x in els() if "mousepad" in x["app_id"]][0]; ok, d = on_screen(e); rec("a window started from the launcher shows whole, the camera follows it", ok, d); close_all()
