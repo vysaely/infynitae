@@ -246,26 +246,23 @@ fn save_place(name: &str) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// The edge writes its process id to `infynitae-edge-rs.pid` (the name the Rust edge gave the file,
+/// kept by the edge from apps so installed scripts and binaries keep finding it).
 fn edge_running_in(runtime: &std::path::Path, proc_root: &std::path::Path) -> bool {
-    for file in ["infynitae-edge-rs.pid", "infynitae-edge.pid"] {
-        let Ok(text) = std::fs::read_to_string(runtime.join(file)) else {
-            continue;
-        };
-        let Ok(pid) = text.trim().parse::<u32>() else {
-            continue;
-        };
-        if pid <= 1 {
-            continue;
-        }
-        let Ok(comm) = std::fs::read_to_string(proc_root.join(pid.to_string()).join("comm")) else {
-            continue;
-        };
-        let comm = comm.trim();
-        if comm == "infynitae-edge" || comm.starts_with("infynitae-edge-") {
-            return true;
-        }
+    let Ok(text) = std::fs::read_to_string(runtime.join("infynitae-edge-rs.pid")) else {
+        return false;
+    };
+    let Ok(pid) = text.trim().parse::<u32>() else {
+        return false;
+    };
+    if pid <= 1 {
+        return false;
     }
-    false
+    let Ok(comm) = std::fs::read_to_string(proc_root.join(pid.to_string()).join("comm")) else {
+        return false;
+    };
+    let comm = comm.trim();
+    comm == "infynitae-edge" || comm.starts_with("infynitae-edge-")
 }
 
 fn capture_chord_from_reply(reply: &Value) -> Result<&str, &str> {
@@ -900,6 +897,11 @@ mod tests {
         std::fs::create_dir_all(&rt).unwrap();
         std::fs::create_dir_all(proc_root.join("4242")).unwrap();
 
+        assert!(!edge_running_in(&rt, &proc_root));
+
+        // the C edge's file, deleted with it, is not read
+        std::fs::write(rt.join("infynitae-edge.pid"), "4242\n").unwrap();
+        std::fs::write(proc_root.join("4242/comm"), "infynitae-edge\n").unwrap();
         assert!(!edge_running_in(&rt, &proc_root));
 
         std::fs::write(rt.join("infynitae-edge-rs.pid"), "4242\n").unwrap();

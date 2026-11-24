@@ -79,10 +79,10 @@ apply_defaults() {
     XKB_DEFAULT_OPTIONS="${XKB_DEFAULT_OPTIONS:-}"
 }
 
-# The look shared by everything Infynitae draws (docs/EDGE_RUST.md, stage 7: CORNERS, THEME_SCHEME,
-# CARD_OPACITY), as the Rust edge resolves it (infynitae-edge-rs --print-theme): LOOK_CORNERS,
-# LOOK_CARD, LOOK_CARD_AA, LOOK_EDGE, LOOK_EDGE_AA, LOOK_TEXT, LOOK_ACCENT... Without the Rust edge,
-# today's values from the colours and CORNERS. Its lines are checked, never run as code.
+# The look shared by everything Infynitae draws (CORNERS, THEME_SCHEME, CARD_OPACITY), as the edge
+# resolves it (infynitae-edge-apps --print-theme): LOOK_CORNERS, LOOK_CARD, LOOK_CARD_AA, LOOK_EDGE,
+# LOOK_EDGE_AA, LOOK_TEXT, LOOK_ACCENT... Without the edge, today's values from the colours and
+# CORNERS. Its lines are checked, never run as code.
 look_load() {
     # CORNERS, else WINDOW_CORNERS (one corner for windows and the interface, owner 2026-11-13),
     # else 8; SQUARE_CORNERS only tells apps to draw square
@@ -109,10 +109,7 @@ look_load() {
     LOOK_TRACK="" LOOK_TRACK_AA=1f
     LOOK_FONT="${FONT_NAME:-sans-serif}"
 
-    # the edge EDGE_IMPL picked (its link), else the Rust one: the C edge prints no theme
-    look_edge="$HOME/.local/bin/$(readlink "$HOME/.local/bin/infynitae-edge" 2>/dev/null || true)"
-    case "$look_edge" in */infynitae-edge-rs | */infynitae-edge-apps) ;; *) look_edge="$HOME/.local/bin/infynitae-edge-rs" ;; esac
-    [ -x "$look_edge" ] || look_edge="$HOME/.local/bin/infynitae-edge-apps"
+    look_edge="$HOME/.local/bin/infynitae-edge-apps"
 
     look_printed_font="" look_got_small=false look_got_card_aa=false
     if [ -x "$look_edge" ] && look_out=$("$look_edge" --print-theme 2>/dev/null); then

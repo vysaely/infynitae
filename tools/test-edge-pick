@@ -1,7 +1,7 @@
 #!/bin/sh
-# tools/test-edge-pick: live/edge-pick points infynitae-edge at the edge EDGE_IMPL names (apps by
-# default, rust, c), falls back to another when that one is not built, and keeps an old plain
-# infynitae-edge as the C one. Stand-in binaries in a temporary folder. Run from the repository root.
+# tools/test-edge-pick: live/edge-pick points infynitae-edge at the edge from apps whatever EDGE_IMPL
+# says, names an old EDGE_IMPL value in one log line, and leaves the link alone when the edge from
+# apps is not built. Stand-in binaries in a temporary folder. Run from the repository root.
 set -eu
 REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
 TMP=$(mktemp -d "/tmp/infynitae-test-edge-pick.XXXXXX")
@@ -12,23 +12,25 @@ mk() { printf '#!/bin/sh\n' > "$TMP/bin/$1"; chmod 755 "$TMP/bin/$1"; }
 pick() {
     mkdir -p "$TMP/home/.config/infynitae"
     if [ -n "$1" ]; then echo "EDGE_IMPL=\"$1\"" > "$TMP/home/.config/infynitae/config"; else : > "$TMP/home/.config/infynitae/config"; fi
-    HOME="$TMP/home" sh "$REPO_DIR/live/edge-pick" "$TMP/bin" >/dev/null 2>&1 || true
+    HOME="$TMP/home" sh "$REPO_DIR/live/edge-pick" "$TMP/bin" >/dev/null 2>"$TMP/err" || true
     readlink "$TMP/bin/infynitae-edge" 2>/dev/null || echo none
 }
 
 mkdir -p "$TMP/bin"
 mk infynitae-edge-rs; mk infynitae-edge-c; mk infynitae-edge-apps
-check "no EDGE_IMPL: the edge from apps" '[ "$(pick "")" = infynitae-edge-apps ]'
-check "EDGE_IMPL=rust: the Rust edge" '[ "$(pick rust)" = infynitae-edge-rs ]'
-check "EDGE_IMPL=c: the C edge" '[ "$(pick c)" = infynitae-edge-c ]'
-check "EDGE_IMPL=apps: the edge from apps" '[ "$(pick apps)" = infynitae-edge-apps ]'
-check "EDGE_IMPL=rust again: back to the Rust edge" '[ "$(pick rust)" = infynitae-edge-rs ]'
-rm -f "$TMP/bin/infynitae-edge-apps"
-check "apps not built: the Rust edge instead" '[ "$(pick apps)" = infynitae-edge-rs ]'
-check "no EDGE_IMPL, apps not built: the Rust edge instead" '[ "$(pick "")" = infynitae-edge-rs ]'
+check "no EDGE_IMPL: the edge from apps" '[ "$(pick "")" = infynitae-edge-apps ] && [ ! -s "$TMP/err" ]'
+check "EDGE_IMPL=apps: the edge from apps, nothing logged" '[ "$(pick apps)" = infynitae-edge-apps ] && [ ! -s "$TMP/err" ]'
+check "EDGE_IMPL=rust: the edge from apps" '[ "$(pick rust)" = infynitae-edge-apps ]'
+check "EDGE_IMPL=rust: one line in the log" '[ "$(wc -l < "$TMP/err")" = 1 ] && grep -q "EDGE_IMPL=\"rust\"" "$TMP/err"'
+check "EDGE_IMPL=c: the edge from apps" '[ "$(pick c)" = infynitae-edge-apps ]'
+check "EDGE_IMPL=c: one line in the log" '[ "$(wc -l < "$TMP/err")" = 1 ] && grep -q "EDGE_IMPL=\"c\"" "$TMP/err"'
 
-rm -rf "$TMP/bin"; mkdir -p "$TMP/bin"; mk infynitae-edge-rs; mk infynitae-edge
-check "an old plain infynitae-edge is kept as the C one" \
-    '[ "$(pick c)" = infynitae-edge-c ] && [ -x "$TMP/bin/infynitae-edge-c" ]'
+# binaries from before the edge from apps: the link they had stays
+rm -rf "$TMP/bin"; mkdir -p "$TMP/bin"; mk infynitae-edge-rs; ln -s infynitae-edge-rs "$TMP/bin/infynitae-edge"
+check "apps not built: the link is left as it was" '[ "$(pick "")" = infynitae-edge-rs ]'
+
+# an edge installed before the link (a plain file named infynitae-edge) gives way to the link
+rm -rf "$TMP/bin"; mkdir -p "$TMP/bin"; mk infynitae-edge-apps; mk infynitae-edge
+check "a plain infynitae-edge is replaced by the link" '[ "$(pick "")" = infynitae-edge-apps ]'
 
 [ "$fails" = 0 ] && echo "test-edge-pick: passed" || { echo "test-edge-pick: $fails failed"; exit 1; }

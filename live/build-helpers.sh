@@ -47,12 +47,6 @@ build infynitae-lock "wayland-client cairo pangocairo xkbcommon pam" \
 build infynitae-wallpaper "wayland-client cairo gdk-pixbuf-2.0" \
     "$LIVE/wallpaper/infynitae-wallpaper.c" "$LIVE/wallpaper/wlr-layer-shell-protocol.c" \
     "$LIVE/wallpaper/xdg-shell-protocol.c" "$LIVE/wallpaper/viewporter-protocol.c" -- -lm
-# the edge: the C one as infynitae-edge-c, the Rust one (live/edge-rs) as infynitae-edge-rs, the one
-# from apps (live/edge-apps) as infynitae-edge-apps, and
-# infynitae-edge pointing at the one EDGE_IMPL names (live/edge-pick, after both)
-build infynitae-edge-c "wayland-client cairo pangocairo xkbcommon gio-2.0" \
-    "$LIVE/edge/infynitae-edge.c" "$LIVE/wallpaper/wlr-layer-shell-protocol.c" \
-    "$LIVE/wallpaper/xdg-shell-protocol.c" "$LIVE/edge/wlr-foreign-toplevel-protocol.c" -- -lm
 # the edge was called the island before 2026-10-31: its old binary goes
 [ -x "$BIN/infynitae-edge" ] && rm -f "$BIN/infynitae-island"
 build_rust() {
@@ -76,8 +70,7 @@ build_rust() {
     fi
 }
 
-build_rust infynitae-edge-rs "$LIVE/edge-rs"
-# the edge rebuilt from apps (docs/EDGE_APPS.md), picked by EDGE_IMPL="apps"
+# the edge (docs/EDGE_APPS.md), and infynitae-edge pointing at it (live/edge-pick)
 build_rust infynitae-edge-apps "$LIVE/edge-apps"
 sh "$LIVE/edge-pick" "$BIN" || FAILED="$FAILED infynitae-edge"
 build infynitae-record-stream "wayland-client" \

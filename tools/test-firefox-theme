@@ -41,7 +41,7 @@ check "THEME_SYNC=false writes nothing into Firefox" "$([ -e "$FF/p.default/chro
 # Built scheme via --print-theme drives Firefox from LOOK_*
 H="$TMP/c"; FF="$H/.config/mozilla/firefox"
 mkdir -p "$H/.config/infynitae" "$H/.local/bin" "$FF/scheme.default"
-cat > "$H/.local/bin/infynitae-edge-rs" << 'EOF'
+cat > "$H/.local/bin/infynitae-edge-apps" << 'EOF'
 #!/bin/sh
 [ "${1:-}" = "--print-theme" ] || exit 1
 cat << 'OUT'
@@ -66,7 +66,7 @@ LOOK_SMALL_RADIUS="4"
 LOOK_FONT="sans-serif"
 OUT
 EOF
-chmod +x "$H/.local/bin/infynitae-edge-rs"
+chmod +x "$H/.local/bin/infynitae-edge-apps"
 printf '[Profile0]\nPath=scheme.default\n' > "$FF/profiles.ini"
 printf 'SURFACE_COLOR="#111317"\nBORDER_ACTIVE="#7aa2f7"\nTEXT_COLOR="#eef2f8"\nTHEME_SCHEME="tonal"\n' > "$H/.config/infynitae/config"
 apply "$H"
