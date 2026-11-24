@@ -1,5 +1,5 @@
 # Infynitae's screenshot helper (`infynitae-shot`): its own crate and lockfile, outside the
-# compositor workspace, like live/edge-rs.
+# compositor workspace, like live/edge-apps.
 [package]
 name = "infynitae-shot"
 version = "0.1.0"
