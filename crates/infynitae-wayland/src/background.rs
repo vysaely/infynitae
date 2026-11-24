@@ -127,6 +127,18 @@ impl Background {
         plan
     }
 
+    /// Lowers `pid`'s tree, down to (not into) the apps in `windowed`.
+    fn lower_app(&mut self, pid: u32, windowed: &[u32]) {
+        self.lowered.insert(pid, lower(pid, windowed));
+    }
+
+    /// Raises `pid`'s tree back, if it was lowered.
+    fn restore_app(&mut self, pid: u32, windowed: &[u32]) {
+        if let Some(lowered) = self.lowered.remove(&pid) {
+            restore(pid, &lowered, windowed);
+        }
+    }
+
     /// How long until an app out of sight is due to be lowered, a share's hold ends, or game
     /// mode ends (the backend wakes then); `None` when nothing waits.
     pub fn due(&self, now: Instant) -> Option<Duration> {
@@ -319,20 +331,18 @@ impl WaylandState {
         let plan = self.background.plan(now, &apps);
         let windowed: Vec<u32> = apps.keys().copied().collect();
         for pid in plan.restore {
-            if let Some(lowered) = self.background.lowered.remove(&pid) {
-                restore(pid, &lowered, &windowed);
-            }
+            self.background.restore_app(pid, &windowed);
         }
         for pid in plan.lower {
-            self.background.lowered.insert(pid, lower(pid, &windowed));
+            self.background.lower_app(pid, &windowed);
         }
     }
 
     /// Restores every lowered app (background priority turned off, or shutting down).
     pub fn background_restore_all(&mut self) {
         let windowed: Vec<u32> = self.background.lowered.keys().copied().collect();
-        for (pid, lowered) in std::mem::take(&mut self.background.lowered) {
-            restore(pid, &lowered, &windowed);
+        for &pid in &windowed {
+            self.background.restore_app(pid, &windowed);
         }
         self.background.hidden_since.clear();
     }
@@ -640,6 +650,82 @@ mod tests {
         let _ = child.kill();
         let _ = child.wait();
         crate::ownership::forget_spawned(pid);
+    }
+
+    /// Lowering and restoring an app of 300 processes keeps the main loop's turn under a
+    /// millisecond (2026-11-23: 25 game clients of about 100 threads each cost turns of 11 to
+    /// 14 ms, "Slow turn 14.2 ms: background priority 13.8 ms").
+    #[test]
+    fn a_large_tree_costs_the_turn_under_a_millisecond() {
+        const BUDGET: Duration = Duration::from_millis(1);
+        let mut child = crate::ownership::spawn_owned(
+            std::process::Command::new("sh")
+                .args(["-c", "for i in $(seq 300); do sleep 30 & done; wait"]),
+        )
+        .unwrap();
+        let pid = child.id();
+        let started = Instant::now();
+        while tree(pid, &[]).len() < 301 && started.elapsed() < Duration::from_secs(10) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let processes = tree(pid, &[]);
+        let tids: Vec<i32> = processes.iter().copied().flat_map(threads).collect();
+        let nice = |tid: i32| getpriority_process(Pid::from_raw(tid)).ok();
+        let before: Vec<Option<i32>> = tids.iter().map(|t| nice(*t)).collect();
+        let may_restore = before[0].is_some_and(|n| lowest_nice(pid as i32) <= n);
+        let low: Vec<Option<i32>> = before
+            .iter()
+            .map(|b| {
+                b.map(|b| {
+                    if may_restore {
+                        BACKGROUND_NICE.max(b)
+                    } else {
+                        b
+                    }
+                })
+            })
+            .collect();
+        // the work may finish after the call returns: wait for it, up to 10 s
+        let settled = |want: &[Option<i32>]| {
+            let started = Instant::now();
+            loop {
+                let now: Vec<Option<i32>> = tids.iter().map(|t| nice(*t)).collect();
+                if now == want || started.elapsed() > Duration::from_secs(10) {
+                    return now == want;
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        };
+
+        let mut bg = Background::default();
+        let started = Instant::now();
+        bg.lower_app(pid, &[]);
+        let lowering = started.elapsed();
+        let lowered = settled(&low);
+        let started = Instant::now();
+        bg.restore_app(pid, &[]);
+        let restoring = started.elapsed();
+        let restored = settled(&before);
+
+        for p in processes.iter().rev() {
+            if let Some(p) = Pid::from_raw(*p) {
+                let _ = smithay::reexports::rustix::process::kill_process(
+                    p,
+                    smithay::reexports::rustix::process::Signal::KILL,
+                );
+            }
+        }
+        let _ = child.wait();
+        crate::ownership::forget_spawned(pid);
+        assert_eq!(processes.len(), 301, "the shell and its 300 sleeps");
+        assert!(
+            lowered && restored,
+            "lowered {lowered}, restored {restored}"
+        );
+        assert!(
+            lowering < BUDGET && restoring < BUDGET,
+            "lowering took {lowering:?}, restoring {restoring:?}"
+        );
     }
 
     #[test]
