@@ -28,13 +28,13 @@ orientation_to_transform() {
             ;;
         right-up)
             case "${AUTO_ROTATE_INVERT:-false}" in
-                1|true|yes|on|TRUE|True) printf '90\n' ;;
+                1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Oo][Nn]) printf '90\n' ;;
                 *) printf '270\n' ;;
             esac
             ;;
         left-up)
             case "${AUTO_ROTATE_INVERT:-false}" in
-                1|true|yes|on|TRUE|True) printf '270\n' ;;
+                1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Oo][Nn]) printf '270\n' ;;
                 *) printf '90\n' ;;
             esac
             ;;

@@ -4835,6 +4835,7 @@ pub fn calculate_abs_pointer_delta_scale(
 
 /// Calculates the logical pointer delta needed to move from `current_p` to an absolute position
 /// `(abs_x, abs_y)` transformed to screen pixels and normalized by `scale_120`.
+#[cfg(test)]
 pub fn calculate_abs_pointer_delta(
     abs_px: (f64, f64),
     current_p: (f64, f64),

@@ -123,10 +123,6 @@ stop_matching() {
     pids=$(pids_matching "$1" "$2") && kill -KILL $pids 2>/dev/null || true
 }
 
-is_true() {
-    case "$1" in 1|true|yes|on|TRUE|True) return 0 ;; *) return 1 ;; esac
-}
-
 reload_settings() {
     s=$(first "$LIVE/settings.sh" "$BIN_DIR/infynitae-settings")
     [ -n "$s" ] && sh "$s" apply >> "$LOG" 2>&1
@@ -163,7 +159,7 @@ reload_recorder() {
     # its ffmpeg encoder can outlive both; it is the one writing into the replay dir
     pkill -u "$(id -u)" -f "^ffmpeg .*${RUNTIME_DIR}/infynitae-replay/chunk" 2>/dev/null || true
     pkill -u "$(id -u)" -f "^ffmpeg .*/dev/shm/infynitae-replay/chunk" 2>/dev/null || true
-    if [ -n "$r" ] && is_true "${ENABLE_REPLAY_BUFFER:-false}"; then
+    if [ -n "$r" ] && infy_on "${ENABLE_REPLAY_BUFFER:-false}"; then
         spawn "$r" supervisor
         echo "recorder: restarted"
     else
@@ -228,7 +224,7 @@ reload_edge() {
     stop_helper infynitae-edge
     # its name before 2026-10-31, still running from before an update
     stop_helper infynitae-island
-    if is_true "${ENABLE_EDGE:-true}" && [ -n "$p" ]; then
+    if infy_on "${ENABLE_EDGE:-true}" && [ -n "$p" ]; then
         spawn "$p"
         echo "edge: restarted"
     else
@@ -239,7 +235,7 @@ reload_edge() {
 reload_restore() {
     stop_matching infynitae "watch"
     stop_helper infynitae-restore
-    if is_true "${SESSION_RESTORE:-restart}" || [ "${SESSION_RESTORE:-restart}" = restart ]; then
+    if infy_on "${SESSION_RESTORE:-restart}" || [ "${SESSION_RESTORE:-restart}" = restart ]; then
         r=$(first "$BIN_DIR/infynitae-restore" "$LIVE/infynitae-restore")
         if [ -n "$r" ]; then
             "$r" save >/dev/null 2>&1 || true
@@ -254,7 +250,7 @@ reload_restore() {
 
 reload_sleep_lock() {
     stop_helper infynitae-sleep-lock
-    if is_true "${LOCK_WHEN_AWAY:-${SLEEP_LOCK:-true}}"; then
+    if infy_on "${LOCK_WHEN_AWAY:-${SLEEP_LOCK:-true}}"; then
         s=$(first "$BIN_DIR/infynitae-sleep-lock" "$LIVE/infynitae-sleep-lock")
         if [ -n "$s" ]; then
             spawn "$s"
@@ -312,7 +308,7 @@ reload_notifications() {
 reload_automount() {
     stop_helper infynitae-automount
     stop_helper udiskie
-    if is_true "${AUTOMOUNT:-true}"; then
+    if infy_on "${AUTOMOUNT:-true}"; then
         s=$(first "$BIN_DIR/infynitae-automount" "$LIVE/infynitae-automount")
         if [ -n "$s" ]; then
             spawn "$s"
@@ -363,10 +359,10 @@ reload_screenshare() {
         fi
         if [ -x "$chooser" ] && [ -n "$has_picker" ]; then
             # a screen at once (or asked, with SCREENSHARE_ASK), a window from the menu
-            if is_true "${SCREENSHARE_ASK:-false}"; then mode=ask; else mode=first; fi
+            if infy_on "${SCREENSHARE_ASK:-false}"; then mode=ask; else mode=first; fi
             echo "chooser_type=dmenu"
             echo "chooser_cmd=$chooser $mode '$picker'"
-        elif is_true "${SCREENSHARE_ASK:-false}" || [ -z "$first" ]; then
+        elif infy_on "${SCREENSHARE_ASK:-false}" || [ -z "$first" ]; then
             echo "chooser_type=simple"
             echo "chooser_cmd=slurp -f %o -or"
         else
@@ -382,7 +378,7 @@ reload_screenshare() {
         return 1
     fi
     systemctl --user stop xdg-desktop-portal-wlr.service 2>/dev/null || true
-    if is_true "${SCREENSHARE_ASK:-false}"; then
+    if infy_on "${SCREENSHARE_ASK:-false}"; then
         echo "screenshare: pick a screen or a window when an app asks"
     else
         echo "screenshare: an app is asked about once; then a screen is shared at once, a window picked from a menu"
@@ -452,11 +448,11 @@ reload_clipboard() {
     stop_matching wl-clip-persist "--clipboard regular"
     stop_matching wl-paste "cliphist store"
     restarted=0
-    if is_true "${CLIPBOARD_PERSIST:-true}" && command -v wl-clip-persist >/dev/null 2>&1; then
+    if infy_on "${CLIPBOARD_PERSIST:-true}" && command -v wl-clip-persist >/dev/null 2>&1; then
         spawn wl-clip-persist --clipboard regular
         restarted=1
     fi
-    if is_true "${CLIPBOARD_HISTORY:-true}" && command -v cliphist >/dev/null 2>&1 && command -v wl-paste >/dev/null 2>&1; then
+    if infy_on "${CLIPBOARD_HISTORY:-true}" && command -v cliphist >/dev/null 2>&1 && command -v wl-paste >/dev/null 2>&1; then
         spawn wl-paste --type text --watch cliphist store
         spawn wl-paste --type image --watch cliphist store
         restarted=1

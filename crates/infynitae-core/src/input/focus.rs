@@ -82,6 +82,7 @@ impl FocusModel {
     }
 
     /// Explicitly clears focus (e.g. background click), preventing automatic initial activation.
+    #[cfg(test)]
     pub fn clear_focus_explicit(&mut self) -> Vec<Effect> {
         self.initial_eligible = false;
         self.set_focus(None)

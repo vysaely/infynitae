@@ -171,7 +171,7 @@ dnd_toggle() {
 # on or off: ENABLE_REPLAY_BUFFER in the config (read from the file: the session's copy is from
 # its start), then the recorder restarted for it
 CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/infynitae/config"
-replay_on() { grep -qE '^ENABLE_REPLAY_BUFFER="?(true|1|yes|on)"?' "$CONFIG" 2>/dev/null; }
+replay_on() { grep -qE '^ENABLE_REPLAY_BUFFER="?([Tt][Rr][Uu][Ee]|1|[Yy][Ee][Ss]|[Oo][Nn])"?' "$CONFIG" 2>/dev/null; }
 replay_toggle() {
     if replay_on; then to=false; else to=true; fi
     if grep -q '^ENABLE_REPLAY_BUFFER=' "$CONFIG"; then

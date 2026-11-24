@@ -94,7 +94,7 @@ mkdir -p "$cfg_dir2"
 cfg_file2="$cfg_dir2/config"
 
 sed -n '/^reload_screenshare() {/,/^}/p' "$here/live/infynitae-reload" > "$tmp/fn_screenshare"
-is_true() { case "$1" in 1|true|yes|on|TRUE|True) return 0 ;; *) return 1 ;; esac; }
+eval "$(sed -n '/^infy_on() {/,/^}/p' "$here/live/config.sh")"
 # the function stops the portal service: never the session's real one
 systemctl() { :; }
 . "$tmp/fn_screenshare"

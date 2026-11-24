@@ -510,6 +510,14 @@ pub fn writable(value: &str) -> bool {
         .all(|c| c.is_ascii_alphanumeric() || " +:_@,.-".contains(c))
 }
 
+/// A config line's key and its raw value (`export ` allowed); a comment line gives a key starting
+/// with `#` that matches nothing.
+fn line_pair(raw: &str) -> Option<(&str, &str)> {
+    let p = raw.trim_start_matches([' ', '\t']);
+    let p = p.strip_prefix("export ").map_or(p, |r| r.trim_start());
+    p.split_once('=')
+}
+
 /// A config value as the shell reads it: quoted parts joined (`'O'\''Reilly'` is `O'Reilly`,
 /// as `settings.sh` writes an apostrophe), up to the first blank outside quotes.
 pub fn value_text(v: &str) -> String {
@@ -653,9 +661,7 @@ impl Config {
         ];
         let mut lines: Vec<(String, String)> = Vec::new();
         for raw in text.lines() {
-            let p = raw.trim_start_matches([' ', '\t']);
-            let p = p.strip_prefix("export ").map_or(p, |r| r.trim_start());
-            let Some((key, v)) = p.split_once('=') else {
+            let Some((key, v)) = line_pair(raw) else {
                 continue;
             };
             match key {
@@ -1017,6 +1023,28 @@ mod tests {
         assert_eq!(value_text("'it'\\''s'"), "it's");
         assert_eq!(value_text("\"\""), "");
         assert_eq!(value_text("#7aa2f7 # note"), "#7aa2f7");
+    }
+
+    /// The lines every config reader shares (tools/config-cases): the key and value the edge
+    /// reads from each, as the shell and the compositor do.
+    #[test]
+    fn config_cases_give_the_shells_key_and_value() {
+        let cases = include_str!("../../../tools/config-cases");
+        let mut n = 0;
+        for row in cases
+            .lines()
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        {
+            let f: Vec<&str> = row.splitn(4, '\t').collect();
+            let (key, expected, line) = (f[0], f[1], f[3]);
+            let got = line_pair(line)
+                .filter(|(k, _)| *k == key)
+                .map(|(_, v)| value_text(v))
+                .unwrap_or_default();
+            assert_eq!(got, expected, "{row:?}");
+            n += 1;
+        }
+        assert!(n >= 20, "only {n} cases read");
     }
 
     #[test]

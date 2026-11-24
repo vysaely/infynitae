@@ -2916,6 +2916,7 @@ impl Core {
             .map(|(_, p)| *p)
     }
 
+    #[cfg(test)]
     pub fn placement_policy(&self) -> PlacementPolicy {
         self.placement
     }

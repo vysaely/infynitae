@@ -724,24 +724,6 @@ $parsed
 EOF
 }
 
-# the background job becomes the monitor itself (exec): $MON is then gdbus, ended by `end`, and
-# no subshell of this script (which a stop would end without its trap) is left holding it
-# UDisks2's signals, one per line. gdbus monitor ends when the system bus or UDisks2 restarts
-# (an update): it starts again after 2 s instead of the watcher ending for the rest of the session
-monitor() {
-    if [ -n "${INFYNITAE_AUTOMOUNT_MONITOR:-}" ]; then
-        exec sh -c "$INFYNITAE_AUTOMOUNT_MONITOR"
-    fi
-    trap 'kill "$g" 2>/dev/null; exit 0' INT TERM HUP
-    while :; do
-        gdbus monitor --system --dest org.freedesktop.UDisks2 &
-        g=$!
-        wait "$g"
-        sleep 2
-        echo "infynitae-automount: monitor restarted"
-    done
-}
-
 end() {
     trap - INT TERM HUP
     [ -n "${MON:-}" ] && kill "$MON" 2>/dev/null
@@ -758,14 +740,31 @@ fi
 log "started"
 scan_existing
 
+# UDisks2's signals, one per line, through a FIFO (a signal then ends the script at once). The
+# background job is gdbus itself, started from this shell: the watcher is two processes, not a
+# second shell around gdbus as well. gdbus monitor ends when the system bus or UDisks2 restarts
+# (an update): it starts again after 2 s instead of the watcher ending for the rest of the
+# session. A test's monitor runs once.
 FIFO="$STATE_DIR/automount.$$"
-rm -f "$FIFO"
-mkfifo "$FIFO" || exit 1
-monitor > "$FIFO" 2>/dev/null 9>&- &
-MON=$!
-exec 3< "$FIFO"
-rm -f "$FIFO"
-while IFS= read -r line <&3; do
-    process_line "$line"
+while :; do
+    rm -f "$FIFO"
+    mkfifo "$FIFO" || exit 1
+    if [ -n "${INFYNITAE_AUTOMOUNT_MONITOR:-}" ]; then
+        sh -c "$INFYNITAE_AUTOMOUNT_MONITOR" > "$FIFO" 2>/dev/null 9>&- &
+    else
+        gdbus monitor --system --dest org.freedesktop.UDisks2 > "$FIFO" 2>/dev/null 9>&- &
+    fi
+    MON=$!
+    exec 3< "$FIFO"
+    rm -f "$FIFO"
+    while IFS= read -r line <&3; do
+        process_line "$line"
+    done
+    exec 3<&-
+    wait "$MON" 2>/dev/null
+    MON=""
+    [ -n "${INFYNITAE_AUTOMOUNT_MONITOR:-}" ] && break
+    sleep 2
+    log "monitor restarted"
 done
 end

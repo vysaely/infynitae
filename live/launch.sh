@@ -127,7 +127,7 @@ GM_ARGS
         # (and tearing) until it goes, so none show until the game ends (they are still listed).
         # The edge holds them while the game-quiet file is there; mako's do-not-disturb does
         # for mako. One the owner turned on stays on (only the one set here is removed)
-        if [ "${GAME_QUIET:-true}" = true ]; then
+        if infy_on "${GAME_QUIET:-true}"; then
             gm_dir="${XDG_RUNTIME_DIR:-/tmp}/infynitae"
             gm_mark="$gm_dir/game-quiet"
             gm_mako="$gm_dir/game-quiet-mako"
@@ -339,7 +339,7 @@ GM_ARGS
         SHOT_BIN="$HOME/.local/bin/infynitae-shot"
         if [ -x "$SHOT_BIN" ]; then
             LIVE_FLAG=""
-            if [ "${FREEZE_SCREENSHOT:-true}" != true ]; then
+            if ! infy_on "${FREEZE_SCREENSHOT:-true}"; then
                 LIVE_FLAG="--live"
             fi
             if "$SHOT_BIN" region $LIVE_FLAG "$SHOT_FILE" >/dev/null && [ -f "$SHOT_FILE" ]; then
@@ -353,7 +353,7 @@ GM_ARGS
             FREEZE_DIR=""
             FREEZERS=""
             FREEZER="$HOME/.local/bin/infynitae-wallpaper"
-            if [ "${FREEZE_SCREENSHOT:-true}" = true ] && [ -x "$FREEZER" ]; then
+            if infy_on "${FREEZE_SCREENSHOT:-true}" && [ -x "$FREEZER" ]; then
                 FREEZE_DIR=$(mktemp -d "${XDG_RUNTIME_DIR:-/tmp}/infynitae-freeze.XXXXXX")
                 # the output names are the only "name" keys of the snapshot
                 for out in $("$INFYNITAE_BIN" msg snapshot 2>/dev/null \

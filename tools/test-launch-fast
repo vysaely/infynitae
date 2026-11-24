@@ -3,7 +3,7 @@
 # With stand-ins on PATH that log their calls, it checks: the first action pushes the environment
 # to D-Bus and systemd and starts the portal; the next ones push nothing and search no processes
 # (each press used to cost a pgrep -f and two D-Bus round trips); a changed display is pushed again;
-# a portal that died is started again; Super+W reaches the edge.
+# a portal that died is started again; Super+W reaches the edge; a switch written True is on.
 set -eu
 
 REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
@@ -16,7 +16,7 @@ LOG="$TMP/calls"
 mkdir -p "$BIN" "$HOMEDIR/.local/bin" "$HOMEDIR/.config/infynitae" "$RUN"
 chmod 700 "$RUN"
 ln -s "$REPO_DIR" "$HOMEDIR/infynitae"
-for tool in dbus-update-activation-environment systemctl pgrep localectl; do
+for tool in dbus-update-activation-environment systemctl pgrep localectl gdbus; do
     printf '#!/bin/sh\necho "%s $*" >> "%s"\n' "$tool" "$LOG" > "$BIN/$tool"
 done
 # pgrep finds nothing, like a session with no portal yet
@@ -68,5 +68,13 @@ sleep 0.2
 press apps wayland-8
 sleep 0.3
 check "a portal that died is started again" "$(portals)" 2
+
+# GAME_QUIET="True" is on, as the compositor reads it: a game holds the notifications back
+printf 'GAME_QUIET="True"\n' > "$HOMEDIR/.config/infynitae/config"
+env -i HOME="$HOMEDIR" PATH="$BIN:/usr/bin:/bin" XDG_RUNTIME_DIR="$RUN" DISPLAY=:9 \
+    WAYLAND_DISPLAY=wayland-8 XKB_DEFAULT_LAYOUT=us LIBSEAT_BACKEND=logind INFYNITAE_SETTINGS_APPLIED=1 \
+    sh "$REPO_DIR/live/launch.sh" game-mode "on 4321 quiet" >/dev/null 2>&1 || true
+check "GAME_QUIET=\"True\" holds notifications during a game" \
+    "$([ -e "$RUN/infynitae/game-quiet" ] && echo held || echo shown)" held
 
 exit $fail

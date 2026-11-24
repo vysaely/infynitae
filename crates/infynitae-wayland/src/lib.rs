@@ -2766,6 +2766,34 @@ mod key_binding_config_tests {
         );
     }
 
+    /// The lines every config reader shares (tools/config-cases): the key and value, and whether a
+    /// switch is on, as live/config.sh's infy_on and the edge read them.
+    #[test]
+    fn config_cases_give_the_shells_key_value_and_switch() {
+        use super::{config_line, parse_bool};
+        let cases = include_str!("../../../tools/config-cases");
+        let mut n = 0;
+        for row in cases
+            .lines()
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        {
+            let f: Vec<&str> = row.splitn(4, '\t').collect();
+            let (key, expected, on, line) = (f[0], f[1], f[2], f[3]);
+            let got = config_line(line)
+                .filter(|(k, _)| k == key)
+                .map(|(_, v)| v)
+                .unwrap_or_default();
+            assert_eq!(got, expected, "{row:?}");
+            match on {
+                "on" => assert_eq!(parse_bool(&got), Some(true), "{row:?}"),
+                "off" => assert_ne!(parse_bool(&got), Some(true), "{row:?}"),
+                _ => {}
+            }
+            n += 1;
+        }
+        assert!(n >= 20, "only {n} cases read");
+    }
+
     #[test]
     fn parse_bool_handles_yes_no_spellings_and_unknowns() {
         use super::parse_bool;

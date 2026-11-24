@@ -155,7 +155,7 @@ if [ -x "$HOME/infynitae/live/remote/screenshare-ask" ]; then
     REMOTE_IFACES="org.freedesktop.impl.portal.ScreenCast;" SCREENCAST_BACKEND="infynitae"
 fi
 case "${REMOTE_DESKTOP:-false}" in
-    1|true|yes|on|TRUE|True)
+    1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Oo][Nn])
         REMOTE_IFACES="org.freedesktop.impl.portal.RemoteDesktop;org.freedesktop.impl.portal.ScreenCast;"
         SCREENCAST_BACKEND="infynitae" RD_BACKEND="infynitae" ;;
 esac

@@ -86,10 +86,11 @@ infy_bin() {
     return 1
 }
 
-# Boolean setting evaluation: accepts 1, true, yes, on, TRUE, True and nothing else
+# A switch is on for 1, true, yes or on in any case, as the compositor reads it (parse_bool in
+# crates/infynitae-wayland/src/lib.rs); the patterns spare a process per call
 infy_on() {
     case "${1:-}" in
-        1|true|yes|on|TRUE|True) return 0 ;;
+        1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Oo][Nn]) return 0 ;;
         *) return 1 ;;
     esac
 }
