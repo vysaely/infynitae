@@ -413,8 +413,11 @@ fn the_window_menu_wins_over_a_popup_grab_on_the_same_press() {
         "the app's grab on the same press is refused: {:?}",
         r.ls.probe.kb_log
     );
-    assert!(!r.ls.state.is_pointer_grabbed(), "the pointer stays free");
     r.button(BTN_RIGHT, false, none());
+    assert!(
+        !r.ls.state.is_pointer_grabbed(),
+        "no grab is left after the press"
+    );
 
     // a later press: the app's own menu works as before
     r.button(BTN_LEFT, true, none());

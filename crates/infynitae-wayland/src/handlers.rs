@@ -872,7 +872,7 @@ impl XdgShellHandler for WaylandState {
             .as_ref()
             .is_some_and(|g| !g.has_ended() && g.serial() == serial)
         {
-            let fx = [infynitae_core::protocol::Effect::DismissPopupGrab(id)];
+            let fx = self.core.end_popup_grab_for_window_menu(id);
             self.apply(&fx);
         }
     }
