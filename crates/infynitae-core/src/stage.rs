@@ -11,7 +11,8 @@ use crate::snapshot::{Extent, SurfaceTree, TreeLayout};
 pub struct ElementId(NonZeroU64);
 
 impl ElementId {
-    #[cfg(test)]
+    // kept outside tests: tools/verify-architecture's p23 probe needs it to exist and be private
+    #[allow(dead_code)]
     pub(crate) const fn new(id: NonZeroU64) -> Self {
         ElementId(id)
     }
