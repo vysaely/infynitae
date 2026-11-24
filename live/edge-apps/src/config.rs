@@ -1,6 +1,5 @@
-//! The edge's part of ~/.config/infynitae/config, read exactly as the C edge reads it
-//! (live/edge/infynitae-edge.c, load_position_config and panel_line), so both print the same
-//! panels (`--print-panels`, tools/test-edge-panel-lines) and either can replace the other.
+//! The edge's part of ~/.config/infynitae/config, read as the C edge (deleted 2026-11-24) read it,
+//! so a config written for that edge gives the same panels.
 
 use std::path::PathBuf;
 
