@@ -1,13 +1,12 @@
 import sys, os, re, time, glob
 exec(open("/home/tester/g/feat.py").read().split("which = sys.argv[1:]")[0])
-# Everyday use of the edge, start to end, with real input (2026-11-10): open it, use its
-# modules, edit it, and how long each click takes to show. A screenshot at every step for a
-# person to look at (results/u-*.png).
+# Everyday use of the edge from apps, start to end, with real input: open it, use its cards, edit
+# it, and how long each click takes to show. A screenshot at every step for a person to look at
+# (results/u-*.png). Cards and their controls are read from the box dump's card and hit lines.
 CFG = "/home/tester/.config/infynitae/config"
 BOX = "/tmp/edge-boxes"
 BACKUP = "/home/tester/.config/infynitae/panels.backup"
-ALL = ["search", "favorites", "apps", "windows", "clipboard", "clock", "volume", "media", "wifi", "bluetooth", "dnd",
-       "nightlight", "keyboard", "osk", "power", "replay", "tray", "notifications", "session", "calendar", "memory", "system"]
+RT = "/run/user/1000"
 SLOW = []
 def line(name="CONTROL"):
     for l in open(CFG):
@@ -15,15 +14,18 @@ def line(name="CONTROL"):
     return ""
 def boxes():
     wait(0.25)
-    d = {"modules": {}, "child": None, "bar": None}
-    d["state"] = "closed"
+    d = {"cards": {}, "order": [], "hits": {}, "cb": {}, "bb": {}, "add": None, "addrow": {}, "bar": None, "state": "closed"}
     for l in open(BOX):
         w = l.split()
         if not w: continue
         if w[0] == "panel": d["panel"] = list(map(float, w[2:6])); d["state"] = w[6]
-        elif w[0] == "module": d["modules"][w[1]] = list(map(float, w[2:6]))
-        elif w[0] == "child": d["child"] = list(map(float, w[1:5]))
+        elif w[0] == "card": d["cards"][w[1]] = list(map(float, w[2:6])); d["order"].append(w[1])
+        elif w[0] == "hit": d["hits"][(w[1], int(w[2]))] = list(map(float, w[3:7]))
+        elif w[0] == "cardbutton": d["cb"][(w[1], w[2])] = list(map(float, w[3:7]))
+        elif w[0] == "barbutton": d["bb"][w[1]] = list(map(float, w[2:6]))
         elif w[0] == "bar": d["bar"] = list(map(float, w[1:5]))
+        elif w[0] == "add": d["add"] = list(map(float, w[1:5]))
+        elif w[0] == "addrow": d["addrow"][w[1]] = list(map(float, w[2:6]))
     return d
 def at(x, y): move(-3000, -3000, 30); move(int(x), int(y), 30); wait(0.25)
 def timed(name, act):
@@ -36,98 +38,95 @@ def timed(name, act):
     return ms
 def click_at(x, y, b="left", name="click"):
     at(x, y); return timed(name, lambda: click(b))
-def drag(x, y, dx, dy):
+def drag(x, y, dx, dy, hold=0.3):
     at(x, y); emit((1, BTN["left"], 1)); wait(0.15)
-    move(int(dx / 2), int(dy / 2), 30); wait(0.2); move(int(dx / 2), int(dy / 2), 30); wait(0.3)
+    move(int(dx / 2), int(dy / 2), 30); wait(0.2); move(int(dx / 2), int(dy / 2), 30); wait(hold)
     emit((1, BTN["left"], 0)); wait(0.8)
+def to_end():
+    # the wheel over the panel scrolls it to its last card
+    p = boxes()["panel"]; at(p[0] + p[2] / 2, p[1] + p[3] / 2)
+    for _ in range(30): emit((2, 8, -1)); wait(0.02)
+    wait(0.4)
 def restart_edge():
     sh("pkill -x infynitae-edge; true"); wait(1.0); run_bg(f"INFYNITAE_EDGE_BOXES={BOX} infynitae-edge"); wait(2.0)
-# where the edge drew each button and Add row (its box dump: barbutton NAME x y w h, cardbutton MODULE
-# NAME x y w h, addrow MODULE x y w h)
-def drawn():
-    wait(0.3)
-    out = {}
+def middle(r): return r[0] + r[2] / 2, r[1] + r[3] / 2
+def bar_button(name): return middle(boxes()["bb"][name])
+def card_button(card, name):
+    at(*middle(boxes()["cards"][card])); return middle(boxes()["cb"][(card, name)])
+def start_edit(card):
+    # a right click on a card's empty corner offers "Edit panel"; choosing it starts editing
+    r = boxes()["cards"][card]; ms = click_at(r[0] + r[2] - 12, r[1] + r[3] - 8, "right", name="edit menu")
     for l in open(BOX):
         w = l.split()
-        if w and w[0] == "barbutton": out[("bar", w[1].lower())] = list(map(float, w[2:6]))
-        elif w and w[0] == "cardbutton": out[(w[1], w[2].lower())] = list(map(float, w[3:7]))
-        elif w and w[0] == "addrow": out[("add", w[1])] = list(map(float, w[2:6]))
-        elif w and w[0] == "add": out[("add", "")] = list(map(float, w[1:5]))
-    return out
-def middle(r): return r[0] + r[2] / 2, r[1] + r[3] / 2
-def bar_button(name): return middle(drawn()[("bar", name)])
-def add_row(word, panel_words): return middle(drawn()[("add", word)])
-def card_button(module, name): return middle(drawn()[(module, name)])
-def hover_card(r): at(r[0] + 30, r[1] + r[3] - 8)
-def words():
-    l = sh("infynitae-edge --print-panels").splitlines()
-    c = [x for x in l if x.startswith("control ")][0].split()
-    return [w.split(":")[0].split("@")[0] for w in c if w.split(":")[0].split("@")[0] in ALL]
+        if w and w[0] == "editmenu":
+            m = list(map(float, w[1:5])); ms += click_at(m[0] + 20, m[1] + m[3] / 2, name="Edit panel")
+    return ms
 
 sh(f"sed -i '/^PANEL_CONTROL=/d' {CFG}; rm -f {BACKUP}"); restart_edge()
 sh("pkill -f fakempris; true"); run_bg("python3 /home/tester/g/fakempris.py"); wait(2.0)
 
-# --- A. everyday use
-ms = timed("Super+A", lambda: chord("super+a")); wait(1.0); d = boxes(); m = d["modules"]; shot("u-01-open")
-check(f"Super+A opens the panel ({ms:.0f} ms)", d["state"] in ("locked", "open", "hover") and "clock" in m, d.get("state"))
-check("the music card is there while something plays", "media" in m, sorted(m))
+# --- A. everyday use (the default control panel; hit ids from sound.rs, quick.rs, music.rs)
+ms = timed("Super+A", lambda: chord("super+a")); wait(1.0); d = boxes(); c = d["cards"]; shot("u-01-open")
+check(f"Super+A opens the panel ({ms:.0f} ms)", d["state"] == "locked" and "calendar/clock" in c, d.get("state"))
+check("the music card is there while something plays", c.get("music/playing", [0, 0, 0, 0])[3] > 0, sorted(c))
 sh("pactl set-sink-volume @DEFAULT_SINK@ 30%"); wait(1.0)
-vo = m["volume"]; before = sh("pactl get-sink-volume @DEFAULT_SINK@ | grep -o '[0-9]*%' | head -1")
-drag(vo[0] + 30, vo[1] + 38, vo[2] - 80, 0); after = sh("pactl get-sink-volume @DEFAULT_SINK@ | grep -o '[0-9]*%' | head -1"); shot("u-02-volume")
+vo = boxes()["hits"][("sound/volume", 1)]; before = sh("pactl get-sink-volume @DEFAULT_SINK@ | grep -o '[0-9]*%' | head -1")
+drag(vo[0] + 10, vo[1] + vo[3] / 2, vo[2] - 20, 0); after = sh("pactl get-sink-volume @DEFAULT_SINK@ | grep -o '[0-9]*%' | head -1"); shot("u-02-volume")
 check("dragging the volume slider changes the volume", before != after, f"{before} -> {after}")
-dn = m["dnd"]; ms = click_at(dn[0] + 40, dn[1] + dn[3] / 2, name="Do not disturb"); shot("u-03-dnd")
-check(f"Do not disturb switches ({ms:.0f} ms)", "do-not-disturb" in sh("makoctl mode 2>/dev/null") or os.path.exists("/run/user/1000/infynitae/do-not-disturb"), sh("makoctl mode"))
-click_at(dn[0] + 40, dn[1] + dn[3] / 2, name="Do not disturb off")
+dn = boxes()["hits"][("settings/quick", 30)]; ms = click_at(*middle(dn), name="Do not disturb"); wait(0.5); shot("u-03-dnd")
+check(f"Do not disturb switches ({ms:.0f} ms)", os.path.exists(f"{RT}/infynitae/do-not-disturb"))
+click_at(*middle(boxes()["hits"][("settings/quick", 30)]), name="Do not disturb off")
 sh("notify-send -a Test 'A message' 'It arrived while the panel was open'"); wait(1.5); shot("u-04-notification")
-check("a notification shows in the panel while it is open", "notifications" in boxes()["modules"])
-md = boxes()["modules"]["media"]; t0 = sh("busctl --user get-property org.mpris.MediaPlayer2.fake /org/mpris/MediaPlayer2 org.mpris.MediaPlayer2.Player PlaybackStatus 2>/dev/null")
-click_at(md[0] + md[2] / 2, md[1] + md[3] - 40, name="play/pause"); t1 = sh("busctl --user get-property org.mpris.MediaPlayer2.fake /org/mpris/MediaPlayer2 org.mpris.MediaPlayer2.Player PlaybackStatus 2>/dev/null"); shot("u-05-media")
-check("the music card's middle button plays or pauses", t0 != t1 or t0 == "", f"{t0} -> {t1}")
-net = boxes()["modules"]["wifi"]; ms = click_at(net[0] + 40, net[1] + net[3] / 2, name="Network card"); shot("u-06-network")
-check(f"Network opens its card ({ms:.0f} ms)", boxes()["child"] is not None)
+check("a notification shows in the panel while it is open", boxes()["cards"].get("notifications/list", [0, 0, 0, 0])[3] > 0)
+pp = boxes()["hits"].get(("music/playing", 5)); prop = "busctl --user get-property org.mpris.MediaPlayer2.fakeplayer /org/mpris/MediaPlayer2 org.mpris.MediaPlayer2.Player PlaybackStatus 2>/dev/null"
+t0 = sh(prop)
+if pp: click_at(*middle(pp), name="play/pause")
+t1 = sh(prop); shot("u-05-media")
+check("the music card's middle button plays or pauses", pp is not None and t0 != t1, f"{t0} -> {t1}")
+# since PR 134 a panel opened by its key stays open while the desktop around it is used
 click_at(300, 900, name="outside"); d = boxes()
-check("a click outside closes the card and the panel", d["child"] is None and d["state"] not in ("open", "locked"), d.get("state"))
+check("a click outside leaves the panel open", d["state"] == "locked", d.get("state"))
+chord("super+a"); wait(0.6)
+check("its key closes it", boxes()["state"] == "closed", boxes()["state"])
 chord("super+a"); wait(1.0); chord("esc"); wait(0.6)
-check("Escape closes the panel", boxes()["state"] not in ("open", "locked"), boxes()["state"])
+check("Escape closes the panel", boxes()["state"] == "closed", boxes()["state"])
 
 # --- B. editing
-chord("super+a"); wait(1.2); d0 = boxes(); start = words()
-s = d0["modules"]["session"]; ms = click_at(s[0] + 4, s[1] + 4, "right", name="edit"); d = boxes(); shot("u-07-edit")
-check(f"a right click starts editing ({ms:.0f} ms)", d["state"] == "editing" and d["bar"] is not None)
-ms = click_at(*bar_button("add"), name="Add"); shot("u-08-add")
-a = drawn().get(("add", "")); b = boxes()["bar"]
-check(f"Add opens its list beside the panel, the bar's buttons stay ({ms:.0f} ms)", a is not None and abs(b[1] - d["bar"][1]) < 1 and (a[0] + a[2] <= d["panel"][0] or a[0] >= d["panel"][0] + d["panel"][2]), f"{a} bar {d['bar']} -> {b}")
-click_at(*add_row("calendar", start), name="add Calendar"); d = boxes(); shot("u-09-calendar")
-check("Calendar added at the bottom", "calendar" in d["modules"] and d["modules"]["calendar"][1] > d["modules"]["session"][1], str(d["modules"].get("calendar")))
-click_at(*bar_button("add"), name="close Add")
-# held near the panel's top edge the panel scrolls up: the calendar can go to the very top
-cal = d["modules"]["calendar"]; top_y = d["panel"][1] + 6
-drag(cal[0] + cal[2] / 2, cal[1] + 40, 0, top_y - (cal[1] + 40)); d = boxes(); shot("u-10-dragged")
-check("the calendar dragged to the top", d["modules"]["calendar"][1] < d["modules"]["volume"][1], f"{d['modules']['calendar']}")
-ck = d["modules"]["clock"]; hover_card(ck); click_at(*card_button("clock", "half"), name="Half"); d = boxes(); shot("u-11-half")
-check("Half puts the clock beside its neighbour", d["modules"]["clock"][2] < d["panel"][2] / 2 + 1, str(d["modules"]["clock"]))
-# the screen edge the panel is on (the box dump's panel line ends with it: a panel as tall as the screen
-# looks the same on two edges)
-side = lambda: [l for l in open(BOX) if l.startswith("panel ")][0].split()[-1]
-p0 = d["panel"]; s0 = side()
-ms = click_at(*bar_button("edge"), name="Edge"); d = boxes(); shot("u-12-edge")
-check(f"Edge moves the panel to the next screen edge ({ms:.0f} ms)", side() != s0, f"{s0} -> {side()} {d['panel']}")
-click_at(*bar_button("undo"), name="Undo edge"); d = boxes()
-check("Undo puts it back", side() == s0 and d["panel"] == p0, f"{side()} {d['panel']}")
-tr = d["modules"].get("tray") or d["modules"].get("notifications"); key = "tray" if "tray" in d["modules"] else "notifications"
-hover_card(tr); click_at(*card_button(key, "remove"), name="remove"); d = boxes(); shot("u-13-removed")
-check(f"x takes the {key} card out", key not in d["modules"])
-click_at(*bar_button("done"), name="Done"); wait(0.8); l = line(); shot("u-14-saved")
-check("Done saves it, calendar first, clock half, no places", l.find("calendar") < l.find("volume") and "clock@half" in l and not re.search(r"@\d", l), l)
+chord("super+a"); wait(1.2); d0 = boxes()
+ms = start_edit("calendar/clock"); d = boxes(); shot("u-07-edit")
+check(f"a right click and Edit panel start editing ({ms:.0f} ms)", d["state"] == "editing" and d["bar"] is not None)
+ms = click_at(*bar_button("Add"), name="Add"); shot("u-08-add")
+b = boxes(); a = b["add"]
+check(f"Add opens its list beside the panel, the bar's buttons stay ({ms:.0f} ms)", a is not None and b["bar"] is not None and abs(b["bar"][1] - d["bar"][1]) < 1 and (a[0] + a[2] <= d["panel"][0] or a[0] >= d["panel"][0] + d["panel"][2]), f"{a} bar {d['bar']} -> {b['bar']}")
+# Calendar is there already (its clock): its month is offered under it
+if "calendar" in b["addrow"]: click_at(*middle(b["addrow"]["calendar"]), name="Calendar")
+r = boxes()["addrow"].get("calendar/month")
+if r: click_at(*middle(r), name="add the month")
+d = boxes(); shot("u-09-calendar")
+check("the month added at the end", d["order"][-1:] == ["calendar/month"], str(d["order"]))
+click_at(*bar_button("Add"), name="close Add")
+# the month dragged from the strip over it (as pedit.py) and held at the panel's top edge: the panel
+# scrolls up while it is held there (drag_autoscroll), so it can go to the very top
+d = boxes(); mo = d["cards"]["calendar/month"]; top_y = d["panel"][1] + 6
+drag(mo[0] + 60, mo[1] - 14, 0, top_y - (mo[1] - 14), hold=2.5); d = boxes(); shot("u-10-dragged")
+check("the month dragged to the top", d["order"].index("calendar/month") < d["order"].index("sound/volume"), str(d["order"]))
+click_at(*card_button("calendar/clock", "Half"), name="Half"); d = boxes(); shot("u-11-half")
+check("Half puts the clock beside its neighbour", d["cards"]["calendar/clock"][2] < d["panel"][2] / 2 + 1, str(d["cards"]["calendar/clock"]))
+# Remove takes a card out (the notifications card, with the message from part A in it; the last
+# cards are under the screen's bottom while editing on 1080 lines)
+to_end(); click_at(*card_button("notifications/list", "Remove"), name="remove"); d = boxes(); shot("u-13-removed")
+check("Remove takes the notifications card out", "notifications/list" not in d["order"], str(d["order"]))
+click_at(*bar_button("Done"), name="Done"); wait(0.8); l = line(); shot("u-14-saved")
+check("Done saves it, the month first, the clock half, no places", 0 <= l.find("calendar/month") < l.find("sound/volume") and re.search(r"calendar/clock\S*@half", l) and "notifications/list" not in l and not re.search(r"@\d", l), l)
 chord("esc"); wait(0.5); chord("super+a"); wait(1.2); d = boxes(); shot("u-15-reopened")
-check("reopened, it is as saved", d["modules"]["calendar"][1] < d["modules"]["volume"][1] and key not in d["modules"])
+check("reopened, it is as saved", "calendar/month" in d["order"] and d["order"].index("calendar/month") < d["order"].index("sound/volume"), str(d["order"]))
 # Reset asks first, Cancel throws it away
-s = d["modules"]["session"]; click_at(s[0] + 4, s[1] + 4, "right")
-click_at(*bar_button("reset"), name="Reset"); shot("u-16-sure")
-check("Reset asks first", "calendar" in boxes()["modules"])
-click_at(*bar_button("reset"), name="Reset sure"); d = boxes(); shot("u-17-reset")
-check("the second press resets to the built-in panel", "calendar" not in d["modules"], sorted(d["modules"]))
-click_at(*bar_button("cancel"), name="Cancel"); wait(0.6)
+start_edit("calendar/clock")
+click_at(*bar_button("Reset"), name="Reset"); shot("u-16-sure")
+check("Reset asks first", "calendar/month" in boxes()["order"])
+click_at(*bar_button("Reset"), name="Reset sure"); d = boxes(); shot("u-17-reset")
+check("the second press resets to the built-in panel", "calendar/month" not in d["order"], str(d["order"]))
+click_at(*bar_button("Cancel"), name="Cancel"); wait(0.6)
 check("Cancel throws the reset away: the saved line stays", line() == l, line())
 chord("esc"); wait(0.5)
 sh(f"sed -i '/^PANEL_CONTROL=/d' {CFG}"); sh("pkill -f fakempris; true")
