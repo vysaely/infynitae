@@ -847,13 +847,33 @@ impl XdgShellHandler for WaylandState {
         &mut self,
         surface: ToplevelSurface,
         _seat: wl_seat::WlSeat,
-        _serial: Serial,
+        serial: Serial,
         location: convert::WindowMenuLocation,
     ) {
         self.toplevel_request(&surface, ToplevelRequest::ShowWindowMenu);
-        if let Some(i) = self.element_index_by_root(surface.wl_surface()) {
-            self.core
-                .show_window_menu(self.elements[i].id, convert::local_point(location));
+        let Some(i) = self.element_index_by_root(surface.wl_surface()) else {
+            return;
+        };
+        let id = self.elements[i].id;
+        self.core
+            .show_window_menu(id, convert::local_point(location));
+        if self.core.window_menu().is_none() {
+            return;
+        }
+        // One right-click often asks for both the window menu and the app's own menu (Firefox's
+        // tab bar, owner 2026-11-24): the app's grab would keep every click and hover from the
+        // window menu. The window menu wins for that press: a grab already made with it ends,
+        // and one asked after it is refused.
+        use smithay::reexports::wayland_server::Resource;
+        let client = surface.wl_surface().client().map(|c| c.id());
+        self.window_menu_press = client.map(|c| (c, serial));
+        if self
+            .popup_grab
+            .as_ref()
+            .is_some_and(|g| !g.has_ended() && g.serial() == serial)
+        {
+            let fx = [infynitae_core::protocol::Effect::DismissPopupGrab(id)];
+            self.apply(&fx);
         }
     }
 
@@ -886,6 +906,13 @@ impl XdgShellHandler for WaylandState {
     fn grab(&mut self, surface: PopupSurface, _seat: wl_seat::WlSeat, serial: Serial) {
         if self.is_locked() {
             // no grab may route keys past the lock surface
+            surface.send_popup_done();
+            return;
+        }
+        use smithay::reexports::wayland_server::Resource;
+        let client = surface.wl_surface().client().map(|c| c.id());
+        if client.is_some_and(|c| self.window_menu_press == Some((c, serial))) {
+            // the window menu opened for this press (`show_window_menu`)
             surface.send_popup_done();
             return;
         }
