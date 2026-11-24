@@ -456,6 +456,19 @@ impl CompositorHandler for WaylandState {
 
     fn commit(&mut self, surface: &WlSurface) {
         on_commit_buffer_handler::<Self>(surface);
+        if let Some(icon) = self.drag_icon.as_mut().filter(|i| &i.surface == surface) {
+            let delta = with_states(surface, |states| {
+                states
+                    .cached_state
+                    .get::<smithay::wayland::compositor::SurfaceAttributes>()
+                    .current()
+                    .buffer_delta
+                    .take()
+            });
+            if let Some(d) = delta {
+                icon.offset = (icon.offset.0 + d.x, icon.offset.1 + d.y);
+            }
+        }
         self.popups.commit(surface);
         self.tearing_commit(surface);
 
@@ -1074,15 +1087,27 @@ impl DataDeviceHandler for WaylandState {
     }
 }
 
-/// Drag-and-drop is not offered: a drag a client starts is refused (`refuse_client_drags`).
+/// Drag-and-drop (owner, 2026-11-23: Discord's server list could not be reordered). Smithay accepts
+/// `start_drag` only on the implicit grab of a press the client holds, so no app drags on its own;
+/// during the drag each motion goes where Core routes it (the window under the pointer), as data
+/// device events, and the release drops there.
 impl ClientDndGrabHandler for WaylandState {
     fn started(
         &mut self,
         _source: Option<smithay::reexports::wayland_server::protocol::wl_data_source::WlDataSource>,
-        _icon: Option<WlSurface>,
+        icon: Option<WlSurface>,
         _seat: Seat<Self>,
     ) {
-        self.drag_started = true;
+        self.drag_icon = icon.map(|surface| crate::pointer::DragIcon {
+            surface,
+            offset: (0, 0),
+        });
+        self.new_buffer = true;
+    }
+
+    fn dropped(&mut self, _target: Option<WlSurface>, _validated: bool, _seat: Seat<Self>) {
+        self.drag_icon = None;
+        self.new_buffer = true;
     }
 }
 impl ServerDndGrabHandler for WaylandState {}

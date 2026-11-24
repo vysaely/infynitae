@@ -765,6 +765,15 @@ impl WaylandState {
             );
             self.lift_fifo_barriers(&surface);
         }
+        if let Some(icon) = self.drag_icon.as_ref().filter(|i| i.surface.is_alive()) {
+            smithay::desktop::utils::send_frames_surface_tree(
+                &icon.surface,
+                output,
+                now,
+                None,
+                |_, _| Some(output.clone()),
+            );
+        }
     }
 }
 

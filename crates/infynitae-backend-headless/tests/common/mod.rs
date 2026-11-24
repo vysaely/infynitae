@@ -146,6 +146,8 @@ pub struct Clipboard {
     pub source_bytes: Vec<u8>,
     /// Sources of this client still alive.
     pub sources: Vec<WlDataSource>,
+    /// The offer of the drag over this client's surface, with the serial of its `enter`.
+    pub drag: Option<(WlDataOffer, u32)>,
 }
 
 #[derive(Default)]
@@ -1393,6 +1395,33 @@ impl Dispatch<WlDataDevice, ()> for Probe {
                 };
                 st.clipboard.log.push(line);
             }
+            wl_data_device::Event::Enter {
+                serial,
+                surface,
+                x,
+                y,
+                id,
+            } => {
+                st.clipboard
+                    .log
+                    .push(format!("dnd enter {} {x},{y}", st.label_of(&surface)));
+                if let Some(id) = &id
+                    && let Some(i) = st.clipboard.pending.iter().position(|(o, _)| o == id)
+                {
+                    st.clipboard.pending.swap_remove(i);
+                }
+                st.clipboard.drag = id.map(|o| (o, serial));
+            }
+            wl_data_device::Event::Leave => {
+                st.clipboard.log.push("dnd leave".to_string());
+                st.clipboard.drag = None;
+            }
+            wl_data_device::Event::Motion { x, y, .. } => {
+                st.clipboard.log.push(format!("dnd motion {x},{y}"));
+            }
+            wl_data_device::Event::Drop => {
+                st.clipboard.log.push("dnd drop".to_string());
+            }
             _ => {}
         }
     }
@@ -1436,6 +1465,17 @@ impl Dispatch<WlDataSource, ()> for Probe {
                 st.clipboard.log.push(format!("send {mime_type}"));
                 let mut file = File::from(fd);
                 let _ = file.write_all(&st.clipboard.source_bytes);
+            }
+            wl_data_source::Event::Target { mime_type } => {
+                st.clipboard
+                    .log
+                    .push(format!("target {}", mime_type.as_deref().unwrap_or("none")));
+            }
+            wl_data_source::Event::DndDropPerformed => {
+                st.clipboard.log.push("dnd_drop_performed".to_string());
+            }
+            wl_data_source::Event::DndFinished => {
+                st.clipboard.log.push("dnd_finished".to_string());
             }
             wl_data_source::Event::Cancelled => {
                 st.clipboard.log.push("cancelled".to_string());
@@ -2168,7 +2208,6 @@ impl Lockstep {
             infynitae_backend_headless::apply_virtual_input(&mut self.state, &mut self.input);
             self.state.settle_unlock();
             self.state.clear_orphaned_selections();
-            self.state.refuse_client_drags();
             self.state.apply_due_timed_commits(self.now);
             frame_fallback(&mut self.state, self.now);
             self.state.set_current_time(self.now);

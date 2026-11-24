@@ -547,34 +547,6 @@ impl WaylandState {
         }
     }
 
-    /// Drag-and-drop is not offered (2026-10-16). Smithay accepts a client's
-    /// `start_drag` on the implicit grab of a pressed button and installs its DnD grab before any
-    /// handler can refuse it; that grab would take pointer delivery away from Core's routing. It
-    /// is replaced at once by the grab that ends at the next pointer event and forwards it (as
-    /// after a pan-dismissed popup grab): Smithay drops the drag, the source gets `cancelled`, no
-    /// client is offered anything, and delivery follows Core's effects again. Run after every
-    /// client dispatch.
-    pub fn refuse_client_drags(&mut self) {
-        if !std::mem::take(&mut self.drag_started) {
-            return;
-        }
-        let ptr = self.pointer_handle();
-        let Some(serial) = ptr.with_grab(|serial, _| serial) else {
-            return;
-        };
-        let start = GrabStartData {
-            focus: None,
-            button: 0,
-            location: ptr.current_location(),
-        };
-        ptr.set_grab(
-            self,
-            PanDismissedPopupGrab { start },
-            serial,
-            smithay::input::pointer::Focus::Keep,
-        );
-    }
-
     pub(crate) fn set_pan_dismissed_pointer_grab(&mut self, serial: smithay::utils::Serial) {
         self.popup_pointer_grab_serial = None;
         let ptr = self.pointer_handle();
@@ -1743,4 +1715,11 @@ impl WaylandState {
             }
         }
     }
+}
+
+/// The icon of a drag (`wl_data_device.start_drag`): its surface, drawn at the pointer moved by
+/// `offset`, the sum of the offsets its commits attached (`wl_surface.attach` x, y; `offset`).
+pub(crate) struct DragIcon {
+    pub surface: WlSurface,
+    pub offset: (i32, i32),
 }

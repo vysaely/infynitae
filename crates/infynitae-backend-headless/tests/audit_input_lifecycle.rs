@@ -16,6 +16,7 @@ use infynitae_core::input::bindings::{BTN_LEFT, BTN_MIDDLE};
 use infynitae_core::input::keys::{KEY_K, KEY_LEFTMETA, KEY_TAB};
 use infynitae_wayland::ClientState;
 use wayland_client::backend::WaylandError;
+use wayland_client::protocol::wl_data_device_manager::DndAction;
 use wayland_client::protocol::wl_registry::WlRegistry;
 use wayland_client::protocol::wl_seat::WlSeat;
 use wayland_client::protocol::wl_surface::WlSurface;
@@ -426,13 +427,11 @@ fn super_tab_leaves_super_depressed_on_leaving_client_wire() {
     assert_eq!(eb, ls.state.core().focus().target().unwrap());
 }
 
-/// Client A owns a `BTN_LEFT` press (`ClickGrab`) and calls `wl_data_device.start_drag`.
-/// `refuse_client_drags` replaces `DnDGrab` with `PanDismissedPopupGrab`, whose next motion
-/// unsets the grab to `DefaultGrab` while `BTN_LEFT` is still pressed. Moving onto client B and
-/// releasing delivers an unmatched `button 272 released` to client B.
+/// Client A owns a `BTN_LEFT` press and starts a drag (2026-11-23: drags are offered, the refusal
+/// that left an unmatched release is gone). Moving onto client B offers it the drag, the release
+/// drops there, and B never gets a pointer `button 272 released` it had no press for.
 #[test]
-#[ignore = "AUDIT_INPUT_LIFECYCLE: refuse_client_drags drops ClickGrab leaving unmatched release on other client"]
-fn refuse_client_drags_drops_click_grab_and_delivers_unmatched_release_to_second_client() {
+fn a_drag_from_one_client_drops_on_another_without_an_unmatched_release() {
     let mut ls = Lockstep::new(Some(output((1920, 1080), 120)));
     let reg_a = ls.registry().clone();
     let qh_a = ls.qh.clone();
@@ -448,6 +447,7 @@ fn refuse_client_drags_drops_click_grab_and_delivers_unmatched_release_to_second
     b.probe.bind_basic(&b.registry, &b.qh);
     let ptr_b = b.probe.seat.as_ref().unwrap().get_pointer(&b.qh, ());
     b.probe.pointer = Some(ptr_b);
+    b.probe.bind_clipboard(&b.registry, &b.qh);
     b.drive(&mut ls);
     let _bi = b.probe.toplevel(&b.qh, "B", (200, 200), 0);
     b.drive(&mut ls);
@@ -490,7 +490,7 @@ fn refuse_client_drags_drops_click_grab_and_delivers_unmatched_release_to_second
     b.drive(&mut ls);
     let serial = ls.probe.last_serial;
 
-    // A starts a drag -> refuse_client_drags replaces DnDGrab with PanDismissedPopupGrab.
+    // A starts a drag on its press
     let source = ls
         .probe
         .data_device_manager
@@ -498,22 +498,52 @@ fn refuse_client_drags_drops_click_grab_and_delivers_unmatched_release_to_second
         .unwrap()
         .create_data_source(&qh_a, ());
     source.offer("text/plain".into());
+    source.set_actions(DndAction::Copy);
     let device = ls.probe.clipboard.device.clone().unwrap();
     device.start_drag(Some(&source), &ls.probe.surfaces[w].wl, None, serial);
     b.drive(&mut ls);
     assert!(
-        ls.probe.clipboard.log.contains(&"cancelled".to_string()),
-        "drag should have been refused: {:?}",
+        !ls.probe.clipboard.log.contains(&"cancelled".to_string()),
+        "the drag holds: {:?}",
         ls.probe.clipboard.log
     );
 
+    // onto B: B is offered the drag and takes it
     b.probe.ptr.clear();
     let db = delta_to(&ls, eb, (100.0, 100.0));
     pointer_motion(&mut ls.state, &mut ls.input, db, db, 10).unwrap();
     b.drive(&mut ls);
-    pointer_button(&mut ls.state, &mut ls.input, BTN_LEFT, false, none(), 11).unwrap();
+    assert!(
+        b.probe
+            .clipboard
+            .log
+            .iter()
+            .any(|l| l.starts_with("dnd enter B ")),
+        "B is offered the drag: {:?}",
+        b.probe.clipboard.log
+    );
+    let (offer, enter_serial) = b.probe.clipboard.drag.clone().expect("B's drag offer");
+    offer.accept(enter_serial, Some("text/plain".into()));
+    offer.set_actions(DndAction::Copy, DndAction::Copy);
+    b.drive(&mut ls);
+    pointer_motion(&mut ls.state, &mut ls.input, (1.0, 0.0), (1.0, 0.0), 11).unwrap();
+    b.drive(&mut ls);
+    pointer_button(&mut ls.state, &mut ls.input, BTN_LEFT, false, none(), 12).unwrap();
     b.drive(&mut ls);
 
+    assert!(
+        b.probe.clipboard.log.contains(&"dnd drop".to_string()),
+        "dropped on B: {:?}",
+        b.probe.clipboard.log
+    );
+    assert!(
+        ls.probe
+            .clipboard
+            .log
+            .contains(&"dnd_drop_performed".to_string()),
+        "A learns the drop was performed: {:?}",
+        ls.probe.clipboard.log
+    );
     assert!(
         !b.probe.ptr.iter().any(|l| l == "button 272 released"),
         "client B received unmatched button 272 released without pressed: B.ptr={:?}",
