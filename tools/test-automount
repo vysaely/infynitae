@@ -337,6 +337,51 @@ if grep -q "ALREADY_MOUNTED" "$NOTIFY_LOG"; then
 fi
 echo "PASS: no notification for already mounted disk"
 
+echo "Test 1b: gdbus runs straight from the watcher's shell and starts again when it ends"
+# a stand-in gdbus: the first one ends at once (UDisks2 restarted by an update), the second
+# prints a plugged stick and stays up
+GD_DIR="$TMP/gdbus-bin"
+mkdir -p "$GD_DIR"
+cat > "$GD_DIR/gdbus" <<EOF
+#!/bin/sh
+n=\$(cat "$TMP/gdbus-runs" 2>/dev/null || echo 0)
+echo \$((n + 1)) > "$TMP/gdbus-runs"
+[ "\$n" = 0 ] && exit 0
+sed -n 1p "$SIGNALS"
+exec sleep 30
+EOF
+chmod +x "$GD_DIR/gdbus"
+rm -f "$CALLS_LOG" "$LOG_FILE"
+PATH="$GD_DIR:$BIN_DIR:$PATH" \
+XDG_STATE_HOME="$STATE_DIR" \
+XDG_RUNTIME_DIR="$RUN_DIR" \
+INFYNITAE_AUTOMOUNT_UDISKSCTL="$MOCK_UDISKSCTL" \
+"$WATCHER" &
+W=$!
+wait_for "$CALLS_LOG" "mount --no-user-interaction -b /dev/sdd1" \
+    || wait_for "$CALLS_LOG" "mount --no-user-interaction -b /dev/sdd1" \
+    || { echo "FAIL: no mount after gdbus started again" >&2; kill "$W"; cat "$LOG_FILE" >&2; exit 1; }
+grep -q "monitor restarted" "$LOG_FILE" || { echo "FAIL: no log line for the restart" >&2; kill "$W"; exit 1; }
+sleep 0.5
+# what runs under the watcher: gdbus only (its stand-in became sleep), nothing under it
+children() { grep -l "^PPid:[[:space:]]*$1\$" /proc/[0-9]*/status 2>/dev/null | cut -d/ -f3; }
+kids=$(children "$W")
+grand=""
+for k in $kids; do grand="$grand$(children "$k")"; done
+if [ "$(echo "$kids" | wc -w)" != 1 ] || [ -n "$grand" ]; then
+    echo "FAIL: the watcher runs more than one process under it: $kids / $grand" >&2
+    kill "$W"
+    exit 1
+fi
+kill "$W"
+wait "$W" || true
+sleep 0.2
+if [ -d "/proc/$kids" ] && grep -q sleep "/proc/$kids/comm" 2>/dev/null; then
+    echo "FAIL: gdbus outlived the watcher" >&2
+    exit 1
+fi
+echo "PASS: two processes (the shell and gdbus), restarted after 2 s, ended with the watcher"
+
 echo "Test 2: Startup scan of pre-plugged drive"
 
 # Clean state/logs for test 2
