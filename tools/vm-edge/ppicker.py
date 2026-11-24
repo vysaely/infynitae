@@ -1,5 +1,5 @@
 import sys, os, time
-exec(open("/home/tester/pflow.py").read().split("sh(f\"sed -i '/^PANEL_CONTROL=/d' {CFG}; rm -f {BACKUP}\")")[0])
+exec(open("/home/tester/vmlib.py").read())
 # The accent picker (live/edge-apps/src/cards/settings_look.rs) with real input in the VM: a
 # wallpaper colour square sets ACCENT to that candidate, Shuffle sets another candidate, a
 # drag in "Any colour" writes once on release (one log line), a style word sets THEME_SCHEME.

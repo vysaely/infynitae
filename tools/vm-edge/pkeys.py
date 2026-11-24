@@ -1,5 +1,5 @@
 import sys, os, time
-exec(open("/home/tester/pflow.py").read().split("sh(f\"sed -i '/^PANEL_CONTROL=/d' {CFG}; rm -f {BACKUP}\")")[0])
+exec(open("/home/tester/vmlib.py").read())
 # The Keys card (live/edge-apps/src/cards/settings_keys.rs) and the compositor's chord capture, with
 # real keys in the VM: while the card listens a bound chord does nothing (Super+Shift+L does not
 # lock), a taken chord offers Swap, Swap writes both lines and the new keys work at once, a capture

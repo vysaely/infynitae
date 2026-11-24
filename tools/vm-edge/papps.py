@@ -1,5 +1,5 @@
 import sys, os, time
-exec(open("/home/tester/pflow.py").read().split("sh(f\"sed -i '/^PANEL_CONTROL=/d' {CFG}; rm -f {BACKUP}\")")[0])
+exec(open("/home/tester/vmlib.py").read())
 # The edge from apps (live/edge-apps, stage 1) with real input in the VM. Stand-ins for nmcli and
 # powerprofilesctl answer as the real ones and log what they were asked (the VM has neither), so a
 # click is checked by the command it ran. Shots "z-*" are compared on the host with "z-base".

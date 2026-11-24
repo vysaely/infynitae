@@ -1,5 +1,5 @@
 import sys, os, time
-exec(open("/home/tester/pflow.py").read().split("sh(f\"sed -i '/^PANEL_CONTROL=/d' {CFG}; rm -f {BACKUP}\")")[0])
+exec(open("/home/tester/vmlib.py").read())
 # The fluid edge of 2026-11-13 with real input: More on hover and lists in place, the keyboard's
 # selection, and panels left with nothing behind when they close (shots "z-*" are compared on the
 # host with "z-base": the desktop before any panel opened).

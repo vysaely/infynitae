@@ -1,5 +1,5 @@
 import sys, os
-exec(open("/home/tester/pflow.py").read().split("sh(f\"sed -i '/^PANEL_CONTROL=/d' {CFG}; rm -f {BACKUP}\")")[0])
+exec(open("/home/tester/vmlib.py").read())
 def centre(r): return r[0] + r[2] / 2, r[1] + r[3] / 2
 def boxes():
     wait(0.3)

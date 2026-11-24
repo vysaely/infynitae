@@ -1,5 +1,5 @@
 import sys, os, time
-exec(open("/home/tester/pflow.py").read().split("sh(f\"sed -i '/^PANEL_CONTROL=/d' {CFG}; rm -f {BACKUP}\")")[0])
+exec(open("/home/tester/vmlib.py").read())
 # The edge from apps (live/edge-apps), stage 1 part 2, with real input in the VM: the launcher's
 # search and Enter, the windows panel, the clipboard, the notification server and its card, the
 # ask prompt, Quick settings, and the keyboard's selection on a card. A stand-in powerprofilesctl
