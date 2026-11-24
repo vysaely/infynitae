@@ -649,7 +649,6 @@ impl Card for InputCard {
                     let tw = draw::measure(cr, &t).0.min(w);
                     draw::text_max(cr, right - tw, r.1 + (r.3 - 15.0) / 2.0, w, &t);
                 }
-                Control::Step { .. } => {}
             }
             y += h;
         }

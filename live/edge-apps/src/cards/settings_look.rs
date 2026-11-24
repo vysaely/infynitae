@@ -895,9 +895,8 @@ impl LookRow {
                 step,
                 unit,
             }),
-            LookControl::Step { min, max } => Some(Control::Step { min, max }),
             LookControl::Accent => Some(Control::Text),
-            LookControl::Found { .. } | LookControl::Wallpapers => None,
+            LookControl::Step { .. } | LookControl::Found { .. } | LookControl::Wallpapers => None,
         }
     }
 }
@@ -3943,6 +3942,10 @@ mod tests {
                             assert!(!v.is_empty(), "{} default should not be empty", r.key);
                         }
                     }
+                    LookControl::Step { min, max } => {
+                        let n: i64 = v.parse().unwrap_or_else(|_| panic!("{} = {v}", r.key));
+                        assert!((min..=max).contains(&n), "{} = {n}", r.key);
+                    }
                     _ => match r.as_control().unwrap() {
                         Control::Switch { on, off } => {
                             assert!(v == on || v == off, "{} = {v}", r.key)
@@ -3952,10 +3955,6 @@ mod tests {
                         }
                         Control::Slide { min, max, .. } => {
                             let n: f64 = v.parse().unwrap_or_else(|_| panic!("{} = {v}", r.key));
-                            assert!((min..=max).contains(&n), "{} = {n}", r.key);
-                        }
-                        Control::Step { min, max } => {
-                            let n: i64 = v.parse().unwrap_or_else(|_| panic!("{} = {v}", r.key));
                             assert!((min..=max).contains(&n), "{} = {n}", r.key);
                         }
                         Control::Text => unreachable!(),

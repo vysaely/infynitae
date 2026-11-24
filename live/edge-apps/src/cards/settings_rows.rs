@@ -30,8 +30,6 @@ pub enum Control {
         step: f64,
         unit: &'static str,
     },
-    /// a whole number with minus and plus
-    Step { min: i64, max: i64 },
     /// a line of text, asked with the edge's own question
     Text,
 }
@@ -166,8 +164,8 @@ pub fn change_command(key: &str, old: Option<&str>, new: &str, after: After) -> 
     cmd
 }
 
-// hits: a row is ROW + 10 * i, its control ROW + 10 * i + 1.. (minus +1 and plus +2 for a
-// step); the open list's items LIST + j; More MORE.
+// hits: a row is ROW + 10 * i, its control ROW + 10 * i + 1; the open list's items LIST + j;
+// More MORE.
 const ROW: u32 = 100;
 const LIST: u32 = 5000;
 const MORE: u32 = 9000;
@@ -550,26 +548,6 @@ impl Card for TableCard {
                     ui::slider(cr, cx, hits, id + 1, sr, part);
                     slides.insert(i, sr);
                 }
-                Control::Step { .. } => {
-                    ui::row(
-                        cr,
-                        cx,
-                        hits,
-                        id,
-                        r,
-                        &Row {
-                            icon: None,
-                            name: s.name,
-                            state: &state,
-                            on: self.restart.contains(s.key),
-                            right: 96.0,
-                        },
-                    );
-                    let v = self.value(i);
-                    ui::button(cr, cx, hits, id + 2, right - 26.0, y + 7.0, "+");
-                    value_at_right(cr, cx, r, right - 32.0, &v, changed);
-                    ui::button(cr, cx, hits, id + 1, right - 90.0, y + 7.0, "−");
-                }
                 Control::Text => {
                     let v = self.value(i);
                     ui::row(
@@ -690,11 +668,6 @@ impl Card for TableCard {
                         self.sliding = Some((i, v));
                         true
                     }
-                    Control::Step { min, max } if part == 1 || part == 2 => {
-                        let v: i64 = self.value(i).parse().unwrap_or(min);
-                        let n = if part == 1 { v - 1 } else { v + 1 }.clamp(min, max);
-                        self.set(i, n.to_string(), out)
-                    }
                     Control::Text => {
                         let s = self.table[i];
                         let now = self.value(i);
@@ -752,11 +725,6 @@ impl Card for TableCard {
                         let next = snap(cur + f64::from(*dir) * step, min, max, step);
                         self.set(i, fmt_number(next), out)
                     }
-                    Control::Step { min, max } if part == 1 || part == 2 => {
-                        let v: i64 = self.value(i).parse().unwrap_or(min);
-                        let n = (v + i64::from(*dir)).clamp(min, max);
-                        self.set(i, n.to_string(), out)
-                    }
                     _ => false,
                 }
             }
@@ -813,7 +781,12 @@ pub(crate) mod tests {
             key: "FONT_SIZE",
             name: "Font size",
             says: "",
-            control: Control::Step { min: 6, max: 30 },
+            control: Control::Slide {
+                min: 6.0,
+                max: 30.0,
+                step: 1.0,
+                unit: "",
+            },
             after: After::Reload("fonts"),
             more: true,
             needs: &[],
@@ -973,7 +946,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_step_stays_in_its_range_and_typing_filters_rows() {
+    fn a_slider_step_stays_in_its_range_and_typing_filters_rows() {
         let th = Theme::from_config(&crate::config::Config::from_text(""));
         let cx = test_cx(&th);
         let mut c = TableCard::new(T);
@@ -982,11 +955,9 @@ pub(crate) mod tests {
             &data(&[("FONT_SIZE", "30")], &[], &[]) as &dyn Any,
         );
         let mut out = Vec::new();
-        assert!(
-            !c.event(&press(ROW + 22), &cx, &mut out),
-            "already at the top"
-        );
-        assert!(c.event(&press(ROW + 21), &cx, &mut out));
+        let step = |dir| Event::Step { hit: ROW + 21, dir };
+        assert!(!c.event(&step(1), &cx, &mut out), "already at the top");
+        assert!(c.event(&step(-1), &cx, &mut out));
         assert_eq!(c.value(2), "29");
         c.event(&Event::Text("tearing"), &cx, &mut out);
         assert_eq!(c.shown(&cx), (vec![1], false));
