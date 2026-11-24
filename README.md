@@ -130,7 +130,7 @@ within seconds it stops restarting. `infynitae-session stop` ends the session.
 | [COMPONENTS](docs/COMPONENTS.md) | Every piece of the desktop and what to use instead |
 | [WINDOWS](docs/WINDOWS.md) | Where windows open, move and grow, and why |
 | [SECURITY](docs/SECURITY.md) | Who may capture the screen, read the clipboard, send input |
-| [EDGE_RUST](docs/EDGE_RUST.md) | The edge (panels, widgets) in Rust: settings and stages |
+| [EDGE_APPS](docs/EDGE_APPS.md) | The edge (panels, cards, widgets): its design and what the old edges did |
 | [NO_SLOP](docs/NO_SLOP.md) | The rule for everything made here: no padding, nothing invented |
 | [DEVELOPMENT](docs/DEVELOPMENT.md) | Layout, building, the test suite and the checks |
 | [DECISIONS](docs/DECISIONS.md) | The choices behind how it behaves, and why |

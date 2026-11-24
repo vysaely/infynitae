@@ -154,7 +154,6 @@ pub struct Panel {
     pub items: Vec<Item>,
     pub placed: bool,
     /// the desktop's widgets (`WIDGETS`): the whole screen at 0,0, under the windows, always shown
-    /// (docs/EDGE_RUST.md stage 5)
     pub desktop: bool,
     /// the panel's cards as written, in order: new `owner/kind` words and the old module words with
     /// their looks and places (`panel.rs` reads them; docs/EDGE_APPS.md section 1)

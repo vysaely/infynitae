@@ -385,7 +385,7 @@ static void parse_font_name(const char *s, char *dst, size_t dst_sz) {
     if (j > 0 && j < dst_sz) memcpy(dst, val, j + 1);
 }
 
-/* The look the panels, widgets, notifications and menus share (docs/EDGE_RUST.md, stage 7), as
+/* The look the panels, widgets, notifications and menus share, as
  * infynitae-settings resolved it into ~/.cache/infynitae/look: card, edge, text, muted, accent,
  * accent-as-text, corners, small radius and font. Read after the config, so a colour scheme reaches
  * the lock screen too; missing keys fall back to values worked out from the resolved colours. */

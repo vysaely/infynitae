@@ -5,8 +5,9 @@ ask prompt, panel editing and Add a card in `edit.rs`), stage 2 app cards (calen
 Steam, chat, files, simple), and the Settings cards (`docs/EDGE_SETTINGS.md`, including
 `settings/keys`) are built in `live/edge-apps` with VM scripts in `tools/vm-edge/` (`papps.py`,
 `papps2.py`, `pask.py`, `pedit.py`, `psettings.py`, `pkeys.py`). The desktop's widgets (`WIDGETS`) are
-built too (2026-11-22, `widgets.rs`; below). `EDGE_IMPL="apps"` is the default since 2026-11-22
-(`live/edge-pick`); `"rust"` and `"c"` still pick the frozen edges.
+built too (2026-11-22, `widgets.rs`; below). It is the only edge since 2026-11-24: `live/edge` and
+`live/edge-rs` were deleted (their code is at the tags `edge-c-final` and `edge-rs-final`), and
+`live/edge-pick` links `infynitae-edge` to it.
 
 Desktop widgets (2026-11-22): the `WIDGETS` line as `live/edge-rs` reads it (`module[:look]@x,y,WxH`,
 the old words mapped as in section 1, each switch word a Quick settings card of that one switch at
@@ -100,14 +101,12 @@ panel is edited and saved; the line from before goes to `~/.config/infynitae/pan
 `module@x,y,WxH` (the older editor) is read in order as now (`config.rs:511`). The `WIDGETS` line takes
 the same card words with its places (`steam/games@60,60,380x234`).
 
-Known limit: the Rust edge of today (`EDGE_IMPL="rust"`) does not know words with `/`. Switching back to
-it after a panel was saved by the new edge loses the new cards from that panel until the backup line is
-put back. `live/config-check` must learn the new word form in the same change that adds it.
+`live/config-check` must learn the new word form in the same change that adds it.
 
 ## 2. The crate
 
-`live/edge-apps/`, its own crate and lockfile as `live/edge-rs` is, binary `infynitae-edge-apps`,
-picked by `EDGE_IMPL="apps"` in `live/edge-pick`. Same libraries: smithay-client-toolkit 0.20, cairo and
+`live/edge-apps/`, its own crate and lockfile, binary `infynitae-edge-apps`, linked as
+`infynitae-edge` by `live/edge-pick`. Same libraries: smithay-client-toolkit 0.20, cairo and
 pango 0.20, zbus 5 (blocking), chrono, libc, signal-hook-registry. No new dependency.
 
 ```
@@ -230,8 +229,7 @@ pub trait Source: Send {
 - A source is known by `(provider id, key)`. Two cards that need the same key share one source and one
   fetch.
 - The core starts a source when a panel (or the desktop's widgets) shows a card that lists its key, and
-  stops asking when none does. A closed edge fetches nothing (the "zero cost when closed" rule of
-  `docs/EDGE_RUST.md`).
+  stops asking when none does. A closed edge fetches nothing.
 - Each source has one worker thread while in use. `fetch` results go to the event loop through one
   `calloop::channel::Sender<(SourceId, Data)>`; the loop calls `Card::apply` on each card that lists the
   key and redraws when one returns true. This is today's `spawn_fetch` and `fetch_rx`
@@ -595,7 +593,7 @@ Kept as in `live/edge-rs/src/wayland.rs`, which was measured and fixed over seve
    trait so the four built-in panels work. Edit mode with "Add a card" by app.
 6. `simple.rs` (the brief is below; it is small and the core's "Add a card" needs it).
 
-Stage 1 is done when the four built-in panels work in the VM with `EDGE_IMPL="apps"` and the VM scripts
+Stage 1 is done when the four built-in panels work in the VM with this edge and the VM scripts
 of `tools/vm-edge` pass against it.
 
 ### Stage 2 and later: app cards (agy workers)
@@ -767,9 +765,11 @@ Open, cannot be known without trying: marked in the briefs (Steam's running game
 
 ## 11. Parity with the old edges (audit, 2026-11-24)
 
-Before `live/edge-rs` and `live/edge` go: each thing they do and where this edge does it. `rs` is
-`live/edge-rs/src`, `c` is `live/edge/infynitae-edge.c`, `ea` is `live/edge-apps/src`; a test is a
-`#[test] fn` in the `ea` file named, or a script. Read in the code, nothing run.
+Written before `live/edge-rs` and `live/edge` were deleted (2026-11-24): each thing they did and where
+this edge does it. `rs` is `live/edge-rs/src` at the tag `edge-rs-final`, `c` is
+`live/edge/infynitae-edge.c` at `edge-c-final`, `ea` is `live/edge-apps/src`; a test is a `#[test] fn`
+in the `ea` file named, or a script (the old edges' scripts were deleted with them). Read in the code,
+nothing run.
 
 ### Modules and cards
 
@@ -825,15 +825,22 @@ Before `live/edge-rs` and `live/edge` go: each thing they do and where this edge
 | `org.kde.StatusNotifierWatcher` (owned by the C edge, used by the Rust one) | c:594-755 | ea/tray_watcher.rs:17, 68-96 (#142) | same; tray_watcher.rs `an_item_registers_by_path_or_by_bus_name`, apps.rs `a_tray_app_registers_with_the_edge_s_watcher_and_leaves_with_its_name` |
 | `org.kde.StatusNotifierItem`, `org.ayatana.StatusNotifierItem`, `com.canonical.dbusmenu`, `org.mpris.MediaPlayer2.*` (called) | rs/modules/tray.rs, media.rs; c:618-855, 1285 | ea/cards/apps.rs, tray_menu.rs, music.rs | same |
 | `$XDG_RUNTIME_DIR/infynitae-edge-rs.{pid,panel,ask,ask.N,ask-cancel,features}` | rs/wayland.rs:57-58, modules/ask.rs:18-21 | ea/wayland.rs:72-73, ea/ask.rs:37-40 | same names, kept: crates/infynitae/src/msg.rs, live/launch.sh:319, infynitae-automount:356 and infynitae-format-drive:54 read them |
-| `$XDG_RUNTIME_DIR/infynitae-edge.{pid,panel,ask,features}` | c:490-540 | not written | C edge only; the readers above read both names |
+| `$XDG_RUNTIME_DIR/infynitae-edge.{pid,panel,ask,features}` | c:490-540 | not written | C edge only; `live/launch.sh`, `infynitae-automount` and `infynitae-format-drive` still read its `features` file beside the new one |
 | `$XDG_RUNTIME_DIR/infynitae/{do-not-disturb,night-light,keyboard-layout,osk-visible,capturing}`, recorder pid files | rs/modules/switches.rs:26-44, tray.rs:135; c:1251-1394 | ea/cards/quick.rs:155-167, ea/cards/apps.rs:1261 | same |
 | `~/.config/infynitae/config` (`PANEL_`, `FAVORITES`, `PANELS_SNAP`/`OVERLAP`, `WIDGETS` written), `panels.backup` | rs/modules/mod.rs:714-726; c:2050, 4518-4667 | ea/edit.rs:1542-1563 (`PANEL_` and backup only) | different: see the missing rows above |
 | `INFYNITAE_EDGE_RENDER_RECT`, `INFYNITAE_EDGE_STATS` (test and debug) | rs/main.rs:2514; c:3737 | none | used only by tools/test-edge-render, which builds the C edge |
 
-### Missing, by size
+### Not carried over (2026-11-24)
 
-Small: clipboard Clear all; the `swaync-client` fallback for do not disturb; the battery level.
-Not small: pinning a favorite from the panel; `SWITCH_LOOK`; VPN rows; the tray menu for apps
-without one (Open, Quit, Force Kill) and background apps without a tray icon; the Notifications card
-when mako serves notifications; the widgets' editor (`widgets`, `PANELS_SNAP`, `PANELS_OVERLAP`).
-The old edges stay until the owner says which of these are built and which are dropped.
+The owner deleted the old edges without these; each can be asked for again:
+
+- Clipboard: Clear all (`cliphist wipe`).
+- Do not disturb through `swaync-client` when mako is not running.
+- The battery level beside the clock.
+- Pinning or unpinning a favorite from the panel.
+- `SWITCH_LOOK` (switches as rows, icons or tiles).
+- VPN rows in the Network card.
+- The tray menu for apps without one (Open, Quit, Force Kill).
+- Background apps without a tray icon.
+- The Notifications card when `NOTIFICATIONS="mako"`.
+- Arranging the widgets in place (`infynitae-edge widgets`, `PANELS_SNAP`, `PANELS_OVERLAP`).
