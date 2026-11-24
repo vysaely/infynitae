@@ -7,9 +7,10 @@ production code, and runs the named test. The control passes only if that test F
 never edited; its digest is compared before and after.
 
 Headless, deterministic, non-interactive. Exit status 0 only when every control detects its defect.
-Usage: tools/verify-test-efficacy [--check-seeds]
+Usage: tools/verify-test-efficacy [--check-seeds] [--shard K/N]
   --check-seeds  every anchor occurs once and every seeded tree compiles its control's test target
                  (no test is run); a built-in negative seed must be reported.
+  --shard K/N    run only every N-th control from the K-th (0-based): N machines run all of them at once
 """
 
 import hashlib
@@ -2321,9 +2322,19 @@ def check_seeds():
 def main():
     if sys.argv[1:] == ["--check-seeds"]:
         return check_seeds()
-    if sys.argv[1:]:
+    shard, shards = 0, 1
+    if len(sys.argv) == 3 and sys.argv[1] == "--shard":
+        try:
+            shard, shards = (int(v) for v in sys.argv[2].split("/"))
+        except ValueError:
+            shards = 0
+        if not 0 <= shard < shards:
+            print(__doc__)
+            return 2
+    elif sys.argv[1:]:
         print(__doc__)
         return 2
+    mine = lambda i: i % shards == shard
     print("=" * 72)
     print("verify-test-efficacy — seeded behavioural defects (INC-1, INC1-F06/F07 corrective, INC-2, INC-3, INC-4, INC-6 hardening)")
     print("verify-test-efficacy — seeded behavioural defects (INC-1, INC1-F06/F07 corrective, INC-2, INC-3, INC-4, INC-8)")
@@ -2331,16 +2342,22 @@ def main():
     target_base = os.path.join(ROOT, "target")
     os.makedirs(target_base, exist_ok=True)
     target_dir = tempfile.mkdtemp(prefix=f"test-efficacy-{os.getpid()}-", dir=target_base)
+    if shards > 1:
+        print(f"shard {shard}/{shards}: controls {shard}, {shard + shards}, {shard + 2 * shards}, ...")
     tree_dir = os.path.join(tempfile.gettempdir(), f"verify-test-efficacy-tree-{os.getpid()}")
     try:
         before = digest()
         failures = 0
-        for prop, rel, old, new, package, target, name in CONTROLS:
+        for i, (prop, rel, old, new, package, target, name) in enumerate(CONTROLS):
+            if not mine(i):
+                continue
             verdict, detail = run_control(prop, rel, old, new, package, target, name, target_dir, tree_dir)
             ok = verdict == "DETECTED"
             failures += not ok
             print(f"  {'ok  ' if ok else 'FAIL'}  {verdict:<9} {prop}\n          {package} {' '.join(target)} {name}: {detail}")
-        for prop, want, rel, old, new, package, target, name in JUDGE:
+        for j, (prop, want, rel, old, new, package, target, name) in enumerate(JUDGE):
+            if not mine(len(CONTROLS) + j):
+                continue
             verdict, detail = run_control(prop, rel, old, new, package, target, name, target_dir, tree_dir)
             ok = verdict == want
             failures += not ok

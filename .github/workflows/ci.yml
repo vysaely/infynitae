@@ -223,10 +223,14 @@ jobs:
 
   # Seeded behavioural defects must fail the product tests. The longest check (it re-runs the suite
   # per defect), so it runs on main, pull requests and nightly, not on every branch push.
-  verify-test-efficacy:
-    name: Test efficacy
+  verify-test-efficacy-shard:
+    name: Test efficacy ${{ matrix.shard }}/6
     if: github.event_name != 'push' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5]
     steps:
       - uses: actions/checkout@v4
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends $NATIVE_DEPS
@@ -234,4 +238,14 @@ jobs:
         run: |
           channel=$(python3 -c 'import tomllib; print(tomllib.load(open("rust-toolchain.toml", "rb"))["toolchain"]["channel"])')
           rustup toolchain install "$channel" --profile minimal --component rustfmt,clippy
-      - run: ./tools/verify-test-efficacy
+      # about 540 controls, one rebuild and one test each: six machines take a sixth each (2026-11-24:
+      # one machine took about two hours per pull request)
+      - run: ./tools/verify-test-efficacy --shard ${{ matrix.shard }}/6
+
+  verify-test-efficacy:
+    name: Test efficacy
+    if: always() && (github.event_name != 'push' || github.ref == 'refs/heads/main')
+    needs: verify-test-efficacy-shard
+    runs-on: ubuntu-24.04
+    steps:
+      - run: test "${{ needs.verify-test-efficacy-shard.result }}" = success
