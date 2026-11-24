@@ -207,10 +207,32 @@ impl Notify {
     /// anything shows differently.
     pub fn receive(&mut self, note: Note, now: Instant, quiet: Quiet) -> bool {
         let same = |n: &Note| n.id == note.id || (note.sync.is_some() && n.sync == note.sync);
+        // a notification that leaves without the sender being told keeps the sender waiting for
+        // NotificationClosed forever (2026-11-24: a drive's "mounted" notification held three
+        // processes for hours): one replaced under its synchronous tag by a new id, or pushed out
+        // of the history, is told it closed
+        let replaced: Vec<u32> = self
+            .history
+            .iter()
+            .chain(self.popups.iter().map(|p| &p.note))
+            .filter(|n| same(n) && n.id != note.id)
+            .map(|n| n.id)
+            .collect();
         self.history.retain(|n| !same(n));
         if !note.transient && note.value.is_none() {
             self.history.insert(0, note.clone());
-            self.history.truncate(MAX_HISTORY);
+            for old in self.history.drain(MAX_HISTORY.min(self.history.len())..) {
+                if !self.popups.iter().any(|p| p.note.id == old.id) {
+                    self.out.push(Outgoing::Closed(old.id, 1));
+                }
+            }
+        }
+        let mut told = Vec::new();
+        for id in replaced {
+            if !told.contains(&id) {
+                told.push(id);
+                self.out.push(Outgoing::Closed(id, 4));
+            }
         }
         let shows = match quiet {
             Quiet::No => true,
@@ -222,6 +244,10 @@ impl Notify {
             // an old pop-up of it goes too (a level held back leaves no stale bar)
             if let Some(i) = old {
                 self.popups.remove(i);
+            }
+            // held back and kept nowhere: it is over for the sender too
+            if !self.history.iter().any(|n| n.id == note.id) {
+                self.out.push(Outgoing::Closed(note.id, 1));
             }
             return true;
         }
@@ -241,7 +267,11 @@ impl Notify {
                         until,
                     },
                 );
-                self.popups.truncate(MAX_POPUPS);
+                for old in self.popups.drain(MAX_POPUPS.min(self.popups.len())..) {
+                    if !self.history.iter().any(|n| n.id == old.note.id) {
+                        self.out.push(Outgoing::Closed(old.note.id, 1));
+                    }
+                }
             }
         }
         true
@@ -776,6 +806,56 @@ mod tests {
         n.invoke(1, "pause");
         assert_eq!(n.out, vec![Outgoing::Action(1, "pause".into())]);
         assert_eq!(n.popups.len(), 1);
+    }
+
+    /// Every notification that leaves tells its sender (NotificationClosed): pushed out of the
+    /// history, replaced under its synchronous tag by a new id, a transient one pushed off the
+    /// screen or held back. A sender waiting on it (notify-send with actions) never waits forever.
+    #[test]
+    fn a_notification_that_leaves_tells_its_sender() {
+        let t0 = Instant::now();
+        // pushed out of the history: the oldest ten
+        let mut n = Notify::default();
+        for i in 1..=60 {
+            n.receive(note(i), t0, Quiet::No);
+        }
+        let closed: Vec<u32> = n
+            .out
+            .iter()
+            .filter_map(|o| match o {
+                Outgoing::Closed(id, 1) => Some(*id),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(closed, (1..=10).collect::<Vec<_>>());
+        // replaced under its tag by a new id
+        let mut n = Notify::default();
+        let mut a = note(1);
+        a.sync = Some("volume".into());
+        n.receive(a, t0, Quiet::No);
+        let mut b = note(2);
+        b.sync = Some("volume".into());
+        n.receive(b, t0, Quiet::No);
+        assert_eq!(n.out, vec![Outgoing::Closed(1, 4)]);
+        // the same id again is an update, not a close
+        let mut n = Notify::default();
+        n.receive(note(5), t0, Quiet::No);
+        n.receive(note(5), t0, Quiet::No);
+        assert!(n.out.is_empty(), "{:?}", n.out);
+        // a transient one pushed off the screen, and one held back during a game
+        let mut n = Notify::default();
+        let mut t = note(1);
+        t.transient = true;
+        n.receive(t, t0, Quiet::No);
+        for i in 2..=(MAX_POPUPS as u32 + 1) {
+            n.receive(note(i), t0, Quiet::No);
+        }
+        assert_eq!(n.out, vec![Outgoing::Closed(1, 1)]);
+        let mut n = Notify::default();
+        let mut g = note(9);
+        g.transient = true;
+        n.receive(g, t0, Quiet::Game);
+        assert_eq!(n.out, vec![Outgoing::Closed(9, 1)]);
     }
 
     #[test]

@@ -55,10 +55,13 @@ notify() {
     fi
 }
 
-# a notification with actions waits for its answer: in the background, without the lock (fd 9)
+# a notification with actions waits for its answer: in the background, without the lock (fd 9),
+# and at most NOTIFY_WAIT seconds, so a server that never says it closed cannot keep it (and its
+# shells) alive for hours (2026-11-24)
+NOTIFY_WAIT="${NOTIFY_WAIT:-600}"
 notify_actions() {
     command -v notify-send >/dev/null 2>&1 || return 0
-    notify-send -a Infynitae "$@" 2>/dev/null
+    timeout "$NOTIFY_WAIT" notify-send -a Infynitae "$@" 2>/dev/null
 }
 
 # the device under a dm cleartext device (/dev/dm-N), else nothing
