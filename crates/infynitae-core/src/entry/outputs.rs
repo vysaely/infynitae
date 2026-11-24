@@ -1,0 +1,814 @@
+//! The output-lifecycle entry points: connect, reconfigure, arrange, disconnect (M4/M5, M10).
+
+use super::*;
+
+impl Core {
+    /// M4 `Absent → Enabled` (startup and hotplug alike): validates the hardware facts, allocates
+    /// a new `OutputId`, binds a camera by the M5 precedence (one proof), places the output in the
+    /// Arrangement, leaves `NoOutput` by the startup rule, and runs the visibility pass. Effects:
+    /// `OutputAdded` first, then enters.
+    pub fn output_connected(
+        &mut self,
+        token: &mut OutputLifecycleToken,
+        desc: OutputDescriptor,
+    ) -> Result<(OutputId, Vec<Effect>), EntryError> {
+        self.check(token.core_id)?;
+        if !output::valid(&desc) {
+            return Err(EntryError::InvalidDescriptor);
+        }
+        let id = self.output_ids.next();
+        let right_edge = self
+            .outputs
+            .iter()
+            .map(|o| o.arrangement.0 + o.logical_extent().0)
+            .fold(0.0, f64::max);
+        let model = OutputModel::from_descriptor(id, &desc, (right_edge, 0.0));
+        self.cameras.bind_on_connect(
+            authority::Authorized::mint(),
+            &desc.key,
+            id,
+            &self.persisted,
+        );
+        let was_zero = self.pointer == PointerState::NoOutput;
+        if was_zero {
+            self.pointer = pointer::startup(&model);
+        }
+        self.outputs.push(model);
+        // F-LATTICE-1: O connected and a camera bound — the reference is set from the view
+        self.update_lattice(id);
+        let mut fx = vec![Effect::OutputAdded(id)];
+        fx.extend(self.visibility_pass());
+        if was_zero {
+            // M10 NoOutput → Located: the grab goes first, then one routed motion (enter) unless
+            // an orphaned interaction still owns the pointer
+            fx.push(Effect::PointerZeroOutputEnd);
+            if !self.input.interaction.active() {
+                fx.extend(self.true_position());
+            }
+        }
+        fx.extend(self.reconcile_constraints());
+        fx.extend(self.settle_all_epochs());
+        Ok((id, fx))
+    }
+
+    /// M4 reconfiguration: new hardware facts for a connected output, same `OutputId`, same
+    /// `OutputKey` (else rejected, nothing mutated). Not a camera authority: no proof is minted
+    /// and no camera item is called (E1R; checked by tools/verify-architecture). The view,
+    /// ProjectionFrame and membership are rebuilt; the pointer is clamped (F-RECONF-1). Effects:
+    /// `OutputChanged`, then leaves and enters.
+    pub fn output_reconfigured(
+        &mut self,
+        token: &mut OutputLifecycleToken,
+        output: OutputId,
+        desc: OutputDescriptor,
+    ) -> Result<Vec<Effect>, EntryError> {
+        self.check(token.core_id)?;
+        let slot = self
+            .outputs
+            .iter_mut()
+            .find(|o| o.id == output)
+            .ok_or(EntryError::UnknownOutput)?;
+        if slot.key != desc.key {
+            return Err(EntryError::IdentityChanged);
+        }
+        if !output::valid(&desc) {
+            return Err(EntryError::InvalidDescriptor);
+        }
+        *slot = OutputModel::from_descriptor(output, &desc, slot.arrangement);
+        let model = slot.clone();
+        // F-LATTICE-1: a new k_O or view_O sets the reference again; otherwise it is kept
+        self.update_lattice(output);
+        self.invalidate_frame(output);
+        let touch_cancelled = self.touches.on_output(output) && self.touches.clear();
+        self.pointer = pointer::reconfigured(self.pointer, &model);
+        let mut fx = vec![Effect::OutputChanged(output)];
+        if touch_cancelled {
+            fx.push(Effect::TouchCancel);
+        }
+        self.touch_resize_settle(&mut fx);
+        // its layer surfaces are arranged in the new extent and told the new scale (L1)
+        fx.extend(self.layers_output_reconfigured(output));
+        fx.extend(self.fullscreen_output_reconfigured(output));
+        fx.extend(self.visibility_pass());
+        // M10: at most one true-position event, none while an interaction owns the pointer, and
+        // none to a lock the reconciliation keeps (zwp_pointer_constraints_v1: no motion while
+        // locked; OB-55)
+        fx.extend(self.reconcile_constraints());
+        let on_it = matches!(self.pointer, PointerState::Located { output: o, .. } if o == output);
+        if on_it && !self.input.interaction.active() && !self.locked() {
+            fx.extend(self.true_position());
+        }
+        fx.extend(self.settle_all_epochs());
+        // a window now larger than the room is offered the room (owner, 2026-10-31)
+        self.offer_room_after_change(output, &mut fx);
+        // a presented element is told its new size: the hint for it goes first (as at entry)
+        Self::hints_before_configures(&mut fx);
+        Ok(fx)
+    }
+
+    /// Changes the arrangement position of a connected output. Not a camera authority: no proof
+    /// is minted and no camera item is called. The view, ProjectionFrame and membership are rebuilt;
+    /// the pointer is clamped. Effects: `OutputChanged`, then leaves and enters.
+    pub fn output_arranged(
+        &mut self,
+        token: &mut OutputLifecycleToken,
+        output: OutputId,
+        position: (i32, i32),
+    ) -> Result<Vec<Effect>, EntryError> {
+        self.check(token.core_id)?;
+        let slot = self
+            .outputs
+            .iter_mut()
+            .find(|o| o.id == output)
+            .ok_or(EntryError::UnknownOutput)?;
+        slot.arrangement = (position.0 as f64, position.1 as f64);
+        let model = slot.clone();
+        self.update_lattice(output);
+        self.invalidate_frame(output);
+        let touch_cancelled = self.touches.on_output(output) && self.touches.clear();
+        self.pointer = pointer::reconfigured(self.pointer, &model);
+        let mut fx = vec![Effect::OutputChanged(output)];
+        if touch_cancelled {
+            fx.push(Effect::TouchCancel);
+        }
+        self.touch_resize_settle(&mut fx);
+        fx.extend(self.layers_output_reconfigured(output));
+        fx.extend(self.fullscreen_output_reconfigured(output));
+        fx.extend(self.visibility_pass());
+        fx.extend(self.reconcile_constraints());
+        let on_it = matches!(self.pointer, PointerState::Located { output: o, .. } if o == output);
+        if on_it && !self.input.interaction.active() && !self.locked() {
+            fx.extend(self.true_position());
+        }
+        fx.extend(self.settle_all_epochs());
+        Self::hints_before_configures(&mut fx);
+        Ok(fx)
+    }
+
+    /// M4 `Enabled → Removed` (INV-OUTPUT-1): the camera is unbound and kept (one proof); the
+    /// output's ProjectionFrame is dropped; the pointer is relocated to a surviving output
+    /// (F-RELOCATE-1) or, when none survives, enters `NoOutput`. Effects: every leave for the
+    /// output, then `OutputRemoved`.
+    pub fn output_disconnected(
+        &mut self,
+        token: &mut OutputLifecycleToken,
+        output: OutputId,
+    ) -> Result<Vec<Effect>, EntryError> {
+        self.check(token.core_id)?;
+        let index = self
+            .outputs
+            .iter()
+            .position(|o| o.id == output)
+            .ok_or(EntryError::UnknownOutput)?;
+        let lost = self.outputs.remove(index);
+        let touch_cancelled = self.touches.on_output(output) && self.touches.clear();
+        self.remove_frame(output);
+        self.remove_lattice(output);
+        // its layer surfaces are closed before the pointer is relocated (they are not on any
+        // output any more) and before the global goes (their leaves first, INV-OUTPUT-1)
+        let closed = self.layers_output_removed(output);
+        self.cameras
+            .unbind_on_disconnect(authority::Authorized::mint(), output);
+        // C4.6: a pan on the removed output keeps its ownership and consumes motion until release
+        self.input.interaction.orphan_if_on(output);
+        let mut pointer_fx = Vec::new();
+        if let PointerState::Located { output: o, p } = self.pointer
+            && o == output
+        {
+            self.pointer = match self.outputs.split_first() {
+                Some((first, rest)) => pointer::relocate(&lost, p, first, rest),
+                None => PointerState::NoOutput,
+            };
+            if self.pointer == PointerState::NoOutput {
+                // M10 → NoOutput: Focus::Clear grab (leave), nothing to the old focus
+                self.constraint = None;
+                pointer_fx.push(Effect::PointerZeroOutputBegin);
+            } else {
+                // M10: exactly one true-position event unless an interaction owns the pointer
+                // or the reconciliation keeps a lock (C12.F17 Q3: a kept confinement receives it)
+                let recon_fx = self.reconcile_constraints();
+                pointer_fx.extend(recon_fx);
+                if !self.input.interaction.active() && !self.locked() {
+                    pointer_fx.extend(self.true_position());
+                }
+            }
+        }
+        // INV-OUTPUT-1: "fullscreen presentation dropped with the INV-PRES-1 configure"
+        let restored = self.fullscreen_output_removed(output);
+        let mut fx = closed;
+        if touch_cancelled {
+            fx.push(Effect::TouchCancel);
+        }
+        self.touch_resize_settle(&mut fx);
+        fx.extend(self.visibility_pass());
+        fx.extend(restored);
+        fx.extend(pointer_fx);
+        fx.push(Effect::OutputRemoved(output));
+        fx.extend(self.settle_all_epochs());
+        Ok(fx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! E1R output-lifecycle tests. Expected values are hand-derived literals, not values computed by
+    //! the code under test.
+
+    use crate::entry::tests::*;
+    use crate::navigation::PersistedCameras;
+    use crate::output::tests::key;
+    use crate::output::{OutputId, Transform};
+    use crate::pointer::PointerState;
+    use crate::protocol::Effect;
+    use crate::{Core, EntryError};
+
+    /// A token minted by another Core grants nothing (C1.5, C12.R2.3).
+    #[test]
+    fn foreign_tokens_grant_nothing() {
+        let (mut a, _, _, mut own) = Core::new(PersistedCameras::default());
+        let (_b, _, _, mut foreign) = Core::new(PersistedCameras::default());
+        let (o, _) = a.output_connected(&mut own, desc("A")).unwrap();
+        assert_eq!(
+            a.output_connected(&mut foreign, desc("B")).err(),
+            Some(EntryError::ForeignPort)
+        );
+        assert_eq!(
+            a.output_reconfigured(&mut foreign, o, desc("A")).err(),
+            Some(EntryError::ForeignPort)
+        );
+        assert_eq!(
+            a.output_disconnected(&mut foreign, o).err(),
+            Some(EntryError::ForeignPort)
+        );
+        assert_eq!(
+            (a.cameras().len(), a.outputs().len()),
+            (1, 1),
+            "a foreign token changed state"
+        );
+    }
+
+    /// M4/M5: no camera exists before a connect; each connect creates and binds its own camera at
+    /// the default placement; connecting another output leaves existing cameras untouched.
+    #[test]
+    fn connect_creates_and_binds_one_camera_per_output() {
+        let (mut c, _, _, mut t) = Core::new(PersistedCameras::default());
+        assert!(c.cameras().is_empty());
+        let (a, fx) = c.output_connected(&mut t, desc("A")).unwrap();
+        // M10 NoOutput → Located: the startup pointer (960, 540) unprojects through
+        // c_eff = (−960, −540) to Canvas (0, 0); nothing is mapped, so the focus stays clear
+        assert_eq!(
+            fx,
+            vec![
+                Effect::OutputAdded(a),
+                Effect::PointerZeroOutputEnd,
+                Effect::PointerMotion {
+                    target: None,
+                    location: pos(0, 0),
+                    time_ms: 0
+                },
+                Effect::PointerFrame
+            ]
+        );
+        assert_eq!(camera_of(&c, a), 0);
+        assert_eq!(
+            (c.cameras().center(0), c.cameras().zoom(0)),
+            (Some(pos(0, 0)), Some(1.0))
+        );
+        let (b, _) = c.output_connected(&mut t, desc("B")).unwrap();
+        assert_ne!(a, b);
+        assert_eq!(camera_of(&c, b), 1);
+        assert_eq!(
+            c.cameras().center(0),
+            Some(pos(0, 0)),
+            "connecting B changed A's camera"
+        );
+        assert_eq!(c.outputs().len(), 2);
+        assert_eq!(
+            c.output(b).unwrap().arrangement,
+            (1920.0, 0.0),
+            "B is arranged right of A"
+        );
+    }
+
+    /// M5: disconnect unbinds and keeps the camera and its value; reconnecting the same key re-binds
+    /// the same camera unchanged with a new OutputId (reconnect is not reconfiguration).
+    #[test]
+    fn disconnect_keeps_the_camera_and_reconnect_rebinds_it() {
+        let persisted =
+            PersistedCameras::from_entries(vec![(key("A"), pos(-25, 40), 1.0)]).unwrap();
+        let (mut c, _i, _s, mut t) = Core::new(persisted);
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        assert_eq!(c.cameras().center(0), Some(pos(-25, 40)));
+        let fx = c.output_disconnected(&mut t, a).unwrap();
+        // the last output: M10 → NoOutput installs the zero-output grab before the removal
+        assert_eq!(
+            fx,
+            vec![Effect::PointerZeroOutputBegin, Effect::OutputRemoved(a)]
+        );
+        assert_eq!(c.cameras().len(), 1, "camera destroyed on disconnect");
+        assert_eq!(c.cameras().bound_output(0), None);
+        assert_eq!(c.cameras().center(0), Some(pos(-25, 40)));
+        assert_eq!(
+            c.output_disconnected(&mut t, a).err(),
+            Some(EntryError::UnknownOutput),
+            "repeated disconnect"
+        );
+        let (a2, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        assert_ne!(a, a2, "OutputId reused");
+        assert_eq!(camera_of(&c, a2), 0, "the remembered camera is re-bound");
+        assert_eq!(c.cameras().len(), 1);
+        assert_eq!(c.cameras().center(0), Some(pos(-25, 40)));
+    }
+
+    /// M20 / OB-24 D2 (C12.F14): the persisted table is accepted or rejected whole. A valid
+    /// table seeds its cameras; an empty one and a rejected one — corrupt (a non-finite zoom) or
+    /// partially valid (one entry outside the representable domain) — leave every output with
+    /// the default camera: none of the table's valid entries is applied.
+    #[test]
+    fn a_rejected_persisted_table_applies_none_of_its_entries() {
+        use crate::geom::ZOOM_MAX;
+        let valid = (key("A"), pos(300, -200), 2.0);
+        let tables = [
+            (vec![valid.clone(), (key("B"), pos(9, 9), 1.5)], true),
+            (vec![], true),
+            (vec![valid.clone(), (key("B"), pos(9, 9), f64::NAN)], false),
+            (
+                vec![valid.clone(), (key("B"), pos(9, 9), ZOOM_MAX * 2.0)],
+                false,
+            ),
+            (vec![(key("B"), pos(9, 9), 0.0), valid.clone()], false),
+        ];
+        for (entries, accepted) in tables {
+            let applies_a = accepted && !entries.is_empty();
+            let table = PersistedCameras::from_entries(entries);
+            assert_eq!(table.is_ok(), accepted);
+            // a rejected table is replaced by the empty/default state (M20)
+            let (mut c, _i, _s, mut t) = Core::new(table.unwrap_or_default());
+            let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+            let cam = camera_of(&c, a);
+            if applies_a {
+                assert_eq!(c.cameras().center(cam), Some(pos(300, -200)));
+                assert_eq!(c.cameras().zoom(cam), Some(2.0));
+            } else {
+                assert_eq!(c.cameras().center(cam), Some(pos(0, 0)));
+                assert_eq!(c.cameras().zoom(cam), Some(1.0));
+            }
+        }
+    }
+
+    /// INV-CAMERA-3 rule order: a camera remembered this session wins over the persisted entry.
+    #[test]
+    fn remembered_camera_wins_over_the_persisted_entry() {
+        let persisted = PersistedCameras::from_entries(vec![
+            (key("A"), pos(5000, -700), 1.5),
+            (key("C"), pos(-123, 456), 0.75),
+        ])
+        .unwrap();
+        let (mut c, _i, _s, mut t) = Core::new(persisted);
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        let (b, _) = c.output_connected(&mut t, desc("B")).unwrap();
+        assert_eq!(
+            (
+                c.cameras().center(camera_of(&c, a)),
+                c.cameras().zoom(camera_of(&c, a))
+            ),
+            (Some(pos(5000, -700)), Some(1.5))
+        );
+        assert_eq!(
+            (
+                c.cameras().center(camera_of(&c, b)),
+                c.cameras().zoom(camera_of(&c, b))
+            ),
+            (Some(pos(0, 0)), Some(1.0))
+        );
+        let (cc, _) = c.output_connected(&mut t, desc("C")).unwrap();
+        assert_eq!(
+            c.cameras().center(camera_of(&c, cc)),
+            Some(pos(-123, 456)),
+            "runtime hotplug takes the same path"
+        );
+        c.output_disconnected(&mut t, a).unwrap();
+        let (a2, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        assert_eq!(camera_of(&c, a2), 0);
+        assert_eq!(c.cameras().len(), 3, "no new camera for a remembered key");
+    }
+
+    /// Runtime 2i (OB-49, transferred from OB-19): two CONNECTED outputs presenting the same
+    /// OutputKey each keep their own camera (1:1); the duplicate is not seeded from persistence;
+    /// on reconnect the lowest unbound camera with the key is re-bound. Under the
+    /// `probe_sealed_key_steal` feature (the sealed 2R rule) this test must fail with "1:1 violated".
+    #[test]
+    fn concurrent_output_key_collision_keeps_one_to_one() {
+        let persisted =
+            PersistedCameras::from_entries(vec![(key("A"), pos(77, 88), 1.25)]).unwrap();
+        let (mut c, _i, _s, mut t) = Core::new(persisted);
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        let (b, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        let (ca, cb) = (
+            c.cameras().camera_for_output(a),
+            c.cameras().camera_for_output(b),
+        );
+        assert!(
+            ca.is_some() && cb.is_some() && ca != cb,
+            "1:1 violated: a={ca:?} b={cb:?}"
+        );
+        // every connected output has exactly one camera, every camera at most one output
+        for o in [a, b] {
+            let n = (0..c.cameras().len())
+                .filter(|&i| c.cameras().bound_output(i) == Some(o))
+                .count();
+            assert_eq!(n, 1, "1:1 violated: output {o:?} has {n} cameras");
+        }
+        assert_eq!(
+            (
+                c.cameras().center(ca.unwrap()),
+                c.cameras().zoom(ca.unwrap())
+            ),
+            (Some(pos(77, 88)), Some(1.25))
+        );
+        assert_eq!(
+            (
+                c.cameras().center(cb.unwrap()),
+                c.cameras().zoom(cb.unwrap())
+            ),
+            (Some(pos(0, 0)), Some(1.0)),
+            "duplicate seeded from persistence"
+        );
+        // the two views differ: no aliasing of camera state
+        assert_ne!(c.view(a).unwrap().c_eff, c.view(b).unwrap().c_eff);
+        c.output_disconnected(&mut t, a).unwrap();
+        c.output_disconnected(&mut t, b).unwrap();
+        let (a2, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        assert_eq!(
+            c.cameras().camera_for_output(a2),
+            ca,
+            "reconnect must take the lowest unbound camera"
+        );
+        let (b2, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        assert_eq!(
+            c.cameras().camera_for_output(b2),
+            cb,
+            "then the next unbound camera"
+        );
+        assert_eq!(c.cameras().len(), 2);
+    }
+
+    /// E1R: mode, scale, transform and refresh changes keep the OutputId, the camera
+    /// identity and value, and allocate nothing.
+    #[test]
+    fn reconfiguration_keeps_identity_and_camera() {
+        let persisted = PersistedCameras::from_entries(vec![(key("A"), pos(17, -3), 1.0)]).unwrap();
+        let (mut c, _i, _s, mut t) = Core::new(persisted);
+        let (o, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        for d in [
+            desc_k(key("A"), (2560, 1440), Transform::Normal, 120, 60_000),
+            desc_k(key("A"), (2560, 1440), Transform::Normal, 150, 60_000),
+            desc_k(key("A"), (2560, 1440), Transform::R90, 150, 60_000),
+            desc_k(key("A"), (2560, 1440), Transform::R90, 150, 144_000),
+        ] {
+            let fx = c.output_reconfigured(&mut t, o, d).unwrap();
+            assert_eq!(fx[0], Effect::OutputChanged(o));
+            assert_eq!(c.outputs().len(), 1);
+            assert_eq!(c.outputs()[0].id, o);
+            assert_eq!(camera_of(&c, o), 0);
+            assert_eq!(c.cameras().len(), 1);
+            assert_eq!(
+                (c.cameras().center(0), c.cameras().zoom(0)),
+                (Some(pos(17, -3)), Some(1.0))
+            );
+        }
+        let m = c.output(o).unwrap();
+        assert_eq!(
+            (m.phys, m.view_size(), m.scale, m.refresh_mhz),
+            ((2560, 1440), (1440, 2560), 1.25, 144_000)
+        );
+    }
+
+    /// E1R: unknown and stale ids, foreign tokens, a changed key and an invalid descriptor are
+    /// rejected and mutate nothing.
+    #[test]
+    fn reconfiguration_rejections_mutate_nothing() {
+        let (mut c, _, _, mut t) = Core::new(PersistedCameras::default());
+        let (o, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        let before = (c.outputs().to_vec(), c.pointer(), c.cameras().len());
+        let (_other, _, _, mut foreign) = Core::new(PersistedCameras::default());
+        assert_eq!(
+            c.output_reconfigured(&mut t, OutputId::for_test(99), desc("A"))
+                .err(),
+            Some(EntryError::UnknownOutput)
+        );
+        assert_eq!(
+            c.output_reconfigured(&mut foreign, o, desc("A")).err(),
+            Some(EntryError::ForeignPort)
+        );
+        assert_eq!(
+            c.output_reconfigured(&mut t, o, desc("B")).err(),
+            Some(EntryError::IdentityChanged)
+        );
+        assert_eq!(
+            c.output_reconfigured(
+                &mut t,
+                o,
+                desc_k(key("A"), (0, 0), Transform::Normal, 120, 60_000)
+            )
+            .err(),
+            Some(EntryError::InvalidDescriptor)
+        );
+        assert_eq!(
+            (c.outputs().to_vec(), c.pointer(), c.cameras().len()),
+            before
+        );
+        c.output_disconnected(&mut t, o).unwrap();
+        let (o2, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        assert_ne!(o, o2);
+        assert_eq!(
+            c.output_reconfigured(&mut t, o, desc("A")).err(),
+            Some(EntryError::UnknownOutput),
+            "stale OutputId"
+        );
+    }
+
+    /// F-RECONF-1: p is clamped into the new extent (half-open, wl_fixed); inside stays.
+    #[test]
+    fn reconfiguration_clamps_the_pointer() {
+        let (mut c, _, _, mut t) = Core::new(PersistedCameras::default());
+        let (o, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        assert_eq!(
+            c.pointer(),
+            PointerState::Located {
+                output: o,
+                p: (960.0, 540.0)
+            }
+        );
+        // 90° at scale 1.5: logical 720 x 1280 → x clamps to 720 − 2⁻⁸
+        c.output_reconfigured(
+            &mut t,
+            o,
+            desc_k(key("A"), (1920, 1080), Transform::R90, 180, 60_000),
+        )
+        .unwrap();
+        let want = PointerState::Located {
+            output: o,
+            p: (720.0 - 1.0 / 256.0, 540.0),
+        };
+        assert_eq!(c.pointer(), want);
+        c.output_reconfigured(&mut t, o, desc("A")).unwrap();
+        assert_eq!(
+            c.pointer(),
+            want,
+            "a pointer inside the new extent is unchanged"
+        );
+    }
+
+    #[test]
+    fn output_arranged_moves_output_and_emits_output_changed() {
+        let (mut c, _, _, mut t) = Core::new(PersistedCameras::default());
+        let (o, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        assert_eq!(c.output(o).unwrap().arrangement, (0.0, 0.0));
+
+        let fx = c.output_arranged(&mut t, o, (500, 300)).unwrap();
+        assert_eq!(fx[0], Effect::OutputChanged(o));
+        assert_eq!(c.output(o).unwrap().arrangement, (500.0, 300.0));
+    }
+
+    #[test]
+    fn output_arranged_rejections_mutate_nothing() {
+        let (mut c, _, _, mut t) = Core::new(PersistedCameras::default());
+        let (o, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        let (_other, _, _, mut foreign) = Core::new(PersistedCameras::default());
+
+        assert_eq!(
+            c.output_arranged(&mut foreign, o, (100, 200)).err(),
+            Some(EntryError::ForeignPort)
+        );
+        assert_eq!(
+            c.output_arranged(&mut t, OutputId::for_test(99), (100, 200))
+                .err(),
+            Some(EntryError::UnknownOutput)
+        );
+        assert_eq!(c.output(o).unwrap().arrangement, (0.0, 0.0));
+    }
+
+    /// INV-OUTPUT-1 zero outputs: before any connect and after the last disconnect the pointer is
+    /// `NoOutput`; nothing is fabricated; cameras persist unbound; the first connect places the
+    /// pointer at the new output's centre; a later connect does not move a located pointer.
+    #[test]
+    fn zero_output_state_is_stable_and_the_first_connect_leaves_it() {
+        let (mut c, _, _, mut t) = Core::new(PersistedCameras::default());
+        assert_eq!(c.pointer(), PointerState::NoOutput);
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        c.output_disconnected(&mut t, a).unwrap();
+        assert!(c.outputs().is_empty());
+        assert_eq!(c.pointer(), PointerState::NoOutput);
+        assert_eq!(c.cameras().bound_output(0), None);
+        assert_eq!(
+            c.output_disconnected(&mut t, a).err(),
+            Some(EntryError::UnknownOutput)
+        );
+        assert_eq!(c.pointer(), PointerState::NoOutput);
+        let (b, _) = c
+            .output_connected(
+                &mut t,
+                desc_k(key("B"), (2560, 1440), Transform::R270, 240, 60_000),
+            )
+            .unwrap();
+        // view 1440x2560 at scale 2 → logical 720x1280; centre (360, 640)
+        assert_eq!(
+            c.pointer(),
+            PointerState::Located {
+                output: b,
+                p: (360.0, 640.0)
+            }
+        );
+        let (a2, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        assert_eq!(camera_of(&c, a2), 0);
+        assert_eq!(
+            c.pointer(),
+            PointerState::Located {
+                output: b,
+                p: (360.0, 640.0)
+            }
+        );
+    }
+
+    /// F-RELOCATE-1: with survivors the pointer moves to the Arrangement-nearest output; with none
+    /// it enters NoOutput (the formula's domain excludes the empty set).
+    #[test]
+    fn relocation_uses_survivors_only() {
+        let (mut c, _, _, mut t) = Core::new(PersistedCameras::default());
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap(); // pointer (960,540) on A
+        let (b, _) = c.output_connected(&mut t, desc("B")).unwrap(); // B at x = 1920
+        c.output_disconnected(&mut t, a).unwrap();
+        // a = (960,540); B's rect is [1920, 3840) × [0, 1080): nearest point x = 1920 → p = (0, 540)
+        assert_eq!(
+            c.pointer(),
+            PointerState::Located {
+                output: b,
+                p: (0.0, 540.0)
+            }
+        );
+        c.output_disconnected(&mut t, b).unwrap();
+        assert_eq!(c.pointer(), PointerState::NoOutput);
+    }
+
+    /// The nearer of two survivors wins, and only the interaction output's loss relocates.
+    /// Arrangement: A [0,1920), B [1920,3840), C [3840,5760), D [5760,7680); pointer (960,540) on A.
+    #[test]
+    fn relocation_picks_the_nearest_survivor() {
+        let (mut c, _, _, mut t) = Core::new(PersistedCameras::default());
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        let (b, _) = c.output_connected(&mut t, desc("B")).unwrap();
+        let (_c3, _) = c.output_connected(&mut t, desc("C")).unwrap();
+        let (d, _) = c.output_connected(&mut t, desc("D")).unwrap();
+        c.output_disconnected(&mut t, d).unwrap();
+        assert_eq!(
+            c.pointer(),
+            PointerState::Located {
+                output: a,
+                p: (960.0, 540.0)
+            },
+            "not the interaction output"
+        );
+        // survivors B (distance 960) and C (distance 2880): B, at its left edge
+        c.output_disconnected(&mut t, a).unwrap();
+        assert_eq!(
+            c.pointer(),
+            PointerState::Located {
+                output: b,
+                p: (0.0, 540.0)
+            }
+        );
+    }
+
+    /// A disconnected output's ProjectionFrame does not survive: no hit-test and no frame for a
+    /// stale OutputId.
+    #[test]
+    fn disconnect_drops_the_output_frame() {
+        let (mut c, _, _, mut t) = Core::new(PersistedCameras::default());
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        let id = c.toplevel_created();
+        let tree = |mapped| crate::snapshot::SurfaceTree {
+            geometry: crate::geom::LocalRect {
+                loc: crate::geom::LocalPoint::default(),
+                size: crate::geom::LocalSize { w: 100, h: 100 },
+            },
+            surfaces: vec![crate::snapshot::SnapshotSurface {
+                key: crate::snapshot::tests::key(1),
+                role: crate::snapshot::SurfaceRole::Root,
+                size: crate::geom::LocalSize { w: 100, h: 100 },
+                mapped,
+                input: crate::snapshot::InputRegion::Infinite,
+                frame_requested: false,
+            }],
+        };
+        c.toplevel_committed(id, tree(false)).unwrap();
+        c.toplevel_committed(id, tree(true)).unwrap();
+        c.render_list(a).unwrap();
+        let p = crate::geom::OutputLogicalPoint { x: 970.5, y: 550.5 };
+        assert!(c.hit_test(a, p).is_some());
+        c.output_disconnected(&mut t, a).unwrap();
+        assert_eq!(c.hit_test(a, p), None, "a stale frame survived its output");
+        assert_eq!(
+            c.render_list(a).err(),
+            Some(crate::FrameError::UnknownOutput)
+        );
+    }
+
+    /// A ProjectionFrame belongs strictly to the output/view configuration from which it
+    /// was built and must not survive output_reconfigured (INC2-F07). Before reconfiguration, p_before hits
+    /// the frame; reconfiguring mode, transform or scale invalidates the frame so that the stale
+    /// frame is not used by a subsequent hit-test.
+    #[test]
+    fn reconfiguration_drops_the_output_frame() {
+        let (mut c, _, _, mut t) = Core::new(PersistedCameras::default());
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        let id = c.toplevel_created();
+        let tree = |mapped| crate::snapshot::SurfaceTree {
+            geometry: crate::geom::LocalRect {
+                loc: crate::geom::LocalPoint::default(),
+                size: crate::geom::LocalSize { w: 100, h: 100 },
+            },
+            surfaces: vec![crate::snapshot::SnapshotSurface {
+                key: crate::snapshot::tests::key(1),
+                role: crate::snapshot::SurfaceRole::Root,
+                size: crate::geom::LocalSize { w: 100, h: 100 },
+                mapped,
+                input: crate::snapshot::InputRegion::Infinite,
+                frame_requested: false,
+            }],
+        };
+        c.toplevel_committed(id, tree(false)).unwrap();
+        c.toplevel_committed(id, tree(true)).unwrap();
+        c.render_list(a).unwrap();
+        // The 100x100 window is centred (anchor (−50,−50)): at 1920x1080 scale 1.0 it is at
+        // OutputLogical [910,1010)x[490,590).
+        let p_before = crate::geom::OutputLogicalPoint { x: 970.5, y: 550.5 };
+        assert!(c.hit_test(a, p_before).is_some());
+
+        // 1. Mode shrink: 800x600. p_before (970.5, 550.5) is outside the new extent.
+        c.output_reconfigured(
+            &mut t,
+            a,
+            desc_k(key("A"), (800, 600), Transform::Normal, 120, 60_000),
+        )
+        .unwrap();
+        assert_eq!(
+            c.hit_test(a, p_before),
+            None,
+            "stale frame survived mode reconfiguration"
+        );
+
+        // Populate new frame for 800x600: window is at logical [350,450)x[250,350).
+        let p_800 = crate::geom::OutputLogicalPoint { x: 410.5, y: 310.5 };
+        assert!(c.hit_test(a, p_800).is_some());
+
+        // 2. Transform change: R90 on 1920x1080 -> view_size (1080, 1920).
+        c.output_reconfigured(
+            &mut t,
+            a,
+            desc_k(key("A"), (1920, 1080), Transform::R90, 120, 60_000),
+        )
+        .unwrap();
+        // On R90 the view is 1080x1920 and the window is at [490,590)x[910,1010). p_800 (410.5, 310.5) misses:
+        assert_eq!(
+            c.hit_test(a, p_800),
+            None,
+            "stale frame survived transform reconfiguration"
+        );
+
+        // 3. Scale change: scale 2.0 (scale_120 = 240) on 1920x1080 Normal -> logical extent 960x540.
+        c.output_reconfigured(
+            &mut t,
+            a,
+            desc_k(key("A"), (1920, 1080), Transform::Normal, 240, 60_000),
+        )
+        .unwrap();
+        assert_eq!(
+            c.hit_test(a, p_before),
+            None,
+            "stale frame survived scale reconfiguration"
+        );
+    }
+
+    /// An invalid descriptor creates nothing and allocates no id.
+    #[test]
+    fn invalid_descriptor_is_rejected_without_mutation() {
+        let (mut c, _, _, mut t) = Core::new(PersistedCameras::default());
+        assert_eq!(
+            c.output_connected(
+                &mut t,
+                desc_k(key("A"), (0, 1080), Transform::Normal, 120, 60_000)
+            )
+            .err(),
+            Some(EntryError::InvalidDescriptor)
+        );
+        assert!(c.cameras().is_empty() && c.outputs().is_empty());
+        assert_eq!(c.pointer(), PointerState::NoOutput);
+        let (o, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        assert_eq!(
+            o,
+            OutputId::for_test(1),
+            "the rejected connect allocated an id"
+        );
+    }
+}

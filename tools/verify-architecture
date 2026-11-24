@@ -798,6 +798,8 @@ def replace(old, new):
 
 CORE_LIB = "crates/infynitae-core/src/lib.rs"
 CORE_ENTRY = "crates/infynitae-core/src/entry.rs"
+CORE_ENTRY_OUTPUTS = "crates/infynitae-core/src/entry/outputs.rs"
+CORE_ENTRY_POINTER = "crates/infynitae-core/src/entry/pointer_input.rs"
 # a line inside Core::output_reconfigured only (2h seeds inject before it)
 RECONF_ANCHOR = "        let mut fx = vec![Effect::OutputChanged(output)];\n"
 
@@ -856,11 +858,11 @@ SOURCE_SEEDS = [
     ("derive(Clone) on InputPort", "authority-not-duplicable",
      CORE_LIB, replace("pub struct InputPort {", "#[derive(Clone)]\npub struct InputPort {")),
     ("2h: camera mutation injected into output_reconfigured", "reconfigured-no-camera-authority",
-     CORE_ENTRY, replace(RECONF_ANCHOR, "        let _p = authority::Authorized::mint();\n" + RECONF_ANCHOR)),
+     CORE_ENTRY_OUTPUTS, replace(RECONF_ANCHOR, "        let _p = authority::Authorized::mint();\n" + RECONF_ANCHOR)),
     ("2h: navigation call injected into output_reconfigured", "reconfigured-no-camera-authority",
-     CORE_ENTRY, replace(RECONF_ANCHOR, "        crate::navigation::CameraSet::empty();\n" + RECONF_ANCHOR)),
+     CORE_ENTRY_OUTPUTS, replace(RECONF_ANCHOR, "        crate::navigation::CameraSet::empty();\n" + RECONF_ANCHOR)),
     ("INC-2: output_reconfigured re-binds a camera (camera write outside connect/disconnect)", "reconfigured-no-camera-authority",
-     CORE_ENTRY, replace(RECONF_ANCHOR, "        self.cameras.bind_on_connect(authority::Authorized::mint(), &desc.key, output, &self.persisted);\n" + RECONF_ANCHOR)),
+     CORE_ENTRY_OUTPUTS, replace(RECONF_ANCHOR, "        self.cameras.bind_on_connect(authority::Authorized::mint(), &desc.key, output, &self.persisted);\n" + RECONF_ANCHOR)),
     ("mint outside the entry points", "mint-location",
      CORE_LIB, append("\nmod rogue {\n    fn f() {\n        let _ = crate::authority::Authorized::mint();\n    }\n}\n")),
     ("mint made crate-visible", "mint-location",
@@ -891,7 +893,7 @@ SOURCE_SEEDS = [
      WAYLAND_OUTPUTS, append("\nimpl WaylandState {\n    pub fn rogue_limit(&mut self) {\n"
                              "        let _ = infynitae_core::Core::set_renderer_device_max(self.core_mut(), 4096);\n    }\n}\n")),
     ("INC-3: mint in a physical_input helper (button_press)", "mint-location",
-     CORE_ENTRY, replace(PRESS_ANCHOR, PRESS_ANCHOR + "        }\n        {\n            let _p = authority::Authorized::mint();\n")),
+     CORE_ENTRY_POINTER, replace(PRESS_ANCHOR, PRESS_ANCHOR + "        }\n        {\n            let _p = authority::Authorized::mint();\n")),
     ("INC-3: input module pans a camera with its own proof", "mint-location",
      "crates/infynitae-core/src/input/interaction.rs",
      append("\nimpl crate::Core {\n    pub fn rogue_pan(&mut self) {\n        self.cameras.pan(crate::authority::Authorized::mint(), 0,"
