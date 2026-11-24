@@ -681,6 +681,7 @@ impl Drop for XwaylandSupervisor {
 }
 
 /// The lock file's content for tests: the pid it names.
+#[cfg(test)]
 pub fn lock_owner(path: &Path) -> Option<u32> {
     let mut s = String::new();
     std::io::Read::read_to_string(&mut File::open(path).ok()?, &mut s).ok()?;

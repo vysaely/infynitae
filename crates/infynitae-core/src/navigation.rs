@@ -972,6 +972,7 @@ pub enum PanMode {
 
 /// F-PAN-1: `C = C_start − Q16(Σ)`, Q16 ties-even, saturated at the stored-Canvas bound ±2³⁶ px
 /// (INV-COORD-1). Pure.
+#[cfg(test)]
 pub fn pan_target(start: CanvasPos, sum: (f64, f64)) -> CanvasPos {
     pan_target_mode(start, sum, PanMode::Grab)
 }

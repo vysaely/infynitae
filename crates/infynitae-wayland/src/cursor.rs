@@ -539,6 +539,7 @@ impl WaylandState {
         }
     }
 
+    #[cfg(test)]
     pub fn set_cursor_epoch(&mut self, epoch: std::time::Duration) {
         self.cursor_epoch = epoch;
     }
