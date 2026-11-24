@@ -118,7 +118,7 @@ while true; do
     LOCKED_ARG=""
     if [ -n "$TTY_MODE" ]; then
         case "${START_LOCKED:-false}" in
-            1|true|yes|on|TRUE|True) LOCKED_ARG="--locked" ;;
+            1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Oo][Nn]) LOCKED_ARG="--locked" ;;
         esac
         [ "${INFYNITAE_RESTART_LOCKED:-}" = "1" ] && LOCKED_ARG="--locked"
     fi
