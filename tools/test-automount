@@ -774,5 +774,26 @@ fi
 grep -q "refused" "$LOG_FILE" || { echo "FAIL: no log line for the refusal" >&2; exit 1; }
 echo "PASS: refused once, not asked again; both sticks under /run/media"
 
+echo "Test 11: a notification that never answers is not waited on forever"
+cat > "$BIN_DIR/notify-send" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$NOTIFY_LOG"
+case "\$*" in *-A*) echo \$\$ > "$TMP/waiting.pid"; exec sleep 30 ;; esac
+EOF
+chmod +x "$BIN_DIR/notify-send"
+rm -f "$TMP/waiting.pid"
+plug /dev/sds1
+NOTIFY_WAIT=1 run_watcher "$TMP/plug" "$BIN_DIR/drive-name-refused"
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$TMP/waiting.pid" ] && break; sleep 0.2; done
+[ -s "$TMP/waiting.pid" ] || { echo "FAIL: the mount notification was not sent with its actions" >&2; cat "$NOTIFY_LOG" >&2; exit 1; }
+waiting=$(cat "$TMP/waiting.pid")
+sleep 2.5
+if kill -0 "$waiting" 2>/dev/null; then
+    kill "$waiting"
+    echo "FAIL: the notification's wait outlived NOTIFY_WAIT" >&2
+    exit 1
+fi
+echo "PASS: the wait ends after NOTIFY_WAIT"
+
 echo "test-automount: all tests passed"
 exit 0
