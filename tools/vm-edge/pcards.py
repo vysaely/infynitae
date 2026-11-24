@@ -1,6 +1,8 @@
 import sys, os, re, glob
 exec(open("/home/tester/g/feat.py").read().split("which = sys.argv[1:]")[0])
-# The Network and Replay cards (2026-11-10), with real input.
+# Replay in the Quick settings card of the edge from apps (live/edge-apps/src/cards/quick.rs), with
+# real input: its switch turns the buffer on, Save a clip writes a clip. (Network's list in place is
+# in papps.py and pfluid.py.) Its first part is the helpers pmic.py runs first.
 CFG = "/home/tester/.config/infynitae/config"
 BOX = "/tmp/edge-boxes"
 CLIPS = "/home/tester/Videos/Clips"
@@ -22,45 +24,41 @@ def row(c, k): return c[0] + 40, c[1] + 16 + 22 + 12 + 32 * k + 16
 
 sh(f"sed -i '/^PANEL_CONTROL=/d; /^ENABLE_REPLAY_BUFFER=/d' {CFG}; echo 'ENABLE_REPLAY_BUFFER=\"false\"' >> {CFG}")
 sh("infynitae-reload recorder >/dev/null 2>&1; true"); wait(2.0)
+open(CFG, "a").write('PANEL_CONTROL="SUPER+A top right 380 settings/quick=replay"\n')
+# the box dump's hit lines (hit OWNER/KIND ID x y w h); Quick settings: row 10 + i, its switch 30 + i,
+# Save a clip 50 (quick.rs)
+def hits():
+    wait(0.3)
+    out = {}
+    for l in open(BOX):
+        w = l.split()
+        if w and w[0] == "hit": out[(w[1], int(w[2]))] = list(map(float, w[3:7]))
+    return out
+def mid(r): return r[0] + r[2] / 2, r[1] + r[3] / 2
+def closed(): wait(0.4); return open(BOX).read().startswith("closed")
 restart_edge()
 chord("super+a"); wait(1.5)
-d = boxes(); m = d["modules"]
-print("modules:", sorted(m), flush=True)
-net = m["wifi"]
-click_at(net[0] + 40, net[1] + net[3] / 2); d = boxes(); shot("k-1-network")
-check("a click on Network opens its card", d["child"] is not None, str(d["child"]))
-nm = sh("nmcli -t -f TYPE,STATE device 2>/dev/null")
-print("nmcli devices:", nm.replace("\n", " "), flush=True)
-click_at(net[0] + 40, net[1] + net[3] / 2); d = boxes()
-check("a second click closes it", d["child"] is None)
-rp = m["replay"]
-click_at(rp[0] + 40, rp[1] + rp[3] / 2); d = boxes(); c = d["child"]; shot("k-2-replay-off")
-check("a click on Replay opens its card", c is not None, str(c))
-# off: Open the clips folder, Keep the last minutes (row 1)
-click_at(*row(c, 1)); wait(4.0); d = boxes(); shot("k-3-replay-on")
+h = hits(); shot("k-1-replay-off")
+print("hits:", sorted(k for k in h if k[0] == "settings/quick"), flush=True)
+check("the Replay switch is in the panel, no Save a clip while it is off", ("settings/quick", 30) in h and ("settings/quick", 50) not in h, str(sorted(h)))
+if ("settings/quick", 30) in h: click_at(*mid(h[("settings/quick", 30)]))
+wait(4.0); h = hits(); shot("k-2-replay-on")
 on = "true" in sh(f"grep '^ENABLE_REPLAY_BUFFER=' {CFG}")
-check("Keep the last minutes turns the buffer on", on, sh(f"grep '^ENABLE_REPLAY_BUFFER=' {CFG}"))
-check("the card stays open, Save a clip now first", d["child"] is not None and d["child"][3] > c[3], f"{c} -> {d['child']}")
+check("the switch turns the buffer on", on, sh(f"grep '^ENABLE_REPLAY_BUFFER=' {CFG}"))
+check("the panel stays open, Save a clip under the switch", not closed() and ("settings/quick", 50) in h, str(sorted(k for k in h if k[0] == "settings/quick")))
 before = set(glob.glob(CLIPS + "/*"))
 wait(20.0)  # let the buffer hold some seconds
-c = boxes()["child"]
-if c:
-    click_at(*row(c, 0));
+h = hits()
+if ("settings/quick", 50) in h:
+    click_at(*mid(h[("settings/quick", 50)]))
     for _ in range(30):
         wait(1.0)
         if set(glob.glob(CLIPS + "/*")) - before: break
 new = sorted(set(glob.glob(CLIPS + "/*")) - before)
 check("Save a clip writes a clip into Videos/Clips", bool(new), str(new) + " " + sh("tail -3 /tmp/infynitae-recorder.log 2>/dev/null"))
-# Escape closes the card first, then the panel
-chord("esc"); wait(0.6)
-check("Escape closes the card first, the panel stays", boxes()["child"] is None and boxes()["state"] != "closed")
-chord("esc"); wait(0.6)
-# right click opens it too
-chord("super+a"); wait(1.5)
-rp = boxes()["modules"]["replay"]; click_at(rp[0] + 40, rp[1] + rp[3] / 2, "right"); d = boxes()
-check("a right click on Replay opens its card too", d["child"] is not None)
-chord("esc"); wait(0.6)
-sh(f"sed -i '/^ENABLE_REPLAY_BUFFER=/d' {CFG}; echo 'ENABLE_REPLAY_BUFFER=\"false\"' >> {CFG}; infynitae-reload recorder >/dev/null 2>&1; true")
+chord("esc")
+check("Escape closes the panel", closed())
+sh(f"sed -i '/^PANEL_CONTROL=/d; /^ENABLE_REPLAY_BUFFER=/d' {CFG}; echo 'ENABLE_REPLAY_BUFFER=\"false\"' >> {CFG}; infynitae-reload recorder >/dev/null 2>&1; true")
 print("SUMMARY", sum(1 for _, ok in RES if ok), "of", len(RES), flush=True)
 for n, ok in RES:
     if not ok: print("  failed:", n)
