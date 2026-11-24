@@ -514,7 +514,11 @@ mod tests {
         assert!(p.names(path, Capability::Layers), "layers");
         assert!(p.names(path, Capability::Windows), "windows");
         assert!(!p.names(path, Capability::Lock), "lock");
-        for name in ["infynitae-edge-rs", "infynitae-edge-c", "infynitae-edge-rs2"] {
+        for name in [
+            "infynitae-edge-rs",
+            "infynitae-edge-c",
+            "infynitae-edge-rs2",
+        ] {
             let path = Path::new("/home/someone/.local/bin").join(name);
             assert!(!p.names(&path, Capability::Layers), "{name} layers");
             assert!(!p.names(&path, Capability::Windows), "{name} windows");
