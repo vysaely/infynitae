@@ -2746,7 +2746,8 @@ LAB A5b DONE
 
     #[test]
     fn gpu_source_real_has_no_lab_dir_when_key_unset() {
-        assert_eq!(GpuSource::real().lab_dir, None);
+        // `GpuSource::real()` reads this machine's config and environment (the owner's sets a log
+        // folder), so the rule is tested on given ones
         assert_eq!(
             GpuSource::from_env_and_config(None, &Config::from_text("")).lab_dir,
             None
