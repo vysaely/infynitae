@@ -428,6 +428,10 @@ pub struct WaylandState {
     )>,
     /// The icon of the drag a client holds (`start_drag`), drawn at the pointer until the drop.
     pub(crate) drag_icon: Option<pointer::DragIcon>,
+    /// The client and press serial of the last window menu shown at a client's request: a popup
+    /// grab the same client asks with the same press is refused (`grab`), so the two menus of one
+    /// right-click do not both open and the window menu keeps the pointer.
+    pub(crate) window_menu_press: Option<(ClientId, smithay::utils::Serial)>,
     /// `xdg_activation_v1` (B10.7, INV-INPUT-9, W-SM-8).
     activation: XdgActivationState,
     /// Who may use the privileged globals (`trust`, `ALLOW_*`).
@@ -868,6 +872,7 @@ impl WaylandState {
             selection_sources: [None, None],
             data_control_owner: None,
             drag_icon: None,
+            window_menu_press: None,
             activation: XdgActivationState::new::<Self>(display),
             _security_context: smithay::wayland::security_context::SecurityContextState::new::<
                 Self,

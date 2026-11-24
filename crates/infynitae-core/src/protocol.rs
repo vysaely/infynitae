@@ -2597,6 +2597,12 @@ impl Core {
         self.window_menu = Some((id, pos));
     }
 
+    /// The effect that ends a client's popup grab made with the press its window menu opened on
+    /// (the adapter matches the press: `show_window_menu`).
+    pub fn end_popup_grab_for_window_menu(&self, id: ElementId) -> Vec<Effect> {
+        vec![Effect::DismissPopupGrab(id)]
+    }
+
     /// A minimized window comes back where it was, on top.
     pub(crate) fn restore_minimized(&mut self, id: ElementId, out: &mut Vec<Effect>) {
         if self.stage.set_minimized(id, false).is_err() {

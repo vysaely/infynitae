@@ -51,6 +51,7 @@ next window switch.
 | Super+Tab | Flip between the last two windows (one asking for attention first); with `FOCUS_CYCLE_NAVIGATE` centre the camera on it. |
 | Super+1..9 / Super+Shift+1..9 | Focus window / cluster N (creation order), raise, centre the camera (zoom 1) / frame the cluster. |
 | Super+Shift+G | Sort the focused window's cluster by app, sizes kept (below). |
+| Super+M (`BIND_WINDOW_MENU`) | The window menu of the window under the pointer, else of the focused one. An app that asks for it on a right-click and opens its own menu on the same press gets the window menu only (2026-11-24). |
 | Click | Focus and raise the window under the pointer. |
 | Super+Space / Super+Shift+Space | Centre the focused window in the usable area at zoom 1 / at the current zoom. A window as large as the whole screen is lined up with it at zoom 1; only a window larger than the screen is zoomed out until it fits, with a 12 px margin (2026-11-06). Super+1..9, a two-finger double tap and TELEPORT_ON_OPEN centre the same way. |
 

@@ -376,3 +376,70 @@ fn keep_on_top_command_toggles_stage_above_follows_camera_pan_and_remembers_for_
         r.ls.recorded_launcher_actions()
     );
 }
+
+/// One right-click that asks for the window menu and opens the app's own menu with a grab
+/// (Firefox's tab bar, owner 2026-11-24: the window menu took no click): the window menu wins
+/// for that press, the app's grab on the same press is refused, and the pointer is not grabbed.
+#[test]
+fn the_window_menu_wins_over_a_popup_grab_on_the_same_press() {
+    let mut r = Rig::x8();
+    let id = *r.ls.state.core().stage().mapped_elements().first().unwrap();
+    r.button(BTN_RIGHT, true, none());
+    let serial = r.ls.probe.last_serial;
+    let seat = r.ls.probe.seat.clone().unwrap();
+    r.ls.probe.surfaces[0]
+        .toplevel
+        .as_ref()
+        .unwrap()
+        .show_window_menu(&seat, serial, 30, 18);
+    r.ls.pump();
+    assert_eq!(r.ls.state.core().window_menu().map(|(e, _)| e), Some(id));
+    let qh = r.ls.qh.clone();
+    r.ls.probe.popup_with_grab_serial(
+        &qh,
+        "P",
+        0,
+        common::PopupSpec {
+            content: (120, 80),
+            shadow: 0,
+            anchor_rect: (10, 10, 1, 1),
+            slide: false,
+        },
+        serial,
+    );
+    r.ls.pump();
+    assert!(
+        r.ls.probe.kb_log.iter().any(|l| l == "popup_done P"),
+        "the app's grab on the same press is refused: {:?}",
+        r.ls.probe.kb_log
+    );
+    r.button(BTN_RIGHT, false, none());
+    assert!(
+        !r.ls.state.is_pointer_grabbed(),
+        "no grab is left after the press"
+    );
+
+    // a later press: the app's own menu works as before
+    r.button(BTN_LEFT, true, none());
+    let qh = r.ls.qh.clone();
+    let later = r.ls.probe.last_serial;
+    r.ls.probe.popup_with_grab_serial(
+        &qh,
+        "Q",
+        0,
+        common::PopupSpec {
+            content: (120, 80),
+            shadow: 0,
+            anchor_rect: (10, 10, 1, 1),
+            slide: false,
+        },
+        later,
+    );
+    r.ls.pump();
+    assert!(
+        !r.ls.probe.kb_log.iter().any(|l| l == "popup_done Q"),
+        "{:?}",
+        r.ls.probe.kb_log
+    );
+    r.button(BTN_LEFT, false, none());
+}

@@ -15,6 +15,7 @@ pub const KEY_LEFTALT: u32 = 56;
 pub const KEY_RIGHTALT: u32 = 100;
 pub const KEY_F: u32 = 33;
 pub const KEY_G: u32 = 34;
+pub const KEY_M: u32 = 50;
 pub const KEY_A: u32 = 30;
 pub const KEY_D: u32 = 32;
 pub const KEY_LEFTSHIFT: u32 = 42;
@@ -165,7 +166,8 @@ pub enum KeyAction {
     /// Super+Shift+Space (owner, 2026-10-24): centre the camera on the focused window and keep
     /// the zoom.
     RecenterKeepZoom,
-    /// Opens the window menu for the window under the pointer (or the focused window).
+    /// Super+M (2026-11-24): opens the window menu for the window under the pointer (or the
+    /// focused window).
     WindowMenu,
     /// No default key since 2026-11-23 (owner: "remove super g"), bound by `BIND_CLUSTER_LAYOUT`:
     /// the focused window's cluster in a spiral around it, then in tiles, then in a line, at each
@@ -551,6 +553,11 @@ pub fn resolve_key_binding(
     // interaction. Super+G alone has no default (owner, 2026-11-23): `BIND_CLUSTER_LAYOUT`.
     if key == KEY_G && mods.logo && mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
         return Some(KeyAction::ArrangeClusterByApp);
+    }
+    // Super+M: the window menu of the window under the pointer, else of the focused one (owner,
+    // 2026-11-24: "we need a keybind for the menu"); exactly Logo, never during interaction
+    if key == KEY_M && mods.logo && !mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
+        return Some(KeyAction::WindowMenu);
     }
     // Super+W: the app launcher; exactly Logo, never during interaction
     if key == KEY_W && mods.logo && !mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
@@ -1270,6 +1277,29 @@ mod tests {
         // During interaction: None
         assert_eq!(resolve_key_binding(KEY_V, logo, true), None);
         assert!(ACTION_NAMES.contains(&("CLIPBOARD", KeyAction::ClipboardHistory)));
+    }
+
+    /// Super+M opens the window menu (2026-11-24): exactly Logo, never during an interaction;
+    /// `BIND_WINDOW_MENU` names it.
+    #[test]
+    fn super_m_opens_the_window_menu() {
+        assert_eq!(
+            resolve_key_binding(KEY_M, mods(true, false, false, false), false),
+            Some(KeyAction::WindowMenu)
+        );
+        assert_eq!(
+            resolve_key_binding(KEY_M, mods(true, false, false, false), true),
+            None
+        );
+        for m in [
+            mods(false, false, false, false),
+            mods(true, true, false, false),
+            mods(true, false, true, false),
+            mods(true, false, false, true),
+        ] {
+            assert_eq!(resolve_key_binding(KEY_M, m, false), None, "{m:?}");
+        }
+        assert!(ACTION_NAMES.contains(&("WINDOW_MENU", KeyAction::WindowMenu)));
     }
 
     /// Super+Shift+G sorts the cluster by app, never during an interaction; Super+G alone has no
