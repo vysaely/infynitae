@@ -59,7 +59,10 @@ h = hits()
 click_at(*mid(h[("settings/power", 2)]))
 check("Performance is set", logged("powerprofilesctl set performance"))
 shot("e-4-after-clicks")
-click_at(200, 200); check("a click outside closes", closed()); at(300, 300); wait(0.4); shot("z-after-outside")
+# since PR 134 a panel opened by its key stays open while the desktop around it is used; its key's
+# command closes it
+click_at(200, 200); check("a click outside leaves it open", not closed())
+run_bg(f"{BIN}/infynitae-edge-apps control"); wait(1.0); check("its key's command closes it", closed()); at(300, 300); wait(0.4); shot("z-after-outside")
 
 # 3. by hover: from the bottom edge up into it, then away
 move(3000, 3000, 30); move(-150, 0, 10); wait(1.2)
