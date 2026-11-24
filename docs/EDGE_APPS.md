@@ -119,6 +119,7 @@ live/edge-apps/src/
   theme.rs, draw.rs  copied as they are, with their tests
   ui.rs              the shared parts every card draws with (section 3.5)
   shell.rs           the state machine: open panel, hover, keyboard, edit mode, the animation clock
+  shell/             its parts: pointer.rs, touch.rs, keys.rs, edit.rs (edit mode), drawing.rs
   wayland.rs         surfaces, buffers, input, signals, the worker channel   (section 5)
   ask.rs             the ask prompt, copied as it is                (edge-rs modules/ask.rs)
   notify.rs, notify_server.rs   copied from origin/feat/edge-notify
