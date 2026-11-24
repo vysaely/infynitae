@@ -2773,7 +2773,10 @@ mod key_binding_config_tests {
         use super::{config_line, parse_bool};
         let cases = include_str!("../../../tools/config-cases");
         let mut n = 0;
-        for row in cases.lines().filter(|l| !l.is_empty() && !l.starts_with('#')) {
+        for row in cases
+            .lines()
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        {
             let f: Vec<&str> = row.splitn(4, '\t').collect();
             let (key, expected, on, line) = (f[0], f[1], f[2], f[3]);
             let got = config_line(line)

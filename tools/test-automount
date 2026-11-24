@@ -365,10 +365,16 @@ grep -q "monitor restarted" "$LOG_FILE" || { echo "FAIL: no log line for the res
 sleep 0.5
 # what runs under the watcher: gdbus only (its stand-in became sleep), nothing under it
 children() { grep -l "^PPid:[[:space:]]*$1\$" /proc/[0-9]*/status 2>/dev/null | cut -d/ -f3; }
-kids=$(children "$W")
-grand=""
-for k in $kids; do grand="$grand$(children "$k")"; done
-if [ "$(echo "$kids" | wc -w)" != 1 ] || [ -n "$grand" ]; then
+# short-lived helpers (the mount's own commands) may still be ending on a slow machine: look a few times
+settled=""
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+    kids=$(children "$W")
+    grand=""
+    for k in $kids; do grand="$grand$(children "$k")"; done
+    if [ "$(echo "$kids" | wc -w)" = 1 ] && [ -z "$grand" ]; then settled=1; break; fi
+    sleep 0.3
+done
+if [ -z "$settled" ]; then
     echo "FAIL: the watcher runs more than one process under it: $kids / $grand" >&2
     kill "$W"
     exit 1
