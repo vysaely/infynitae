@@ -229,12 +229,28 @@ gsr_usable() {
 
 start_gsr_replay() {
     mkdir -p "$CLIPS_DIR"
-    set -- -w screen -f "$RECORD_FPS" -r "$TOTAL_SECS" -c mp4 -k "$(gsr_codec)" -o "$CLIPS_DIR"
-    # REPLAY_STORAGE=disk: the buffer is a file in CLIPS_DIR (a gsr-replay-*.gsr folder) instead of
-    # about 1.5 GB of RAM for 20 minutes at 60 fps
+    # REPLAY_STORAGE=disk: the buffer is a file (a gsr-replay-*.gsr folder) instead of memory, in
+    # CLIPS_DIR, or in REPLAY_DISK_DIR when set (a hard drive takes the constant writing better
+    # than an SSD; owner 2026-11-24): gpu-screen-recorder then saves clips there and runs this
+    # script on each, which moves it into CLIPS_DIR. A REPLAY_DISK_DIR that cannot be written
+    # keeps the replay in memory, never on another drive.
+    out="$CLIPS_DIR" storage=ram
     case "$(echo "${REPLAY_STORAGE:-ram}" | tr 'A-Z' 'a-z')" in
-        disk) set -- "$@" -replay-storage disk ;;
+        disk)
+            storage=disk
+            if [ -n "${REPLAY_DISK_DIR:-}" ] && [ "$REPLAY_DISK_DIR" != "$CLIPS_DIR" ]; then
+                if mkdir -p "$REPLAY_DISK_DIR" 2>/dev/null && [ -w "$REPLAY_DISK_DIR" ]; then
+                    out="$REPLAY_DISK_DIR"
+                else
+                    echo "[infynitae-recorder] REPLAY_DISK_DIR $REPLAY_DISK_DIR cannot be written: the replay stays in memory"
+                    storage=ram
+                fi
+            fi
+            ;;
     esac
+    set -- -w screen -f "$RECORD_FPS" -r "$TOTAL_SECS" -c mp4 -k "$(gsr_codec)" -o "$out"
+    [ "$storage" = disk ] && set -- "$@" -replay-storage disk
+    [ "$out" != "$CLIPS_DIR" ] && set -- "$@" -sc "$(readlink -f "$0")"
     case "$(echo "${RECORD_AUDIO:-desktop}" | tr 'A-Z' 'a-z')" in
         desktop|true|1|yes|on) set -- "$@" -a default_output ;;
         mic|microphone) set -- "$@" -a default_input ;;
@@ -467,10 +483,25 @@ toggle_recording() {
     fi
 }
 
+# gpu-screen-recorder's -sc: a saved clip (its path, then "replay" or "regular") moves from
+# REPLAY_DISK_DIR into CLIPS_DIR
+move_saved_clip() {
+    [ -f "$1" ] || return 0
+    mkdir -p "$CLIPS_DIR"
+    if mv -f "$1" "$CLIPS_DIR/"; then
+        echo "[infynitae-recorder] Moved the saved clip into $CLIPS_DIR: ${1##*/}"
+    else
+        echo "[infynitae-recorder] Could not move $1 into $CLIPS_DIR"
+    fi
+}
+
 # sourced by tools/test-recorder-backend for its functions only
 [ -z "${INFYNITAE_RECORDER_FUNCTIONS:-}" ] || return 0
 
 case "$1" in
+    /*)
+        move_saved_clip "$1"
+        ;;
     supervisor|daemon|autostart)
         supervisor_loop
         ;;
