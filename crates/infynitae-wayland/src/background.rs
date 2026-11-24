@@ -8,14 +8,18 @@
 //! a window being shared (captured in the last [`CAPTURE_HOLD`]), the game, and X11 apps (one
 //! xwayland-satellite serves them all). A thread is lowered only when its process may raise it
 //! back (`RLIMIT_NICE`, which the installer sets so apps return to nice 0 and never above it);
-//! without that limit nothing is lowered.
+//! without that limit nothing is lowered. A thread of its own walks /proc and sets the nice
+//! values, in the order the main loop decided them: an app of hundreds of threads is hundreds of
+//! calls (2026-11-23, 25 game clients: 11 to 14 ms a turn on the main loop).
 //!
 //! Game mode (`GAME_MODE`, on by default): a fullscreen window with a frame on screen, shown
 //! directly or composited ([`WaylandState::fullscreen_frame_shown`]), is a game. Its app is registered with Feral's
 //! gamemode, when installed (`launch.sh game-mode`), until the window has been off screen for
 //! [`GAME_MODE_HOLD`] continuously.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::mpsc::{Sender, channel};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use infynitae_core::output::OutputId;
@@ -53,8 +57,10 @@ pub struct Background {
     pids: HashMap<ElementId, Option<u32>>,
     /// When each windowed app's windows were last all out of sight, while they are.
     hidden_since: HashMap<u32, Instant>,
-    /// The apps lowered now: each thread's nice before.
-    lowered: HashMap<u32, Lowered>,
+    /// The apps lowered now, or queued to be.
+    lowered: HashSet<u32>,
+    /// The thread that lowers and restores, started with the first app lowered.
+    worker: Option<(Sender<Job>, JoinHandle<()>)>,
     /// The last captured frame of each window shared alone.
     captured: HashMap<ElementId, Instant>,
     /// The game: its window and app.
@@ -73,7 +79,8 @@ impl Default for Background {
             scanned_at: None,
             pids: HashMap::new(),
             hidden_since: HashMap::new(),
-            lowered: HashMap::new(),
+            lowered: HashSet::new(),
+            worker: None,
             captured: HashMap::new(),
             game: None,
             game_off_since: None,
@@ -88,6 +95,41 @@ struct Lowered {
     /// Threads already at [`BACKGROUND_NICE`] or lower when the tree was lowered (an app the user
     /// started with `nice`): left alone then, and never raised by the restore.
     kept: std::collections::HashSet<i32>,
+}
+
+/// The worker's work: an app to lower or restore, and the apps with windows its tree stops at.
+enum Job {
+    Lower(u32, Vec<u32>),
+    Restore(u32, Vec<u32>),
+}
+
+/// The worker: does each job in turn, keeping each lowered app's threads' nice before.
+fn work(jobs: std::sync::mpsc::Receiver<Job>) {
+    let mut lowered: HashMap<u32, Lowered> = HashMap::new();
+    while let Ok(job) = jobs.recv() {
+        match job {
+            Job::Lower(pid, windowed) => {
+                lowered.insert(pid, lower(pid, &windowed));
+            }
+            Job::Restore(pid, windowed) => {
+                if let Some(l) = lowered.remove(&pid) {
+                    restore(pid, &l, &windowed);
+                }
+            }
+        }
+    }
+}
+
+impl Drop for Background {
+    /// Waits for the restores queued (at shutdown): an app left at nice 10 stays there.
+    fn drop(&mut self) {
+        if let Some((jobs, thread)) = self.worker.take() {
+            drop(jobs);
+            if thread.join().is_err() {
+                log_line!("[infynitae] The background priority thread panicked");
+            }
+        }
+    }
 }
 
 /// What [`Background::plan`] decided.
@@ -106,25 +148,68 @@ impl Background {
             .retain(|pid, _| apps.get(pid) == Some(&false));
         for (&pid, &in_sight) in apps {
             if in_sight || !self.enabled {
-                if self.lowered.contains_key(&pid) {
+                if self.lowered.contains(&pid) {
                     plan.restore.push(pid);
                 }
                 continue;
             }
             let since = *self.hidden_since.entry(pid).or_insert(now);
-            if now.duration_since(since) >= HIDE_AFTER && !self.lowered.contains_key(&pid) {
+            if now.duration_since(since) >= HIDE_AFTER && !self.lowered.contains(&pid) {
                 plan.lower.push(pid);
             }
         }
         // an app whose last window closed (one that lives on in the tray)
         plan.restore.extend(
             self.lowered
-                .keys()
+                .iter()
                 .filter(|pid| !apps.contains_key(pid))
                 .copied(),
         );
         plan.restore.sort_unstable();
         plan
+    }
+
+    /// Lowers `pid`'s tree, down to (not into) the apps in `windowed`, on the worker.
+    fn lower_app(&mut self, pid: u32, windowed: &[u32]) {
+        if self.send(Job::Lower(pid, windowed.to_vec())) {
+            self.lowered.insert(pid);
+        }
+    }
+
+    /// Raises `pid`'s tree back, if it was lowered, on the worker.
+    fn restore_app(&mut self, pid: u32, windowed: &[u32]) {
+        if self.lowered.remove(&pid) {
+            self.send(Job::Restore(pid, windowed.to_vec()));
+        }
+    }
+
+    /// Queues a job, starting the worker first if needed; false if it could not be queued.
+    fn send(&mut self, job: Job) -> bool {
+        if self.worker.is_none() {
+            let (jobs, queue) = channel();
+            match std::thread::Builder::new()
+                .name("infynitae-background".into())
+                .spawn(move || work(queue))
+            {
+                Ok(thread) => self.worker = Some((jobs, thread)),
+                Err(e) => {
+                    log_line!(
+                        "[infynitae] Background priority: no thread ({e}); apps keep their priority"
+                    );
+                    return false;
+                }
+            }
+        }
+        let Some((jobs, _)) = &self.worker else {
+            return false;
+        };
+        if jobs.send(job).is_ok() {
+            return true;
+        }
+        // the worker panicked: a new one next time
+        self.worker = None;
+        log_line!("[infynitae] Background priority: the thread ended; apps keep their priority");
+        false
     }
 
     /// How long until an app out of sight is due to be lowered, a share's hold ends, or game
@@ -141,7 +226,7 @@ impl Background {
         let lowering = self
             .hidden_since
             .iter()
-            .filter(|(pid, _)| !self.lowered.contains_key(pid))
+            .filter(|(pid, _)| !self.lowered.contains(pid))
             .map(|(_, since)| *since + HIDE_AFTER);
         let holds = self.captured.values().map(|t| *t + CAPTURE_HOLD);
         lowering
@@ -319,20 +404,19 @@ impl WaylandState {
         let plan = self.background.plan(now, &apps);
         let windowed: Vec<u32> = apps.keys().copied().collect();
         for pid in plan.restore {
-            if let Some(lowered) = self.background.lowered.remove(&pid) {
-                restore(pid, &lowered, &windowed);
-            }
+            self.background.restore_app(pid, &windowed);
         }
         for pid in plan.lower {
-            self.background.lowered.insert(pid, lower(pid, &windowed));
+            self.background.lower_app(pid, &windowed);
         }
     }
 
-    /// Restores every lowered app (background priority turned off, or shutting down).
+    /// Restores every lowered app (background priority turned off, or shutting down: dropping
+    /// [`Background`] waits for the restores).
     pub fn background_restore_all(&mut self) {
-        let windowed: Vec<u32> = self.background.lowered.keys().copied().collect();
-        for (pid, lowered) in std::mem::take(&mut self.background.lowered) {
-            restore(pid, &lowered, &windowed);
+        let windowed: Vec<u32> = self.background.lowered.iter().copied().collect();
+        for &pid in &windowed {
+            self.background.restore_app(pid, &windowed);
         }
         self.background.hidden_since.clear();
     }
@@ -456,7 +540,7 @@ mod tests {
             bg.plan(later, &apps(&[(10, false), (11, true)])).lower,
             vec![10]
         );
-        bg.lowered.insert(10, Lowered::default());
+        bg.lowered.insert(10);
         // lowered once, not again
         assert_eq!(bg.plan(later, &apps(&[(10, false)])), Plan::default());
         assert_eq!(bg.due(later), None);
@@ -481,8 +565,8 @@ mod tests {
     fn an_app_without_windows_and_a_disabled_setting_restore() {
         let mut bg = Background::default();
         let t0 = Instant::now();
-        bg.lowered.insert(10, Lowered::default());
-        bg.lowered.insert(11, Lowered::default());
+        bg.lowered.insert(10);
+        bg.lowered.insert(11);
         assert_eq!(bg.plan(t0, &apps(&[(11, false)])).restore, vec![10]);
         bg.lowered.remove(&10);
         bg.enabled = false;
@@ -640,6 +724,82 @@ mod tests {
         let _ = child.kill();
         let _ = child.wait();
         crate::ownership::forget_spawned(pid);
+    }
+
+    /// Lowering and restoring an app of 300 processes keeps the main loop's turn under a
+    /// millisecond (2026-11-23: 25 game clients of about 100 threads each cost turns of 11 to
+    /// 14 ms, "Slow turn 14.2 ms: background priority 13.8 ms").
+    #[test]
+    fn a_large_tree_costs_the_turn_under_a_millisecond() {
+        const BUDGET: Duration = Duration::from_millis(1);
+        let mut child = crate::ownership::spawn_owned(
+            std::process::Command::new("sh")
+                .args(["-c", "for i in $(seq 300); do sleep 30 & done; wait"]),
+        )
+        .unwrap();
+        let pid = child.id();
+        let started = Instant::now();
+        while tree(pid, &[]).len() < 301 && started.elapsed() < Duration::from_secs(10) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let processes = tree(pid, &[]);
+        let tids: Vec<i32> = processes.iter().copied().flat_map(threads).collect();
+        let nice = |tid: i32| getpriority_process(Pid::from_raw(tid)).ok();
+        let before: Vec<Option<i32>> = tids.iter().map(|t| nice(*t)).collect();
+        let may_restore = before[0].is_some_and(|n| lowest_nice(pid as i32) <= n);
+        let low: Vec<Option<i32>> = before
+            .iter()
+            .map(|b| {
+                b.map(|b| {
+                    if may_restore {
+                        BACKGROUND_NICE.max(b)
+                    } else {
+                        b
+                    }
+                })
+            })
+            .collect();
+        // the work may finish after the call returns: wait for it, up to 10 s
+        let settled = |want: &[Option<i32>]| {
+            let started = Instant::now();
+            loop {
+                let now: Vec<Option<i32>> = tids.iter().map(|t| nice(*t)).collect();
+                if now == want || started.elapsed() > Duration::from_secs(10) {
+                    return now == want;
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        };
+
+        let mut bg = Background::default();
+        let started = Instant::now();
+        bg.lower_app(pid, &[]);
+        let lowering = started.elapsed();
+        let lowered = settled(&low);
+        let started = Instant::now();
+        bg.restore_app(pid, &[]);
+        let restoring = started.elapsed();
+        let restored = settled(&before);
+
+        for p in processes.iter().rev() {
+            if let Some(p) = Pid::from_raw(*p) {
+                let _ = smithay::reexports::rustix::process::kill_process(
+                    p,
+                    smithay::reexports::rustix::process::Signal::KILL,
+                );
+            }
+        }
+        let _ = child.wait();
+        crate::ownership::forget_spawned(pid);
+        assert_eq!(processes.len(), 301, "the shell and its 300 sleeps");
+        assert!(
+            lowered && restored,
+            "lowered {lowered}, restored {restored}"
+        );
+        assert!(
+            lowering < BUDGET && restoring < BUDGET,
+            "lowering took {lowering:?}, restoring {restoring:?}"
+        );
     }
 
     #[test]
