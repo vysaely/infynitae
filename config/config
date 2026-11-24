@@ -848,12 +848,19 @@ REPLAY_DIR="auto"
 
 REPLAY_STORAGE="ram"
     # Where gpu-screen-recorder keeps the replay buffer.
-    # "ram": in memory, about 1.5 GB for 20 minutes at 60 fps. "disk": a file in CLIPS_DIR, almost
-    # no memory; the buffer is written to that drive all the time (pick a CLIPS_DIR on a data
-    # drive). The compositor's capture backend uses REPLAY_DIR instead. Applies when the replay
+    # "ram": in memory: about 0.3 GB for 20 minutes of a desktop, up to about 1.5 GB in fast games
+    # (measured 2026-11-24). "disk": a file in CLIPS_DIR (or REPLAY_DISK_DIR), almost no memory;
+    # the buffer is written to that drive all the time. The compositor's capture backend uses REPLAY_DIR instead. Applies when the replay
     # restarts (the next login, or infynitae-reload recorder, which empties the buffer).
     # default: "ram"
     # options: "ram"  · "disk"
+
+#REPLAY_DISK_DIR="/mnt/III/replay"
+    # With REPLAY_STORAGE="disk": a folder on another drive for the buffer, for example a hard
+    # drive (it takes the constant writing better than an SSD); saved clips are still moved into
+    # CLIPS_DIR. A folder that cannot be written keeps the replay in memory.
+    # default: unset (the buffer in CLIPS_DIR)
+    # options: unset (commented)  · any folder
 
 CLIPS_DIR="$HOME/Videos/Clips"
     # default: "$HOME/Videos/Clips"

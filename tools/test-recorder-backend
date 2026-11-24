@@ -66,7 +66,7 @@ run() {
     [ "${NO_GSR:-0}" = 1 ] && path="/usr/bin:/bin"
     env -i HOME="$TMP/home" XDG_RUNTIME_DIR="$TMP/run" PATH="$path" \
         INFYNITAE_RECORDER_FUNCTIONS=1 RECORD_CODEC="${RECORD_CODEC:-hevc}" \
-        REPLAY_STORAGE="${REPLAY_STORAGE:-}" \
+        REPLAY_STORAGE="${REPLAY_STORAGE:-}" REPLAY_DISK_DIR="${REPLAY_DISK_DIR:-}" \
         STUB_CODECS="${STUB_CODECS:-}" STUB_SCREEN="${STUB_SCREEN:-yes}" \
         sh -c ". '$REPO_DIR/live/record/infynitae-recorder'; $1" 2>/dev/null
 }
@@ -87,6 +87,20 @@ check "replay buffer in RAM by default" \
     "$(run start_gsr_replay | grep '^gsr ' | grep -c -- '-replay-storage')" "0"
 check "replay buffer on disk with REPLAY_STORAGE=disk" \
     "$(REPLAY_STORAGE=disk run start_gsr_replay | grep '^gsr ' | grep -c -- '-replay-storage disk')" "1"
+# REPLAY_DISK_DIR: the buffer and its saves on that drive, each save moved into CLIPS_DIR
+gsr_line=$(REPLAY_STORAGE=disk REPLAY_DISK_DIR="$TMP/hdd" run start_gsr_replay | grep '^gsr ')
+check "REPLAY_DISK_DIR: gpu-screen-recorder writes there" \
+    "$(echo "$gsr_line" | grep -c -- "-o $TMP/hdd")" "1"
+check "REPLAY_DISK_DIR: each save runs the recorder to move it" "$(echo "$gsr_line" | grep -c -- ' -sc ')" "1"
+check "REPLAY_DISK_DIR: the buffer is on disk" "$(echo "$gsr_line" | grep -c -- '-replay-storage disk')" "1"
+gsr_line=$(REPLAY_STORAGE=disk REPLAY_DISK_DIR=/proc/no-such-dir run start_gsr_replay | grep '^gsr ')
+check "a REPLAY_DISK_DIR that cannot be written keeps the replay in memory" \
+    "$(echo "$gsr_line" | grep -c -- '-replay-storage')" "0"
+check "...and in no other folder" "$(echo "$gsr_line" | grep -c -- "-o $TMP/home/Videos/Clips")" "1"
+mkdir -p "$TMP/hdd" && echo clip > "$TMP/hdd/Replay_1.mp4"
+run "move_saved_clip '$TMP/hdd/Replay_1.mp4' replay" >/dev/null
+check "a saved clip moves from REPLAY_DISK_DIR into CLIPS_DIR" \
+    "$( [ -f "$TMP/home/Videos/Clips/Replay_1.mp4" ] && [ ! -e "$TMP/hdd/Replay_1.mp4" ] && echo moved)" "moved"
 : > "$TMP/run/infynitae-gsr-failed"
 check "not usable: failed 3 times this session" "$(run 'gsr_usable && echo yes || echo no')" "no"
 rm "$TMP/run/infynitae-gsr-failed"
