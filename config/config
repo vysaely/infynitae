@@ -642,12 +642,6 @@ ENABLE_EDGE="true"
     # default: true
     # options: true  · false (falls back to fuzzel / control-menu)
 
-EDGE_IMPL="apps"
-    # Which edge runs: "apps" (every card comes from an app), "rust" (the one before it, frozen,
-    # the only one that arranges the desktop's widgets in place) or "c" (the first one, frozen);
-    # the two older ones are kept for a while in case something is missing [reload]
-    # default: apps
-    # options: apps  · rust  · c
 
 EDGE_POSITION="bottom"
     # The edge the built-in panels open from, unless their PANEL_ line says another [reload]
@@ -707,9 +701,8 @@ PANELS_OVERLAP="false"
 
 #WIDGETS="clock:big@60,60,380x150 calendar@60,230,380x330 media@470,60,380x234"
     # The same modules (or cards, app/kind@x,y,WxH) as widgets on the desktop, under the windows:
-    # each at its place (x,y,WxH in screen pixels). Changed here; with EDGE_IMPL="rust" a right
-    # click on a widget (or infynitae-edge widgets) arranges them in place too. Unset: none, and
-    # nothing runs for them [save]
+    # each at its place (x,y,WxH in screen pixels), changed here. Unset: none, and nothing runs for
+    # them [save]
 
 # ═══ Lock & idle ═══════════════════════════════════════════════════════════════════ [save] ═══
 

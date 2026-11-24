@@ -294,7 +294,7 @@ No source: the lists come from `cx.apps`. A value that is no listed app's `exec`
 stays (a command of the owner's). "Automatic" shows what it resolves to only where that is cheap to
 know; otherwise the word alone. Hidden: a row with no app of its category installed; "Mount USB
 drives" and "Name drives" without `udisksctl`. Left to the file: `LAUNCHER`, `MENU_PICKER`, `CLIPBOARD_PICKER`,
-`CONTROL_MENU`, `POLKIT_AGENT`, `NOTIFICATIONS`, `ENABLE_EDGE`, `EDGE_IMPL`, `EDGE_POSITION`,
+`CONTROL_MENU`, `POLKIT_AGENT`, `NOTIFICATIONS`, `ENABLE_EDGE`, `EDGE_POSITION`,
 `EDGE_CONTROL_SIDE` (a reload of the edge closes the panel; a panel's edge is set by editing it),
 `MONITOR_LOG_DIR` (empty by default; folder of `lab*.log` files for the System monitor GPU card).
 Open: `BROWSER` is only what command-line programs run (`live/config.sh`); the browser other apps
