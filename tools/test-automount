@@ -363,22 +363,22 @@ wait_for "$CALLS_LOG" "mount --no-user-interaction -b /dev/sdd1" \
     || { echo "FAIL: no mount after gdbus started again" >&2; kill "$W"; cat "$LOG_FILE" >&2; exit 1; }
 grep -q "monitor restarted" "$LOG_FILE" || { echo "FAIL: no log line for the restart" >&2; kill "$W"; exit 1; }
 sleep 0.5
-# what runs under the watcher: gdbus only (its stand-in became sleep), nothing under it
 children() { grep -l "^PPid:[[:space:]]*$1\$" /proc/[0-9]*/status 2>/dev/null | cut -d/ -f3; }
-# short-lived helpers (the mount's own commands) may still be ending on a slow machine: look a few times
-settled=""
+# gdbus (its stand-in became `sleep 30`) runs straight under the watcher's shell: no extra shell between them
+comm_of() { cat "/proc/$1/comm" 2>/dev/null; }
+direct=""
 for _ in 1 2 3 4 5 6 7 8 9 10; do
-    kids=$(children "$W")
-    grand=""
-    for k in $kids; do grand="$grand$(children "$k")"; done
-    if [ "$(echo "$kids" | wc -w)" = 1 ] && [ -z "$grand" ]; then settled=1; break; fi
+    for k in $(children "$W"); do [ "$(comm_of "$k")" = sleep ] && direct=$k; done
+    [ -n "$direct" ] && break
     sleep 0.3
 done
-if [ -z "$settled" ]; then
-    echo "FAIL: the watcher runs more than one process under it: $kids / $grand" >&2
+if [ -z "$direct" ]; then
+    kids=$(children "$W")
+    echo "FAIL: gdbus does not run straight under the watcher; its children: $(for k in $kids; do printf '%s(%s) ' "$k" "$(comm_of "$k")"; done)" >&2
     kill "$W"
     exit 1
 fi
+kids=$direct
 kill "$W"
 wait "$W" || true
 sleep 0.2
