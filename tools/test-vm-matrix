@@ -1,0 +1,74 @@
+#!/bin/sh
+# tools/test-vm-matrix: tools/vm-matrix/run without a VM: the scripts parse, --dry-run prints for
+# each shape the qemu line and the settings it asks for, creates nothing and starts no qemu, and a
+# shape that does not exist is refused.
+set -u
+
+REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
+RUN="$REPO_DIR/tools/vm-matrix/run"
+TMP=$(mktemp -d "/tmp/infynitae-test-vm-matrix.XXXXXX")
+trap 'rm -rf "$TMP"' EXIT INT TERM
+
+fail=0
+check() {
+    if [ "$2" = "$3" ]; then
+        echo "ok   $1"
+    else
+        echo "FAIL $1: expected '$3', got '$2'"
+        fail=1
+    fi
+}
+# has NAME TEXT PATTERN: a line of TEXT matches the grep pattern
+has() {
+    if printf '%s\n' "$2" | grep -qE -- "$3"; then echo "ok   $1"; else echo "FAIL $1: no line matches '$3'"; fail=1; fi
+}
+
+check "run parses (sh -n)" "$(sh -n "$RUN" 2>&1; echo $?)" 0
+check "smoke.py compiles" "$(python3 -I -c 'import sys; compile(open(sys.argv[1]).read(), sys.argv[1], "exec")' "$REPO_DIR/tools/vm-matrix/smoke.py" 2>&1; echo $?)" 0
+
+# a stub qemu on PATH: --dry-run must never call it
+mkdir -p "$TMP/bin"
+printf '#!/bin/sh\ntouch "%s/qemu-ran"\n' "$TMP" > "$TMP/bin/qemu-system-x86_64"
+cp "$TMP/bin/qemu-system-x86_64" "$TMP/bin/qemu-img"
+chmod +x "$TMP/bin"/*
+dry() { PATH="$TMP/bin:$PATH" VM_DIR="$TMP/vm" OUT="$TMP/out" sh "$RUN" --dry-run "$@"; }
+
+out=$(dry)
+check "dry run exits 0" "$?" 0
+check "every shape listed" "$(printf '%s\n' "$out" | grep -c '^== ')" "$(sh "$RUN" --list | wc -l)"
+check "one qemu line per shape" "$(printf '%s\n' "$out" | grep -c '^nice -n 19 qemu-system-x86_64 ')" "$(sh "$RUN" --list | wc -l)"
+check "nothing created" "$(ls "$TMP/out" 2>&1 >/dev/null | grep -c 'No such file')" 1
+check "qemu not started" "$([ -e "$TMP/qemu-ran" ] && echo ran || echo no)" no
+check "software rendering only (no virtio-vga-gl, no render node)" "$(printf '%s\n' "$out" | grep -c 'virtio-vga-gl\|renderD')" 0
+
+for k in 1 1.25 1.5 2; do
+    one=$(dry "scale-$k")
+    has "scale-$k: OUTPUT_SCALE" "$one" "^config: OUTPUT_SCALE=\"$k\"$"
+    has "scale-$k: smoke expects it" "$one" "--scales $k --mode 1920x1080$"
+done
+one=$(dry two-screens)
+has "two-screens: two virtio-gpu outputs" "$one" "-device virtio-vga,xres=1920,yres=1080,max_outputs=2 "
+has "two-screens: the second at 1.5" "$one" '^config: OUTPUT_VIRTUAL_2_SCALE="1.5"$'
+has "two-screens: the second connected" "$one" "vm-matrix-second-screen.service"
+has "two-screens: smoke expects two" "$one" "--screens 2 --scales 1,1.5 "
+has "two-screens: its everyday test" "$one" "^everyday: .* two_screens$"
+one=$(dry odd-1366x768)
+has "odd-1366x768: the resolution" "$one" "-device virtio-vga,xres=1366,yres=768 "
+has "odd-1366x768: smoke expects it" "$one" "--mode 1366x768$"
+one=$(dry laptop)
+has "laptop: battery and touchpad checks" "$one" "--laptop$"
+has "laptop: tap on" "$one" '^config: TOUCHPAD_TAP="true"$'
+one=$(dry no-xwayland)
+has "no-xwayland: XWAYLAND off" "$one" '^config: XWAYLAND="false"$'
+has "no-xwayland: smoke checks it" "$one" "--no-xwayland$"
+one=$(dry scale-2)
+has "disk: a layer over the VM's disk" "$one" "^qemu-img create -f qcow2 -b $TMP/vm/disk.qcow2 -F qcow2 $TMP/out/scale-2/disk.qcow2$"
+has "disk: qemu boots the layer" "$one" "-drive file=$TMP/out/scale-2/disk.qcow2,"
+# the printed line is the command run: the cloud-init argument's ';' is quoted for the shell
+check "qemu line is one shell command" "$(printf '%s\n' "$one" | grep '^nice ' | sed 's/^nice -n 19 qemu-system-x86_64 /true /' | sh 2>&1; echo $?)" 0
+
+check "unknown shape refused" "$(dry nope 2>/dev/null; echo $?)" 2
+check "unknown option refused" "$(sh "$RUN" --nope >/dev/null 2>&1; echo $?)" 2
+check "a space in OUT refused" "$(OUT="$TMP/a b" sh "$RUN" --dry-run scale-1 >/dev/null 2>&1; echo $?)" 2
+
+exit "$fail"
