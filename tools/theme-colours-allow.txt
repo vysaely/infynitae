@@ -10,5 +10,5 @@ crates/infynitae-wayland/src/lib.rs:BORDER_ACTIVE and BORDER_INACTIVE until the 
 # Colours that are not the theme's.
 crates/infynitae-wayland/src/convert.rs:CANVAS_COLOR's default (#0b0f14) for a host window, black behind the lock, the red capture dot, the black and white fallback pointer
 crates/infynitae-backend-drm/src/render.rs:black behind a fullscreen window, for direct scanout of a window that is not opaque
-live/edge-apps/src/cards/settings_look.rs:the colour picker draws the pure hues, white and black it picks from
+live/edge-apps/src/cards/settings_look/accent.rs:the colour picker draws the pure hues, white and black it picks from
 live/wallpaper/infynitae-wallpaper.c:black under the image, seen beside it in the fit and center modes
