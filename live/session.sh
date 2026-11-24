@@ -52,7 +52,7 @@ if ! command -v infy_bin >/dev/null 2>&1; then
 fi
 if ! command -v infy_on >/dev/null 2>&1; then
     infy_on() {
-        case "${1:-}" in 1|true|yes|on|TRUE|True) return 0 ;; *) return 1 ;; esac
+        case "${1:-}" in 1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Oo][Nn]) return 0 ;; *) return 1 ;; esac
     }
 fi
 

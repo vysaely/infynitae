@@ -1,8 +1,9 @@
-# Shared config parsing cases for shell (live/config.sh + infy_on) and future parser checks.
+# Config lines and what every reader must make of them: live/config.sh with infy_on
+# (tools/test-settings-actions), the compositor's config_line and parse_bool
+# (crates/infynitae-wayland/src/lib.rs) and the edge's value_text (live/edge-apps/src/config.rs).
 # Format (tab-separated, empty lines and # lines ignored; line is last so values may hold spaces/tabs):
 # KEY	EXPECTED	ON_OR_OFF	LINE
 # ON_OR_OFF is "on", "off", or "-" (non-boolean).
-# Note: YES/ON/NO/OFF stay omitted until infy_on and tools/test-session are updated together.
 
 TEST_PLAIN	hello	-	TEST_PLAIN=hello
 TEST_DQ	hello world	-	TEST_DQ="hello world"
@@ -19,6 +20,9 @@ TEST_BOOL_YES_L	yes	on	TEST_BOOL_YES_L="yes"
 TEST_BOOL_ON_L	on	on	TEST_BOOL_ON_L="on"
 TEST_BOOL_TRUE_U	TRUE	on	TEST_BOOL_TRUE_U="TRUE"
 TEST_BOOL_TRUE_T	True	on	TEST_BOOL_TRUE_T="True"
+TEST_BOOL_YES_U	YES	on	TEST_BOOL_YES_U="YES"
+TEST_BOOL_ON_U	ON	on	TEST_BOOL_ON_U=ON
+TEST_BOOL_ON_T	On	on	TEST_BOOL_ON_T='On'
 
 TEST_BOOL_0	0	off	TEST_BOOL_0=0
 TEST_BOOL_FALSE_L	false	off	TEST_BOOL_FALSE_L="false"
@@ -26,3 +30,6 @@ TEST_BOOL_NO_L	no	off	TEST_BOOL_NO_L="no"
 TEST_BOOL_OFF_L	off	off	TEST_BOOL_OFF_L="off"
 TEST_BOOL_FALSE_U	FALSE	off	TEST_BOOL_FALSE_U="FALSE"
 TEST_BOOL_FALSE_T	False	off	TEST_BOOL_FALSE_T="False"
+TEST_BOOL_NO_U	NO	off	TEST_BOOL_NO_U="NO"
+TEST_BOOL_OFF_U	OFF	off	TEST_BOOL_OFF_U=OFF
+TEST_BOOL_AUTO	auto	off	TEST_BOOL_AUTO="auto"

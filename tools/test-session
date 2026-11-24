@@ -127,23 +127,23 @@ if [ ! -f "$TERM_MARKER" ]; then
 fi
 echo "ok Finding 21: spaced paths and commands in NOTIFICATIONS and TERMINAL execute cleanly"
 
-# ---- 4. infy_on accepts 1 true yes on TRUE True and nothing else
+# ---- 4. infy_on accepts 1, true, yes and on in any case and nothing else (as parse_bool does)
 (
     . "$REPO_DIR/live/config.sh"
-    for val in 1 true yes on TRUE True; do
+    for val in 1 true yes on TRUE True tRuE YES Yes ON On; do
         if ! infy_on "$val"; then
             echo "FAIL infy_on: rejected truthy '$val'"
             exit 1
         fi
     done
-    for val in 0 false no off FALSE False 2 "" "true1" "auto" "random" "YES" "ON"; do
+    for val in 0 false no off FALSE False NO OFF 2 "" "true1" " true" "auto" "random" "yes please"; do
         if infy_on "$val"; then
             echo "FAIL infy_on: accepted non-truthy '$val'"
             exit 1
         fi
     done
 )
-echo "ok infy_on: accepts 1 true yes on TRUE True and nothing else"
+echo "ok infy_on: accepts 1, true, yes and on in any case and nothing else"
 
 # ---- 5. Owner, 2026-11-22: the compositor's main thread is raised with reset-on-fork, so what it
 # starts later begins at normal priority; real-time when allowed, else normal with the same flag
