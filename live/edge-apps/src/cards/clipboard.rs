@@ -1,5 +1,7 @@
-//! Clipboard history (`clipboard/history`): `cliphist list` items with click-to-copy and
-//! right/middle-click delete.
+//! Clipboard history (`clipboard/history`): the compositor's own history (`infynitae msg
+//! clipboard`, 2026-11-25), else `cliphist list` with an older compositor. Click copies,
+//! right/middle-click deletes, the pin at a row's end pins it (the compositor's history only), and
+//! the panel's typed query filters the list.
 
 use std::any::Any;
 use std::ffi::{OsStr, OsString};
@@ -22,7 +24,13 @@ use infynitae_edge_apps::clipboard_entry::{sq, MAX_ITEMS};
 const MEDIUM_ROWS: usize = 8;
 const LARGE_ROWS: usize = 16;
 const ROW_H: f64 = ui::LIST_ROW_H;
-const CMD: &str = "cliphist list 2>/dev/null | head -n 24";
+/// The compositor's history; with a compositor from before it, a `cliphist` line and cliphist's.
+const CMD: &str =
+    "infynitae msg clipboard 2>/dev/null || { echo cliphist; cliphist list 2>/dev/null | head -n 24; }";
+/// The first line of `CMD`'s output when cliphist answered.
+const CLIPHIST_MARK: &str = "cliphist";
+/// The pin's hit at the end of row `i` (rows are `i + 1`).
+const PIN_HIT: u32 = 10_000;
 const MISSING_MSG: &str = "cliphist is not installed";
 
 pub struct Clipboard;
@@ -67,9 +75,33 @@ impl Provider for Clipboard {
     }
 }
 
+/// before the tab, which the compositor wrote). None for a line without one.
+fn own_request(cmd: &str, raw_line: &str, on: Option<bool>) -> Option<String> {
+    let id: u64 = raw_line.split('\t').next()?.parse().ok()?;
+    let on = on.map_or(String::new(), |on| format!(",\"on\":{on}"));
+    Some(format!(
+        "{{\"id\":0,\"cmd\":\"{cmd}\",\"entry\":{id}{on}}}\n"
+    ))
+}
+
+/// An entry put back through the compositor's own history (`infynitae msg clipboard use`); `None`
+/// with a compositor that keeps none (cliphist's then, through [`ClipItem::copy`]).
+pub(crate) trait CopyOwn {
+    fn copy_own(&self) -> Option<String>;
+}
+
+impl CopyOwn for ClipItem {
+    fn copy_own(&self) -> Option<String> {
+        own_request("clipboard_use", &self.raw_line, None)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ClipboardData {
     installed: bool,
+    /// The compositor's history (else cliphist's): entries are used, pinned and deleted through
+    /// the shell socket.
+    pub(crate) own: bool,
     pub(crate) items: Vec<ClipItem>,
 }
 
@@ -97,33 +129,41 @@ impl ClipboardSource {
             if !has_key {
                 return ClipboardData {
                     installed: false,
+                    own: false,
                     items: Vec::new(),
                 };
             }
-            let out = run_sh("clipboard", CMD);
+        }
+        self.data_of(&run_sh("clipboard", CMD))
+    }
+
+    /// `CMD`'s output as the card's data: the compositor's history, or cliphist's when cliphist
+    /// answered (and missing when it is not installed).
+    fn data_of(&self, out: &str) -> ClipboardData {
+        let Some(rest) = out
+            .strip_prefix(CLIPHIST_MARK)
+            .and_then(|r| r.strip_prefix('\n'))
+        else {
             return ClipboardData {
                 installed: true,
-                items: parse_cliphist(&out),
+                own: true,
+                items: parse_cliphist(out),
             };
-        }
-
+        };
         let installed = match &self.path {
             Some(p) => has_executable("cliphist", p),
             None => std::env::var_os("PATH")
                 .as_deref()
                 .is_some_and(|p| has_executable("cliphist", p)),
         };
-        if !installed {
-            return ClipboardData {
-                installed: false,
-                items: Vec::new(),
-            };
-        }
-
-        let out = run_sh("clipboard", CMD);
         ClipboardData {
-            installed: true,
-            items: parse_cliphist(&out),
+            installed,
+            own: false,
+            items: if installed {
+                parse_cliphist(rest)
+            } else {
+                Vec::new()
+            },
         }
     }
 }
@@ -143,6 +183,8 @@ fn parse_cliphist(out: &str) -> Vec<ClipItem> {
 #[derive(Default)]
 struct HistoryCard {
     data: Option<ClipboardData>,
+    /// The panel's typed query, in lowercase: only items whose text holds it are shown.
+    query: String,
     scroll: usize,
     scroll_accum: f64,
 }
@@ -155,8 +197,16 @@ impl HistoryCard {
         }
     }
 
-    fn visible_range_for(d: &ClipboardData, size: Size, scroll: usize) -> Range<usize> {
-        let n = d.items.len();
+    /// The items the query lets through, as indices into `items`.
+    fn shown(&self, d: &ClipboardData) -> Vec<usize> {
+        (0..d.items.len())
+            .filter(|&i| {
+                self.query.is_empty() || d.items[i].preview.to_lowercase().contains(&self.query)
+            })
+            .collect()
+    }
+
+    fn visible_range_for(n: usize, size: Size, scroll: usize) -> Range<usize> {
         let limit = Self::visible_limit(size);
         let max_scroll = n.saturating_sub(limit);
         let start = scroll.min(max_scroll);
@@ -194,8 +244,11 @@ impl Card for HistoryCard {
     fn height(&self, cx: &Cx, _width: f64) -> f64 {
         match &self.data {
             None => ROW_H,
-            Some(d) if !d.installed || d.items.is_empty() => ROW_H,
-            Some(d) => Self::visible_range_for(d, cx.size, self.scroll).len() as f64 * ROW_H,
+            Some(d) if !d.installed => ROW_H,
+            Some(d) => {
+                let n = self.shown(d).len();
+                (Self::visible_range_for(n, cx.size, self.scroll).len() as f64 * ROW_H).max(ROW_H)
+            }
         }
     }
 
@@ -206,30 +259,59 @@ impl Card for HistoryCard {
         if !d.installed {
             return;
         }
-        if d.items.is_empty() {
+        let shown = self.shown(d);
+        if shown.is_empty() {
             let t = Text {
                 size: 13.0,
                 bold: false,
                 color: cx.theme.muted,
-                text: "Nothing copied yet",
+                text: if d.items.is_empty() {
+                    "Nothing copied yet"
+                } else {
+                    "No copied item holds this text"
+                },
             };
             let (_, th) = draw::measure(cr, &t);
             draw::text(cr, body.0 + 8.0, body.1 + (ROW_H - th) / 2.0, &t);
             return;
         }
 
-        let range = Self::visible_range_for(d, cx.size, self.scroll);
+        let range = Self::visible_range_for(shown.len(), cx.size, self.scroll);
         let start = range.start;
-        for (row_i, idx) in range.enumerate() {
-            let item = &d.items[idx];
+        for (row_i, pos) in range.enumerate() {
+            let item = &d.items[shown[pos]];
             let ry = body.1 + row_i as f64 * ROW_H;
             let row_r = (body.0, ry, body.2, ROW_H);
-            let id = (idx + 1) as u32;
-            if hits.add(id, row_r) || hits.selected(id) {
+            let id = (pos + 1) as u32;
+            let pointed = hits.add(id, row_r);
+            if pointed || hits.selected(id) {
                 ui::light(cr, cx, row_r);
             }
+            // the pin: shown on a pinned row, and on the row pointed at to pin it
+            let pin_w = if d.own && (pointed || item.pinned) {
+                let pin_r = (body.0 + body.2 - 32.0, ry, 32.0, ROW_H);
+                let over = hits.add(PIN_HIT + id, pin_r);
+                let color = if item.pinned || over {
+                    cx.theme.accent
+                } else {
+                    cx.theme.muted
+                };
+                draw_item_icon(
+                    cr,
+                    ClipKind::Text,
+                    true,
+                    pin_r.0 + 8.0,
+                    ry + (ROW_H - 16.0) / 2.0,
+                    color,
+                );
+                32.0
+            } else {
+                0.0
+            };
 
-            let ic_color = if item.pinned {
+            // the compositor's history shows a pin at the row's end; cliphist's in place of the icon
+            let pin_left = item.pinned && !d.own;
+            let ic_color = if pin_left {
                 cx.theme.accent
             } else {
                 cx.theme.muted
@@ -237,25 +319,31 @@ impl Card for HistoryCard {
             draw_item_icon(
                 cr,
                 kind_of(item),
-                item.pinned,
+                pin_left,
                 body.0 + 8.0,
                 ry + (ROW_H - 16.0) / 2.0,
                 ic_color,
             );
 
-            let right_pad = if item.time.is_empty() {
-                8.0
-            } else {
-                let time_t = Text {
-                    size: draw::SIZE_NOTE,
-                    bold: false,
-                    color: cx.theme.muted,
-                    text: &item.time,
+            let right_pad = pin_w
+                + if item.time.is_empty() {
+                    8.0
+                } else {
+                    let time_t = Text {
+                        size: draw::SIZE_NOTE,
+                        bold: false,
+                        color: cx.theme.muted,
+                        text: &item.time,
+                    };
+                    let (tw, th) = draw::measure(cr, &time_t);
+                    draw::text_right(
+                        cr,
+                        body.0 + body.2 - pin_w - 8.0,
+                        ry + (ROW_H - th) / 2.0,
+                        &time_t,
+                    );
+                    tw + 16.0
                 };
-                let (tw, th) = draw::measure(cr, &time_t);
-                draw::text_right(cr, body.0 + body.2 - 8.0, ry + (ROW_H - th) / 2.0, &time_t);
-                tw + 16.0
-            };
 
             let text_x = body.0 + 8.0 + 16.0 + 10.0;
             let max_w = (body.0 + body.2 - right_pad - text_x).max(0.0);
@@ -274,32 +362,71 @@ impl Card for HistoryCard {
             cr,
             cx,
             body,
-            d.items.len() as f64 * ROW_H,
+            shown.len() as f64 * ROW_H,
             start as f64 * ROW_H,
         );
     }
 
     fn event(&mut self, ev: &Event, cx: &Cx, out: &mut Vec<Action>) -> bool {
-        let Some(d) = &mut self.data else {
+        if let Event::Text(q) = ev {
+            let q = q.trim().to_lowercase();
+            if q == self.query {
+                return false;
+            }
+            self.query = q;
+            self.scroll = 0;
+            return true;
+        }
+        let Some(d) = &self.data else {
             return false;
         };
         if !d.installed {
             return false;
         }
+        let shown = self.shown(d);
+        // a row's hit (or its pin's) as the item's index
+        let item_of = |hit: u32| {
+            let pos = (hit % PIN_HIT).checked_sub(1)? as usize;
+            shown.get(pos).copied()
+        };
+        let Some(d) = &mut self.data else {
+            return false;
+        };
         match ev {
             Event::Press {
                 hit,
                 button: Button::Left,
                 ..
+            } if *hit > PIN_HIT && d.own => {
+                let Some(idx) = item_of(*hit) else {
+                    return false;
+                };
+                let item = &mut d.items[idx];
+                item.pinned = !item.pinned;
+                if let Some(line) = own_request("clipboard_pin", &item.raw_line, Some(item.pinned))
+                {
+                    out.push(Action::ShellCommand(line));
+                }
+                d.items.sort_by_key(|it| !it.pinned);
+                true
+            }
+            Event::Press {
+                hit,
+                button: Button::Left,
+                ..
             } => {
-                let Some(idx) = hit.checked_sub(1).map(|i| i as usize) else {
+                let Some(item) = item_of(*hit).map(|i| &d.items[i]) else {
                     return false;
                 };
-                let Some(item) = d.items.get(idx) else {
-                    return false;
-                };
-                // Shell breaks out of action processing once ClosePanel runs, so Run must come first.
-                out.push(Action::Run(copy_command(&item.raw_line)));
+                // Shell breaks out of action processing once ClosePanel runs, so the copy comes first.
+                if d.own {
+                    match own_request("clipboard_use", &item.raw_line, None) {
+                        Some(line) => out.push(Action::ShellCommand(line)),
+                        None => return false,
+                    }
+                } else {
+                    out.push(Action::Run(copy_command(&item.raw_line)));
+                }
                 out.push(Action::ClosePanel);
                 true
             }
@@ -309,21 +436,24 @@ impl Card for HistoryCard {
                 ..
             }
             | Event::Delete { hit } => {
-                let Some(idx) = hit.checked_sub(1).map(|i| i as usize) else {
+                let Some(idx) = item_of(*hit) else {
                     return false;
                 };
-                if idx >= d.items.len() {
-                    return false;
-                }
                 let removed = d.items.remove(idx);
-                let max_scroll = d.items.len().saturating_sub(Self::visible_limit(cx.size));
+                let max_scroll = (shown.len() - 1).saturating_sub(Self::visible_limit(cx.size));
                 self.scroll = self.scroll.min(max_scroll);
-                out.push(Action::Run(delete_command(&removed.raw_line)));
+                if d.own {
+                    if let Some(line) = own_request("clipboard_delete", &removed.raw_line, None) {
+                        out.push(Action::ShellCommand(line));
+                    }
+                } else {
+                    out.push(Action::Run(delete_command(&removed.raw_line)));
+                }
                 true
             }
             Event::Scroll { dy, notches, .. } => {
                 let limit = Self::visible_limit(cx.size);
-                let max_scroll = d.items.len().saturating_sub(limit);
+                let max_scroll = shown.len().saturating_sub(limit);
                 crate::card::scroll_rows(
                     &mut self.scroll,
                     &mut self.scroll_accum,
@@ -332,7 +462,6 @@ impl Card for HistoryCard {
                     *notches,
                 )
             }
-            Event::Text(_) => false,
             _ => false,
         }
     }
@@ -514,7 +643,7 @@ pinned:101\tmulti\rline\x07 bell\t1h
         assert_eq!(items[0].raw_line, "109\tvalid item");
 
         let mut many = String::new();
-        for i in 1..=30 {
+        for i in 1..=MAX_ITEMS + 6 {
             many.push_str(&format!("{i}\tentry {i}\n"));
         }
         assert_eq!(parse_cliphist_with_home(&many, None).len(), MAX_ITEMS);
@@ -568,11 +697,12 @@ pinned:101\tmulti\rline\x07 bell\t1h
         let empty = dir.join("empty");
         std::fs::create_dir_all(&empty).unwrap();
 
-        let mut src = ClipboardSource {
+        // what `CMD` prints with a compositor from before its own history (not run here: it
+        // would ask the desktop the tests run on)
+        let src = ClipboardSource {
             path: Some(empty.clone().into_os_string()),
         };
-        let d = src.fetch();
-        let d = d.downcast_ref::<ClipboardData>().unwrap();
+        let d = src.data_of("cliphist\n");
         assert!(!d.installed);
         assert!(d.items.is_empty());
 
@@ -603,6 +733,7 @@ pinned:101\tmulti\rline\x07 bell\t1h
             "wrong",
             &ClipboardData {
                 installed: true,
+                own: false,
                 items: vec![]
             }
         ));
@@ -612,6 +743,7 @@ pinned:101\tmulti\rline\x07 bell\t1h
             "clipboard",
             &ClipboardData {
                 installed: false,
+                own: false,
                 items: vec![],
             }
         ));
@@ -629,6 +761,7 @@ pinned:101\tmulti\rline\x07 bell\t1h
 
         let empty_data = ClipboardData {
             installed: true,
+            own: false,
             items: vec![],
         };
         assert!(card.apply("clipboard", &empty_data));
@@ -643,6 +776,7 @@ pinned:101\tmulti\rline\x07 bell\t1h
             "clipboard",
             &ClipboardData {
                 installed: true,
+                own: false,
                 items,
             }
         ));
@@ -688,9 +822,9 @@ pinned:101\tmulti\rline\x07 bell\t1h
         );
         assert_eq!(card.data.as_ref().unwrap().items.len(), 1);
 
-        // Middle click deletes as well; Text events do not filter clipboard.
+        // Middle click deletes as well; the typed query filters the list (here to the one left).
         out.clear();
-        assert!(!card.event(&Event::Text("git"), &cx_m, &mut out));
+        assert!(card.event(&Event::Text("git"), &cx_m, &mut out));
         assert!(out.is_empty());
         assert!(card.event(
             &Event::Press {
@@ -729,6 +863,7 @@ pinned:101\tmulti\rline\x07 bell\t1h
             "clipboard",
             &ClipboardData {
                 installed: true,
+                own: false,
                 items: vec![ClipItem {
                     raw_line: raw_line.clone(),
                     preview: "alpha'beta".into(),
@@ -826,6 +961,7 @@ pinned:101\tmulti\rline\x07 bell\t1h
             (
                 Some(ClipboardData {
                     installed: false,
+                    own: false,
                     items: vec![],
                 }),
                 0,
@@ -833,6 +969,7 @@ pinned:101\tmulti\rline\x07 bell\t1h
             (
                 Some(ClipboardData {
                     installed: true,
+                    own: false,
                     items: vec![],
                 }),
                 0,
@@ -852,6 +989,7 @@ pinned:101\tmulti\rline\x07 bell\t1h
             "clipboard",
             &ClipboardData {
                 installed: true,
+                own: false,
                 items,
             },
         );
@@ -907,5 +1045,103 @@ pinned:101\tmulti\rline\x07 bell\t1h
                 assert!(r.1 + r.3 <= body.1 + h + 0.001);
             }
         }
+    }
+
+    #[test]
+    fn the_compositors_history_is_used_pinned_and_deleted_through_the_shell_socket() {
+        let src = ClipboardSource::default();
+        let d = src.data_of(
+            "pinned:7\tkept note\n5\t[[ binary data 24 KiB png 1920x1080 ]]\n3\tgit push\n",
+        );
+        assert!(d.installed && d.own);
+        assert_eq!(d.items.len(), 3);
+        assert!(d.items[0].pinned);
+        assert_eq!(d.items[1].preview, "Image 1920x1080");
+        let th = test_theme();
+        let cx = make_cx(&th, Size::M);
+        let mut card = HistoryCard::default();
+        assert!(card.apply("clipboard", &d));
+
+        // the row pointed at shows its pin, and only it (and the pinned row) has one
+        let h = card.height(&cx, 360.0);
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 400, h as i32).unwrap();
+        let cr = cairo::Context::new(&surf).unwrap();
+        let mut hits = Hits::new(Some((20.0, ROW_H * 1.5)), None);
+        card.draw(&cr, &cx, (0.0, 0.0, 360.0, h), &mut hits);
+        let ids: Vec<u32> = hits.list.iter().map(|(id, _)| *id).collect();
+        assert_eq!(ids, [1, PIN_HIT + 1, 2, PIN_HIT + 2, 3]);
+
+        let press = |hit: u32, button: Button| Event::Press {
+            hit,
+            button,
+            at: (0.0, 0.0),
+        };
+        let mut out = Vec::new();
+        assert!(card.event(&press(2, Button::Left), &cx, &mut out));
+        assert_eq!(
+            out,
+            [
+                Action::ShellCommand("{\"id\":0,\"cmd\":\"clipboard_use\",\"entry\":5}\n".into()),
+                Action::ClosePanel
+            ]
+        );
+        out.clear();
+        assert!(card.event(&press(PIN_HIT + 1, Button::Left), &cx, &mut out));
+        assert_eq!(
+            out,
+            [Action::ShellCommand(
+                "{\"id\":0,\"cmd\":\"clipboard_pin\",\"entry\":7,\"on\":false}\n".into()
+            )]
+        );
+        assert!(!card.data.as_ref().unwrap().items[0].pinned);
+        out.clear();
+        assert!(card.event(&press(3, Button::Right), &cx, &mut out));
+        assert_eq!(
+            out,
+            [Action::ShellCommand(
+                "{\"id\":0,\"cmd\":\"clipboard_delete\",\"entry\":3}\n".into()
+            )]
+        );
+        assert_eq!(card.data.as_ref().unwrap().items.len(), 2);
+    }
+
+    #[test]
+    fn the_typed_query_filters_the_list_and_says_when_nothing_holds_it() {
+        let src = ClipboardSource::default();
+        let d = src.data_of("9\tGit push origin\n8\tcargo test\n7\tgit status\n");
+        let th = test_theme();
+        let cx = make_cx(&th, Size::M);
+        let mut card = HistoryCard::default();
+        card.apply("clipboard", &d);
+        let mut out = Vec::new();
+        assert!(card.event(&Event::Text(" GIT "), &cx, &mut out));
+        assert!(
+            !card.event(&Event::Text("git"), &cx, &mut out),
+            "the same query"
+        );
+        assert_eq!(card.height(&cx, 360.0), 2.0 * ROW_H);
+        // the second row shown is the third item
+        assert!(card.event(
+            &Event::Press {
+                hit: 2,
+                button: Button::Left,
+                at: (0.0, 0.0),
+            },
+            &cx,
+            &mut out
+        ));
+        assert_eq!(
+            out[0],
+            Action::ShellCommand("{\"id\":0,\"cmd\":\"clipboard_use\",\"entry\":7}\n".into())
+        );
+        assert!(card.event(&Event::Text("nothing like it"), &cx, &mut out));
+        assert_eq!(card.height(&cx, 360.0), ROW_H);
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 360, ROW_H as i32).unwrap();
+        let cr = cairo::Context::new(&surf).unwrap();
+        let mut hits = Hits::new(None, None);
+        card.draw(&cr, &cx, (0.0, 0.0, 360.0, ROW_H), &mut hits);
+        assert!(hits.list.is_empty());
+        assert!(card.event(&Event::Text(""), &cx, &mut out));
+        assert_eq!(card.height(&cx, 360.0), 3.0 * ROW_H);
     }
 }
