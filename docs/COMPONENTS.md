@@ -10,7 +10,7 @@ this repository already.
 | :--- | :--- | :--- | :--- | :--- |
 | Terminal | first installed: kitty, alacritty, foot… | wezterm, ghostty, konsole, any | `TERMINAL` | No: huge, and good ones exist |
 | Launcher | the edge (Super+W), fuzzel without it | rofi, tofi, wofi, walker, anyrun | `LAUNCHER`, `ENABLE_EDGE` | **Yes, a good fit**: a launcher that knows the canvas (open here, jump to a window). The edge is a start |
-| Menus (control menu, clipboard) | `fuzzel --dmenu` | `rofi -dmenu`, tofi, bemenu, `wofi --dmenu` | `MENU_PICKER` | Comes with our launcher |
+| Menus (Open with, the screen-sharing question; without the edge the control menu and clipboard) | `fuzzel --dmenu` | `rofi -dmenu`, tofi, bemenu, `wofi --dmenu` | `MENU_PICKER` | Comes with our launcher |
 | File manager | thunar with tumbler's previews (installed unless another is in use); yazi, lf (in the terminal), nemo, dolphin when installed | nautilus, pcmanfm, any | `FILE_MANAGER` | No |
 | System monitor | a window if installed (missioncenter, gnome-system-monitor, plasma-systemmonitor), else btop, htop or top in the terminal | any | `SYSTEM_MONITOR` | No |
 | Browser | the system default | any | `BROWSER` | No |
@@ -21,9 +21,9 @@ this repository already.
 | :--- | :--- | :--- | :--- | :--- |
 | Notifications | the edge (ours), else first installed: mako, swaync, dunst, fnott | mako, swaync (with a panel), dunst, fnott | `NOTIFICATIONS` | Ours (pop-ups and history in `live/edge-apps`) |
 | Volume / brightness pop-ups | `notify-send` from `live/launch.sh` | swayosd, avizo, wob | none yet (the edge's sound card shows the level) | **Yes, small**: a native on-screen display |
-| Control menu (Wi-Fi, Bluetooth, volume, sound output, power) | `live/control-menu` (ours) on fuzzel | nm-applet, iwgtk, blueman, pwvucontrol, a bar's widgets | `CONTROL_MENU` | Ours already; the edge's control panel (Super+A) is the graphical one |
-| Bar / panel | the edge (ours: `live/edge-apps`) | waybar, ironbar, eww, quickshell | `ENABLE_EDGE="false"`, then start yours in `autostart.sh`; `LAUNCHER` / `CONTROL_MENU` give it Super+W / Super+A | Ours |
-| Clipboard history | cliphist + wl-clip-persist | clipman, copyq | `CLIPBOARD_HISTORY`, `CLIPBOARD_PICKER` | Low value |
+| Control menu (Wi-Fi, Bluetooth, volume, sound output, power) | `live/control-menu` (ours) on fuzzel | nm-applet, iwgtk, blueman, pwvucontrol, a bar's widgets | `BIND_CONTROL` and `EXEC_` (another command on Super+A) | Ours already; the edge's control panel (Super+A) is the graphical one |
+| Bar / panel | the edge (ours: `live/edge-apps`) | waybar, ironbar, eww, quickshell | `ENABLE_EDGE="false"`, then start yours in `autostart.sh`; `LAUNCHER` gives it Super+W, `BIND_CONTROL="none"` with an `EXEC_` line Super+A | Ours |
+| Clipboard history | cliphist + wl-clip-persist | clipman, copyq | `CLIPBOARD_HISTORY`, `MENU_PICKER` | Low value |
 | Screenshots | `infynitae-shot` (ours, `live/shot-rs`), else `grim` + `slurp` | grimblast, flameshot, satty (annotate) | `SCREENSHOT_CMD` (whole screen) | Ours (`live/shot-rs`) |
 | Recording, replay buffer | `infynitae-recorder` (ours) + ffmpeg | wf-recorder, gpu-screen-recorder, OBS | `ENABLE_REPLAY_BUFFER` | Ours |
 | Wallpaper | `infynitae-wallpaper` (ours) | swaybg, swww, mpvpaper | `WALLPAPER` | Ours |

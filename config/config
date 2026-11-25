@@ -590,21 +590,12 @@ CLIPBOARD_HISTORY="true"
     # default: true
     # options: true  · false
 
-CLIPBOARD_PICKER=""
-    # Super+V picker
-    # default: ""
-    #   ""    infynitae-edge clipboard (or MENU_PICKER)  · any dmenu-style command
-
 MENU_PICKER=""
-    # Menus (control menu, clipboard)
+    # The menu for Open with, the screen-sharing and remote desktop questions, and without the
+    # edge the control menu, clipboard history and window list; set, it also replaces the
+    # edge's clipboard panel and screen picker
     # default: ""
     #   ""    fuzzel --dmenu  · any dmenu-style command, e.g. "rofi -dmenu"
-
-CONTROL_MENU="auto"
-    # Super+A — Wi-Fi, Bluetooth, volume (all sound or one app), sound output, power mode, do
-    # not disturb (the parts whose tools are installed)
-    # default: auto
-    # options: auto  · a command
 
 TRAY_CARD="menu"
     # The edge from apps: a right click on a tray app's icon shows, in the panel's place, its own
@@ -685,9 +676,6 @@ FAVORITES=""
 #   (module@half for a half); the line from before is kept in ~/.config/infynitae/panels.backup.
 #   A line written with places (module@x,y,WxH, the older editor) is read in order, side by side
 #   modules as halves. An open list (networks, devices, sound, replay) opens beside the panel.
-#   The desktop's widgets (WIDGETS) keep free placement; for them Snap and Overlap still apply:
-PANELS_SNAP="true"
-PANELS_OVERLAP="false"
 # Four panels are built in; a line for one of them changes only what it says (PANEL_CONTROL="left"
 # moves it and keeps its key and modules). Any other name is a new panel:
 #   PANEL_APPS="SUPER+W top center search favorites apps"

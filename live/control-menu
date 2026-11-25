@@ -4,7 +4,7 @@
 # (NetworkManager) or iwctl (iwd), bluetoothctl (bluez-utils), pactl (pipewire-pulse),
 # powerprofilesctl (power-profiles-daemon), makoctl or swaync-client. The picker is MENU_PICKER
 # (empty: fuzzel --dmenu); any dmenu-style command works.
-# CONTROL_MENU in the config replaces this whole menu with your own command.
+# Super+A runs another command with BIND_CONTROL="none" and EXEC_<NAME>="SUPER+A:command" in the config.
 
 PICKER="${MENU_PICKER:-fuzzel --dmenu}"
 TERM_BIN="${TERMINAL:-auto}"

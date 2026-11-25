@@ -583,26 +583,22 @@ GM_ARGS
         esac
         ;;
     control-menu)
-        # Super+A: the control flyout (or CONTROL_MENU if set)
-        case "${CONTROL_MENU:-auto}" in
-            auto|"")
-                if edge_on; then
-                    exec "$EDGE_BIN" control
-                fi
-                for m in "$HOME/.local/bin/infynitae-control-menu" "$HOME/infynitae/live/control-menu"; do
-                    if [ -x "$m" ]; then exec "$m"; fi
-                done
-                ;;
-            *) exec sh -c "$CONTROL_MENU" ;;
-        esac
+        # Super+A: the edge's control panel, else the control menu (another command: BIND_CONTROL
+        # and EXEC_ in the config)
+        if edge_on; then
+            exec "$EDGE_BIN" control
+        fi
+        for m in "$HOME/.local/bin/infynitae-control-menu" "$HOME/infynitae/live/control-menu"; do
+            if [ -x "$m" ]; then exec "$m"; fi
+        done
         ;;
     clipboard-history)
-        # Super+V: Clipboard history picker (native infynitae-edge clipboard mode, or CLIPBOARD_PICKER / MENU_PICKER / fuzzel)
+        # Super+V: Clipboard history picker (the edge's clipboard panel, or MENU_PICKER / fuzzel)
         if command -v cliphist >/dev/null 2>&1; then
-            if edge_on && [ -z "${CLIPBOARD_PICKER:-}" ] && [ -z "${MENU_PICKER:-}" ]; then
+            if edge_on && [ -z "${MENU_PICKER:-}" ]; then
                 exec "$EDGE_BIN" clipboard
             fi
-            PICKER="${CLIPBOARD_PICKER:-${MENU_PICKER:-fuzzel --dmenu}}"
+            PICKER="${MENU_PICKER:-fuzzel --dmenu}"
             # Escape in the picker selects nothing: the clipboard is left as it was
             PICK=$(cliphist list | $PICKER)
             [ -n "$PICK" ] && printf '%s\n' "$PICK" | cliphist decode | wl-copy

@@ -6,3 +6,7 @@ ISLAND_EDGE          EDGE_POSITION
 ISLAND_CONTROL_SIDE  EDGE_CONTROL_SIDE
 CONTROL_MODULES      -                    # the control panel's modules: still read by the edge, not rewritten; PANEL_CONTROL since 2026-11-07
 EDGE_IMPL            -                    # chose the C, Rust or apps edge; the edge from apps is the only one since 2026-11-24
+CLIPBOARD_PICKER     -                    # Super+V's picker; MENU_PICKER, or BIND_CLIPBOARD and EXEC_, since 2026-11-25
+CONTROL_MENU         -                    # Super+A's command; BIND_CONTROL and EXEC_ since 2026-11-25
+PANELS_SNAP          -                    # the old edges' widget placement; nothing read them since 2026-11-24
+PANELS_OVERLAP       -

@@ -557,8 +557,6 @@ pub struct Config {
     /// WIDGETS: the desktop's widgets, None without the line or with no placed widget
     pub widgets: Option<Panel>,
     pub favorites: String,
-    pub snap: bool,
-    pub overlap: bool,
     pub surface: [u8; 3],
     pub text: [u8; 3],
     pub accent: [u8; 3],
@@ -625,8 +623,6 @@ impl Config {
             panels: Vec::new(),
             widgets: None,
             favorites: String::new(),
-            snap: true,
-            overlap: false,
             surface: [0x11, 0x13, 0x17],
             text: [0xee, 0xf2, 0xf8],
             accent: [0x33, 0x3b, 0x54],
@@ -680,15 +676,6 @@ impl Config {
                     }
                 }
                 "FAVORITES" => c.favorites = value_text(v),
-                "PANELS_SNAP" | "PANELS_OVERLAP" => {
-                    let t = value_text(v).to_ascii_lowercase();
-                    let on = !matches!(t.as_str(), "false" | "off" | "no" | "0");
-                    if key == "PANELS_SNAP" {
-                        c.snap = on
-                    } else {
-                        c.overlap = on
-                    }
-                }
                 "SURFACE_COLOR" => c.surface = parse_hex(v).unwrap_or(c.surface),
                 "BORDER_INACTIVE" => c.hair = parse_hex(v).or(c.hair),
                 "ACCENT" => {
@@ -1058,12 +1045,6 @@ mod tests {
     #[test]
     fn audit_config_edge_value_text_decodes_escaped_single_quote() {
         assert_eq!(value_text("'O'\\''Reilly'"), "O'Reilly");
-    }
-
-    #[test]
-    #[ignore = "AUDIT_CONFIG: empty PANELS_OVERLAP flips default false to true"]
-    fn audit_config_edge_panels_overlap_empty_stays_false() {
-        assert!(!Config::from_text("PANELS_OVERLAP=\"\"\n").overlap);
     }
 
     #[test]
