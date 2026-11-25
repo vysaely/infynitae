@@ -1,18 +1,23 @@
 #!/bin/sh
-# tools/test-sleep-lock: test live/infynitae-sleep-lock without logind or a compositor. The
-# compositor's answer (`infynitae msg snapshot`), the inhibitor, logind's delay and the lock
-# screen are stand-ins; logind's signals come through INFYNITAE_SLEEP_MONITOR.
+# tools/test-sleep-lock: test live/infynitae-sleep-lock, run by live/bus-watch as in a session,
+# without logind or a compositor. The compositor's answer (`infynitae msg snapshot`), logind's
+# delay and the lock screen are stand-ins; logind's signals and inhibitor come from tools/bus-stub
+# on a private bus (tools/bus-stub.sh).
 # It checks: the sleep goes on only once the compositor says the session is locked; a process
 # merely named like the lock screen counts for nothing; a lock that is not confirmed keeps the
-# inhibitor (the sleep is never let go early).
+# inhibitor (the sleep is never let go early); the wake takes it again; the lock screen never
+# holds it; one watcher per session.
 set -eu
 
 REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
 SCRIPT="$REPO_DIR/live/infynitae-sleep-lock"
 TMP=$(mktemp -d "/tmp/infynitae-test-sleep-lock.XXXXXX")
-trap 'rm -rf "$TMP"' EXIT INT TERM
 BIN="$TMP/bin"
-mkdir -p "$BIN" "$TMP/home" "$TMP/run"
+mkdir -p "$BIN" "$TMP/home" "$TMP/run" "$TMP/bus"
+. "$REPO_DIR/tools/bus-stub.sh"
+bus_build "$TMP/bus"
+bus_start
+trap 'bus_stop; rm -rf "$TMP"' EXIT INT TERM
 
 # the compositor: locked once $TMP/locked exists
 cat > "$BIN/infynitae" <<EOF
@@ -27,12 +32,6 @@ fi
 [ -f "$TMP/no-snapshot" ] && exit 2
 if [ -f "$TMP/locked" ]; then echo '{"id":1,"ok":true,"snapshot":{"locked":true}}'
 else echo '{"id":1,"ok":true,"snapshot":{"locked":false}}'; fi
-EOF
-# the inhibitor: alive until killed (released)
-cat > "$BIN/systemd-inhibit" <<EOF
-#!/bin/sh
-echo \$\$ > "$TMP/inhibitor.pid"
-exec sleep 1000
 EOF
 # logind's delay limit: 1 s, so the test is quick
 cat > "$BIN/busctl" <<EOF
@@ -56,28 +55,40 @@ EOF
 chmod +x "$BIN"/*
 
 fail=0
-# run LOCKER [pre-locked]: one announced sleep; prints the script's log
+# waits up to 5 s for N inhibitors open
+inhibitors_are() {
+    i=0
+    while [ "$(inhibitors)" != "$1" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+    [ "$(inhibitors)" = "$1" ]
+}
+# run LOCKER [pre-locked]: one announced sleep; prints the script's log. WAKE=1: the wake after it,
+# and a second watcher started meanwhile
 run() {
-    rm -f "$TMP/locked" "$TMP/inhibitor.pid"
+    rm -f "$TMP/locked"
     rm -rf "$TMP/home/.local/state"
     [ "${2:-}" = pre ] && touch "$TMP/locked"
     HOME="$TMP/home" XDG_RUNTIME_DIR="$TMP/run" PATH="$BIN:$PATH" \
         INFYNITAE_BIN="$BIN/infynitae" SCREEN_LOCKER="$BIN/$1" \
-        INFYNITAE_SLEEP_MONITOR="sleep 0.3; echo 'PrepareForSleep (true,)'; sleep 3" \
-        sh "$SCRIPT" &
+        "$BUS_WATCH" --sleep "$SCRIPT" &
     pid=$!
-    sleep 2.5
+    inhibitors_are 1 || { echo "FAIL  the watcher took no inhibitor"; fail=1; }
+    bus_send "PrepareForSleep true"
+    sleep 2.2
     # the inhibitor still held?
     held=no
-    # alive and not a zombie (dash reaps its background jobs only when it waits)
-    if [ -f "$TMP/inhibitor.pid" ]; then
-        ipid=$(cat "$TMP/inhibitor.pid")
-        if kill -0 "$ipid" 2>/dev/null && ! grep -q '^State:[[:space:]]*Z' "/proc/$ipid/status" 2>/dev/null; then
-            held=yes
-        fi
+    [ "$(inhibitors)" = 1 ] && held=yes
+    if [ "${WAKE:-}" = 1 ]; then
+        bus_send "PrepareForSleep false"
+        woke=released
+        inhibitors_are 1 && woke=held
+        second=0
+        HOME="$TMP/home" XDG_RUNTIME_DIR="$TMP/run" "$BUS_WATCH" --sleep "$SCRIPT" || second=$?
+        sleep 0.3
+        second_inhibitors=$(inhibitors)
     fi
     kill "$pid" 2>/dev/null || true
     wait "$pid" 2>/dev/null || true
+    inhibitors_are 0 || { echo "FAIL  the inhibitor outlived the watcher"; fail=1; }
     pkill -f "$BIN/" 2>/dev/null || true
     LOG=$(cat "$TMP/home/.local/state/infynitae/sleep-lock.log" 2>/dev/null || true)
 }
@@ -88,10 +99,14 @@ held_is() {
     if [ "$held" = "$2" ]; then echo "ok    $1"; else echo "FAIL  $1: inhibitor held=$held"; fail=1; fi
 }
 
-run good-lock
+WAKE=1 run good-lock
 check "a confirmed lock lets the sleep go on" "lock confirmed"
 check "  and then releases the inhibitor" "letting the sleep go on"
-held_is "  the inhibitor is gone" no
+held_is "  the inhibitor is gone, the lock screen still up" no
+check "the wake is logged" "woke up"
+if [ "$woke" = held ]; then echo "ok    the wake takes the inhibitor again"; else echo "FAIL  no inhibitor after the wake"; fail=1; fi
+if [ "$second" = 0 ] && [ "$second_inhibitors" = 1 ]; then echo "ok    a second watcher in the session ends at once"
+else echo "FAIL  a second watcher: exit $second, $second_inhibitors inhibitors"; fail=1; fi
 
 run stuck-lock
 check "an unconfirmed lock is said" "no confirmation in time"

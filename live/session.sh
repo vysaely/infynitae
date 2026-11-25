@@ -243,16 +243,6 @@ if [ -x "$HOME/infynitae/live/config-check" ]; then
     (sleep 2; "$HOME/infynitae/live/config-check" --notify >/dev/null) &
 fi
 
-# 6d. USB drives and SD cards mount when plugged in (infynitae-automount, through udisks2): AUTOMOUNT
-if infy_on "${AUTOMOUNT:-true}"; then
-    AUTOMOUNT_BIN=$(infy_bin infynitae-automount || true)
-    if [ -n "$AUTOMOUNT_BIN" ]; then
-        "$AUTOMOUNT_BIN" >/dev/null 2>&1 &
-    elif command -v udiskie >/dev/null 2>&1; then
-        udiskie --no-tray --notify >/dev/null 2>&1 &
-    fi
-fi
-
 # 6d2. KDE apps' list of apps (Open With), from the menu file settings.sh provides
 for b in kbuildsycoca6 kbuildsycoca5; do
     if command -v "$b" >/dev/null 2>&1; then
@@ -285,16 +275,38 @@ case "${BATTERY_LIMIT:-off}" in
     *) sh "$HOME/infynitae/live/battery-limit" "$BATTERY_LIMIT" >/dev/null 2>&1 || true ;;
 esac
 
-# 6e4. The screen locks before the machine sleeps (the lid, the power button): it wakes locked (LOCK_WHEN_AWAY, fallback SLEEP_LOCK)
+# 6e4. One watcher of the system bus, infynitae-bus-watch, for two things: USB drives and SD cards
+# mount when plugged in (infynitae-automount, through udisks2: AUTOMOUNT), and the screen locks
+# before the machine sleeps (the lid, the power button), so it wakes locked (infynitae-sleep-lock:
+# LOCK_WHEN_AWAY, fallback SLEEP_LOCK). Installed before 2026-11-25, without the watcher, each
+# script watches the bus itself.
+AUTOMOUNT_BIN=""
+SLEEP_LOCK_BIN=""
+if infy_on "${AUTOMOUNT:-true}"; then
+    AUTOMOUNT_BIN=$(infy_bin infynitae-automount || true)
+    if [ -z "$AUTOMOUNT_BIN" ] && command -v udiskie >/dev/null 2>&1; then
+        udiskie --no-tray --notify >/dev/null 2>&1 &
+    fi
+fi
 if infy_on "${LOCK_WHEN_AWAY:-${SLEEP_LOCK:-true}}"; then
     SLEEP_LOCK_BIN=$(infy_bin infynitae-sleep-lock || true)
-    if [ -n "$SLEEP_LOCK_BIN" ]; then
-        # the lock screen it starts keeps the desktop's out-of-memory score (1c)
-        (
-            [ -n "$DESKTOP_OOM" ] && echo "$DESKTOP_OOM" > /proc/self/oom_score_adj 2>/dev/null
-            exec "$SLEEP_LOCK_BIN"
-        ) >/dev/null 2>&1 &
-    fi
+fi
+BUS_WATCH_BIN=$(infy_bin infynitae-bus-watch || true)
+if [ -z "$BUS_WATCH_BIN" ] && [ -n "$AUTOMOUNT_BIN" ]; then
+    "$AUTOMOUNT_BIN" >/dev/null 2>&1 &
+    AUTOMOUNT_BIN=""
+fi
+if [ -n "$AUTOMOUNT_BIN$SLEEP_LOCK_BIN" ]; then
+    # the lock screen it starts keeps the desktop's out-of-memory score (1c); infynitae-automount
+    # gives what it opens an app's
+    (
+        [ -n "$DESKTOP_OOM" ] && echo "$DESKTOP_OOM" > /proc/self/oom_score_adj 2>/dev/null
+        [ -n "$BUS_WATCH_BIN" ] || exec "$SLEEP_LOCK_BIN"
+        set --
+        [ -n "$AUTOMOUNT_BIN" ] && set -- --udisks "$AUTOMOUNT_BIN"
+        [ -n "$SLEEP_LOCK_BIN" ] && set -- "$@" --sleep "$SLEEP_LOCK_BIN"
+        exec "$BUS_WATCH_BIN" "$@"
+    ) >/dev/null 2>&1 &
 fi
 
 # 6f. Screen auto-rotation on convertible laptops (AUTO_ROTATE; needs iio-sensor-proxy)

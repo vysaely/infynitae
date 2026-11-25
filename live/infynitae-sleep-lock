@@ -1,11 +1,14 @@
 #!/bin/sh
 # infynitae-sleep-lock: the screen is locked before the machine sleeps (the lid, the power button,
-# a menu), so it wakes at the lock screen. It holds a logind "delay" sleep inhibitor; when sleep
-# is announced (PrepareForSleep true) it starts the lock screen, waits until the compositor says
-# the session is locked (the shell snapshot), and only then lets the sleep go on; without that
-# answer it keeps the inhibitor until logind's own limit. After the wake it takes the inhibitor
-# again (or still has it). Started by session.sh; ends with the session.
-#   INFYNITAE_SLEEP_MONITOR: a command printing logind's signals instead of gdbus (tests)
+# a menu), so it wakes at the lock screen. infynitae-bus-watch (live/bus-watch) holds a logind
+# "delay" sleep inhibitor and runs this script for each step:
+#   infynitae-sleep-lock start: at the session's start (the log)
+#   infynitae-sleep-lock sleep: sleep is announced (PrepareForSleep true). It starts the lock
+#     screen and waits until the compositor says the session is locked (the shell snapshot); it
+#     exits 0 once it is, and the watcher then lets the sleep go on. Otherwise it exits 1: the
+#     inhibitor is kept until logind's own limit.
+#   infynitae-sleep-lock wake: after the wake (PrepareForSleep false); the watcher then takes the
+#     inhibitor again
 set -u
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/infynitae"
 LOCK_LOG="$STATE_DIR/lock.log"
@@ -18,36 +21,6 @@ unset _r
 log() {
     printf '%s %s\n' "$(date '+%F %T.%3N')" "$*" >> "$LOG" 2>/dev/null || true
 }
-
-# one per session: two would race for the same sleep (fd 9 holds the lock; the programs started
-# below do not inherit it, so a lock screen still up never keeps the next session's helper out)
-RUN_DIR="${XDG_RUNTIME_DIR:-/tmp}/infynitae"
-mkdir -p "$RUN_DIR"
-exec 9> "$RUN_DIR/sleep-lock.lock"
-if command -v flock >/dev/null 2>&1 && ! flock -n 9; then
-    exit 0
-fi
-
-rotate_log "$LOG"
-
-INH=""
-take() {
-    [ -n "$INH" ] && kill -0 "$INH" 2>/dev/null && return
-    systemd-inhibit --what=sleep --mode=delay --who=Infynitae \
-        --why="Locking the screen before sleep" sleep infinity 9>&- &
-    INH=$!
-}
-release() {
-    [ -n "$INH" ] && kill "$INH" 2>/dev/null
-    INH=""
-}
-end() {
-    trap - INT TERM HUP
-    release
-    [ -n "${MON:-}" ] && kill "$MON" 2>/dev/null
-    exit 0
-}
-trap end INT TERM HUP
 
 locker() {
     case "${SCREEN_LOCKER:-auto}" in
@@ -105,7 +78,7 @@ lock_now() {
     [ -n "$l" ] || { log "no lock screen installed"; return 1; }
     log "starting the lock screen ($l)"
     : > "$LOCK_LOG" 2>/dev/null
-    $l > "$LOCK_LOG" 2>&1 9>&- &
+    $l > "$LOCK_LOG" 2>&1 &
     lpid=$!
     limit=$(delay_tenths)
     i=0
@@ -136,40 +109,21 @@ lock_now() {
     return 1
 }
 
-# the background job becomes the monitor itself (exec): $MON is then gdbus, ended by `end`, and
-# no subshell of this script (which a stop would end without its trap) is left holding it
-monitor() {
-    if [ -n "${INFYNITAE_SLEEP_MONITOR:-}" ]; then
-        exec sh -c "$INFYNITAE_SLEEP_MONITOR"
-    else
-        exec gdbus monitor --system --dest org.freedesktop.login1 --object-path /org/freedesktop/login1
-    fi
-}
-
-command -v systemd-inhibit >/dev/null 2>&1 || exit 0
-log "started (WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-unset})"
-take
-# the monitor in the background, its lines through a FIFO: a signal ends the script at once
-FIFO="$STATE_DIR/sleep-lock.$$"
-rm -f "$FIFO"
-mkfifo "$FIFO" || exit 1
-monitor > "$FIFO" 2>/dev/null 9>&- &
-MON=$!
-exec 3< "$FIFO"
-rm -f "$FIFO"
-while IFS= read -r line <&3; do
-    case "$line" in
-        *PrepareForSleep*true*)
-            log "sleep announced"
-            if lock_now; then
-                log "letting the sleep go on"
-                release
-            fi
-            ;;
-        *PrepareForSleep*false*)
-            log "woke up"
-            take
-            ;;
-    esac
-done
-end
+case "${1:-}" in
+    start)
+        rotate_log "$LOG"
+        log "started (WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-unset})"
+        ;;
+    sleep)
+        log "sleep announced"
+        lock_now || exit 1
+        log "letting the sleep go on"
+        ;;
+    wake)
+        log "woke up"
+        ;;
+    *)
+        echo "usage: infynitae-sleep-lock start|sleep|wake (run by infynitae-bus-watch)" >&2
+        exit 2
+        ;;
+esac

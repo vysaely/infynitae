@@ -47,7 +47,7 @@ history, hidden from search by `.ignore`.
 | The shell socket (`infynitae msg …`) | `crates/infynitae-ipc` |
 | Who may use capture, clipboard, input, lock… (`ALLOW_*`) | `crates/infynitae-wayland/src/trust.rs`; the model in `docs/SECURITY.md` |
 | Settings and their comments | `config/config`; loading `live/config.sh`; checks `live/config-check` |
-| C helpers (lock, wallpaper, polkit, portal, recorder) | `live/<name>/`; built by `live/build-helpers.sh` |
+| C helpers (lock, wallpaper, polkit, portal, recorder, bus-watch) | `live/<name>/`; built by `live/build-helpers.sh` |
 | The edge (panels, cards, desktop widgets) | `live/edge-apps` (own crate, CI job "Edge (apps)"); design `docs/EDGE_APPS.md`, settings `docs/EDGE_SETTINGS.md`; VM tests `tools/vm-edge/` |
 | Screenshot helper | `live/shot-rs` (own crate, CI job "Shot (Rust)") |
 | Where windows open, move, grow | `docs/WINDOWS.md` |

@@ -1,7 +1,8 @@
 #!/bin/sh
 # tools/test-automount: test live/infynitae-automount without root or real drives.
-# Tests hotplug signals and start-time mounts using INFYNITAE_AUTOMOUNT_MONITOR and
-# INFYNITAE_AUTOMOUNT_UDISKSCTL.
+# Tests hotplug signals and start-time mounts: udisks2's signals are run through the script as
+# live/bus-watch runs them ($FEED; test 1b runs the watcher itself, on a private bus with
+# tools/bus-stub as UDisks2), and INFYNITAE_AUTOMOUNT_UDISKSCTL stands in for udisksctl.
 set -eu
 
 REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
@@ -19,6 +20,17 @@ BIN_DIR="$TMP/bin"
 STATE_DIR="$TMP/state"
 RUN_DIR="$TMP/run"
 mkdir -p "$BIN_DIR" "$STATE_DIR" "$RUN_DIR"
+
+# what infynitae-bus-watch runs in a session, one step after the other: scan, then a step for
+# each udisks2 signal of the file, as gdbus monitor prints it
+FEED="$TMP/feed"
+cat > "$FEED" <<'EOF'
+#!/bin/sh
+"$1" scan
+[ -n "${2:-}" ] || exit 0
+while IFS= read -r line; do "$1" signal "$line"; done < "$2"
+EOF
+chmod +x "$FEED"
 
 # No run reads the owner's config, asks pkexec or reads /etc/fstab: a home of its own, a
 # drive-name helper that is not there (tests that name drives give their own), a temporary
@@ -217,9 +229,8 @@ EOF
 PATH="$BIN_DIR:$PATH" \
 XDG_STATE_HOME="$STATE_DIR" \
 XDG_RUNTIME_DIR="$RUN_DIR" \
-INFYNITAE_AUTOMOUNT_MONITOR="cat $SIGNALS" \
 INFYNITAE_AUTOMOUNT_UDISKSCTL="$MOCK_UDISKSCTL" \
-"$WATCHER"
+"$FEED" "$WATCHER" "$SIGNALS"
 
 LOG_FILE="$STATE_DIR/infynitae/automount.log"
 
@@ -337,56 +348,69 @@ if grep -q "ALREADY_MOUNTED" "$NOTIFY_LOG"; then
 fi
 echo "PASS: no notification for already mounted disk"
 
-echo "Test 1b: gdbus runs straight from the watcher's shell and starts again when it ends"
-# a stand-in gdbus: the first one ends at once (UDisks2 restarted by an update), the second
-# prints a plugged stick and stays up
-GD_DIR="$TMP/gdbus-bin"
-mkdir -p "$GD_DIR"
-cat > "$GD_DIR/gdbus" <<EOF
+echo "Test 1b: infynitae-bus-watch passes udisks2's signals as gdbus monitor prints them"
+mkdir -p "$TMP/bus"
+. "$REPO_DIR/tools/bus-stub.sh"
+bus_build "$TMP/bus"
+bus_start
+trap 'bus_stop; rm -rf "$TMP"' EXIT INT TERM
+# a stand-in for the script first: every step it is given, in order
+cat > "$BIN_DIR/steps" <<EOF
 #!/bin/sh
-n=\$(cat "$TMP/gdbus-runs" 2>/dev/null || echo 0)
-echo \$((n + 1)) > "$TMP/gdbus-runs"
-[ "\$n" = 0 ] && exit 0
-sed -n 1p "$SIGNALS"
-exec sleep 30
+printf '%s\n' "\$*" >> "$TMP/steps.log"
 EOF
-chmod +x "$GD_DIR/gdbus"
-rm -f "$CALLS_LOG" "$LOG_FILE"
-PATH="$GD_DIR:$BIN_DIR:$PATH" \
-XDG_STATE_HOME="$STATE_DIR" \
-XDG_RUNTIME_DIR="$RUN_DIR" \
-INFYNITAE_AUTOMOUNT_UDISKSCTL="$MOCK_UDISKSCTL" \
-"$WATCHER" &
+chmod +x "$BIN_DIR/steps"
+XDG_STATE_HOME="$STATE_DIR" XDG_RUNTIME_DIR="$RUN_DIR" "$BUS_WATCH" --udisks "$BIN_DIR/steps" &
 W=$!
-wait_for "$CALLS_LOG" "mount --no-user-interaction -b /dev/sdd1" \
-    || wait_for "$CALLS_LOG" "mount --no-user-interaction -b /dev/sdd1" \
-    || { echo "FAIL: no mount after gdbus started again" >&2; kill "$W"; cat "$LOG_FILE" >&2; exit 1; }
-grep -q "monitor restarted" "$LOG_FILE" || { echo "FAIL: no log line for the restart" >&2; kill "$W"; exit 1; }
-sleep 0.5
-children() { grep -l "^PPid:[[:space:]]*$1\$" /proc/[0-9]*/status 2>/dev/null | cut -d/ -f3; }
-# gdbus (its stand-in became `sleep 30`) runs straight under the watcher's shell: no extra shell between them
-comm_of() { cat "/proc/$1/comm" 2>/dev/null; }
-direct=""
-for _ in 1 2 3 4 5 6 7 8 9 10; do
-    for k in $(children "$W"); do [ "$(comm_of "$k")" = sleep ] && direct=$k; done
-    [ -n "$direct" ] && break
-    sleep 0.3
-done
-if [ -z "$direct" ]; then
-    kids=$(children "$W")
-    echo "FAIL: gdbus does not run straight under the watcher; its children: $(for k in $kids; do printf '%s(%s) ' "$k" "$(comm_of "$k")"; done)" >&2
+wait_for "$TMP/steps.log" "^scan$" || { echo "FAIL: the watcher did not start with scan" >&2; exit 1; }
+while IFS= read -r line; do bus_send "$line"; done < "$SIGNALS"
+want=$(sed 's/^/signal /' "$SIGNALS")
+i=0
+while [ "$(sed 1d "$TMP/steps.log")" != "$want" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+if [ "$(sed 1d "$TMP/steps.log")" != "$want" ]; then
+    echo "FAIL: the signals did not reach the script as gdbus monitor prints them:" >&2
+    diff "$TMP/steps.log" "$SIGNALS" >&2 || true
     kill "$W"
     exit 1
 fi
-kids=$direct
 kill "$W"
 wait "$W" || true
-sleep 0.2
-if [ -d "/proc/$kids" ] && grep -q sleep "/proc/$kids/comm" 2>/dev/null; then
-    echo "FAIL: gdbus outlived the watcher" >&2
+echo "PASS: scan first, then each signal in order, as gdbus monitor prints it"
+
+# the script itself: a stick mounts; the system bus restarts (an update) and the next one still
+# mounts
+rm -f "$CALLS_LOG" "$LOG_FILE"
+PATH="$BIN_DIR:$PATH" XDG_STATE_HOME="$STATE_DIR" XDG_RUNTIME_DIR="$RUN_DIR" \
+INFYNITAE_AUTOMOUNT_UDISKSCTL="$MOCK_UDISKSCTL" "$BUS_WATCH" --udisks "$WATCHER" &
+W=$!
+wait_for "$LOG_FILE" "started" || { echo "FAIL: no scan at start" >&2; kill "$W"; exit 1; }
+bus_send "$(sed -n 1p "$SIGNALS")"
+wait_for "$CALLS_LOG" "mount --no-user-interaction -b /dev/sdd1" \
+    || { echo "FAIL: a plugged stick was not mounted" >&2; kill "$W"; cat "$LOG_FILE" >&2; exit 1; }
+bus_restart
+wait_for "$LOG_FILE" "watching again after the system bus restarted" \
+    || { echo "FAIL: no log line for the bus restart" >&2; kill "$W"; cat "$LOG_FILE" >&2; exit 1; }
+# its drive first, removable: the step for the stick knows it from the step before
+grep External_USB "$SIGNALS" | while IFS= read -r line; do bus_send "$line"; done
+wait_for "$CALLS_LOG" "mount --no-user-interaction -b /dev/sdg1" \
+    || { echo "FAIL: no mount after the bus restarted" >&2; kill "$W"; cat "$LOG_FILE" >&2; exit 1; }
+# idle, the watcher is the only process: every step has ended (a notification's wait, which
+# runs on, is no longer its child)
+children() { grep -l "^PPid:[[:space:]]*$1\$" /proc/[0-9]*/status 2>/dev/null | cut -d/ -f3; }
+kids=x
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+    kids=$(children "$W")
+    [ -z "$kids" ] && break
+    sleep 0.3
+done
+if [ -n "$kids" ]; then
+    echo "FAIL: the watcher has children while idle: $(for k in $kids; do printf '%s(%s) ' "$k" "$(cat "/proc/$k/comm" 2>/dev/null)"; done)" >&2
+    kill "$W"
     exit 1
 fi
-echo "PASS: two processes (the shell and gdbus), restarted after 2 s, ended with the watcher"
+kill "$W"
+wait "$W" || true
+echo "PASS: one process, mounts through the script, watches again after the bus restarted"
 
 echo "Test 2: Startup scan of pre-plugged drive"
 
@@ -415,9 +439,8 @@ EOF
 PATH="$BIN_DIR:$PATH" \
 XDG_STATE_HOME="$STATE_DIR" \
 XDG_RUNTIME_DIR="$RUN_DIR" \
-INFYNITAE_AUTOMOUNT_MONITOR="true" \
 INFYNITAE_AUTOMOUNT_UDISKSCTL="$MOCK_UDISKSCTL" \
-"$WATCHER"
+"$FEED" "$WATCHER"
 
 if ! grep -q "mount --no-user-interaction -b /dev/sdh1" "$CALLS_LOG"; then
     echo "FAIL: pre-plugged drive /dev/sdh1 was not mounted at start" >&2
@@ -444,10 +467,9 @@ printf 'wrong\nsecret\n' > "$TMP/answers"
 PATH="$BIN_DIR:$PATH" \
 XDG_STATE_HOME="$STATE_DIR" \
 XDG_RUNTIME_DIR="$RUN_DIR" \
-INFYNITAE_AUTOMOUNT_MONITOR="cat $ENC" \
 INFYNITAE_AUTOMOUNT_UDISKSCTL="$MOCK_UDISKSCTL" \
 INFYNITAE_AUTOMOUNT_ASK="n=\$(wc -l < $ASKS 2>/dev/null || echo 0); echo x >> $ASKS; sed -n \"\$((n + 1))p\" $TMP/answers" \
-"$WATCHER"
+"$FEED" "$WATCHER" "$ENC"
 if ! wait_for "$CALLS_LOG" "mount --no-user-interaction -b /dev/dm-7"; then
     echo "FAIL: the unlocked drive was not mounted" >&2
     cat "$CALLS_LOG" "$LOG_FILE" >&2
@@ -569,9 +591,8 @@ EOF
 PATH="$BIN_DIR:$PATH" \
 XDG_STATE_HOME="$STATE_DIR" \
 XDG_RUNTIME_DIR="$RUN_DIR" \
-INFYNITAE_AUTOMOUNT_MONITOR="true" \
 INFYNITAE_AUTOMOUNT_UDISKSCTL="$MOCK_UDISKSCTL" \
-"$WATCHER"
+"$FEED" "$WATCHER"
 if grep -q "mount --no-user-interaction -b /dev/sda2" "$CALLS_LOG" 2>/dev/null; then
     echo "FAIL: a forged entry got the system disk mounted" >&2
     exit 1
@@ -597,9 +618,8 @@ EOF
 PATH="$BIN_DIR:$PATH" \
 XDG_STATE_HOME="$STATE_DIR" \
 XDG_RUNTIME_DIR="$RUN_DIR" \
-INFYNITAE_AUTOMOUNT_MONITOR="true" \
 INFYNITAE_AUTOMOUNT_UDISKSCTL="$MOCK_UDISKSCTL" \
-"$WATCHER"
+"$FEED" "$WATCHER"
 if ! wait_for "$NOTIFY_LOG" "&lt;b&gt;START&lt;/b&gt;&amp; mounted at"; then
     echo "FAIL: the label was not shown as plain text:" >&2
     cat "$NOTIFY_LOG" >&2
@@ -645,10 +665,9 @@ run_watcher() {
     PATH="$BIN_DIR:$PATH" \
     XDG_STATE_HOME="$STATE_DIR" \
     XDG_RUNTIME_DIR="$RUN_DIR" \
-    INFYNITAE_AUTOMOUNT_MONITOR="cat $1" \
     INFYNITAE_AUTOMOUNT_UDISKSCTL="$MOCK_UDISKSCTL" \
     INFYNITAE_AUTOMOUNT_DRIVE_NAME="${2:-$BIN_DIR/drive-name}" \
-    "$WATCHER"
+    "$FEED" "$WATCHER" "$1"
 }
 plug() {
     : > "$TMP/plug"
