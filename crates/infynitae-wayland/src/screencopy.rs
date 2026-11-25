@@ -482,7 +482,9 @@ fn queue_copy(
         frame.failed();
         return;
     }
-    state.note_capture(client);
+    state.note_capture(client, |s| {
+        format!("screen {} (wlr-screencopy)", s.output_name(output_id))
+    });
     let consumer = with_damage.then(|| Consumer::Client(client.id(), output_id, data.region));
     state.screencopy.pending.lock().unwrap().push(PendingFrame {
         frame: CaptureFrame::Wlr(frame.clone()),

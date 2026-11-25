@@ -31,6 +31,7 @@ pub mod idle_inhibit;
 pub mod idle_notify;
 mod image_copy;
 mod input_method;
+pub mod journal;
 mod keyboard;
 mod launch;
 mod layers;
@@ -193,6 +194,8 @@ pub struct ClientState {
     /// Who the client is, for the privileged globals (`trust`). Unset: the compositor's own
     /// connection (an internal socket pair, a test), which is trusted.
     identity: std::sync::OnceLock<trust::Identity>,
+    /// The client's process id when it connected (`SO_PEERCRED`), for the journal.
+    pid: std::sync::OnceLock<i32>,
     /// Connected through the recorder's own socket (`session::recorder_socket_path`, M2): the
     /// replay buffer Infynitae started, left out of the capture mark.
     recorder: bool,
@@ -210,6 +213,15 @@ impl ClientState {
     /// first request is read).
     pub fn identify(&self, identity: trust::Identity) {
         let _ = self.identity.set(identity);
+    }
+
+    /// Sets the process id the client connected with (once).
+    pub fn set_pid(&self, pid: i32) {
+        let _ = self.pid.set(pid);
+    }
+
+    pub fn pid(&self) -> Option<i32> {
+        self.pid.get().copied()
     }
 
     /// A client of the recorder's own socket.
@@ -284,6 +296,8 @@ pub struct WaylandState {
     pointer_motions: u64,
     arrow: cursor::Arrow,
     capture_indicator: capture_indicator::CaptureIndicator,
+    /// The desktop journal (`journal`): written only once a session opens it.
+    journal: journal::Journal,
     /// Apps out of sight yield the CPU; the game gets game mode (`background`).
     background: background::Background,
     pub(crate) cursor_theme: std::sync::Mutex<Option<cursor::CursorThemeManager>>,
@@ -760,7 +774,8 @@ impl WaylandState {
         let capabilities = convert::wm_capabilities(core.toplevel_capabilities());
 
         // the privileged globals are offered only to the clients the policy allows (`trust`)
-        let trust = trust::SharedPolicy::default();
+        let journal = journal::Journal::default();
+        let trust = trust::SharedPolicy::with_journal(journal.clone());
         if let Ok(home) = std::env::var("HOME")
             && let Ok(content) = std::fs::read_to_string(format!("{home}/.config/infynitae/config"))
         {
@@ -804,7 +819,8 @@ impl WaylandState {
             pointer_sent: pointer::Sent::default(),
             pointer_motions: 0,
             arrow: cursor::Arrow::default(),
-            capture_indicator: capture_indicator::CaptureIndicator::default(),
+            capture_indicator: capture_indicator::CaptureIndicator::with_journal(journal.clone()),
+            journal,
             background: background::Background::default(),
             cursor_theme: std::sync::Mutex::new(None),
             config_home: None,

@@ -34,6 +34,7 @@
 #include <security/pam_appl.h>
 
 #include "ext-session-lock-v1-protocol.h"
+#include "../journal.h"
 
 #define PASSWORD_MAX_LEN 256
 #define SHAKE_DURATION_FRAMES 18
@@ -276,6 +277,9 @@ static void *pam_worker_thread(void *arg) {
     if (rc == PAM_SUCCESS) {
         app->auth_state = AUTH_STATE_SUCCESS;
     } else {
+        char detail[128];
+        snprintf(detail, sizeof(detail), "PAM service %s: %s", service, pam_strerror(NULL, rc));
+        journal_write("unlock-failed", getpid(), detail, "denied");
         app->auth_state = AUTH_STATE_FAILED;
         app->shake_frame = SHAKE_DURATION_FRAMES;
     }

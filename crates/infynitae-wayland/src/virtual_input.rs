@@ -343,7 +343,7 @@ impl GlobalDispatch<ZwlrVirtualPointerManagerV1, crate::trust::Gate> for Wayland
 impl Dispatch<ZwlrVirtualPointerManagerV1, ()> for WaylandState {
     fn request(
         state: &mut Self,
-        _client: &Client,
+        client: &Client,
         _resource: &ZwlrVirtualPointerManagerV1,
         request: zwlr_virtual_pointer_manager_v1::Request,
         _data: &(),
@@ -359,6 +359,12 @@ impl Dispatch<ZwlrVirtualPointerManagerV1, ()> for WaylandState {
             Request::Destroy => return,
             _ => return,
         };
+        state.journal_client(
+            "virtual-pointer",
+            client,
+            "virtual pointer created".into(),
+            "allowed",
+        );
         data_init.init(
             id,
             VirtualPointerData {

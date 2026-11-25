@@ -12,6 +12,8 @@
 #include <gtk/gtk.h>
 #include <gdk/gdkwayland.h>
 
+#include "../journal.h"
+
 #define INFYNITAE_TYPE_AGENT_LISTENER (infynitae_agent_listener_get_type())
 G_DECLARE_FINAL_TYPE(InfynitaeAgentListener, infynitae_agent_listener, INFYNITAE, AGENT_LISTENER, PolkitAgentListener)
 
@@ -30,6 +32,9 @@ typedef struct {
     gchar *cookie;
     GCancellable *cancellable;
     gulong cancellable_handler_id;
+    /* for the journal: what was asked, and by which process (polkit's "polkit.subject-pid") */
+    gchar *action_id;
+    pid_t subject_pid;
 
     GtkWidget *window;
     GtkWidget *entry;
@@ -55,6 +60,7 @@ static void free_auth_dialog(AuthDialogData *data) {
     }
     g_clear_object(&data->identity);
     g_clear_pointer(&data->cookie, g_free);
+    g_clear_pointer(&data->action_id, g_free);
     if (data->task) {
         g_object_unref(data->task);
         data->task = NULL;
@@ -65,6 +71,7 @@ static void free_auth_dialog(AuthDialogData *data) {
 static void on_cancel_clicked(GtkWidget *widget, gpointer user_data) {
     (void)widget;
     AuthDialogData *data = (AuthDialogData *)user_data;
+    journal_write("polkit", data->subject_pid, data->action_id, "cancelled");
     if (data->session) {
         polkit_agent_session_cancel(data->session);
     }
@@ -177,6 +184,8 @@ static void on_session_completed(PolkitAgentSession *session,
     (void)session;
     AuthDialogData *data = (AuthDialogData *)user_data;
 
+    journal_write("polkit", data->subject_pid, data->action_id,
+                  gained_authorization ? "allowed" : "denied");
     if (gained_authorization) {
         if (data->task && !g_task_get_completed(data->task)) {
             g_task_return_boolean(data->task, TRUE);
@@ -509,12 +518,14 @@ static void infynitae_agent_listener_initiate_authentication(
     gpointer user_data)
 {
     (void)icon_name;
-    (void)details;
 
     AuthDialogData *data = g_new0(AuthDialogData, 1);
     data->listener = INFYNITAE_AGENT_LISTENER(listener);
     data->task = g_task_new(listener, cancellable, callback, user_data);
     data->cancellable = cancellable;
+    data->action_id = g_strdup(action_id);
+    const gchar *subject_pid = details ? polkit_details_lookup(details, "polkit.subject-pid") : NULL;
+    data->subject_pid = subject_pid ? (pid_t)atoi(subject_pid) : 0;
 
     /* the account whose password is asked: your own when polkit accepts it, else the first
      * one it names; the dialog says which (it is never a guess the user cannot see) */
@@ -531,7 +542,9 @@ static void infynitae_agent_listener_initiate_authentication(
     }
     if (identity == NULL) {
         g_task_return_new_error(data->task, POLKIT_ERROR, POLKIT_ERROR_FAILED, "No identity provided for authentication");
+        journal_write("polkit", data->subject_pid, data->action_id, "failed");
         g_object_unref(data->task);
+        g_free(data->action_id);
         g_free(data);
         return;
     }
@@ -542,6 +555,7 @@ static void infynitae_agent_listener_initiate_authentication(
     if (cancellable && g_cancellable_is_cancelled(cancellable)) {
         /* g_cancellable_connect would run the handler now, freeing data under us */
         g_task_return_new_error(data->task, POLKIT_ERROR, POLKIT_ERROR_CANCELLED, "Authentication cancelled");
+        journal_write("polkit", data->subject_pid, data->action_id, "cancelled");
         free_auth_dialog(data);
         return;
     }
@@ -557,6 +571,7 @@ static void infynitae_agent_listener_initiate_authentication(
     if (!ensure_gtk()) {
         g_task_return_new_error(data->task, POLKIT_ERROR, POLKIT_ERROR_FAILED,
                                 "No display to show the password prompt on");
+        journal_write("polkit", data->subject_pid, data->action_id, "failed");
         free_auth_dialog(data);
         return;
     }

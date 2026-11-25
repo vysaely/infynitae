@@ -91,6 +91,34 @@ Before the machine sleeps, the sleep lock asks the compositor whether the sessio
 (`infynitae msg snapshot`, its `locked` field), never whether a process of some name runs; a
 lock screen that does not confirm in time holds the sleep back as long as logind allows.
 
+## The desktop journal: what happened, where and how
+
+`~/.local/state/infynitae/journal/journal.tsv` (`$XDG_STATE_HOME` when set) records what the
+compositor and Infynitae's helpers see, one line per event, and is never sent anywhere.
+`infynitae msg journal` prints it; `--since 2026-11-25` (any start of a time) and `--app grim`
+(any part of the program) narrow it down.
+
+A line has six fields separated by tabs: the time in UTC, the event, the program as its real
+file (the path `/proc/<pid>/exe` points to; for a sandboxed app its app id), its pid, what it was
+about, and the outcome. An empty field is not known.
+
+| Event | Written by | When |
+| :--- | :--- | :--- |
+| `capture-start`, `capture-stop` | compositor | a program starts capturing a screen or window, and 3 s after its last frame |
+| `clipboard-reader` | compositor | a program makes a data-control device: it can read every copy without focus |
+| `virtual-keyboard`, `virtual-pointer` | compositor | a program makes one |
+| `input-method` | compositor | a program becomes the input method |
+| `global-refused` | compositor | a program is refused a power its list does not give it; once per program and power per session |
+| `session-lock`, `session-unlock` | compositor | the session is locked and by whom, unlocked, or an unlock is refused |
+| `unlock-failed` | lock screen | a wrong password |
+| `polkit` | password prompt | a program asks for a system action: allowed, denied (each wrong password), cancelled |
+| `drive-added`, `drive-mounted` | automount | a removable drive is plugged in, and each mount or failed mount |
+| `autostart-added`, `autostart-removed` | session start | an autostart entry, or `autostart.sh`, is new or gone since the last session |
+
+Its size is capped: at 1 MiB (1,048,576 bytes) the file becomes `journal.1.tsv` and the one
+before is deleted, so the two never hold more than 2 MiB (a line is about 150 bytes: some
+14,000 events). Only the compositor rotates; the helpers append.
+
 ## Windows and Android programs
 
 A Windows program (`.exe`, `.msi`) opened with `infynitae-windows-run` runs with Proton (through

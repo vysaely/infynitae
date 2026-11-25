@@ -412,7 +412,20 @@ impl Dispatch<ExtImageCopyCaptureFrameV1, FrameData> for WaylandState {
                         }
                     },
                 };
-                state.note_capture(client);
+                state.note_capture(client, |s| match window {
+                    Some(e) => format!(
+                        "window {} (ext-image-copy-capture)",
+                        s.core
+                            .stage()
+                            .meta(e)
+                            .and_then(|m| m.app_id.as_deref())
+                            .unwrap_or("without an app id")
+                    ),
+                    None => format!(
+                        "screen {} (ext-image-copy-capture)",
+                        s.output_name(output_id)
+                    ),
+                });
                 state.screencopy.pending.lock().unwrap().push(PendingFrame {
                     frame: CaptureFrame::Ext(frame.clone()),
                     output_id,

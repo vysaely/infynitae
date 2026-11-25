@@ -869,6 +869,12 @@ pub fn run_console_with(
                 .join("capturing"),
         );
     }
+    // the desktop journal: what captured, read the clipboard, typed or locked, and who
+    if let Some(dir) = infynitae_wayland::journal::default_dir()
+        && let Err(e) = state.open_journal(&dir)
+    {
+        log_line!("[infynitae] Journal: cannot open {}: {e}", dir.display());
+    }
     // the shortcut actions get this session's socket and X display too (INV-XWAYLAND-1)
     state.set_client_env(
         session.socket_name(),

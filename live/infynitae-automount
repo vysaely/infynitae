@@ -31,6 +31,9 @@ mkdir -p "$STATE_DIR"
 for _r in "$(dirname "$0")/log-rotate.sh" "$HOME/infynitae/live/log-rotate.sh"; do
     [ -f "$_r" ] && { . "$_r"; break; }
 done
+for _r in "$(dirname "$0")/journal.sh" "$HOME/infynitae/live/journal.sh"; do
+    [ -f "$_r" ] && { . "$_r"; break; }
+done
 unset _r
 log() {
     printf '%s %s\n' "$(date '+%F %T.%3N')" "$*" >> "$LOG" 2>/dev/null || true
@@ -322,6 +325,7 @@ mount_device() {
         [ -z "$mount_path" ] && mount_path=$(printf '%s\n' "$mount_out" | sed -n 's/^Mounted .* at //p')
         [ -z "$mount_path" ] && mount_path="$mount_out"
         log "mounted $dev at $mount_path"
+        journal_write drive-mounted "" "$dev ($label) at $mount_path" mounted
         # Open shows it in the file manager, Eject makes it safe to pull (in the background:
         # the notification waits for its answer). A drive at its numeral's folder is called by
         # the numeral, its label below it.
@@ -339,6 +343,7 @@ mount_device() {
         ) 9>&- &
     else
         log "mount failed for $dev: $mount_out"
+        journal_write drive-mounted "" "$dev ($label): $mount_out" failed
         notify "Mount failed for $label" "$mount_out"
     fi
 }
@@ -688,6 +693,7 @@ process_line() {
             DRIVE_ADD)
                 removable_drives="$removable_drives $f1 "
                 log "drive added: $f1"
+                journal_write drive-added "" "$f1" added
                 ;;
             BLOCK_ADD)
                 if [ -z "$f7" ]; then

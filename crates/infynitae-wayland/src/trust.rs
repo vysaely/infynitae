@@ -93,6 +93,20 @@ impl Capability {
         }
     }
 
+    /// What its globals let a client do, for the journal.
+    fn words(self) -> &'static str {
+        match self {
+            Capability::Capture => "screen and window capture",
+            Capability::Clipboard => "clipboard reading without focus",
+            Capability::Input => "virtual keyboard and pointer",
+            Capability::InputMethod => "input method",
+            Capability::Windows => "window list",
+            Capability::Lock => "session lock",
+            Capability::Display => "display control",
+            Capability::Layers => "panels and overlays (layer shell)",
+        }
+    }
+
     /// Infynitae's own helpers that always have this capability, by installed name.
     fn helpers(self) -> &'static [&'static str] {
         match self {
@@ -341,14 +355,20 @@ fn helper_paths(home: Option<&Path>, name: &str) -> Vec<PathBuf> {
 }
 
 /// The policy, shared by every gate; a config reload replaces it for the clients that bind after.
+/// A refusal is written to the journal, once per program and capability.
 #[derive(Clone, Default)]
-pub struct SharedPolicy(Arc<RwLock<Policy>>);
+pub struct SharedPolicy(Arc<RwLock<Policy>>, crate::journal::Journal);
 
 impl SharedPolicy {
     pub fn set(&self, policy: Policy) {
         if let Ok(mut p) = self.0.write() {
             *p = policy;
         }
+    }
+
+    /// The journal refusals are written to.
+    pub fn with_journal(journal: crate::journal::Journal) -> SharedPolicy {
+        SharedPolicy(Arc::default(), journal)
     }
 
     pub fn gate(&self, cap: Capability) -> Gate {
@@ -371,7 +391,21 @@ impl SharedPolicy {
             // the compositor's own connection
             return true;
         };
-        self.allows_identity(identity, cap)
+        let allowed = self.allows_identity(identity, cap);
+        if !allowed {
+            // the client is never told: the global is hidden from it (module docs)
+            self.1.refused_once(
+                crate::journal::Entry {
+                    event: "global-refused",
+                    program: identity.describe(),
+                    pid: state.pid(),
+                    detail: format!("{}: not on {}, hidden from it", cap.words(), cap.key()),
+                    outcome: "refused",
+                },
+                cap.key(),
+            );
+        }
+        allowed
     }
 
     /// Whether `identity` has `cap`. A native program refused is checked once more against the

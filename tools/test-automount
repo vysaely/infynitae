@@ -298,6 +298,36 @@ if ! grep -q "mount failed for /dev/sdf1:" "$LOG_FILE" || ! grep -q "wrong fs ty
 fi
 echo "PASS: log recorded mount failure details for /dev/sdf1"
 
+echo "--- Checking the desktop journal ---"
+JOURNAL="$STATE_DIR/infynitae/journal/journal.tsv"
+if [ ! -f "$JOURNAL" ]; then
+    echo "FAIL: no journal at $JOURNAL" >&2
+    exit 1
+fi
+# one line each, six tab-separated fields, no program (a drive is no app)
+journal_once() {
+    n=$(awk -F '\t' -v e="$1" -v d="$2" -v o="$3" \
+        'NF == 6 && $2 == e && index($5, d) == 1 && $6 == o && $3 == "" && $4 == "" { n++ } END { print n + 0 }' \
+        "$JOURNAL")
+    if [ "$n" != 1 ]; then
+        echo "FAIL: journal has $n lines for $1 $2 $3 (want 1)" >&2
+        cat "$JOURNAL" >&2
+        exit 1
+    fi
+}
+journal_once drive-added /org/freedesktop/UDisks2/drives/External_USB added
+journal_once drive-mounted "/dev/sdd1 (USB_STICK) at /run/media/testuser/USB_STICK" mounted
+journal_once drive-mounted "/dev/sdf1 (BROKEN_DRIVE):" failed
+if [ "$(grep -c "/dev/sda2" "$JOURNAL")" != 0 ]; then
+    echo "FAIL: the ignored system disk is in the journal" >&2
+    exit 1
+fi
+if [ "$(stat -c %a "$JOURNAL")" != 600 ]; then
+    echo "FAIL: the journal is readable by others: $(stat -c %a "$JOURNAL")" >&2
+    exit 1
+fi
+echo "PASS: the journal names the drive added, the mount and the failed mount once each"
+
 if ! grep -q "device removed: /dev/sdd1" "$LOG_FILE"; then
     echo "FAIL: log missing device removal for /dev/sdd1" >&2
     exit 1

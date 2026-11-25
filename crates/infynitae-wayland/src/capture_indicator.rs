@@ -62,6 +62,11 @@ pub struct CaptureIndicator {
     pub(crate) ids: [Id; 1],
     /// This capture was announced by a notification (the mark was hidden by a fullscreen window).
     noticed: bool,
+    /// Where a capture's start and stop are written.
+    journal: crate::journal::Journal,
+    /// Each capturing client's start as the journal wrote it, for its stop: the client may be gone
+    /// by then.
+    started: HashMap<ClientId, crate::journal::Entry>,
 }
 
 impl Default for CaptureIndicator {
@@ -74,11 +79,21 @@ impl Default for CaptureIndicator {
             file: None,
             ids: [Id::new()],
             noticed: false,
+            journal: crate::journal::Journal::default(),
+            started: HashMap::new(),
         }
     }
 }
 
 impl CaptureIndicator {
+    /// One that writes each capture's start and stop to `journal`.
+    pub fn with_journal(journal: crate::journal::Journal) -> Self {
+        Self {
+            journal,
+            ..Self::default()
+        }
+    }
+
     /// `CAPTURE_INDICATOR` set by hand (tests).
     pub fn set_mode(&mut self, mode: CaptureMode) {
         self.mode = mode;
@@ -110,6 +125,19 @@ impl CaptureIndicator {
     pub fn update(&mut self, now: Instant) -> bool {
         let changed = self.seen.update(now, self.mode != CaptureMode::Off);
         self.names.retain(|k, _| self.seen.last.contains_key(k));
+        let journal = &self.journal;
+        let last = &self.seen.last;
+        self.started.retain(|k, start| {
+            let still = last.contains_key(k);
+            if !still {
+                journal.write(crate::journal::Entry {
+                    event: "capture-stop",
+                    outcome: "stopped",
+                    ..start.clone()
+                });
+            }
+            still
+        });
         let mut now_names: Vec<String> = if self.mode == CaptureMode::Edge {
             self.seen
                 .shown_keys(now)
@@ -205,8 +233,26 @@ fn write_capturing(path: &std::path::Path, names: &[String]) {
 }
 
 impl WaylandState {
-    /// A client asked for a capture frame: the mark shows (unless the client is left out).
-    pub(crate) fn note_capture(&mut self, client: &Client) {
+    /// A client asked for a capture frame of `what` (`output DP-1`, `window firefox`): the mark
+    /// shows (unless the client is left out). Its first frame since it was last quiet for `HOLD`
+    /// starts a capture in the journal.
+    pub(crate) fn note_capture(
+        &mut self,
+        client: &Client,
+        what: impl FnOnce(&WaylandState) -> String,
+    ) {
+        if !self.capture_indicator.started.contains_key(&client.id()) {
+            let (program, pid) = crate::journal::who(client);
+            let start = crate::journal::Entry {
+                event: "capture-start",
+                program,
+                pid,
+                detail: what(self),
+                outcome: "allowed",
+            };
+            self.capture_indicator.journal.write(start.clone());
+            self.capture_indicator.started.insert(client.id(), start);
+        }
         self.capture_indicator
             .names
             .entry(client.id())
@@ -223,6 +269,15 @@ impl WaylandState {
                     .get_data::<crate::ClientState>()
                     .is_some_and(|s| s.is_recorder())
             });
+    }
+
+    /// A screen's connector name (`DP-1`), for the journal; empty when it is gone.
+    pub(crate) fn output_name(&self, id: infynitae_core::output::OutputId) -> String {
+        self.outputs
+            .iter()
+            .find(|o| o.id == id)
+            .map(|o| o.output.name())
+            .unwrap_or_default()
     }
 
     /// The capture indicator (the backends ask it when to draw and when to wake).
@@ -355,6 +410,60 @@ mod tests {
         assert_eq!(s.due(t0), None);
     }
 
+    /// A capture is one start and one stop in the journal, however many frames it asks for, and a
+    /// capture after a quiet `HOLD` is a new one.
+    #[test]
+    fn a_capture_is_written_once_at_its_start_and_once_at_its_stop() {
+        use smithay::reexports::wayland_server::Display;
+        use std::sync::Arc;
+        let dir =
+            std::env::temp_dir().join(format!("infynitae-capture-journal-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (core, _input, _shell, _token) =
+            infynitae_core::Core::new(infynitae_core::navigation::PersistedCameras::default());
+        let display: Display<WaylandState> = Display::new().unwrap();
+        let mut state = WaylandState::new(&display.handle(), core);
+        state.open_journal(&dir).unwrap();
+        let me = crate::ClientState::with_identity(crate::trust::Identity::of_pid(
+            std::process::id() as i32,
+        ));
+        me.set_pid(std::process::id() as i32);
+        let (server, _client) = std::os::unix::net::UnixStream::pair().unwrap();
+        let client = display
+            .handle()
+            .insert_client(server, Arc::new(me))
+            .unwrap();
+        for _ in 0..5 {
+            state.note_capture(&client, |_| "screen DP-1 (wlr-screencopy)".into());
+        }
+        // after the last frame
+        let t0 = Instant::now();
+        state.capture_indicator.update(t0);
+        state.capture_indicator.update(t0 + HOLD);
+        state.note_capture(&client, |_| "screen DP-1 (wlr-screencopy)".into());
+        state.journal().flush();
+        let text = std::fs::read_to_string(crate::journal::current_file(&dir)).unwrap();
+        let rows: Vec<Vec<&str>> = text.lines().map(|l| l.split('\t').collect()).collect();
+        let me = std::fs::read_link("/proc/self/exe").unwrap();
+        let pid = std::process::id().to_string();
+        let events: Vec<(&str, &str)> = rows.iter().map(|f| (f[1], f[5])).collect();
+        assert_eq!(
+            events,
+            [
+                ("capture-start", "allowed"),
+                ("capture-stop", "stopped"),
+                ("capture-start", "allowed")
+            ],
+            "{text}"
+        );
+        for f in &rows {
+            assert_eq!(f[2], me.display().to_string());
+            assert_eq!(f[3], pid);
+            assert_eq!(f[4], "screen DP-1 (wlr-screencopy)");
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     /// Only a client of the recorder's own socket is left out; any other client shows the mark,
     /// whatever its executable is called (M2).
     #[test]
@@ -382,12 +491,12 @@ mod tests {
             },
         ));
         let now = Instant::now();
-        state.note_capture(&recorder);
+        state.note_capture(&recorder, |_| String::new());
         assert!(
             !state.capture_indicator.active(now),
             "the recorder is left out"
         );
-        state.note_capture(&named);
+        state.note_capture(&named, |_| String::new());
         assert!(
             state.capture_indicator.active(now),
             "a name exempts nothing"
