@@ -1,5 +1,6 @@
 //! Settings: Lock and sleep (docs/EDGE_SETTINGS.md, `settings/lock`): the "Lock & idle" keys
-//! and BATTERY_LIMIT. Left to the file: IDLE_AUTO_LOCK, SLEEP_LOCK, SCREEN_LOCKER.
+//! and BATTERY_LIMIT. Left to the file: IDLE_AUTO_LOCK, SLEEP_LOCK; SCREEN_LOCKER is on
+//! `settings/advanced`.
 
 use super::settings_rows::{After, Control, Setting, TableCard};
 use crate::card::{render_value, Action, Card, Cx, Data, Event, Hits, Rect, Source, Status};

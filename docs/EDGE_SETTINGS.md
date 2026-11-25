@@ -30,6 +30,7 @@ hold. Line numbers are in the worktree `feat/edge-apps`.
 | `settings/lock` | Lock and sleep | Lock & idle, battery limit |
 | `settings/privacy` | Privacy | Privacy & screen capture, clipboard |
 | `settings/recording` | Screenshots and recording | Screen recorder, screenshots |
+| `settings/advanced` | Advanced | Advanced (the last section) |
 | `settings/about` | This PC | nothing in the config: what the PC is, updates, the config file |
 
 Already there and unchanged: `network`, `bluetooth`, `power`, `quick`, `session`.
@@ -147,27 +148,24 @@ file" (section 5). Sizes: M only. No setting of its own.
 
 | Row | Control | Key | Values | After |
 |---|---|---|---|---|
-| Apps look | Words | `COLOR_SCHEME` | Dark `prefer-dark`, Light `prefer-light` | look |
-| Accent | Text, with a 16 px swatch of the value | `BORDER_ACTIVE` | `#rrggbb`; anything else is refused and the row says "Not a colour" | look |
-| Colours from the wallpaper | Pick | `THEME_FROM_WALLPAPER` | Off `false`, The accent `accent`, Everything `all` | look |
+| Dark or light | Pick | `COLOR_SCHEME` | Dark `prefer-dark`, Light `prefer-light` | look |
+| Accent | Text, with a 16 px swatch of the value | `ACCENT` (a config with only `BORDER_ACTIVE` shows that) | `#rrggbb`; anything else is refused and the row says "Not a colour" | look |
+| Colours from the wallpaper | Pick | `THEME_FROM_WALLPAPER` | Off `false`, The accent `accent`, Everything `all`, A new accent each time `shuffle` | look |
 | Corners | Slide 0-24 px | `WINDOW_CORNERS` | | look |
-| Panels' colours | Pick | `THEME_SCHEME` | Yours, Monochrome, Neutral, Tonal, Vibrant, Expressive (lower case written) | look |
-| M Cards | Slide 20-100 % | `CARD_OPACITY` | | look |
-| M Background | Text + swatch | `SURFACE_COLOR` | | look |
-| M Text | Text + swatch | `TEXT_COLOR` | | look |
+| Colours | Pick | `THEME_SCHEME` | Yours, Monochrome, Neutral, Tonal, Vibrant, Expressive (lower case written) | look |
+| M Card opacity | Slide 20-100 % | `CARD_OPACITY` | | look |
 | M Window border | Step 0-8 | `BORDER_WIDTH` | | save |
-| M Other windows' border | Text + swatch | `BORDER_INACTIVE` | | save |
-| M Behind the windows | Text + swatch | `CANVAS_COLOR` | | save |
 | M Folders in the accent | Switch | `FOLDER_COLOR` | `accent` / `theme` | look |
-| M Apps follow these colours | Switch | `THEME_SYNC` | | look |
 
 The swatch is the setting's own value drawn as data; nothing else on the card has a colour of its own.
-Hidden: "Folders in the accent" unless `ICON_THEME` starts with `Papirus`. "Colours from the
-wallpaper" without `~/.local/bin/infynitae-wallpaper`. While it is not Off, Accent (and for
-Everything also Background, borders, Behind the windows) show "From the wallpaper" and are not
-clickable: the next apply would overwrite them (`settings.sh:225-241`). Left to the file: `CORNERS`
-(one corner for everything is the rule), `SQUARE_CORNERS`, `BORDER_IGNORE_CSD`, `CLIP_TO_GEOMETRY`,
-`WINE_TRANSPARENCY`, `FORCE_TRANSPARENT_APPS`, `SWITCH_LOOK`. Not known without trying: whether
+Hidden: "Folders in the accent" unless `ICON_THEME` starts with `Papirus`, or is `auto` and the
+Papirus set it picks (Papirus-Dark, Papirus with prefer-light) is in the `icons` source. "Colours from the
+wallpaper" without `~/.local/bin/infynitae-wallpaper`. Left to the file: the four colours "Yours"
+uses (`SURFACE_COLOR`, `TEXT_COLOR`, `BORDER_INACTIVE`, `CANVAS_COLOR`, one block under
+`THEME_SCHEME` in `config/config`), `THEME_SYNC`, `BORDER_ACTIVE`, `CORNERS` and `SQUARE_CORNERS` (both
+unset overrides under `WINDOW_CORNERS`: one corner for everything is the rule), `BORDER_IGNORE_CSD`,
+`SWITCH_LOOK`. `CLIP_TO_GEOMETRY`, `WINE_TRANSPARENCY` and `FORCE_TRANSPARENT_APPS` are on
+`settings/advanced`. Not known without trying: whether
 `WINDOW_CORNERS` reaches open windows on save or only on reload (its tag says reload; the compositor
 reloads on save).
 
@@ -190,7 +188,7 @@ Hidden: the whole card without `infynitae-wallpaper`.
 |---|---|---|---|---|
 | Font | Found `fonts` | `FONT_NAME` | | look |
 | Size | Step 6-24 | `FONT_SIZE` | | look |
-| Icons | Found `icons` | `ICON_THEME` | | look |
+| Icons | Found `icons` | `ICON_THEME` | first entry "Automatic" writes `auto` (Papirus when installed, else Adwaita) | look |
 | Cursor | Found `cursors` | `CURSOR_THEME` | | look |
 | M Cursor size | Pick | `CURSOR_SIZE` | 16, 24, 32, 48 | look |
 | M Terminal font | Found `fonts-mono` | `TERMINAL_FONT` | first entry "Same as Font" writes `""` | look |
@@ -226,7 +224,6 @@ Then, once:
 | Variable refresh rate | Pick | `VRR_ENABLED` | In fullscreen `auto`, On, Off | save |
 | Night light warmth | Slide 3000-6500 K, step 100 | `NIGHT_LIGHT_TEMP` | | save |
 | M Order, left to right | Text | `OUTPUT_ORDER` | names with commas | save |
-| M Sharper when zoomed in | Pick | `MAX_APP_SCALE` | Never `1`, 2x, 3x | save |
 | M Zoomed windows | Pick | `SCALING_FILTER` | Sharp `sharp`, Smooth `smooth`, FSR `fsr`, FSR sharp `fsr-sharp` | save |
 
 A mode change through `wlr-randr` is followed by a card "Keep this? 10" in the edge's ask prompt
@@ -235,7 +232,8 @@ write the key. Hidden: Resolution, Refresh rate and Turned without `wlr-randr` l
 shows what is set, and Scale writes the key); Order with one screen;
 Refresh rate with one rate; Variable refresh rate when no mode list says the screen can (not known
 how to read that without trying: `wlr-randr --json` has `adaptive_sync` only where the compositor
-reports it). Left to the file: `ZOOM_SHARPEN`, `VIRTUAL_SCREEN`, `OUTPUT_LAYOUT`, `AUTO_ROTATE*`, `OSK`.
+reports it). Left to the file: `VIRTUAL_SCREEN`, `OUTPUT_LAYOUT`, `AUTO_ROTATE*`, `OSK`.
+`MAX_APP_SCALE` and `ZOOM_SHARPEN` are on `settings/advanced`.
 Not known without trying: whether the compositor's output management takes every mode `wlr-randr`
 lists; whether night light re-reads the temperature while on. Brightness stays in `sound/volume`.
 
@@ -270,7 +268,7 @@ names in `/usr/share/X11/xkb/rules/evdev.lst` is a later step.
 | Super+Enter | Words | `SUPER_ENTER_ACTION` | Maximize, Fit | save |
 | M The view follows a new window | Pick | `TELEPORT_ON_OPEN` | Only ones you opened `user`, Always `1`, Never `0` | save |
 | M An app asks for the focus | Pick | `FOCUS_ON_ACTIVATE` | From you `user`, Always, Never | save |
-| M Super+Tab moves the view | Switch | `FOCUS_CYCLE_NAVIGATE` | `1` / `0` | save |
+| M Super+Tab moves the view | Switch | `FOCUS_CYCLE_NAVIGATE` | `true` / `false` (an older `1`, `yes` or `on` shows on: a true/false switch reads them as the compositor does) | save |
 | M Dragging the canvas | Pick | `PAN_MODE` | Pointer moves with it `free`, Pointer stays `grab`, Grip `rts` | save |
 | M Pan out of fullscreen | Switch | `FULLSCREEN_PAN` | | save |
 | M Keep on top | Text | `KEEP_ON_TOP` | Titles or apps, with commas | save |
@@ -293,10 +291,9 @@ names in `/usr/share/X11/xkb/rules/evdev.lst` is a later step.
 No source: the lists come from `cx.apps`. A value that is no listed app's `exec` shows as written and
 stays (a command of the owner's). "Automatic" shows what it resolves to only where that is cheap to
 know; otherwise the word alone. Hidden: a row with no app of its category installed; "Mount USB
-drives" and "Name drives" without `udisksctl`. Left to the file: `LAUNCHER`, `MENU_PICKER`, `CLIPBOARD_PICKER`,
-`CONTROL_MENU`, `POLKIT_AGENT`, `NOTIFICATIONS`, `ENABLE_EDGE`, `EDGE_POSITION`,
-`EDGE_CONTROL_SIDE` (a reload of the edge closes the panel; a panel's edge is set by editing it),
-`MONITOR_LOG_DIR` (empty by default; folder of `lab*.log` files for the System monitor GPU card).
+drives" and "Name drives" without `udisksctl`. Left to the file: `LAUNCHER`, `MENU_PICKER`,
+`POLKIT_AGENT`, `NOTIFICATIONS`, `ENABLE_EDGE`, `EDGE_POSITION`,
+`EDGE_CONTROL_SIDE` (a reload of the edge closes the panel; a panel's edge is set by editing it).
 Open: `BROWSER` is only what command-line programs run (`live/config.sh`); the browser other apps
 open links with is `xdg-settings set default-web-browser`. This row should set both; that is the
 owner's call (section 8).
@@ -306,17 +303,12 @@ owner's call (section 8).
 | Row | Control | Key | Values | After |
 |---|---|---|---|---|
 | Game mode | Switch | `GAME_MODE` | | save |
-| Hold notifications during a game | Switch | `GAME_QUIET` | | save |
 | Tearing in fullscreen | Pick | `TEARING` | Always, When the game asks `true`, Never `false` | save |
-| Slow hidden windows when the GPU is full | Switch | `GPU_RELIEF` | | save |
 | M Lower priority for apps out of sight | Switch | `BACKGROUND_PRIORITY` | | save |
-| M When frames are drawn | Pick | `LATENCY` | Direct, At once `off`, Balanced, Lowest | save |
-| M Fullscreen straight to the screen | Switch | `DIRECT_SCANOUT` | | save |
-| M A window filling the screen counts as fullscreen | Switch | `FIT_IS_FULLSCREEN` | | save |
-| M Cursor on the GPU's layer | Switch | `HARDWARE_CURSOR` | | save |
 
-Hidden: Game mode without `gamemoded` on PATH. Left to the file: `FRAME_GUARD`, `OVERLAY_PLANES`,
-`LATENCY_STATS`.
+Hidden: Game mode without `gamemoded` on PATH. Left to the file: `GAME_QUIET`, `GPU_RELIEF`,
+`LATENCY`, `LATENCY_STATS`. `DIRECT_SCANOUT`, `FIT_IS_FULLSCREEN`, `FRAME_GUARD`, `HARDWARE_CURSOR`
+and `OVERLAY_PLANES` are on `settings/advanced`.
 
 ### `settings/lock` (`cards/settings_lock.rs`)
 
@@ -331,7 +323,7 @@ Hidden: Game mode without `gamemoded` on PATH. Left to the file: `FRAME_GUARD`, 
 
 Hidden: "Stop charging at" unless a `/sys/class/power_supply/BAT*/charge_control_end_threshold`
 exists (`live/battery-limit:12`). Not known without trying: how `battery-limit` is called to apply
-now (read its head before building). Left to the file: `SCREEN_LOCKER`.
+now (read its head before building). `SCREEN_LOCKER` is on `settings/advanced`.
 
 ### `settings/privacy` (`cards/settings_privacy.rs`)
 
@@ -367,7 +359,31 @@ file has the explanation beside each).
 Replay on or off stays in `settings/quick`. The recorder is reloaded only while
 `ENABLE_REPLAY_BUFFER` is true (else the key is written and nothing runs). Hidden: the
 gpu-screen-recorder choice without it on PATH; the whole card without `infynitae-recorder`. Left to
-the file: `REPLAY_DIR`, `SCREENSHOT_CMD`, `RECORD_NOTIFY`.
+the file: `REPLAY_DIR`, `RECORD_NOTIFY`. `SCREENSHOT_CMD` is on `settings/advanced`.
+
+### `settings/advanced` (`cards/settings_advanced.rs`)
+
+The keys of the Advanced section at the end of `config/config`, in its order; the last group of
+`settings/all`, closed like every group until it is opened. Its summary there: "Defaults", or how
+many of its lines differ from the shipped defaults ("2 changed"). A test fails when the table and
+the section differ.
+
+| Row | Control | Key | Values | After |
+|---|---|---|---|---|
+| Clip windows to their edges | Switch | `CLIP_TO_GEOMETRY` | | save |
+| Transparent Wine and X11 windows | Switch | `WINE_TRANSPARENCY` | | save |
+| More apps blended that way | Text | `FORCE_TRANSPARENT_APPS` | app ids or titles, with commas | save |
+| Games straight to the screen | Switch | `DIRECT_SCANOUT` | | save |
+| A window filling the screen is fullscreen | Switch | `FIT_IS_FULLSCREEN` | | save |
+| Frame guard | Slide 0-100 % | `FRAME_GUARD` | | save |
+| Cursor on the GPU's cursor layer | Switch | `HARDWARE_CURSOR` | | save |
+| Windows on overlay planes | Switch | `OVERLAY_PLANES` | | save |
+| Sharper when zoomed in | Pick | `MAX_APP_SCALE` | Never `1`, 2x, 3x | save |
+| When apps redraw sharper | Pick | `ZOOM_SHARPEN` | After the zoom stops `after`, While zooming `live` | save |
+| Screenshot command | Text | `SCREENSHOT_CMD` | empty: the built-in one | use |
+| Lab log folder | Text | `MONITOR_LOG_DIR` | a folder of `lab*.log` files for the System monitor's GPU card | use |
+| Lock screen command | Text | `SCREEN_LOCKER` | `auto`: infynitae-lock | use |
+| Update signing key | Text | `UPDATE_SIGNING_KEY` | a GnuPG fingerprint or an SSH key | use |
 
 ### `settings/about` (`cards/settings_about.rs`)
 

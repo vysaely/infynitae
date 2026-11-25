@@ -177,11 +177,7 @@ pub const FILE_ONLY: &[&str] = &[
     "CANVAS_COLOR",
     "BORDER_INACTIVE",
     "BORDER_IGNORE_CSD",
-    "SQUARE_CORNERS",
     "SWITCH_LOOK",
-    "CLIP_TO_GEOMETRY",
-    "WINE_TRANSPARENCY",
-    "FORCE_TRANSPARENT_APPS",
     "SURFACE_COLOR",
     "TEXT_COLOR",
     "THEME_SYNC",
@@ -189,12 +185,6 @@ pub const FILE_ONLY: &[&str] = &[
     "GPU_RELIEF",
     "LATENCY",
     "LATENCY_STATS",
-    "FRAME_GUARD",
-    "DIRECT_SCANOUT",
-    "FIT_IS_FULLSCREEN",
-    "HARDWARE_CURSOR",
-    "OVERLAY_PLANES",
-    "ZOOM_SHARPEN",
     "VIRTUAL_SCREEN",
     "OSK",
     "TOUCH_EDGE_SWIPE",
@@ -202,20 +192,13 @@ pub const FILE_ONLY: &[&str] = &[
     "OUTPUT_LAYOUT",
     "LAUNCHER",
     "POLKIT_AGENT",
-    "SCREENSHOT_CMD",
-    "CLIPBOARD_PICKER",
     "MENU_PICKER",
-    "CONTROL_MENU",
     "TRAY_CARD",
-    "MONITOR_LOG_DIR",
     "NOTIFICATIONS",
     "ENABLE_EDGE",
     "EDGE_POSITION",
     "EDGE_CONTROL_SIDE",
     "FAVORITES",
-    "PANELS_SNAP",
-    "PANELS_OVERLAP",
-    "SCREEN_LOCKER",
     "PRIVACY_TITLES",
     "ALLOW_CAPTURE",
     "ALLOW_CLIPBOARD",
@@ -227,7 +210,6 @@ pub const FILE_ONLY: &[&str] = &[
     "ALLOW_LOCK",
     "ENABLE_REPLAY_BUFFER",
     "REPLAY_DIR",
-    "UPDATE_SIGNING_KEY",
     "GLOBAL_SHORTCUTS",
 ];
 
@@ -387,6 +369,16 @@ fn fmt_number(v: f64) -> String {
     }
 }
 
+/// Whether a switch shows on: its own word, or for a true/false switch any word the compositor
+/// reads as on (parse_bool: 1, yes, on), so an older "1" line still shows on.
+fn switch_on(value: &str, on: &str) -> bool {
+    value.eq_ignore_ascii_case(on)
+        || (on == "true"
+            && ["1", "yes", "on"]
+                .iter()
+                .any(|w| value.eq_ignore_ascii_case(w)))
+}
+
 fn snap(v: f64, min: f64, max: f64, step: f64) -> f64 {
     let v = v.clamp(min, max);
     if step > 0.0 {
@@ -450,7 +442,7 @@ impl Card for TableCard {
             let changed = !self.is_default(i) || self.restart.contains(s.key);
             match s.control {
                 Control::Switch { on, .. } => {
-                    let is_on = self.value(i).eq_ignore_ascii_case(on);
+                    let is_on = switch_on(&self.value(i), on);
                     ui::row(
                         cr,
                         cx,
@@ -647,7 +639,7 @@ impl Card for TableCard {
                 };
                 match s.control {
                     Control::Switch { on, off } => {
-                        let is_on = self.value(i).eq_ignore_ascii_case(on);
+                        let is_on = switch_on(&self.value(i), on);
                         self.set(i, if is_on { off } else { on }.to_string(), out);
                         true
                     }
@@ -1007,8 +999,8 @@ pub(crate) mod tests {
     #[test]
     fn every_key_in_config_config_is_on_a_card_or_in_file_only() {
         use crate::cards::{
-            settings_apps, settings_display, settings_games, settings_input, settings_lock,
-            settings_look, settings_privacy, settings_recording, settings_windows,
+            settings_advanced, settings_apps, settings_display, settings_games, settings_input,
+            settings_lock, settings_look, settings_privacy, settings_recording, settings_windows,
         };
         use std::collections::HashSet;
 
@@ -1034,6 +1026,7 @@ pub(crate) mod tests {
             settings_lock::TABLE,
             settings_privacy::TABLE,
             settings_recording::TABLE,
+            settings_advanced::TABLE,
         ] {
             for s in t {
                 assert!(on_cards.insert(s.key), "duplicate card key {}", s.key);
@@ -1079,7 +1072,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    #[ignore = "AUDIT_CONFIG: Switch row only matches exact `on` token instead of bool aliases"]
     fn audit_config_switch_accepts_shell_bool_tokens() {
         let th = Theme::from_config(&crate::config::Config::from_text(""));
         let cx = test_cx(&th);

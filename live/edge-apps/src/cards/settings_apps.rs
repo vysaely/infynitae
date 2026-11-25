@@ -1,6 +1,6 @@
 //! Settings: Apps (docs/EDGE_SETTINGS.md, `settings/defaults`): default apps and session-app
-//! toggles from config/config. Left to the file: LAUNCHER, MENU_PICKER, CLIPBOARD_PICKER,
-//! CONTROL_MENU, POLKIT_AGENT, NOTIFICATIONS, ENABLE_EDGE, EDGE_POSITION, EDGE_CONTROL_SIDE.
+//! toggles from config/config. Left to the file: LAUNCHER, MENU_PICKER, POLKIT_AGENT,
+//! NOTIFICATIONS, ENABLE_EDGE, EDGE_POSITION, EDGE_CONTROL_SIDE.
 
 use super::settings_rows::{change_command, After, ConfigData, Control, Setting, TableCard};
 use crate::app::App;

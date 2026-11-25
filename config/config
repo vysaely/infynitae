@@ -36,11 +36,6 @@ XKB_DEFAULT_OPTIONS=""
     #   ""        none
     #    e.g. "grp:alt_shift_toggle,caps:swapescape"
 
-NIGHT_LIGHT_TEMP="4000"
-    # Night light's colour in kelvin (the nightlight switch in the control panel, or
-    # `infynitae msg night-light`): lower is warmer
-    # default: 4000   (6500 is daylight, 3000 very warm)
-
 KEYBOARD_REPEAT_DELAY="200"
     # Milliseconds before a held key repeats
     # default: 200
@@ -122,10 +117,10 @@ FOCUS_ON_ACTIVATE="user"
     #              (a link from Discord in the browser) only marks it
     #    always    · never
 
-FOCUS_CYCLE_NAVIGATE="1"
+FOCUS_CYCLE_NAVIGATE="true"
     # Super+Tab also centres the camera on the window (always on a window asking for attention)
-    # default: 1
-    # options: 1  · 0
+    # default: true
+    # options: true  · false   (1 and 0, the older spelling, still work)
 
 PLACEMENT_POLICY="cluster"
     # Where a new window goes
@@ -175,12 +170,6 @@ ZOOM_FEEL="smooth"
     #   smooth   gentle glide (about 165 ms)
     #   floaty   slow glide (about 300 ms) with decaying wheel momentum
 
-CANVAS_COLOR="#0b0f14"
-    # Background behind the windows when no wallpaper (used with THEME_SCHEME="yours"; built
-    # schemes derive it from the card)
-    # default: "#0b0f14"
-    # options: "#0b0f14"  · any "#rrggbb"
-
 BORDER_WIDTH="1"
     # Window border in pixels
     # default: 1
@@ -196,22 +185,10 @@ ACCENT="#7aa2f7"
     # default: unset (same as ACCENT)
     # options: unset (commented)  · any "#rrggbb"
 
-BORDER_INACTIVE="#333b54"
-    # Border of the other windows (used with THEME_SCHEME="yours"; built schemes derive it)
-    # default: "#333b54"
-    # options: "#333b54"  · any "#rrggbb"
-
 BORDER_IGNORE_CSD="true"
     # No border around apps that draw their own (Firefox…)
     # default: true
     # options: true  · false
-
-SQUARE_CORNERS="true"
-    # Apps draw square corners and no shadow (they are told they are tiled), flush with the border;
-    # the compositor then rounds every window itself (WINDOW_CORNERS)
-    # default: true
-    #   true     square
-    #    false   their own rounded look
 
 WINDOW_CORNERS="8"
     # The corners of the whole desktop, this many px: windows (a gentle squircle; their border
@@ -228,12 +205,40 @@ WINDOW_CORNERS="8"
     # default: unset (as WINDOW_CORNERS)
     # options: 0 (square) to 28
 
+#SQUARE_CORNERS="false"
+    # Only to let apps draw their own rounded corners and shadows; unset, apps are told they are
+    # tiled, draw square corners flush with the border, and the compositor rounds every window
+    # (WINDOW_CORNERS)
+    # default: unset (true: square)
+    # options: unset (commented)  · false  · true
+
 THEME_SCHEME="yours"
     # Colours of the desktop, panels, widgets, notifications, lock and apps [reload]
     # default: yours
-    #   yours        SURFACE_COLOR, TEXT_COLOR and ACCENT as they are
+    #   yours        ACCENT and the four colours below as they are
     #   monochrome   greys only (light or dark per COLOR_SCHEME)
-    #   neutral · tonal · vibrant · expressive   built from ACCENT, more colour each
+    #   neutral · tonal · vibrant · expressive   built from ACCENT, more colour each: panels
+    #                and apps take their background and borders from the built card, and
+    #                TEXT_COLOR only where it reads on it
+
+# The four colours "yours" uses for panels and apps, each any "#rrggbb" (THEME_FROM_WALLPAPER="all"
+# writes all but TEXT_COLOR from the wallpaper). The compositor draws windows' borders and the
+# canvas with BORDER_INACTIVE and CANVAS_COLOR under every scheme.
+SURFACE_COLOR="#111317"
+    # Background of panels, menus, notifications, the lock box and managed terminals [reload]
+    # default: "#111317"
+
+TEXT_COLOR="#eef2f8"
+    # Text on panels, menus, notifications and managed apps [reload]
+    # default: "#eef2f8"
+
+BORDER_INACTIVE="#333b54"
+    # Border of the windows without the focus
+    # default: "#333b54"
+
+CANVAS_COLOR="#0b0f14"
+    # Behind the windows where no wallpaper is
+    # default: "#0b0f14"
 
 CARD_OPACITY="100"
     # How solid the panels' and widgets' cards are, in % [reload]
@@ -244,22 +249,6 @@ SWITCH_LOOK="rows"
     # The quick settings in a panel [reload]
     # default: rows
     # options: rows (an icon, its name and state)  · icons  · tiles
-
-CLIP_TO_GEOMETRY="true"
-    # Windows are drawn only inside their own edges, not in the margins apps keep for shadows
-    # default: true
-    #   true     clipped
-    #    false   whole buffer (stale pixels there can show as black blocks)
-
-WINE_TRANSPARENCY="true"
-    # No black boxes behind Wine/Proton/X11 layered windows
-    # default: true
-    # options: true  · false
-
-FORCE_TRANSPARENT_APPS=""
-    # More apps blended that way (by app id or title, comma separated)
-    # default: ""
-    #   ""    none  · e.g. "steam_app"
 
 
 # ═══ Performance & latency ═════════════════════════════════════════════════════════ [save] ═══
@@ -279,11 +268,6 @@ LATENCY_STATS="false"
     # default: false
     # options: false  · true
 
-DIRECT_SCANOUT="true"
-    # A fullscreen game's frames go straight to the screen
-    # default: true
-    # options: true  · false
-
 TEARING="true"
     # A fullscreen game shows each frame at once (lowest latency, a visible tear line)
     # default: true (as Windows: the game's own vsync setting decides)
@@ -291,16 +275,6 @@ TEARING="true"
     #            asking; Super+Shift+O turns it off for one window
     #    true    when it asks (vsync off) or after Super+Shift+O on its window
     #    false   never
-
-FIT_IS_FULLSCREEN="true"
-    # A window that exactly fills the screen, with no transparency, is treated as fullscreen though it
-    # never asked: shown directly when possible, and tearing applies, with game mode if it tears. It stops when it stops fitting.
-    # default: true
-
-FRAME_GUARD="33"
-    # LATENCY off: how late in a refresh, in percent, a frame waits for the next refresh instead of
-    # risking a miss. 0 turns it off; a quarter of it applies while a window is shown directly.
-    # default: 33
 
 GAME_MODE="true"
     # While a game is fullscreen, gamemode runs the CPU at full speed (when installed); ends
@@ -327,18 +301,6 @@ BACKGROUND_PRIORITY="true"
     # back when you see one (never a shared window, the game, or X11 apps)
     # default: true
     # options: true  · false
-
-HARDWARE_CURSOR="true"
-    # The cursor on the GPU's own cursor layer: it moves without a redraw, and a fullscreen game
-    # under it still goes to the screen directly (tearing, game mode)
-    # default: true
-    #   true     GPU cursor layer
-    #    false   drawn into the frame
-
-OVERLAY_PLANES="false"
-    # Also put windows' buffers on overlay planes
-    # default: false
-    # options: false  · true (on AMD this dropped frames whenever Electron apps like Discord drew)
 
 
 # ═══ Look ══════════════════════════════════════════════════════════════════════════ [reload] ═══
@@ -368,15 +330,17 @@ FONT_SIZE="10"
     # default: 10
     # options: 10  · any number
 
-ICON_THEME="Adwaita"
-    # Icon theme
-    # default: Adwaita
-    # options: Adwaita  · Papirus-Dark  · any installed theme (GTK and Qt apps)
+ICON_THEME="auto"
+    # Icon theme (GTK and Qt apps)
+    # default: auto
+    #   auto    Papirus when installed (Papirus-Dark with prefer-dark, Papirus with prefer-light),
+    #           else Adwaita
+    #    any installed theme (a folder in /usr/share/icons or ~/.local/share/icons)
 
 FOLDER_COLOR="accent"
     # Folders in the file manager: in the theme's colour (ACCENT), following it when it
-    # changes (requires ICON_THEME set to Papirus, Papirus-Dark or Papirus-Light; with Adwaita
-    # or other themes this setting has no effect), or the icon theme's own ("theme")
+    # changes (only with a Papirus icon theme, which ICON_THEME="auto" picks when installed;
+    # with Adwaita or other themes this setting has no effect), or the icon theme's own ("theme")
     # default: accent
     # options: accent · theme
 
@@ -384,18 +348,6 @@ COLOR_SCHEME="prefer-dark"
     # Dark or light look (apps, and built THEME_SCHEME cards and text)
     # default: prefer-dark
     # options: prefer-dark  · prefer-light
-
-SURFACE_COLOR="#111317"
-    # Background of panels, menus, notifications, lock box, and managed terminals
-    # (used with THEME_SCHEME="yours")
-    # default: "#111317"
-    # options: "#111317"  · any "#rrggbb"
-
-TEXT_COLOR="#eef2f8"
-    # Primary text colour across panels, menus, notifications, and managed apps
-    # (used with THEME_SCHEME="yours")
-    # default: "#eef2f8"
-    # options: "#eef2f8"  · any "#rrggbb"
 
 THEME_SYNC="true"
     # Apply the colours above to Mako, Fuzzel, GTK 3/4, Qt (with qt6ct installed), Foot,
@@ -445,17 +397,10 @@ SCALING_FILTER="sharp"
     #   fsr-sharp  zoomed in: AMD FSR 1 (EASU + stronger RCAS) · zoomed out: cached averaging
     #   (nearest and linear are accepted aliases for sharp and smooth)
 
-MAX_APP_SCALE="1"
-    # Apps redraw sharper as you zoom in, up to this scale
-    # default: 1
-    # options: 1 never: zooming only scales what is drawn (text soft when zoomed in, never
-    #            shifts)  · 2  · 3 sharper, apps redraw as you zoom (see ZOOM_SHARPEN)  · 4 …
-
-ZOOM_SHARPEN="after"
-    # When apps redraw sharper as you zoom
-    # default: after
-    #   after   once the zoom stops, at a whole scale (2x, 3x): text does not shift while zooming
-    #   live    at each step while zooming (finer steps; a terminal re-flows its text at each)
+NIGHT_LIGHT_TEMP="4000"
+    # Night light's colour in kelvin (the nightlight switch in the control panel, or
+    # `infynitae msg night-light`): lower is warmer
+    # default: 4000   (6500 is daylight, 3000 very warm)
 
 VRR_ENABLED="auto"
     # Variable refresh rate (FreeSync)
@@ -545,13 +490,9 @@ POLKIT_AGENT="auto"
     #   auto    infynitae-polkit  · none / false  · a path
 
 SCREENSHOT_DIR="$HOME/Pictures/Screenshots"
+    # Where screenshots are saved (Super+S, Super+Shift+S)
     # default: "$HOME/Pictures/Screenshots"
     # options: "$HOME/Pictures/Screenshots"  · any folder
-
-SCREENSHOT_CMD=""
-    # Super+Shift+S or Print: the whole screen
-    # default: ""
-    #   ""    grim  · a command (it gets the file path)
 
 FREEZE_SCREENSHOT="true"
     # Super+S (or Super+Shift+R): the screen stays frozen at the key press while you pick the
@@ -589,21 +530,12 @@ CLIPBOARD_HISTORY="true"
     # default: true
     # options: true  · false
 
-CLIPBOARD_PICKER=""
-    # Super+V picker
-    # default: ""
-    #   ""    infynitae-edge clipboard (or MENU_PICKER)  · any dmenu-style command
-
 MENU_PICKER=""
-    # Menus (control menu, clipboard)
+    # The menu for Open with, the screen-sharing and remote desktop questions, and without the
+    # edge the control menu, clipboard history and window list; set, it also replaces the
+    # edge's clipboard panel and screen picker
     # default: ""
     #   ""    fuzzel --dmenu  · any dmenu-style command, e.g. "rofi -dmenu"
-
-CONTROL_MENU="auto"
-    # Super+A — Wi-Fi, Bluetooth, volume (all sound or one app), sound output, power mode, do
-    # not disturb (the parts whose tools are installed)
-    # default: auto
-    # options: auto  · a command
 
 TRAY_CARD="menu"
     # The edge from apps: a right click on a tray app's icon shows, in the panel's place, its own
@@ -611,11 +543,6 @@ TRAY_CARD="menu"
     # app's own [reload]
     # default: menu
     # options: menu  · menu-first (its menu, then its card)  · card-first
-
-MONITOR_LOG_DIR=""
-    # Folder of lab*.log files shown by the System monitor GPU card; empty reads none [use]
-    # default: ""
-    # options: ""  · a folder path
 
 NOTIFICATIONS="auto"
     # Who shows notifications [reload]: the edge's own pop-ups (top right, in the system's
@@ -684,9 +611,6 @@ FAVORITES=""
 #   (module@half for a half); the line from before is kept in ~/.config/infynitae/panels.backup.
 #   A line written with places (module@x,y,WxH, the older editor) is read in order, side by side
 #   modules as halves. An open list (networks, devices, sound, replay) opens beside the panel.
-#   The desktop's widgets (WIDGETS) keep free placement; for them Snap and Overlap still apply:
-PANELS_SNAP="true"
-PANELS_OVERLAP="false"
 # Four panels are built in; a line for one of them changes only what it says (PANEL_CONTROL="left"
 # moves it and keeps its key and modules). Any other name is a new panel:
 #   PANEL_APPS="SUPER+W top center search favorites apps"
@@ -707,7 +631,8 @@ PANELS_OVERLAP="false"
 # ═══ Lock & idle ═══════════════════════════════════════════════════════════════════ [save] ═══
 
 IDLE_SLEEP_TIMEOUT_MIN="15"
-    # Screens off after this many idle minutes
+    # Screens turn off after this many minutes without input; the PC keeps running (it does not
+    # sleep, whatever the name says)
     # default: 15
     # options: 15  · 0 never  · any number
 
@@ -730,11 +655,6 @@ SHUTDOWN_SCREEN="true"
     # Show the "Rebooting…" / "Shutting down…" screen on reboot or power off [use]
     # default: true
     # options: true  · false
-
-SCREEN_LOCKER="auto"
-    # Super+Shift+L [use]
-    # default: auto
-    #   auto    infynitae-lock  · a command
 
 START_LOCKED="false"
     # Start the session at the lock screen [at login]
@@ -834,14 +754,18 @@ REMOTE_DESKTOP="false"
 # infynitae-reload recorder.
 
 ENABLE_REPLAY_BUFFER="false"
+    # Keep the last minutes of the screen, so Super+Alt+C can save them as a clip. Off by default:
+    # it holds memory (or disk) and encodes all the time. Recording (Super+Alt+P) works without it
     # default: false
     # options: false  · true
 
 REPLAY_BUFFER_MINUTES="20"
+    # How many minutes the replay buffer keeps (a saved clip is this long at most)
     # default: 20
     # options: 20  · any number
 
 REPLAY_DIR="auto"
+    # Where the compositor's capture (REPLAY_BACKEND="infynitae") keeps the buffer's pieces
     # default: "auto"
     #   "auto"                         (RAM; on a machine whose RAM it would fill a quarter of,
     #                                   the disk cache ~/.cache/infynitae-replay)  · any folder
@@ -863,10 +787,12 @@ REPLAY_STORAGE="ram"
     # options: unset (commented)  · any folder
 
 CLIPS_DIR="$HOME/Videos/Clips"
+    # Where saved replay clips go
     # default: "$HOME/Videos/Clips"
     # options: "$HOME/Videos/Clips"  · any folder
 
 RECORDINGS_DIR="$HOME/Videos/Recordings"
+    # Where recordings (Super+Alt+P) go
     # default: "$HOME/Videos/Recordings"
     # options: "$HOME/Videos/Recordings"  · any folder
 
@@ -881,10 +807,13 @@ REPLAY_BACKEND="auto"
     #                         the GPU costs the compositor time on every frame)
 
 RECORD_FPS="60"
+    # Frames per second of the replay buffer and recordings
     # default: 60
     # options: 60  · e.g. 30, 120
 
 RECORD_CODEC="hevc"
+    # The video format. A GPU without HEVC encodes H.264 instead (or AV1, when gpu-screen-recorder
+    # finds only that); one that encodes none of them leaves H.264 to the CPU, which costs CPU time
     # default: hevc
     # options: hevc  · auto  · av1  · h264
 
@@ -893,13 +822,6 @@ RECORD_AUDIO="desktop"
     # default: desktop
     # options: desktop  · mic  · both  · none
     #RECORD_NOTIFY="false"   no notification when recording starts, stops or a clip is saved
-
-
-UPDATE_SIGNING_KEY=""
-    # infynitae-update takes a new version only when its commit is signed by this key [use]
-    # default: ""   (any version from the repository, as before)
-    # options: ""  · a GnuPG fingerprint · an SSH key as git shows it (SHA256:..., with
-    #            gpg.ssh.allowedSignersFile set in git)
 
 
 # ═══ Key bindings ══════════════════════════════════════════════════════════════════ [save] ═══
@@ -954,3 +876,84 @@ XWAYLAND_KEYS="modifiers"
 # ═══ Your own scripts ═══
 # ~/.config/infynitae/autostart.sh   run at session start (bars, notifications…)
 # ~/.config/infynitae/launch.sh      handles every shortcut action instead of the built-in one
+
+
+# ═══ Advanced ═════════════════════════════════════════════════════════════════════ [save] ═══
+# Workarounds for particular apps, drivers and GPUs, and commands that replace a built-in part.
+# The Settings app shows them under Advanced.
+
+CLIP_TO_GEOMETRY="true"
+    # Windows are drawn only inside their own edges, not in the margins apps keep for shadows
+    # default: true
+    #   true     clipped
+    #    false   whole buffer (stale pixels there can show as black blocks)
+
+WINE_TRANSPARENCY="true"
+    # No black boxes behind Wine/Proton/X11 layered windows
+    # default: true
+    # options: true  · false
+
+FORCE_TRANSPARENT_APPS=""
+    # More apps blended that way (by app id or title, comma separated)
+    # default: ""
+    #   ""    none  · e.g. "steam_app"
+
+DIRECT_SCANOUT="true"
+    # A fullscreen game's frames go straight to the screen
+    # default: true
+    # options: true  · false
+
+FIT_IS_FULLSCREEN="true"
+    # A window that exactly fills the screen, with no transparency, is treated as fullscreen though it
+    # never asked: shown directly when possible, and tearing applies, with game mode if it tears. It stops when it stops fitting.
+    # default: true
+
+FRAME_GUARD="33"
+    # LATENCY off: how late in a refresh, in percent, a frame waits for the next refresh instead of
+    # risking a miss. 0 turns it off; a quarter of it applies while a window is shown directly.
+    # default: 33
+
+HARDWARE_CURSOR="true"
+    # The cursor on the GPU's own cursor layer: it moves without a redraw, and a fullscreen game
+    # under it still goes to the screen directly (tearing, game mode)
+    # default: true
+    #   true     GPU cursor layer
+    #    false   drawn into the frame
+
+OVERLAY_PLANES="false"
+    # Also put windows' buffers on overlay planes
+    # default: false
+    # options: false  · true (on AMD this dropped frames whenever Electron apps like Discord drew)
+
+MAX_APP_SCALE="1"
+    # Apps redraw sharper as you zoom in, up to this scale
+    # default: 1
+    # options: 1 never: zooming only scales what is drawn (text soft when zoomed in, never
+    #            shifts)  · 2  · 3 sharper, apps redraw as you zoom (see ZOOM_SHARPEN)  · 4 …
+
+ZOOM_SHARPEN="after"
+    # When apps redraw sharper as you zoom
+    # default: after
+    #   after   once the zoom stops, at a whole scale (2x, 3x): text does not shift while zooming
+    #   live    at each step while zooming (finer steps; a terminal re-flows its text at each)
+
+SCREENSHOT_CMD=""
+    # Super+Shift+S or Print: the whole screen [use]
+    # default: ""
+    #   ""    infynitae-shot, else grim  · a command (it gets the file path)
+
+MONITOR_LOG_DIR=""
+    # Folder of lab*.log files shown by the System monitor GPU card; empty reads none [use]
+    # default: ""
+    # options: ""  · a folder path
+
+SCREEN_LOCKER="auto"
+    # Super+Shift+L [use]
+    # default: auto
+    #   auto    infynitae-lock  · a command
+
+UPDATE_SIGNING_KEY=""
+    # infynitae-update takes a new version only when its commit is signed by this key [use]
+    # default: ""   (any version from the repository, as before)
+    # options: ""  · a GnuPG fingerprint · an SSH key as git shows it (SHA256:..., with
+    #            gpg.ssh.allowedSignersFile set in git)

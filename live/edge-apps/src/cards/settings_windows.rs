@@ -94,7 +94,10 @@ pub const TABLE: &[Setting] = &[
         key: "FOCUS_CYCLE_NAVIGATE",
         name: "Super+Tab moves the view",
         says: "Always on a window asking for attention",
-        control: Control::Switch { on: "1", off: "0" },
+        control: Control::Switch {
+            on: "true",
+            off: "false",
+        },
         after: After::Save,
         more: true,
         needs: &[],
@@ -426,14 +429,15 @@ mod tests {
         card.event(&press(5001), &cx, &mut out);
         assert!(out.is_empty());
 
-        // 3. Switch (FOCUS_CYCLE_NAVIGATE, row 6: "1"/"0"; FULLSCREEN_PAN, row 8: "true"/"false")
+        // 3. Switch (FOCUS_CYCLE_NAVIGATE, row 6, and FULLSCREEN_PAN, row 8: "true"/"false"); an
+        // older "1" reads as on, so the click writes 'false'
         out.clear();
         assert!(card.event(&press(161), &cx, &mut out));
         assert_eq!(
             out,
             vec![Action::Run(
                 "sh \"$HOME/infynitae/live/settings.sh\" log FOCUS_CYCLE_NAVIGATE - && \
-                 sh \"$HOME/infynitae/live/settings.sh\" set FOCUS_CYCLE_NAVIGATE '0' >/dev/null 2>&1"
+                 sh \"$HOME/infynitae/live/settings.sh\" set FOCUS_CYCLE_NAVIGATE 'false' >/dev/null 2>&1"
                     .into()
             )]
         );

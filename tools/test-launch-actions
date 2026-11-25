@@ -274,4 +274,19 @@ remember PRIVACY_APPS bitwarden on
 check "a config without the line gets it" "$(line PRIVACY_APPS)" 'PRIVACY_APPS="bitwarden"'
 printf '%s' "$cfg_before" > "$HOMEDIR/.config/infynitae/config"
 
+# Retired CONTROL_MENU and CLIPBOARD_PICKER (2026-11-25): an old line changes nothing. Super+A
+# runs the control menu, Super+V the MENU_PICKER (another command: BIND_ and EXEC_ lines).
+printf '#!/bin/sh\necho control-menu >> "$CALL_LOG"\n' > "$HOMEDIR/.local/bin/infynitae-control-menu"
+chmod +x "$HOMEDIR/.local/bin/infynitae-control-menu"
+: > "$LOG"
+run_action control-menu "" CONTROL_MENU="echo old-control >> $LOG"
+check "an old CONTROL_MENU line: Super+A runs the control menu" "$(cat "$LOG")" "control-menu"
+printf '#!/bin/sh\necho entry\n' > "$BIN/cliphist"
+printf '#!/bin/sh\ncat > /dev/null; echo "picker: $1" >> "$CALL_LOG"\n' > "$BIN/pick"
+chmod +x "$BIN/cliphist" "$BIN/pick"
+: > "$LOG"
+run_action clipboard-history "" CLIPBOARD_PICKER="pick old" MENU_PICKER="pick menu"
+check "an old CLIPBOARD_PICKER line: Super+V uses MENU_PICKER" "$(cat "$LOG")" "picker: menu"
+rm -f "$BIN/cliphist" "$BIN/pick" "$HOMEDIR/.local/bin/infynitae-control-menu"
+
 exit $fail
