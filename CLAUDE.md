@@ -15,8 +15,9 @@ history, hidden from search by `.ignore`.
   returns effects; the adapter (`crates/infynitae-wayland`) applies them. Rules and invariants (INV-*, F-*) live
   in `docs/foundation/`; `tools/verify-architecture` and `tools/check-foundation-docs` enforce structure.
 - **The owner's live desktop runs scripts from this checkout** (`~/infynitae/live/*.sh`; the compositor spawns
-  `live/launch.sh`). A merge or a branch switch here changes the running desktop at once, while the binaries in
-  `~/.local/bin` change only with `infynitae-update`. A script must keep working with the binaries installed
+  `live/launch.sh`; an install elsewhere records its checkout in `~/.config/infynitae/checkout`). A merge or a
+  branch switch here changes the running desktop at once, while the binaries in `~/.local/bin` change only with
+  `infynitae-update`. A script must keep working with the binaries installed
   before an update (e.g. a renamed helper falls back to its old name). Work on branches in a separate worktree.
 - **Builds on the owner's PC pause the lab first** (owner 2026-11-12: "pause the ai training and just continue
   whenever done"): `~/aevyternae-mind/scripts/lab-pause on` before cargo build/check/test/clippy, `lab-pause off`
@@ -30,7 +31,7 @@ history, hidden from search by `.ignore`.
 - **Tests**: most are real Wayland clients against the headless backend (`crates/infynitae-backend-headless/tests`,
   the `Lockstep` harness in `tests/common`). A fix comes with a test that failed before it. Tests never touch
   the owner's desktop: the harness points the compositor at an owned temporary folder with a stub `launch.sh`
-  and an isolated client environment, so shortcut actions never run `$HOME/infynitae/live/launch.sh` or talk
+  and an isolated client environment, so shortcut actions never run the checkout's `live/launch.sh` or talk
   to the host session. It must stay so.
 - **No emoji or status symbols** in anything the system shows or in docs: plain words (maths and arrows are fine).
 - **Merging**: to `main` only when CI is green; commit messages end with the attribution line the session gives.

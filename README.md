@@ -17,6 +17,8 @@ git clone https://github.com/vysaely/infynitae.git ~/infynitae
 ~/infynitae/install.sh
 ```
 
+The clone can be in any folder: Infynitae runs from the one `install.sh` was run from.
+
 It asks for your password once, then menus show what was found on the machine and what to
 install, with what fits it already ticked. After the last menu it runs by itself. Reboot when it
 is done:

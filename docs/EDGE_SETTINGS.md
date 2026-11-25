@@ -101,11 +101,13 @@ pub struct Setting {
 - **A change** shows at once (as `settings.rs:926` does), then one `Action::Run`:
 
   ```
-  sh "$HOME/infynitae/live/settings.sh" log KEY 'OLD' && \
-  sh "$HOME/infynitae/live/settings.sh" set KEY 'NEW' >/dev/null 2>&1 [&& AFTER]
+  sh "${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh" log KEY 'OLD' && \
+  sh "${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh" set KEY 'NEW' >/dev/null 2>&1 [&& AFTER]
   ```
 
-  the path as `quick.rs:172`, values through `settings::sq` (`settings.rs:98`). `log` is new: it adds
+  `INFYNITAE_DIR` is the checkout the scripts run from, which the edge sets for its commands when
+  it starts (`paths::checkout_dir`: `~/.config/infynitae/checkout`, else `~/infynitae`); the path
+  as `quick.rs:172`, values through `settings::sq` (`settings.rs:98`). `log` is new: it adds
   `time<TAB>KEY<TAB>OLD` to `~/.local/state/infynitae/settings-changes` (the last 50 lines kept); OLD
   is `-` for a key that had no line. `AFTER` by the key's tag in `config/config:10-14`:
 
@@ -113,7 +115,7 @@ pub struct Setting {
   |---|---|---|
   | `[save]` | nothing: the compositor checks the file every 250 ms (`infynitae-backend-drm/src/lib.rs:1712`) | nothing |
   | `[reload]`, look keys | nothing more: `set` already re-applied GTK, Qt and the terminals; the core's refresh re-reads the theme (2.3) | nothing |
-  | `[reload]`, a helper | `sh "$HOME/infynitae/live/infynitae-reload" PART` (the part is in each card's table) | nothing |
+  | `[reload]`, a helper | `sh "${INFYNITAE_DIR:-$HOME/infynitae}/live/infynitae-reload" PART` (the part is in each card's table) | nothing |
   | `[use]` | nothing | nothing |
   | `[restart]` | nothing | "At the next start" in place of the state, in the accent, until the compositor restarts |
   | `[at login]` | nothing | "At the next login", the same way: the key only does something when a session starts |
@@ -317,7 +319,7 @@ and `OVERLAY_PLANES` are on `settings/advanced`.
 | Screens off after | Pick | `IDLE_SLEEP_TIMEOUT_MIN` | 5, 10, 15, 30, 60 minutes, Never `0`; another number shows as it is | save |
 | Lock when the screens go off | Switch | `IDLE_AUTO_LOCK` | | save |
 | Lock before sleep | Switch | `SLEEP_LOCK` | | Reload(`sleep-lock`) |
-| Stop charging at | Pick | `BATTERY_LIMIT` | Full `off`, 80 %, 90 % | save, then `sh "$HOME/infynitae/live/battery-limit"` |
+| Stop charging at | Pick | `BATTERY_LIMIT` | Full `off`, 80 %, 90 % | save, then `sh "${INFYNITAE_DIR:-$HOME/infynitae}/live/battery-limit"` |
 | M Start at the lock screen | Switch | `START_LOCKED` | | at login |
 | M Show "Shutting down" | Switch | `SHUTDOWN_SCREEN` | | use |
 
@@ -396,7 +398,7 @@ Source `pc` (`every`: None), each line left out when its file or program is miss
 | Processor | the first `model name` of `/proc/cpuinfo` |
 | Memory | `MemTotal` of `/proc/meminfo`, in GB |
 | Graphics | `lspci -mm` lines of class VGA or 3D, the device name (not shown without `lspci`) |
-| Infynitae | `git -C "$HOME/infynitae" log -1 --format='%h %cs'` |
+| Infynitae | `git -C CHECKOUT log -1 --format='%h %cs'`, CHECKOUT as `paths::checkout_dir` resolves it |
 | Time zone | `timedatectl show -p Timezone --value` |
 
 Then the actions: **Check for updates** (`Action::Run` of `infynitae-update` in the terminal:
@@ -419,7 +421,7 @@ the key Windows uses. No hover. Any of the cards can also be put in any other pa
 (`settings/display:m` in the control panel).
 
 **Open the config file** (a row of `settings/about`, and the last row of `settings/all`):
-`Action::Run("sh \"$HOME/.local/bin/xdg-terminal-exec\" sh \"$HOME/infynitae/live/settings.sh\" edit")`
+`Action::Run("sh \"$HOME/.local/bin/xdg-terminal-exec\" sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" edit")`
 then `ClosePanel` (`settings.sh:921` runs `$EDITOR`, else nano). Saving the file applies as the tags
 say; the cards read it again the next time the panel opens.
 
