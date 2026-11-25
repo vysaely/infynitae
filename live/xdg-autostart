@@ -13,6 +13,10 @@
 # session start (autostart-added), and each that is gone (autostart-removed); the user's
 # ~/.config/infynitae/autostart.sh counts by its checksum. The list is kept in
 # $XDG_STATE_HOME/infynitae/journal/autostart.last. A dry run changes neither.
+
+# the checkout these scripts run from: the one install.sh recorded, else ~/infynitae
+INFYNITAE_DIR=; { IFS= read -r INFYNITAE_DIR < "$HOME/.config/infynitae/checkout"; } 2>/dev/null || :
+INFYNITAE_DIR="${INFYNITAE_DIR:-$HOME/infynitae}"
 set -u
 dry=false
 [ "${1:-}" = "--dry-run" ] && dry=true
@@ -81,7 +85,7 @@ done
 IFS=$old_ifs
 
 $dry && exit 0
-for _r in "$(dirname "$0")/journal.sh" "$HOME/infynitae/live/journal.sh"; do
+for _r in "$(dirname "$0")/journal.sh" "$INFYNITAE_DIR/live/journal.sh"; do
     [ -f "$_r" ] && { . "$_r"; break; }
 done
 script="$HOME/.config/infynitae/autostart.sh"

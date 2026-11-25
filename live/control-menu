@@ -6,6 +6,10 @@
 # (empty: fuzzel --dmenu); any dmenu-style command works.
 # Super+A runs another command with BIND_CONTROL="none" and EXEC_<NAME>="SUPER+A:command" in the config.
 
+# the checkout these scripts run from: the one install.sh recorded, else ~/infynitae
+INFYNITAE_DIR=; { IFS= read -r INFYNITAE_DIR < "$HOME/.config/infynitae/checkout"; } 2>/dev/null || :
+INFYNITAE_DIR="${INFYNITAE_DIR:-$HOME/infynitae}"
+
 PICKER="${MENU_PICKER:-fuzzel --dmenu}"
 TERM_BIN="${TERMINAL:-auto}"
 [ "$TERM_BIN" = "auto" ] && for t in kitty alacritty foot wezterm ghostty konsole xterm; do
@@ -224,14 +228,14 @@ replay_toggle() {
         echo "ENABLE_REPLAY_BUFFER=\"$to\"" >> "$CONFIG"
     fi
     reload="$HOME/.local/bin/infynitae-reload"
-    [ -x "$reload" ] || reload="$HOME/infynitae/live/infynitae-reload"
+    [ -x "$reload" ] || reload="$INFYNITAE_DIR/live/infynitae-reload"
     "$reload" recorder >/dev/null 2>&1
     if [ "$to" = true ]; then note "Replay on" "Super+Alt+C saves a clip"; else note "Replay off"; fi
 }
 
 # ---- Battery limit
 # BATTERY_LIMIT in the config (80 or off), applied at once and at every login
-BATTERY_LIMIT_SCRIPT="$HOME/infynitae/live/battery-limit"
+BATTERY_LIMIT_SCRIPT="$INFYNITAE_DIR/live/battery-limit"
 battery_limit_now() { sh "$BATTERY_LIMIT_SCRIPT" 2>/dev/null; }
 battery_limit_toggle() {
     if [ "$(battery_limit_now)" = off ]; then to=80; else to=off; fi
@@ -366,9 +370,9 @@ apps_menu() {
 # ---- Session & power
 session_menu() {
     lock_bin="$HOME/.local/bin/infynitae-lock"
-    [ -x "$lock_bin" ] || lock_bin="$HOME/infynitae/live/lock/infynitae-lock"
+    [ -x "$lock_bin" ] || lock_bin="$INFYNITAE_DIR/live/lock/infynitae-lock"
     sess_bin="$HOME/.local/bin/infynitae-session"
-    [ -x "$sess_bin" ] || sess_bin="$HOME/infynitae/live/infynitae-session"
+    [ -x "$sess_bin" ] || sess_bin="$INFYNITAE_DIR/live/infynitae-session"
     choice=$(pick "Lock screen" "Reboot" "Power off" "Log out")
     case "$choice" in
         "Lock screen")

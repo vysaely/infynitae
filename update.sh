@@ -7,13 +7,14 @@ set -e
 # entry unreadable to a display manager
 umask 022
 
-# the source: next to this script, or ~/infynitae for the installed copy
+# the source: next to this script, or for the installed copy the checkout install.sh recorded
+# (else ~/infynitae)
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P)"
 if [ ! -f "$REPO_DIR/Cargo.toml" ]; then
-    if [ -d "$HOME/infynitae" ] && [ -f "$HOME/infynitae/Cargo.toml" ]; then
-        REPO_DIR="$HOME/infynitae"
-    else
-        echo "==> Infynitae source not found (expected ~/infynitae)." >&2
+    REPO_DIR=; { IFS= read -r REPO_DIR < "$HOME/.config/infynitae/checkout"; } 2>/dev/null || :
+    REPO_DIR="${REPO_DIR:-$HOME/infynitae}"
+    if [ ! -f "$REPO_DIR/Cargo.toml" ]; then
+        echo "==> Infynitae source not found (expected $REPO_DIR)." >&2
         exit 1
     fi
 fi
@@ -229,8 +230,9 @@ cargo build --release -p infynitae -j "$JOBS"
 export UPDATE_SCRIPTS_CHANGED
 install_programs "$REPO_DIR"
 
-# 6. the session scripts, when this source is not ~/infynitae itself
-sync_live_dir "$REPO_DIR"
+# 6. the session scripts run from this source from now on (shortcuts, reload, the edge's
+#    commands); a running compositor keeps the folder it started with for launch.sh itself
+record_checkout "$REPO_DIR"
 
 if [ -n "$PRE_HEAD" ] && [ -n "$POST_HEAD" ] && [ "$PRE_HEAD" != "$POST_HEAD" ]; then
     printf 'PRE_HEAD=%s\nPOST_HEAD=%s\nSCRIPTS_CHANGED=%s\n' \

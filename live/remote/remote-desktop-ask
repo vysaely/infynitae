@@ -2,7 +2,11 @@
 # Asked by infynitae-portal before an app takes the keyboard and mouse (remote desktop): prints
 # "once", "always" or nothing (deny). The picker is MENU_PICKER (empty: fuzzel --dmenu).
 #   remote-desktop-ask -- <app id>   (empty: an app outside a sandbox, which is asked each time)
-[ -f "$HOME/infynitae/live/config.sh" ] && . "$HOME/infynitae/live/config.sh"
+
+# the checkout these scripts run from: the one install.sh recorded, else ~/infynitae
+INFYNITAE_DIR=; { IFS= read -r INFYNITAE_DIR < "$HOME/.config/infynitae/checkout"; } 2>/dev/null || :
+INFYNITAE_DIR="${INFYNITAE_DIR:-$HOME/infynitae}"
+[ -f "$INFYNITAE_DIR/live/config.sh" ] && . "$INFYNITAE_DIR/live/config.sh"
 [ "${1:-}" = "--" ] && shift
 PICKER="${MENU_PICKER:-fuzzel --dmenu}"
 # the id is shown as text only, on one line

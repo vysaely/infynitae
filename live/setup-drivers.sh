@@ -3,6 +3,10 @@
 # Vulkan and Xwayland packages; with --gaming also the 32-bit ones (multilib: Steam, Wine, 32-bit
 # games), and on their own when Steam or Wine is installed already. --dry-run only says what it
 # would do.
+
+# the checkout these scripts run from: the one install.sh recorded, else ~/infynitae
+INFYNITAE_DIR=; { IFS= read -r INFYNITAE_DIR < "$HOME/.config/infynitae/checkout"; } 2>/dev/null || :
+INFYNITAE_DIR="${INFYNITAE_DIR:-$HOME/infynitae}"
 set -e
 # files it creates are readable by everyone, like any installed file: the session's private
 # umask (077) would make /etc/pam.d/infynitae unreadable to the lock screen, and the session
@@ -25,9 +29,9 @@ if pacman -Qq steam wine wine-staging lutris 2>/dev/null | grep -q . \
 fi
 
 # the shared, unattended pacman (waits for another package manager, replaces a conflicting
-# package instead of stopping); next to this script in the repo, or in ~/infynitae when this is
+# package instead of stopping); next to this script in the repo, or in the checkout when this is
 # the installed ~/.local/bin/infynitae-drivers
-for lib in "$(dirname "$0")/install-lib.sh" "$HOME/infynitae/live/install-lib.sh"; do
+for lib in "$(dirname "$0")/install-lib.sh" "$INFYNITAE_DIR/live/install-lib.sh"; do
     if [ -f "$lib" ]; then
         # shellcheck disable=SC1090
         . "$lib"

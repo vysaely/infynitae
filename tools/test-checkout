@@ -1,0 +1,98 @@
+#!/bin/sh
+# tools/test-checkout: Infynitae runs from the checkout it was installed from, wherever that is.
+# A copy of the checkout in a folder with a space, installed into a temporary HOME with the
+# installer's own steps (record_checkout, install_programs); then the installed programs find it:
+# a shortcut action through launch.sh, infynitae-reload, infynitae-update. A HOME with no record
+# (an install from before it) still runs from ~/infynitae.
+# After the install the checkout's env.sh, config-check and install-lib.sh are replaced by stubs
+# that say where they ran: nothing of a desktop session runs.
+set -eu
+
+REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
+TMP=$(mktemp -d "/tmp/infynitae-test-checkout.XXXXXX")
+trap 'rm -rf "$TMP"' EXIT INT TERM
+
+fail=0
+check() {
+    if [ "$2" = "$3" ]; then
+        echo "ok   $1"
+    else
+        echo "FAIL $1: expected '$3', got '$2'"
+        fail=1
+    fi
+}
+
+LOG="$TMP/ran"
+# a checkout at $1: the repository's scripts and a built compositor that is a stub
+make_checkout() {
+    mkdir -p "$1/crates/infynitae" "$1/target/release"
+    cp -R "$REPO_DIR/live" "$REPO_DIR/config" "$REPO_DIR/update.sh" "$REPO_DIR/Cargo.toml" "$1/"
+    printf '#!/bin/sh\nexit 0\n' > "$1/target/release/infynitae"
+    printf '#!/bin/sh\nexit 0\n' > "$1/live/build-satellite.sh"
+    cp "$1/live/build-satellite.sh" "$1/live/build-helpers.sh"
+}
+# the stubs in the checkout at $1: each says it ran and in which checkout
+stub_checkout() {
+    printf 'echo "env.sh: %s" >> "%s"\n' "$1" "$LOG" > "$1/live/env.sh"
+    printf '#!/bin/sh\necho "config-check $*: %s" >> "%s"\n' "$1" "$LOG" > "$1/live/config-check"
+    chmod +x "$1/live/config-check"
+    # update.sh sources it before anything that needs a password: it says where, and stops
+    printf 'echo "update in $(pwd)" >> "%s"; exit 0\n' "$LOG" > "$1/live/install-lib.sh"
+}
+
+run_in() {
+    home=$1
+    shift
+    env -i HOME="$home" PATH="$home/.local/bin:/usr/bin:/bin" XDG_RUNTIME_DIR="$TMP/run" "$@" \
+        >/dev/null 2>&1 || true
+}
+
+mkdir -p "$TMP/run"
+chmod 700 "$TMP/run"
+
+# 1. An install from a checkout outside the home folder
+H="$TMP/home"
+CK="$TMP/my src/infynitae"
+mkdir -p "$H" "$CK"
+make_checkout "$CK"
+env -i HOME="$H" PATH="/usr/bin:/bin" bash -c '
+    . "$1/live/install-lib.sh"
+    record_checkout "$1"
+    install_programs "$1"' sh "$CK" >/dev/null 2>&1
+stub_checkout "$CK"
+check "the installer records the checkout" "$(cat "$H/.config/infynitae/checkout")" "$CK"
+check "the programs are installed" "$([ -x "$H/.local/bin/infynitae-reload" ] && echo yes)" yes
+check "nothing is made in ~/infynitae" "$([ -e "$H/infynitae" ] && echo made || echo none)" none
+
+: > "$LOG"
+run_in "$H" sh "$CK/live/launch.sh" config-check
+check "a shortcut action runs the checkout's script" \
+    "$(grep '^config-check' "$LOG")" "config-check --notify: $CK"
+check "launch.sh loads the checkout's env.sh" "$(grep '^env.sh' "$LOG")" "env.sh: $CK"
+
+: > "$LOG"
+# with no session running it stops after loading the session environment, before restarting
+# anything (the restarts themselves: in the test VM)
+run_in "$H" "$H/.local/bin/infynitae-reload" settings
+check "infynitae-reload (installed) loads the checkout's env.sh" "$(cat "$LOG")" "env.sh: $CK"
+
+: > "$LOG"
+run_in "$H" "$H/.local/bin/infynitae-update"
+check "infynitae-update (installed) updates the checkout" "$(cat "$LOG")" "update in $CK"
+
+# 2. No record (an install from before it): ~/infynitae, as before
+H2="$TMP/home2"
+mkdir -p "$H2/infynitae"
+make_checkout "$H2/infynitae"
+stub_checkout "$H2/infynitae"
+: > "$LOG"
+run_in "$H2" sh "$H2/infynitae/live/launch.sh" config-check
+check "without a record, a shortcut action runs ~/infynitae's script" \
+    "$(grep '^config-check' "$LOG")" "config-check --notify: $H2/infynitae"
+cp "$REPO_DIR/update.sh" "$TMP/infynitae-update"
+: > "$LOG"
+run_in "$H2" bash "$TMP/infynitae-update"
+check "without a record, an installed infynitae-update updates ~/infynitae" "$(cat "$LOG")" \
+    "update in $H2/infynitae"
+
+exit $fail

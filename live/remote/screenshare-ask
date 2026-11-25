@@ -4,7 +4,11 @@
 # "Always" is offered only to an app with a sandbox app id (one outside a sandbox has none, so
 # it is asked each time). The picker is MENU_PICKER (empty: fuzzel --dmenu).
 #   screenshare-ask -- <app id>
-[ -f "$HOME/infynitae/live/config.sh" ] && . "$HOME/infynitae/live/config.sh"
+
+# the checkout these scripts run from: the one install.sh recorded, else ~/infynitae
+INFYNITAE_DIR=; { IFS= read -r INFYNITAE_DIR < "$HOME/.config/infynitae/checkout"; } 2>/dev/null || :
+INFYNITAE_DIR="${INFYNITAE_DIR:-$HOME/infynitae}"
+[ -f "$INFYNITAE_DIR/live/config.sh" ] && . "$INFYNITAE_DIR/live/config.sh"
 [ "${1:-}" = "--" ] && shift
 case "${SCREENSHARE_ASK:-app}" in
     false | 0 | no | off) echo once; exit 0 ;;

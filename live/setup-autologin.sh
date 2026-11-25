@@ -131,7 +131,7 @@ if [ -f "$CONFIG_FILE" ]; then
     fi
 else
     mkdir -p "$CONFIG_DIR"
-    sed 's/^START_LOCKED="[^"]*"/START_LOCKED="true"/' "$USER_HOME/infynitae/config/config" > "$CONFIG_FILE"
+    sed 's/^START_LOCKED="[^"]*"/START_LOCKED="true"/' "$(dirname "$0")/../config/config" > "$CONFIG_FILE"
 fi
 chown -R "$USER_NAME:" "$CONFIG_DIR"
 if ! grep -q '^START_LOCKED="true"' "$CONFIG_FILE"; then

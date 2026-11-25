@@ -11,7 +11,13 @@ set -eE
 umask 022
 
 REPO_URL="https://github.com/vysaely/infynitae.git"
+# the checkout Infynitae runs from: this one when the installer is run from a checkout (from any
+# folder: path/to/install.sh), else, through curl, a new clone in ~/infynitae
 INSTALL_DIR="$HOME/infynitae"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]:-.}")" 2>/dev/null && pwd -P)"
+if [ -f "$HERE/Cargo.toml" ] && [ -d "$HERE/crates/infynitae" ]; then
+    INSTALL_DIR="$HERE"
+fi
 
 usage() {
     cat <<'USAGE'
@@ -133,18 +139,6 @@ done
 [ -z "$not_mine" ] || fail "These belong to another user (probably root, from a run with sudo):$not_mine
     Give them back, then run this again:  sudo chown -R $USER: $not_mine"
 
-# run from a clone elsewhere: ~/infynitae points to it (the session scripts run from there)
-if [ -f "Cargo.toml" ] && [ -d "crates/infynitae" ]; then
-    HERE="$(pwd -P)"
-    if [ ! -e "$INSTALL_DIR" ]; then
-        ln -s "$HERE" "$INSTALL_DIR"
-        echo "==> $INSTALL_DIR points to $HERE"
-    elif [ "$(cd "$INSTALL_DIR" && pwd -P)" != "$HERE" ]; then
-        fail "$INSTALL_DIR already exists and is another folder: Infynitae runs from $INSTALL_DIR. Run the installer there, or move that folder away."
-    fi
-    cd "$INSTALL_DIR"
-fi
-
 # ---- 1. your password, once ---------------------------------------------------------------------
 echo "==> Your password, once (packages, drivers, login setup)"
 if [ -f "$INSTALL_DIR/live/install-lib.sh" ]; then
@@ -248,6 +242,7 @@ cargo build --release -p infynitae -j "$JOBS"
 
 # ---- 7. install -------------------------------------------------------------------------------------
 echo "==> Installing..."
+record_checkout "$INSTALL_DIR"
 install_programs "$INSTALL_DIR"
 install_system_files "$INSTALL_DIR"
 install_config "$INSTALL_DIR"
@@ -285,6 +280,7 @@ fi
 
 echo ""
 echo "==> Infynitae is installed. Reboot, then $START_HOW."
+echo "    Runs from:   $INSTALL_DIR"
 echo "    Update:      infynitae-update"
 echo "    Config:      ~/.config/infynitae/config"
 echo "    Install log: $LOG"
@@ -293,5 +289,5 @@ if [ "$FOREIGN_APPS" = true ] && ! waydroid_ready; then
     echo "                 then sudo systemctl enable --now waydroid-container"
 fi
 if [ "$AUTOLOGIN_ON" = true ]; then
-    echo "    Text login instead: sudo ~/infynitae/live/setup-autologin.sh --off"
+    echo "    Text login instead: sudo $INSTALL_DIR/live/setup-autologin.sh --off"
 fi

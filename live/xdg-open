@@ -1,10 +1,14 @@
 #!/bin/sh
 # Infynitae non-blocking URL and file opener wrapper
 # Ensures CLI tools, OAuth handlers, and scripts do not hang on synchronous browser launch
+
+# the checkout these scripts run from: the one install.sh recorded, else ~/infynitae
+INFYNITAE_DIR=; { IFS= read -r INFYNITAE_DIR < "$HOME/.config/infynitae/checkout"; } 2>/dev/null || :
+INFYNITAE_DIR="${INFYNITAE_DIR:-$HOME/infynitae}"
 if command -v gio >/dev/null 2>&1; then
     gio open "$@" && exit 0
     # no app for its type: say so, or let you pick (infynitae-open-with)
-    for o in "$HOME/.local/bin/infynitae-open-with" "$HOME/infynitae/live/infynitae-open-with"; do
+    for o in "$HOME/.local/bin/infynitae-open-with" "$INFYNITAE_DIR/live/infynitae-open-with"; do
         [ -x "$o" ] && exec "$o" "$1"
     done
     exit 1

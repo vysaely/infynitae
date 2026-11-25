@@ -6,12 +6,16 @@
 #
 # Run it from any terminal inside the session, or let infynitae-update call it.
 
+# the checkout these scripts run from: the one install.sh recorded, else ~/infynitae
+INFYNITAE_DIR=; { IFS= read -r INFYNITAE_DIR < "$HOME/.config/infynitae/checkout"; } 2>/dev/null || :
+INFYNITAE_DIR="${INFYNITAE_DIR:-$HOME/infynitae}"
+
 STATE_DIR="$HOME/.local/state/infynitae"
 LOG="$STATE_DIR/helpers.log"
 BIN_DIR="$HOME/.local/bin"
-LIVE="$HOME/infynitae/live"
+LIVE="$INFYNITAE_DIR/live"
 mkdir -p "$STATE_DIR"
-for _r in "$(dirname "$0")/log-rotate.sh" "$LIVE/log-rotate.sh" "$HOME/infynitae/live/log-rotate.sh"; do
+for _r in "$(dirname "$0")/log-rotate.sh" "$LIVE/log-rotate.sh"; do
     [ -f "$_r" ] && { . "$_r"; break; }
 done
 unset _r
@@ -395,7 +399,7 @@ reload_screenshare() {
         echo "force_mod_linear=1"
         # MENU_PICKER, or none: the chooser shows the edge's card (fuzzel without the edge)
         picker="${MENU_PICKER:-}"
-        chooser="$HOME/infynitae/live/screenshare-chooser"
+        chooser="$LIVE/screenshare-chooser"
         if [ -n "$picker" ]; then
             has_picker=$(command -v "${picker%% *}")
         elif [ -x "$HOME/.local/bin/infynitae-edge" ]; then

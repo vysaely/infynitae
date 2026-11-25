@@ -2,6 +2,10 @@
 # env.sh: session environment setup and Wayland/X11 socket resolution
 # Decouples Wayland clients from host desktop environments (e.g. KDE Plasma, GNOME)
 
+# the checkout these scripts run from: the one install.sh recorded, else ~/infynitae
+INFYNITAE_DIR=; { IFS= read -r INFYNITAE_DIR < "$HOME/.config/infynitae/checkout"; } 2>/dev/null || :
+INFYNITAE_DIR="${INFYNITAE_DIR:-$HOME/infynitae}"
+
 # 0. Infynitae's own programs live in ~/.local/bin. The session may start with a minimal PATH
 # (systemd-run, a display manager), and every Super+key action runs from it; added once.
 case ":$PATH:" in
@@ -87,8 +91,8 @@ if [ -z "$LIBSEAT_BACKEND" ]; then
 fi
 
 # 6. Load the user config and apply its settings
-if [ -f "$HOME/infynitae/live/config.sh" ]; then
-    . "$HOME/infynitae/live/config.sh"
+if [ -f "$INFYNITAE_DIR/live/config.sh" ]; then
+    . "$INFYNITAE_DIR/live/config.sh"
 fi
 export XCURSOR_THEME="${CURSOR_THEME:-${XCURSOR_THEME:-Adwaita}}"
 export XCURSOR_SIZE="${CURSOR_SIZE:-${XCURSOR_SIZE:-24}}"
@@ -131,9 +135,9 @@ export SCREENCOPY_CURSOR="${SCREENCOPY_CURSOR:-false}"
 export SCALING_FILTER="${SCALING_FILTER:-sharp}"
 export OUTPUT_SCALE="${OUTPUT_SCALE:-1.0}"
 
-if [ "${INFYNITAE_SETTINGS_APPLIED:-0}" != "1" ] && [ -f "$HOME/infynitae/live/settings.sh" ]; then
+if [ "${INFYNITAE_SETTINGS_APPLIED:-0}" != "1" ] && [ -f "$INFYNITAE_DIR/live/settings.sh" ]; then
     export INFYNITAE_SETTINGS_APPLIED="1"
-    sh "$HOME/infynitae/live/settings.sh" apply >/dev/null 2>&1 || true
+    sh "$INFYNITAE_DIR/live/settings.sh" apply >/dev/null 2>&1 || true
 fi
 
 # 6b. Isolated D-Bus/dconf database profile (prevents inheriting host desktop defaults)
@@ -151,7 +155,7 @@ PORTAL_DATA_DIR="$HOME/.local/share/xdg-desktop-portal/portals"
 # through to xdg-desktop-portal-wlr (owner, 2026-10-31); REMOTE_DESKTOP adds RemoteDesktop. A
 # portal from before the consent has no screenshare-ask next to it: then wlr directly.
 REMOTE_IFACES="" SCREENCAST_BACKEND="wlr" RD_BACKEND="wlr"
-if [ -x "$HOME/infynitae/live/remote/screenshare-ask" ]; then
+if [ -x "$INFYNITAE_DIR/live/remote/screenshare-ask" ]; then
     REMOTE_IFACES="org.freedesktop.impl.portal.ScreenCast;" SCREENCAST_BACKEND="infynitae"
 fi
 case "${REMOTE_DESKTOP:-false}" in
@@ -211,7 +215,7 @@ unset _infy_old _infy_l
 # Ensure infynitae-portal is running
 PORTAL_LOG="$HOME/.local/state/infynitae/portal.log"
 [ -d "$HOME/.local/state/infynitae" ] || mkdir -p "$HOME/.local/state/infynitae"
-for PORTAL_BIN in "$HOME/.local/bin/infynitae-portal" "$HOME/infynitae/live/infynitae-portal"; do
+for PORTAL_BIN in "$HOME/.local/bin/infynitae-portal" "$INFYNITAE_DIR/live/infynitae-portal"; do
     [ -x "$PORTAL_BIN" ] && break
 done
 # one instance. Every Super+key runs this file, so the running portal is found by the PID it was

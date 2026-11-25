@@ -2,6 +2,10 @@
 # Sourced by the session scripts instead of ~/.config/infynitae/config itself: loads the user's
 # settings, then fixes the ones that are also environment variables other programs read.
 
+# the checkout these scripts run from: the one install.sh recorded, else ~/infynitae
+INFYNITAE_DIR=; { IFS= read -r INFYNITAE_DIR < "$HOME/.config/infynitae/checkout"; } 2>/dev/null || :
+INFYNITAE_DIR="${INFYNITAE_DIR:-$HOME/infynitae}"
+
 # the layout env.sh found (the system's), for a config that leaves it empty
 _infy_layout="${XKB_DEFAULT_LAYOUT:-}" _infy_options="${XKB_DEFAULT_OPTIONS:-}"
 _infy_config="${CONFIG_FILE:-$HOME/.config/infynitae/config}"
@@ -27,7 +31,7 @@ if [ -f "$_infy_config" ]; then
 fi
 unset _infy_config
 # settings renamed (live/config-renames): the old name still works where the new one is not set
-_infy_renames_file="${_infy_renames:-$HOME/infynitae/live/config-renames}"
+_infy_renames_file="${_infy_renames:-$INFYNITAE_DIR/live/config-renames}"
 if [ -f "$_infy_renames_file" ]; then
     while read -r _infy_old _infy_new _infy_rest; do
         case "$_infy_old$_infy_new" in
@@ -75,8 +79,8 @@ infy_bin() {
         if [ -x "$HOME/.local/bin/$_infy_b" ]; then
             echo "$HOME/.local/bin/$_infy_b"
             return 0
-        elif [ -x "$HOME/infynitae/live/$_infy_b" ]; then
-            echo "$HOME/infynitae/live/$_infy_b"
+        elif [ -x "$INFYNITAE_DIR/live/$_infy_b" ]; then
+            echo "$INFYNITAE_DIR/live/$_infy_b"
             return 0
         elif command -v "$_infy_b" >/dev/null 2>&1; then
             command -v "$_infy_b"

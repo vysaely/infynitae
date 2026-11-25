@@ -3,14 +3,18 @@
 # Uses gpu-screen-recorder when available and working (auto), else the compositor's capture
 # with a GPU video encoder or libx264 on CPU.
 
+# the checkout these scripts run from: the one install.sh recorded, else ~/infynitae
+INFYNITAE_DIR=; { IFS= read -r INFYNITAE_DIR < "$HOME/.config/infynitae/checkout"; } 2>/dev/null || :
+INFYNITAE_DIR="${INFYNITAE_DIR:-$HOME/infynitae}"
+
 set -e
 
 # 1. Load user configuration
-if [ -f "$HOME/infynitae/live/env.sh" ]; then
-    . "$HOME/infynitae/live/env.sh"
+if [ -f "$INFYNITAE_DIR/live/env.sh" ]; then
+    . "$INFYNITAE_DIR/live/env.sh"
 fi
-if [ -f "$HOME/infynitae/live/config.sh" ]; then
-    . "$HOME/infynitae/live/config.sh"
+if [ -f "$INFYNITAE_DIR/live/config.sh" ]; then
+    . "$INFYNITAE_DIR/live/config.sh"
 fi
 
 # the installed build (infynitae-update builds it)
