@@ -214,11 +214,16 @@ These pass the test suite but have not run on a real screen or device yet:
   10) and the next start says so in a notification. Tested with a fake compositor, not a real
   crash yet.
 - **Remote desktop through the portal** (`REMOTE_DESKTOP`, off by default): apps like AnyDesk
-  get the screen through xdg-desktop-portal-wlr and, once you allow it (this time, or always),
+  get the screen through Infynitae's portal and, once you allow it (this time, or always),
   the keyboard and mouse as real input: Super shortcuts work, the lock screen gets no keys from
   it. Display tools and VNC servers (wayvnc) can also drive the pointer
   (`zwlr_virtual_pointer_v1`). Tested end to end on a private bus against a headless compositor,
   not yet with a real app.
+- **Screen sharing and app screenshots without xdg-desktop-portal-wlr** (2026-11-25):
+  `infynitae-portal` streams a screen or a window to PipeWire itself (GPU buffers when the app
+  takes them) and takes an app's screenshot with `infynitae-shot`; wlr is no longer started.
+  Builds and passes its D-Bus checks (`tools/test-portal-screencast`); not yet tried with a real
+  share (Discord, OBS, Firefox) in the test VM.
 - **The session scripts and the C helpers** have the least test coverage of anything here.
 
 ## Root drive and memory guard

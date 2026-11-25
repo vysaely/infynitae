@@ -36,7 +36,7 @@ this repository already.
 | Session restore | `infynitae-restore` (ours) | none comparable | `SESSION_RESTORE` | Ours |
 | Settings sync (GTK, Qt, cursor) | `infynitae-settings` (ours) | nwg-look, qt6ct | edit the config | Ours |
 | Global shortcuts for apps | `infynitae-portal` (ours) | none for this compositor | always on | Ours |
-| Screen sharing (a screen or one window) | xdg-desktop-portal-wlr (+ gtk for file dialogs) | none that fits better | `SCREENSHARE_ASK` (true: pick a screen or a window) | Later, medium: our own portal could show a window picker on the canvas |
+| Screen sharing (a screen or one window), app screenshots | `infynitae-portal` (ours, since 2026-11-25; xdg-desktop-portal-wlr before) | xdg-desktop-portal-wlr | `SCREENSHARE_ASK` (true: pick a screen or a window) | Ours |
 | Login | the Infynitae login screen once switched on (`sudo infynitae-login-screen on`: greetd runs the lock screen's greeter mode, username and password), else tty login | SDDM, GDM, greetd + tuigreet | `infynitae-login-screen on/off` | Ours (the lock screen's look; greetd does the root part) |
 | X11 apps | xwayland-satellite | (none needed) | `XWAYLAND` | No |
 
