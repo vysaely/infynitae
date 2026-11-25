@@ -41,6 +41,8 @@ build infynitae-portal "gio-2.0 gio-unix-2.0 wayland-client xkbcommon" \
     "$LIVE/portal/infynitae-portal.c" "$LIVE/portal/remote-desktop.c" "$LIVE/portal/settings.c" \
     "$LIVE/portal/wlr-virtual-pointer-protocol.c" "$LIVE/portal/virtual-keyboard-protocol.c" \
     "$LIVE/portal/xdg-output-protocol.c"
+# drives mounting when plugged in and the lock before sleep, on one watcher of the system bus
+build infynitae-bus-watch "gio-2.0 gio-unix-2.0" "$LIVE/bus-watch/infynitae-bus-watch.c"
 build infynitae-polkit "polkit-agent-1 gtk+-3.0" "$LIVE/polkit/infynitae-polkit.c"
 build infynitae-lock "wayland-client cairo pangocairo xkbcommon pam" \
     "$LIVE/lock/infynitae-lock.c" "$LIVE/lock/ext-session-lock-v1-protocol.c" -- -lm -lpthread
