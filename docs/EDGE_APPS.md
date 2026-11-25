@@ -93,7 +93,7 @@ panel is edited and saved; the line from before goes to `~/.config/infynitae/pan
 | `memory` | `monitor/memory` | |
 | `system` | `monitor/gpu` | |
 | `drives` | `files/drives` | |
-| `search` `favorites` `apps` | `apps/search` `apps/favorites` `apps/list` | looks `hidden`, `bar` kept as `:s`, `:m` |
+| `search` `favorites` `apps` | `apps/search` `apps/favorites` `apps/list` | looks `hidden`, `bar` kept as `:s`, `:m`; `apps` also places `apps/results` under the list (unless placed by hand) |
 | `windows` | `windows/list` | |
 | `clipboard` | `clipboard/history` | |
 | `tray` | `apps/background` | |
@@ -509,6 +509,19 @@ and go to `simple`; the Steam card lists the games without them.
 "Add a card" lists: first the providers with `Listed::Always` and those with `Listed::WithoutApp` that
 have no app (under "Infynitae"), then the claimed apps ("Rich cards"), then the rest ("Simple card"),
 each group by name. Picking one shows its kinds (`CardKind::title`, `about`) with an Add button each.
+
+### The launcher's other results (`apps/results`, `cards/search.rs`)
+
+Under the app list, while something is typed: open windows, settings rows (by the label in the
+Settings cards' tables; a pick opens the Settings panel searching that label), clipboard history,
+the file names in `CLIPS_DIR` and `RECORDINGS_DIR`, `recently-used.xbel`, and files by name from
+plocate. Four rows a kind, under its heading. Enter with no app found opens the first.
+
+Its source (`search`) reads the clipboard, the two folders and the xbel once per opening, off the UI
+thread; a keystroke compares against that in memory. plocate (`-i -b -l 40`) runs on a thread of its
+own (`locate.rs`); the next keystroke or the panel closing kills it, and an answer for an older
+query is dropped. The edge never runs `updatedb`. Without plocate, Settings, Apps says so. Closed,
+the card holds nothing.
 
 ## 5. Surfaces, the animation clock, input, damage
 
