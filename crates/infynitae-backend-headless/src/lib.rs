@@ -626,6 +626,9 @@ pub fn run_headless_with(
         event_loop.dispatch(timeout, &mut ())?;
         if let Some(ext) = extension.as_mut() {
             ext.set_locked(state.is_locked());
+            if let Some(entries) = state.clipboard_listing() {
+                ext.set_clipboard(&entries);
+            }
             let (fx, changed) = ext.service(state.core_mut());
             session.set_extension_wake(ext.wake_at());
             if ext.take_lock_request() {

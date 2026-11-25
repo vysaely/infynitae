@@ -111,6 +111,8 @@ pub struct ShellServer {
     /// In-flight `capture-chord` request (at most one at a time).
     capture: Option<PendingCapture>,
     capture_timeout: Duration,
+    /// The clipboard history the adapter last gave (`set_clipboard`), as `clipboard` answers it.
+    clipboard: Value,
 }
 
 impl ShellServer {
@@ -134,6 +136,7 @@ impl ShellServer {
             acceptor: None,
             capture: None,
             capture_timeout: CAPTURE_TIMEOUT,
+            clipboard: Value::Arr(Vec::new()),
         }
     }
 
@@ -205,6 +208,11 @@ impl ShellServer {
     /// Overrides the `capture-chord` timeout (default 10 s); useful for unit tests.
     pub fn set_capture_timeout(&mut self, timeout: Duration) {
         self.capture_timeout = timeout;
+    }
+
+    /// The clipboard history as the adapter holds it now (an array of entries).
+    pub fn set_clipboard(&mut self, entries: Value) {
+        self.clipboard = entries;
     }
 
     /// When the loop must turn so subscribers get what changed (`None`: nothing is owed). A loop
@@ -287,6 +295,11 @@ impl ShellServer {
             Ok(Request::Layers) => {
                 protocol::ok_reply(rid, self.generation, Some(crate::model::layers(core)))
             }
+            Ok(Request::Clipboard) => protocol::ok_reply(
+                rid,
+                self.generation,
+                Some(Value::obj([("clipboard", self.clipboard.clone())])),
+            ),
             Ok(Request::Subscribe) => {
                 // the events up to this generation go to the subscribers there were; this one
                 // starts from the snapshot it is given

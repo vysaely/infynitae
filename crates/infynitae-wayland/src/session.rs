@@ -196,6 +196,8 @@ pub struct Session {
     x_authority: Option<std::path::PathBuf>,
     /// Serves a sandbox's listener that the state collected (`trust`).
     serve_sandbox: ServeSandbox,
+    /// Watches a clipboard pipe the state collected (`clipboard`).
+    watch_clipboard: WatchClipboard,
     /// The recorder's socket file, removed with the session.
     _recorder_socket: Option<SocketFile>,
 }
@@ -275,6 +277,8 @@ type ServeSandbox = Box<
         smithay::wayland::security_context::SecurityContext,
     ),
 >;
+
+type WatchClipboard = Box<dyn Fn(std::os::fd::OwnedFd, crate::clipboard::Shared, bool)>;
 
 impl Session {
     /// Opens the listening socket and registers it and the display with the event loop, then
@@ -412,6 +416,27 @@ impl Session {
                 log_line!("[infynitae] Failed to serve a sandbox listener: {e}");
             }
         });
+        // a clipboard pipe moves as soon as the app at its other end reads or writes; finished,
+        // its source goes
+        let pipes = handle.clone();
+        let watch_clipboard: WatchClipboard = Box::new(move |fd, transfer, write| {
+            let interest = if write {
+                Interest::WRITE
+            } else {
+                Interest::READ
+            };
+            if let Err(e) =
+                pipes.insert_source(Generic::new(fd, interest, Mode::Level), move |_, _, _| {
+                    Ok(if crate::clipboard::lock(&transfer).pump() {
+                        PostAction::Remove
+                    } else {
+                        PostAction::Continue
+                    })
+                })
+            {
+                log_line!("[infynitae] Clipboard pipe not watched: {e}");
+            }
+        });
         // a readable display wakes the loop; the requests are dispatched by `dispatch`
         let display_ready = Rc::new(Cell::new(false));
         let ready = display_ready.clone();
@@ -451,6 +476,7 @@ impl Session {
             x_display: options.x_display.clone(),
             x_authority: options.x_authority.clone(),
             serve_sandbox,
+            watch_clipboard,
             _recorder_socket: recorder_socket,
         };
         if let Some(cmd) = &options.exec {
@@ -638,6 +664,9 @@ impl Session {
         state.settle_unlock();
         state.restart_dead_locker(Instant::now());
         state.clear_orphaned_selections();
+        for (fd, transfer, write) in state.clipboard.watch.drain(..) {
+            (self.watch_clipboard)(fd, transfer, write);
+        }
         state.prune_disabled_outputs();
         self.flush();
     }

@@ -1158,3 +1158,62 @@ fn arrange_tidies_the_named_windows_cluster() {
         "side by side, 12 px apart"
     );
 }
+
+/// `clipboard` answers the history the adapter last gave (`set_clipboard`), empty before it gives
+/// one; `clipboard_use`, `clipboard_pin` and `clipboard_delete` go to the adapter as asks, and one
+/// without its entry, or a pin without `on`, is refused.
+#[test]
+fn clipboard_answers_the_adapters_history_and_passes_its_asks_on() {
+    use infynitae_ipc::protocol::{Ask, ClipboardAsk};
+    let (mut core, mut server, _) = setup();
+    let mut shell = connect(&mut server);
+    let r = shell.reply(&mut server, &mut core, r#"{"id":1,"cmd":"clipboard"}"#);
+    assert_eq!(
+        r.get("snapshot").and_then(|s| s.get("clipboard")),
+        Some(&Value::Arr(Vec::new()))
+    );
+    server.set_clipboard(json::parse(r#"[{"id":4,"pinned":false,"text":"hello"}]"#).unwrap());
+    let r = shell.reply(&mut server, &mut core, r#"{"id":2,"cmd":"clipboard"}"#);
+    assert_eq!(
+        r.get("snapshot").unwrap().to_json(),
+        r#"{"clipboard":[{"id":4,"pinned":false,"text":"hello"}]}"#
+    );
+    for (line, ask) in [
+        (
+            r#"{"id":3,"cmd":"clipboard_use","entry":4}"#,
+            ClipboardAsk::Use(4),
+        ),
+        (
+            r#"{"id":4,"cmd":"clipboard_pin","entry":4,"on":true}"#,
+            ClipboardAsk::Pin(4, true),
+        ),
+        (
+            r#"{"id":5,"cmd":"clipboard_delete","entry":4}"#,
+            ClipboardAsk::Delete(4),
+        ),
+    ] {
+        shell.send(line);
+        let end = Instant::now() + Duration::from_secs(5);
+        let mut asks = Vec::new();
+        while Instant::now() < end && asks.is_empty() {
+            asks = server.service(&mut core).asks;
+        }
+        assert_eq!(asks, [Ask::Clipboard(ask)], "{line}");
+        let reply = shell
+            .read_until(&mut server, &mut core, |got| !got.is_empty())
+            .pop()
+            .unwrap();
+        assert_eq!(reply.get("ok"), Some(&Value::Bool(true)), "{line}");
+    }
+    for line in [
+        r#"{"id":"x","cmd":"clipboard_use"}"#,
+        r#"{"id":"x","cmd":"clipboard_pin","entry":4}"#,
+    ] {
+        let r = shell.reply(&mut server, &mut core, line);
+        assert_eq!(
+            r.get("error").and_then(Value::as_str),
+            Some("invalid_request"),
+            "{line}"
+        );
+    }
+}

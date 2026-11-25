@@ -14,6 +14,7 @@
 
 pub mod background;
 pub mod capture_indicator;
+pub mod clipboard;
 mod commit_timing;
 pub mod convert;
 pub mod corners;
@@ -433,8 +434,11 @@ pub struct WaylandState {
     /// The client that set the clipboard and the primary selection (Smithay accepts a selection
     /// only from the keyboard-focused client). A selection whose owner's connection is gone is
     /// cleared, so other clients are told it is gone (Smithay does not do it by itself).
-    selection_owners: [Option<ClientId>; 2],
-    selection_sources: [Option<ObjectId>; 2],
+    pub(crate) selection_owners: [Option<ClientId>; 2],
+    pub(crate) selection_sources: [Option<ObjectId>; 2],
+    /// The compositor's copy of the clipboard and its history (`CLIPBOARD_PERSIST`,
+    /// `CLIPBOARD_HISTORY`).
+    pub clipboard: clipboard::Clipboard,
     pub(crate) data_control_owner: Option<(
         smithay::wayland::selection::SelectionTarget,
         Option<ClientId>,
@@ -885,6 +889,7 @@ impl WaylandState {
             ext_data_control,
             selection_owners: [None, None],
             selection_sources: [None, None],
+            clipboard: clipboard::Clipboard::default(),
             data_control_owner: None,
             drag_icon: None,
             window_menu_press: None,
@@ -1335,6 +1340,7 @@ impl WaylandState {
                 let mut cluster_sort = infynitae_core::ClusterSort::default();
                 let mut overlay_planes = false;
                 let mut wine_transparency = true;
+                let (mut clipboard_persist, mut clipboard_history) = (true, true);
                 let mut frame_guard = DEFAULT_FRAME_GUARD;
                 let mut window_corners = 8.0f32;
                 // one corner for windows and the interface (owner 2026-11-13): WINDOW_CORNERS, else
@@ -1665,6 +1671,12 @@ impl WaylandState {
                             "WINE_TRANSPARENCY" => {
                                 wine_transparency = parse_bool(val).unwrap_or(true);
                             }
+                            "CLIPBOARD_PERSIST" => {
+                                clipboard_persist = parse_bool(val).unwrap_or(true);
+                            }
+                            "CLIPBOARD_HISTORY" => {
+                                clipboard_history = parse_bool(val).unwrap_or(true);
+                            }
                             "FORCE_TRANSPARENT_APPS" => {
                                 self.force_transparent_apps = parse_titles(val);
                             }
@@ -1708,6 +1720,8 @@ impl WaylandState {
                 self.core.set_cluster_sort(cluster_sort);
                 self.overlay_planes = overlay_planes;
                 self.wine_transparency = wine_transparency;
+                self.clipboard
+                    .configure(clipboard_persist, clipboard_history);
                 self.frame_guard_percent = frame_guard;
                 if let (false, Some(c)) = (window_corners_given, corners) {
                     window_corners = c.clamp(0.0, 24.0);

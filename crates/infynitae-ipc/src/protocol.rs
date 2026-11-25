@@ -7,7 +7,9 @@
 //! `"maximized": {"anchor", "size"}` to maximize it, session restore) are commands Core validates
 //! and executes. Elements are
 //! named `[instance, element]` (INV-STAGE-3), outputs by their id. `layers` is a diagnostic
-//! query: each window's surfaces and the physical rects they are drawn at.
+//! query: each window's surfaces and the physical rects they are drawn at. `clipboard` gives the
+//! compositor's clipboard history; `clipboard_use`, `clipboard_pin` and `clipboard_delete` act on
+//! one of its entries (`"entry": id`).
 //!
 //! Replies: `{"id": …, "ok": true, "generation": g}` (plus `"snapshot"` for the queries that return
 //! one) or `{"id": …, "ok": false, "error": <code>}`; nothing was changed by a failed request.
@@ -34,6 +36,8 @@ pub enum Request {
     Ask(Ask),
     /// A diagnostic: every window's surfaces as Core holds them and the rects it draws them at.
     Layers,
+    /// The clipboard history as the adapter last gave it (`ShellServer::set_clipboard`).
+    Clipboard,
     Subscribe,
     Unsubscribe,
     Command(ShellCommand),
@@ -50,6 +54,17 @@ pub enum Ask {
     NextKeyboardLayout,
     /// `{"cmd": "osk", "on": …}`: the on-screen keyboard shown or hidden by hand.
     Osk(Option<bool>),
+    Clipboard(ClipboardAsk),
+}
+
+/// `{"cmd": "clipboard_use" | "clipboard_delete", "entry": id}` and `{"cmd": "clipboard_pin",
+/// "entry": id, "on": true|false}`: an entry of the clipboard history becomes the clipboard again,
+/// is pinned (kept before the others and dropped last) or unpinned, or is deleted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClipboardAsk {
+    Use(u64),
+    Pin(u64, bool),
+    Delete(u64),
 }
 
 /// Why a request was not executed, as its reply names it.
@@ -153,6 +168,18 @@ fn request(v: &Value, core: &Core) -> Result<Request, RequestError> {
             _ => return Err(Invalid),
         })),
         "layers" => Request::Layers,
+        "clipboard" => Request::Clipboard,
+        "clipboard_use" | "clipboard_pin" | "clipboard_delete" => {
+            let entry = v.get("entry").and_then(Value::as_u64).ok_or(Invalid)?;
+            Request::Ask(Ask::Clipboard(match cmd {
+                "clipboard_use" => ClipboardAsk::Use(entry),
+                "clipboard_delete" => ClipboardAsk::Delete(entry),
+                _ => match v.get("on") {
+                    Some(Value::Bool(on)) => ClipboardAsk::Pin(entry, *on),
+                    _ => return Err(Invalid),
+                },
+            }))
+        }
         "subscribe" => Request::Subscribe,
         "unsubscribe" => Request::Unsubscribe,
         "capture-chord" | "capture_chord" => Request::CaptureChord,

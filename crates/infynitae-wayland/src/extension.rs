@@ -33,6 +33,10 @@ pub trait LoopExtension {
         Vec::new()
     }
 
+    /// The clipboard history changed (`WaylandState::clipboard_listing`): what a shell's
+    /// `clipboard` query answers from now on.
+    fn set_clipboard(&mut self, _entries: &[crate::clipboard::Listed]) {}
+
     /// When the extension needs a loop turn although nothing else happens (the shell's batched
     /// events); a backend sleeps no longer than that. `None`: only when something happens.
     fn wake_at(&self) -> Option<std::time::Instant> {
