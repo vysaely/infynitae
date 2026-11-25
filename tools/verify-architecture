@@ -27,7 +27,9 @@ import tempfile
 import tomllib
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PROBE_TARGET = os.path.join(ROOT, "target", "verify-architecture")
+# under CARGO_TARGET_DIR when one is set, so the probe builds (about 5 GB) land on the disk the caller chose
+PROBE_TARGET = os.path.join(os.path.abspath(os.environ.get("CARGO_TARGET_DIR") or os.path.join(ROOT, "target")),
+                            "verify-architecture")
 TOOLCHAIN = "1.99.0"
 SMITHAY_REQ = "=0.7.0"
 SMITHAY_VERSION = "0.7.0"
