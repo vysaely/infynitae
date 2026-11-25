@@ -177,7 +177,6 @@ pub const FILE_ONLY: &[&str] = &[
     "CANVAS_COLOR",
     "BORDER_INACTIVE",
     "BORDER_IGNORE_CSD",
-    "SQUARE_CORNERS",
     "SWITCH_LOOK",
     "CLIP_TO_GEOMETRY",
     "WINE_TRANSPARENCY",

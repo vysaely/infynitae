@@ -170,12 +170,6 @@ ZOOM_FEEL="smooth"
     #   smooth   gentle glide (about 165 ms)
     #   floaty   slow glide (about 300 ms) with decaying wheel momentum
 
-CANVAS_COLOR="#0b0f14"
-    # Background behind the windows when no wallpaper (used with THEME_SCHEME="yours"; built
-    # schemes derive it from the card)
-    # default: "#0b0f14"
-    # options: "#0b0f14"  · any "#rrggbb"
-
 BORDER_WIDTH="1"
     # Window border in pixels
     # default: 1
@@ -191,22 +185,10 @@ ACCENT="#7aa2f7"
     # default: unset (same as ACCENT)
     # options: unset (commented)  · any "#rrggbb"
 
-BORDER_INACTIVE="#333b54"
-    # Border of the other windows (used with THEME_SCHEME="yours"; built schemes derive it)
-    # default: "#333b54"
-    # options: "#333b54"  · any "#rrggbb"
-
 BORDER_IGNORE_CSD="true"
     # No border around apps that draw their own (Firefox…)
     # default: true
     # options: true  · false
-
-SQUARE_CORNERS="true"
-    # Apps draw square corners and no shadow (they are told they are tiled), flush with the border;
-    # the compositor then rounds every window itself (WINDOW_CORNERS)
-    # default: true
-    #   true     square
-    #    false   their own rounded look
 
 WINDOW_CORNERS="8"
     # The corners of the whole desktop, this many px: windows (a gentle squircle; their border
@@ -223,12 +205,40 @@ WINDOW_CORNERS="8"
     # default: unset (as WINDOW_CORNERS)
     # options: 0 (square) to 28
 
+#SQUARE_CORNERS="false"
+    # Only to let apps draw their own rounded corners and shadows; unset, apps are told they are
+    # tiled, draw square corners flush with the border, and the compositor rounds every window
+    # (WINDOW_CORNERS)
+    # default: unset (true: square)
+    # options: unset (commented)  · false  · true
+
 THEME_SCHEME="yours"
     # Colours of the desktop, panels, widgets, notifications, lock and apps [reload]
     # default: yours
-    #   yours        SURFACE_COLOR, TEXT_COLOR and ACCENT as they are
+    #   yours        ACCENT and the four colours below as they are
     #   monochrome   greys only (light or dark per COLOR_SCHEME)
-    #   neutral · tonal · vibrant · expressive   built from ACCENT, more colour each
+    #   neutral · tonal · vibrant · expressive   built from ACCENT, more colour each: panels
+    #                and apps take their background and borders from the built card, and
+    #                TEXT_COLOR only where it reads on it
+
+# The four colours "yours" uses for panels and apps, each any "#rrggbb" (THEME_FROM_WALLPAPER="all"
+# writes all but TEXT_COLOR from the wallpaper). The compositor draws windows' borders and the
+# canvas with BORDER_INACTIVE and CANVAS_COLOR under every scheme.
+SURFACE_COLOR="#111317"
+    # Background of panels, menus, notifications, the lock box and managed terminals [reload]
+    # default: "#111317"
+
+TEXT_COLOR="#eef2f8"
+    # Text on panels, menus, notifications and managed apps [reload]
+    # default: "#eef2f8"
+
+BORDER_INACTIVE="#333b54"
+    # Border of the windows without the focus
+    # default: "#333b54"
+
+CANVAS_COLOR="#0b0f14"
+    # Behind the windows where no wallpaper is
+    # default: "#0b0f14"
 
 CARD_OPACITY="100"
     # How solid the panels' and widgets' cards are, in % [reload]
@@ -381,18 +391,6 @@ COLOR_SCHEME="prefer-dark"
     # Dark or light look (apps, and built THEME_SCHEME cards and text)
     # default: prefer-dark
     # options: prefer-dark  · prefer-light
-
-SURFACE_COLOR="#111317"
-    # Background of panels, menus, notifications, lock box, and managed terminals
-    # (used with THEME_SCHEME="yours")
-    # default: "#111317"
-    # options: "#111317"  · any "#rrggbb"
-
-TEXT_COLOR="#eef2f8"
-    # Primary text colour across panels, menus, notifications, and managed apps
-    # (used with THEME_SCHEME="yours")
-    # default: "#eef2f8"
-    # options: "#eef2f8"  · any "#rrggbb"
 
 THEME_SYNC="true"
     # Apply the colours above to Mako, Fuzzel, GTK 3/4, Qt (with qt6ct installed), Foot,
