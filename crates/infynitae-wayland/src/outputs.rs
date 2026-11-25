@@ -323,7 +323,7 @@ impl WaylandState {
         self.sync_wlr_toplevels();
     }
 
-    /// Spawns a desktop action via ~/infynitae/live/launch.sh <action>
+    /// Spawns a desktop action via launch.sh <action> in the live folder
     pub(crate) fn spawn_action(&mut self, action: &str) {
         self.spawn_action_with(action, "");
     }
@@ -741,7 +741,7 @@ pub struct ClientEnv {
     pub x_authority: Option<std::path::PathBuf>,
 }
 
-/// The command of one shortcut action: `sh ~/infynitae/live/launch.sh ACTION ARGS...`. With the
+/// The command of one shortcut action: `sh <live>/launch.sh ACTION ARGS...`. With the
 /// session's environment known it gets that session's socket and its X display and cookie, or no
 /// `DISPLAY` / `XAUTHORITY` at all (INV-XWAYLAND-1: never the compositor's own, which on the console
 /// are missing or left over from another run); before the session listens, the compositor's own

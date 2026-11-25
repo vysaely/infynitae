@@ -556,10 +556,11 @@ fn run() -> ExitCode {
     }) {
         log_line!("[infynitae] Starting console compositor (DRM backend, EXPERIMENTAL)...");
         let exec = exec_cmd.or_else(|| {
-            let home = std::env::var("HOME").ok()?;
-            let session_script = format!("{home}/infynitae/live/session.sh");
-            if std::path::Path::new(&session_script).exists() {
-                Some(session_script)
+            let home = std::env::var_os("HOME")?;
+            let session_script = infynitae_wayland::checkout_dir(std::path::Path::new(&home))
+                .join("live/session.sh");
+            if session_script.exists() {
+                Some(session_script.to_string_lossy().into_owned())
             } else {
                 None
             }

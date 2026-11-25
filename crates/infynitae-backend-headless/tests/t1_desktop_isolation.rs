@@ -1,5 +1,6 @@
 //! Desktop isolation test: desktop actions triggered during tests run through the harness's
-//! stub launcher and never reach `$HOME/infynitae/live/launch.sh` or the live desktop session.
+//! stub launcher and never reach the checkout's `live/launch.sh` (the one recorded in
+//! `~/.config/infynitae/checkout`, or `$HOME/infynitae`) or the live desktop session.
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -26,11 +27,22 @@ fn action_runs_from_harness_stub_and_never_from_home() {
         fs::create_dir_all(&fake_live).expect("create fake live dir");
 
         let marker = fake_home.join("MARKER_HOST_LAUNCH_WAS_RUN");
-        let fake_launch = fake_live.join("launch.sh");
-        let script = format!("#!/bin/sh\ntouch \"{}\"\n", marker.display());
-        fs::write(&fake_launch, script).expect("write fake launch.sh");
-        fs::set_permissions(&fake_launch, fs::Permissions::from_mode(0o755))
-            .expect("chmod fake launch.sh");
+        // the checkout an install elsewhere records
+        let recorded_live = fake_home.join("src/infynitae/live");
+        fs::create_dir_all(&recorded_live).expect("create recorded live dir");
+        fs::create_dir_all(fake_home.join(".config/infynitae")).expect("create config dir");
+        fs::write(
+            fake_home.join(".config/infynitae/checkout"),
+            format!("{}\n", fake_home.join("src/infynitae").display()),
+        )
+        .expect("write checkout record");
+        for live in [&fake_live, &recorded_live] {
+            let fake_launch = live.join("launch.sh");
+            let script = format!("#!/bin/sh\ntouch \"{}\"\n", marker.display());
+            fs::write(&fake_launch, script).expect("write fake launch.sh");
+            fs::set_permissions(&fake_launch, fs::Permissions::from_mode(0o755))
+                .expect("chmod fake launch.sh");
+        }
 
         let status = Command::new(std::env::current_exe().expect("test binary"))
             .args([
@@ -49,7 +61,7 @@ fn action_runs_from_harness_stub_and_never_from_home() {
         assert!(status.success(), "inner test failed: {status}");
         assert!(
             !marker_ran,
-            "action ran from $HOME/infynitae/live/launch.sh instead of harness stub!"
+            "action ran from the checkout's live/launch.sh instead of harness stub!"
         );
         return;
     }

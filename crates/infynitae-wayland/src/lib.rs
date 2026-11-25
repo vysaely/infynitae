@@ -603,8 +603,9 @@ pub struct WaylandState {
     pub(crate) exec_commands: Vec<String>,
     /// Processes started from shortcuts, to tell the windows the user opened (`launch`).
     pub(crate) launches: launch::Launches,
-    /// Directory holding live desktop scripts (launch.sh, infynitae-reload). Defaults to
-    /// `$HOME/infynitae/live` in the real binary; test harnesses point it at a temporary folder.
+    /// Directory holding live desktop scripts (launch.sh, infynitae-reload). Defaults to `live`
+    /// in the [checkout](checkout_dir) in the real binary; test harnesses point it at a temporary
+    /// folder.
     pub live_dir: std::path::PathBuf,
     /// Directory holding portal communication sockets (`bound_keys`, `shortcuts.sock`).
     /// `None` disables portal shortcut notification (e.g. in test harnesses).
@@ -781,9 +782,7 @@ impl WaylandState {
         {
             trust.set(trust_policy(std::path::Path::new(&home), &content));
         }
-        let live_dir = std::env::var_os("HOME")
-            .map(|h| std::path::PathBuf::from(h).join("infynitae/live"))
-            .unwrap_or_else(|| std::path::PathBuf::from("/infynitae/live"));
+        let live_dir = default_live_dir();
         let portal_runtime_dir = std::env::var_os("XDG_RUNTIME_DIR").map(std::path::PathBuf::from);
         use trust::Capability as Cap;
         // the primary selection exists before the data-control globals that also serve it
@@ -1733,12 +1732,7 @@ impl WaylandState {
                     // session script starts the wallpaper
                     if !first_load {
                         let home = std::env::var("HOME").unwrap_or_default();
-                        let default_live = if home.is_empty() {
-                            std::path::PathBuf::from("/infynitae/live")
-                        } else {
-                            std::path::PathBuf::from(&home).join("infynitae/live")
-                        };
-                        let reload = if self.live_dir != default_live {
+                        let reload = if self.live_dir != default_live_dir() {
                             self.live_dir.join("infynitae-reload")
                         } else {
                             let bin = std::path::PathBuf::from(format!(
@@ -2194,6 +2188,30 @@ impl WaylandState {
         for id in ids {
             self.output_power.set_mode(id, mode);
         }
+    }
+}
+
+/// The Infynitae checkout the desktop scripts run from: the one the installer recorded in
+/// `~/.config/infynitae/checkout` (its first line), else `~/infynitae` (an install from before
+/// the record, and the owner's). The shell scripts, the edge and the portal resolve it the same
+/// way.
+pub fn checkout_dir(home: &std::path::Path) -> std::path::PathBuf {
+    std::fs::read_to_string(home.join(".config/infynitae/checkout"))
+        .ok()
+        .and_then(|s| {
+            s.lines()
+                .next()
+                .filter(|l| !l.is_empty())
+                .map(std::path::PathBuf::from)
+        })
+        .unwrap_or_else(|| home.join("infynitae"))
+}
+
+/// `live` in the checkout of `$HOME`.
+fn default_live_dir() -> std::path::PathBuf {
+    match std::env::var_os("HOME") {
+        Some(h) => checkout_dir(std::path::Path::new(&h)).join("live"),
+        None => std::path::PathBuf::from("/infynitae/live"),
     }
 }
 
@@ -3237,5 +3255,28 @@ mod scanout_tranche_tests {
     fn a_scanout_tranche_is_what_both_the_plane_and_the_renderer_take() {
         assert_eq!(super::scanout_tranche(&[1, 2, 3, 4], [9, 4, 2]), [2, 4]);
         assert!(super::scanout_tranche(&[1, 2], [3]).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod checkout_dir_tests {
+    use super::checkout_dir;
+    use std::path::PathBuf;
+
+    /// The installer's record, else `~/infynitae`.
+    #[test]
+    fn the_checkout_is_the_recorded_one_else_home_infynitae() {
+        let temp = super::cursor::TestTempDir::new("checkout_dir");
+        let home = temp.path();
+        assert_eq!(checkout_dir(home), home.join("infynitae"));
+        std::fs::create_dir_all(home.join(".config/infynitae")).unwrap();
+        std::fs::write(home.join(".config/infynitae/checkout"), "").unwrap();
+        assert_eq!(checkout_dir(home), home.join("infynitae"));
+        std::fs::write(
+            home.join(".config/infynitae/checkout"),
+            "/src/my infynitae\n",
+        )
+        .unwrap();
+        assert_eq!(checkout_dir(home), PathBuf::from("/src/my infynitae"));
     }
 }
