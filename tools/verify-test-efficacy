@@ -2272,9 +2272,10 @@ SEED_CHECK_NEGATIVE = (f"{CORE}/geom.rs", "pub const Q16_ONE: i64 = 1 << 16;",
 
 def check_seeds():
     tmp = tempfile.mkdtemp(prefix="verify-test-efficacy-seeds-")
-    os.makedirs(os.path.join(ROOT, "target"), exist_ok=True)
+    target_base = os.path.abspath(os.environ.get("CARGO_TARGET_DIR") or os.path.join(ROOT, "target"))
+    os.makedirs(target_base, exist_ok=True)
     # the build goes to disk next to the canonical target (/tmp may be memory-backed)
-    target_dir = tempfile.mkdtemp(prefix=f"check-seeds-{os.getpid()}-", dir=os.path.join(ROOT, "target"))
+    target_dir = tempfile.mkdtemp(prefix=f"check-seeds-{os.getpid()}-", dir=target_base)
     try:
         for item in COPY_ITEMS:
             src, dst = os.path.join(ROOT, item), os.path.join(tmp, item)
@@ -2342,7 +2343,8 @@ def main():
     print("verify-test-efficacy — seeded behavioural defects (INC-1, INC1-F06/F07 corrective, INC-2, INC-3, INC-4, INC-6 hardening)")
     print("verify-test-efficacy — seeded behavioural defects (INC-1, INC1-F06/F07 corrective, INC-2, INC-3, INC-4, INC-8)")
     print("=" * 72)
-    target_base = os.path.join(ROOT, "target")
+    # under CARGO_TARGET_DIR when one is set, else next to the canonical target
+    target_base = os.path.abspath(os.environ.get("CARGO_TARGET_DIR") or os.path.join(ROOT, "target"))
     os.makedirs(target_base, exist_ok=True)
     target_dir = tempfile.mkdtemp(prefix=f"test-efficacy-{os.getpid()}-", dir=target_base)
     if shards > 1:
