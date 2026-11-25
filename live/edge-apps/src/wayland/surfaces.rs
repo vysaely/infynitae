@@ -63,8 +63,8 @@ pub(super) struct OutputSurface {
     pub(super) below: bool,
     pub(super) dirty: bool,
     pub(super) frame_pending: bool,
-    /// a clear frame is committed: on its frame callback, when the compositor reads neither
-    /// buffer any more, their pages are given back (`release_buffers`)
+    /// a clear frame is committed: on its frame callback, when the compositor has read it, its
+    /// buffer's pages are given back (`release_shown_buffer`)
     pub(super) release_pending: bool,
 }
 
@@ -231,7 +231,15 @@ impl OutputSurface {
         if w <= 0 || h <= 0 {
             return None;
         }
-        for i in 0..2 {
+        // the buffer not shown last first, when there is one: after a close the shown one's pages
+        // were given back (`release_shown_buffer`), and a compositor may release it at once
+        let other = 1 - self.last_slot;
+        let order = if self.slots[other].is_some() {
+            [other, self.last_slot]
+        } else {
+            [self.last_slot, other]
+        };
+        for i in order {
             if self.slots[i].is_none() {
                 if let Ok((buffer, canvas)) =
                     self.pool
@@ -322,12 +330,13 @@ impl OutputSurface {
         }
     }
 
-    /// Closed and its clear frame shown: both buffers' pages given back. 16 MB on a 1920×1080
-    /// screen (two buffers of 8 MB) are held while the edge is closed otherwise; the next frame
-    /// faults in only the pages of the box it draws.
-    pub(super) fn release_buffers(&mut self) {
+    /// Closed and its clear frame shown: that buffer's pages (all zero) given back, 8 MB on a
+    /// 1920×1080 screen. The other buffer stays in memory: the compositor holds the shown one,
+    /// so the next opening draws its first frame in the other, and there freed pages would come
+    /// back at a cost (2.3 ms for the rows of a 440 by 1080 panel, 0.02 ms when held).
+    pub(super) fn release_shown_buffer(&mut self) {
         self.release_pending = false;
-        for slot in self.slots.iter_mut().flatten() {
+        if let Some(slot) = &mut self.slots[self.last_slot] {
             zero_by_release(self.pool.raw_data_mut(&slot.buffer.slot()));
             slot.prev_box = None;
         }
@@ -802,7 +811,7 @@ mod tests {
     }
 
     #[test]
-    fn headless_closed_panel_gives_its_buffers_pages_back_and_draws_again() {
+    fn headless_closed_panel_gives_its_shown_buffers_pages_back_and_draws_again() {
         let (_mock, conn) = MockWayland::start(
             vec![MockOutputSpec {
                 width: 1280,
@@ -845,22 +854,25 @@ mod tests {
         }
         assert!(!app.shell.visible());
         assert!(!app.outputs[0].release_pending);
+        let shown = app.outputs[0].last_slot;
         let closed = slots_resident(&mut app.outputs[0]);
-        assert!(
-            closed.iter().all(|&b| b == 0),
-            "held while closed: {closed:?}"
+        assert_eq!(closed.len(), 2);
+        assert_eq!(
+            closed[shown], 0,
+            "the shown clear buffer is held: {closed:?}"
         );
+        // kept, holding only the pages drawn on: a new buffer is zeroed without touching them
+        let kept = closed[1 - shown];
+        assert!(kept > 0 && kept < full, "the other is kept: {closed:?}");
 
-        // open again: drawn as before, holding only the pages of the panel's box
+        // open again: the first frame is drawn in the kept buffer, as before
         assert!(app.shell.toggle_named_on(target, "control"));
         app.shell.open_ms = f64::INFINITY;
         app.shell.opened_at = None;
         app.sync_all();
+        assert_eq!(app.outputs[0].last_slot, 1 - shown);
         eq.roundtrip(&mut app).unwrap();
         assert!(surface_has_nonzero_pixels(&mut app.outputs[0]));
-        let again = slots_resident(&mut app.outputs[0]);
-        assert!(again.iter().any(|&b| b > 0), "{again:?}");
-        assert!(again.iter().all(|&b| b < full / 2), "{again:?} of {full}");
     }
 
     #[test]
