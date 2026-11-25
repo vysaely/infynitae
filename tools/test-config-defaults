@@ -104,4 +104,22 @@ check "reload leaves a running squeekboard" "$got" "osk: running "
 osk_check 'OSK=off' false
 check "reload does not start squeekboard for OSK=off" "$got" "osk: only by hand "
 
+# 10. ICON_THEME: auto (or no line) is Papirus when installed, dark or light as COLOR_SCHEME, else Adwaita
+got=$(sh -c 'unset ICON_THEME COLOR_SCHEME; . live/settings.sh >/dev/null 2>&1; echo "$ICON_THEME"')
+if [ -f /usr/share/icons/Papirus-Dark/index.theme ]; then
+    check "ICON_THEME unset, Papirus-Dark in /usr/share/icons: Papirus-Dark" "$got" "Papirus-Dark"
+else
+    check "ICON_THEME unset, no Papirus: Adwaita" "$got" "Adwaita"
+fi
+mkdir -p "$HOME/.local/share/icons/Papirus-Dark" "$HOME/.local/share/icons/Papirus"
+: > "$HOME/.local/share/icons/Papirus-Dark/index.theme"
+: > "$HOME/.local/share/icons/Papirus/index.theme"
+got=$(sh -c 'ICON_THEME=auto; unset COLOR_SCHEME; . live/settings.sh >/dev/null 2>&1; echo "$ICON_THEME"')
+check "ICON_THEME=auto with Papirus installed, dark: Papirus-Dark" "$got" "Papirus-Dark"
+got=$(sh -c 'ICON_THEME=auto COLOR_SCHEME=prefer-light; . live/settings.sh >/dev/null 2>&1; echo "$ICON_THEME"')
+check "ICON_THEME=auto with Papirus installed, light: Papirus" "$got" "Papirus"
+got=$(sh -c 'ICON_THEME=Adwaita; . live/settings.sh >/dev/null 2>&1; echo "$ICON_THEME"')
+check "ICON_THEME=Adwaita stays Adwaita with Papirus installed" "$got" "Adwaita"
+rm -rf "$HOME/.local/share/icons"
+
 [ "$fails" = 0 ] && echo "test-config-defaults: passed" || { echo "test-config-defaults: $fails failed"; exit 1; }

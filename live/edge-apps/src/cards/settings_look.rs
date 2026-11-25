@@ -49,7 +49,7 @@ pub const KIND_APPEARANCE: CardKind = CardKind {
     sizes: &[Size::S, Size::M],
     default: Size::S,
     half: false,
-    sources: &["config", "look", "face"],
+    sources: &["config", "look", "face", "icons"],
 };
 
 pub const KIND_WALLPAPER: CardKind = CardKind {
@@ -362,7 +362,7 @@ pub const TABLE_FONTS: &[LookRow] = &[
         says: "",
         control: LookControl::Found {
             source: "icons",
-            first: None,
+            first: Some(("auto", "Automatic")),
             other_file: false,
             file_name: false,
         },
@@ -595,7 +595,21 @@ impl LookCard {
         match r.hide {
             HideRule::None => true,
             HideRule::WallpaperBin => self.look.as_ref().is_some_and(|l| l.wallpaper_bin),
-            HideRule::PapirusIcons => self.key_value("ICON_THEME").starts_with("Papirus"),
+            HideRule::PapirusIcons => match self.key_value("ICON_THEME").as_str() {
+                // as settings.sh resolves auto: Papirus-Dark (Papirus with prefer-light) when
+                // installed
+                "auto" | "" => {
+                    let papirus = if self.key_value("COLOR_SCHEME") == "prefer-light" {
+                        "Papirus"
+                    } else {
+                        "Papirus-Dark"
+                    };
+                    self.found
+                        .get("icons")
+                        .is_some_and(|names| names.iter().any(|n| n == papirus))
+                }
+                theme => theme.starts_with("Papirus"),
+            },
             HideRule::FcList => cfg.has("fc-list"),
         }
     }
@@ -1913,6 +1927,25 @@ mod tests {
         let keys1: Vec<&str> = rows1.iter().map(|&i| c1.table[i].key).collect();
         assert!(!keys1.contains(&"THEME_FROM_WALLPAPER"));
         assert!(!keys1.contains(&"FOLDER_COLOR"));
+
+        // ICON_THEME="auto": Folders in the accent shows when the Papirus set it picks is installed
+        let found = |names: &[&str]| FoundNames(names.iter().map(|n| (*n).to_string()).collect());
+        let mut auto_dark = init_appearance(&[("ICON_THEME", "auto")], false, &[]);
+        auto_dark.apply("icons", &found(&["Adwaita", "Papirus-Dark"]));
+        let (r, _) = auto_dark.shown(&cx_m);
+        assert!(r.iter().any(|&i| auto_dark.table[i].key == "FOLDER_COLOR"));
+        let mut auto_none = init_appearance(&[("ICON_THEME", "auto")], false, &[]);
+        auto_none.apply("icons", &found(&["Adwaita"]));
+        let (r, _) = auto_none.shown(&cx_m);
+        assert!(!r.iter().any(|&i| auto_none.table[i].key == "FOLDER_COLOR"));
+        let mut auto_light = init_appearance(
+            &[("ICON_THEME", "auto"), ("COLOR_SCHEME", "prefer-light")],
+            false,
+            &[],
+        );
+        auto_light.apply("icons", &found(&["Adwaita", "Papirus-Dark"]));
+        let (r, _) = auto_light.shown(&cx_m);
+        assert!(!r.iter().any(|&i| auto_light.table[i].key == "FOLDER_COLOR"));
 
         // With wallpaper bin + Papirus-Dark, all 8 Appearance rows appear at size M
         let c2 = init_appearance(&[("ICON_THEME", "Papirus-Dark")], true, &[]);

@@ -61,8 +61,16 @@ apply_defaults() {
         esac
     fi
     FONT_SIZE="${FONT_SIZE:-10}"
-    ICON_THEME="${ICON_THEME:-Adwaita}"
     COLOR_SCHEME="${COLOR_SCHEME:-prefer-dark}"
+    # auto (or no line): Papirus when installed, in its dark or light set as COLOR_SCHEME says,
+    # else Adwaita
+    case "${ICON_THEME:-auto}" in
+        auto)
+            case "$COLOR_SCHEME" in prefer-light) ICON_THEME=Papirus ;; *) ICON_THEME=Papirus-Dark ;; esac
+            [ -f "$HOME/.local/share/icons/$ICON_THEME/index.theme" ] || [ -f "/usr/share/icons/$ICON_THEME/index.theme" ] \
+                || ICON_THEME=Adwaita
+            ;;
+    esac
     CANVAS_COLOR="${CANVAS_COLOR:-#0b0f14}"
     SURFACE_COLOR="${SURFACE_COLOR:-#111317}"
     ACCENT="${ACCENT:-${BORDER_ACTIVE:-#7aa2f7}}"

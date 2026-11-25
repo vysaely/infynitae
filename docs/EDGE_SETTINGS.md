@@ -147,27 +147,24 @@ file" (section 5). Sizes: M only. No setting of its own.
 
 | Row | Control | Key | Values | After |
 |---|---|---|---|---|
-| Apps look | Words | `COLOR_SCHEME` | Dark `prefer-dark`, Light `prefer-light` | look |
-| Accent | Text, with a 16 px swatch of the value | `BORDER_ACTIVE` | `#rrggbb`; anything else is refused and the row says "Not a colour" | look |
-| Colours from the wallpaper | Pick | `THEME_FROM_WALLPAPER` | Off `false`, The accent `accent`, Everything `all` | look |
+| Dark or light | Pick | `COLOR_SCHEME` | Dark `prefer-dark`, Light `prefer-light` | look |
+| Accent | Text, with a 16 px swatch of the value | `ACCENT` (a config with only `BORDER_ACTIVE` shows that) | `#rrggbb`; anything else is refused and the row says "Not a colour" | look |
+| Colours from the wallpaper | Pick | `THEME_FROM_WALLPAPER` | Off `false`, The accent `accent`, Everything `all`, A new accent each time `shuffle` | look |
 | Corners | Slide 0-24 px | `WINDOW_CORNERS` | | look |
-| Panels' colours | Pick | `THEME_SCHEME` | Yours, Monochrome, Neutral, Tonal, Vibrant, Expressive (lower case written) | look |
-| M Cards | Slide 20-100 % | `CARD_OPACITY` | | look |
-| M Background | Text + swatch | `SURFACE_COLOR` | | look |
-| M Text | Text + swatch | `TEXT_COLOR` | | look |
+| Colours | Pick | `THEME_SCHEME` | Yours, Monochrome, Neutral, Tonal, Vibrant, Expressive (lower case written) | look |
+| M Card opacity | Slide 20-100 % | `CARD_OPACITY` | | look |
 | M Window border | Step 0-8 | `BORDER_WIDTH` | | save |
-| M Other windows' border | Text + swatch | `BORDER_INACTIVE` | | save |
-| M Behind the windows | Text + swatch | `CANVAS_COLOR` | | save |
 | M Folders in the accent | Switch | `FOLDER_COLOR` | `accent` / `theme` | look |
-| M Apps follow these colours | Switch | `THEME_SYNC` | | look |
 
 The swatch is the setting's own value drawn as data; nothing else on the card has a colour of its own.
-Hidden: "Folders in the accent" unless `ICON_THEME` starts with `Papirus`. "Colours from the
-wallpaper" without `~/.local/bin/infynitae-wallpaper`. While it is not Off, Accent (and for
-Everything also Background, borders, Behind the windows) show "From the wallpaper" and are not
-clickable: the next apply would overwrite them (`settings.sh:225-241`). Left to the file: `CORNERS`
-(one corner for everything is the rule), `SQUARE_CORNERS`, `BORDER_IGNORE_CSD`, `CLIP_TO_GEOMETRY`,
-`WINE_TRANSPARENCY`, `FORCE_TRANSPARENT_APPS`, `SWITCH_LOOK`. Not known without trying: whether
+Hidden: "Folders in the accent" unless `ICON_THEME` starts with `Papirus`, or is `auto` and the
+Papirus set it picks (Papirus-Dark, Papirus with prefer-light) is in the `icons` source. "Colours from the
+wallpaper" without `~/.local/bin/infynitae-wallpaper`. Left to the file: the four colours "Yours"
+uses (`SURFACE_COLOR`, `TEXT_COLOR`, `BORDER_INACTIVE`, `CANVAS_COLOR`, one block under
+`THEME_SCHEME` in `config/config`), `THEME_SYNC`, `BORDER_ACTIVE`, `CORNERS` and `SQUARE_CORNERS` (both
+unset overrides under `WINDOW_CORNERS`: one corner for everything is the rule), `BORDER_IGNORE_CSD`,
+`SWITCH_LOOK`. `CLIP_TO_GEOMETRY`, `WINE_TRANSPARENCY` and `FORCE_TRANSPARENT_APPS` are on
+`settings/advanced`. Not known without trying: whether
 `WINDOW_CORNERS` reaches open windows on save or only on reload (its tag says reload; the compositor
 reloads on save).
 
@@ -190,7 +187,7 @@ Hidden: the whole card without `infynitae-wallpaper`.
 |---|---|---|---|---|
 | Font | Found `fonts` | `FONT_NAME` | | look |
 | Size | Step 6-24 | `FONT_SIZE` | | look |
-| Icons | Found `icons` | `ICON_THEME` | | look |
+| Icons | Found `icons` | `ICON_THEME` | first entry "Automatic" writes `auto` (Papirus when installed, else Adwaita) | look |
 | Cursor | Found `cursors` | `CURSOR_THEME` | | look |
 | M Cursor size | Pick | `CURSOR_SIZE` | 16, 24, 32, 48 | look |
 | M Terminal font | Found `fonts-mono` | `TERMINAL_FONT` | first entry "Same as Font" writes `""` | look |

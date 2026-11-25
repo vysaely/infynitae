@@ -341,7 +341,10 @@ impl SettingsAllCard {
             }
             "fonts" => {
                 let font = join_space(cfg.value("FONT_NAME").trim(), cfg.value("FONT_SIZE").trim());
-                let icons = non_empty(cfg.value("ICON_THEME"));
+                let icons = match cfg.value("ICON_THEME").trim() {
+                    "auto" | "" => "Automatic icons".to_string(),
+                    other => other.to_string(),
+                };
                 vec![font, icons]
             }
             "display" => self.display_summary(cfg),
