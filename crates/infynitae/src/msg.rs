@@ -101,7 +101,7 @@ fn first_output() -> u64 {
 
 fn usage() -> ExitCode {
     eprintln!(
-        "Usage: infynitae msg snapshot | focus <inst> <elem> | navigate <x> <y> [zoom] | navigate element <inst> <elem> | place <name> | restore [output] | shortcut <name> | overview | lock | night-light [on|off] | keyboard-layout | osk [on|off] | capture-chord | layers [app] | arrange spiral|tiles|line|tidy|app [<inst> <elem>]"
+        "Usage: infynitae msg snapshot | focus <inst> <elem> | navigate <x> <y> [zoom] | navigate element <inst> <elem> | place <name> | restore [output] | shortcut <name> | overview | lock | night-light [on|off] | keyboard-layout | osk [on|off] | capture-chord | layers [app] | journal [--since T] [--app X] | arrange spiral|tiles|line|tidy|app [<inst> <elem>]"
     );
     ExitCode::from(2)
 }
@@ -535,8 +535,56 @@ pub fn run(args: &[String]) -> ExitCode {
             ("cmd", "keyboard_layout".into()),
         ]))),
         Some("capture-chord" | "capture_chord") if args.len() == 1 => capture_chord(),
+        Some("journal") => match journal_args(&args[1..]) {
+            Some((since, app)) => journal(since, app),
+            None => usage(),
+        },
         _ => usage(),
     }
+}
+
+/// `journal [--since T] [--app X]`: the time prefix and the program text, each at most once.
+fn journal_args(args: &[String]) -> Option<(Option<&str>, Option<&str>)> {
+    let (mut since, mut app) = (None, None);
+    let mut it = args.iter();
+    while let Some(flag) = it.next() {
+        let value = Some(it.next()?.as_str());
+        match flag.as_str() {
+            "--since" if since.is_none() => since = value,
+            "--app" if app.is_none() => app = value,
+            _ => return None,
+        }
+    }
+    Some((since, app))
+}
+
+/// `infynitae msg journal`: the desktop journal's lines, oldest first (the rotated file, then the
+/// current one), read from the file: the compositor need not run.
+fn journal(since: Option<&str>, app: Option<&str>) -> ExitCode {
+    use infynitae_wayland::journal;
+    let Some(dir) = journal::default_dir() else {
+        eprintln!("infynitae msg journal: neither XDG_STATE_HOME nor HOME is set");
+        return ExitCode::FAILURE;
+    };
+    let mut found = false;
+    for path in [journal::older_file(&dir), journal::current_file(&dir)] {
+        let text = match std::fs::read_to_string(&path) {
+            Ok(t) => t,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => {
+                eprintln!("infynitae msg journal: {}: {e}", path.display());
+                return ExitCode::FAILURE;
+            }
+        };
+        found = true;
+        for line in text.lines().filter(|l| journal::matches(l, since, app)) {
+            println!("{line}");
+        }
+    }
+    if !found {
+        eprintln!("No journal yet in {}", dir.display());
+    }
+    ExitCode::SUCCESS
 }
 
 /// Sends a global shortcut's name to the shortcuts portal (`shortcuts.sock`), which passes it to
@@ -737,6 +785,23 @@ fn replace_keeping_mode(path: &std::path::Path, text: &str) -> std::io::Result<(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn journal_takes_since_and_app_once_each() {
+        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(journal_args(&a(&[])), Some((None, None)));
+        assert_eq!(
+            journal_args(&a(&["--app", "grim", "--since", "2026-11-25"])),
+            Some((Some("2026-11-25"), Some("grim")))
+        );
+        assert_eq!(
+            journal_args(&a(&["--since"])),
+            None,
+            "a flag without its value"
+        );
+        assert_eq!(journal_args(&a(&["--app", "a", "--app", "b"])), None);
+        assert_eq!(journal_args(&a(&["grim"])), None);
+    }
 
     #[test]
     fn the_overview_lists_each_window_with_its_app_and_title() {

@@ -73,6 +73,9 @@ pub(crate) struct SessionLock {
     holder: Option<ExtSessionLockV1>,
     /// The holder's client.
     holder_client: Option<ClientId>,
+    /// The holder's program and pid as the journal names them, for its unlock (its lock object
+    /// is gone by then).
+    holder_who: Option<(String, Option<i32>)>,
     /// `unlock` was called during the last dispatch: [`WaylandState::settle_unlock`] decides.
     unlock_requested: bool,
     /// A lock request confirmed once a locked frame has been drawn.
@@ -108,6 +111,7 @@ impl WaylandState {
                 locked: false,
                 holder: None,
                 holder_client: None,
+                holder_who: None,
                 unlock_requested: false,
                 pending: None,
                 surfaces: Vec::new(),
@@ -148,6 +152,14 @@ impl WaylandState {
             return;
         }
         log_line!("[infynitae] Locked by request; starting the lock screen");
+        // the request came through the shell socket, whose client is not known here
+        self.journal.write(crate::journal::Entry {
+            event: "session-lock",
+            program: String::new(),
+            pid: None,
+            detail: "locked by a shell request (infynitae msg lock)".into(),
+            outcome: "locked",
+        });
         self.start_locked();
         self.spawn_action("lock-screen");
     }
@@ -379,6 +391,14 @@ impl WaylandState {
         }
         if !(holder_destroyed && confirmed && connected) {
             log_line!("[infynitae] Session lock: unlock refused (not the lock holder's)");
+            // whose request it was is not known (module docs)
+            self.journal.write(crate::journal::Entry {
+                event: "session-unlock",
+                program: String::new(),
+                pid: None,
+                detail: "an unlock that was not the lock holder's".into(),
+                outcome: "refused",
+            });
             return;
         }
         let Some(l) = self.session_lock.as_mut() else {
@@ -387,6 +407,14 @@ impl WaylandState {
         l.locked = false;
         l.holder = None;
         l.holder_client = None;
+        let (program, pid) = l.holder_who.take().unwrap_or_default();
+        self.journal.write(crate::journal::Entry {
+            event: "session-unlock",
+            program,
+            pid,
+            detail: "ext-session-lock".into(),
+            outcome: "unlocked",
+        });
         l.pending = None;
         l.surfaces.clear();
         l.just_unlocked = true;
@@ -451,10 +479,22 @@ impl SessionLockHandler for WaylandState {
         }
         l.relaunched = None;
         l.holder = Some(confirmation.ext_session_lock().clone());
-        l.holder_client = confirmation.ext_session_lock().client().map(|c| c.id());
+        let client = confirmation.ext_session_lock().client();
+        l.holder_client = client.as_ref().map(|c| c.id());
+        let who = client.as_ref().map(crate::journal::who);
+        l.holder_who = who.clone();
         l.unlock_requested = false;
         l.surfaces.clear();
-        if l.locked {
+        let took_over = l.locked;
+        let (program, pid) = who.unwrap_or_default();
+        self.journal.write(crate::journal::Entry {
+            event: "session-lock",
+            program,
+            pid,
+            detail: "ext-session-lock".into(),
+            outcome: if took_over { "taken over" } else { "locked" },
+        });
+        if took_over {
             // taking over from a lock client that died: the session never stopped being locked
             confirmation.lock();
             return;

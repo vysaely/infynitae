@@ -256,6 +256,7 @@ fn open_recorder_socket<D: 'static>(
                                 client.get_data::<ClientState>(),
                             ) {
                                 data.identify(crate::trust::Identity::of_pid(c.pid));
+                                data.set_pid(c.pid);
                             }
                         }
                         Err(e) => log_line!("[infynitae] Failed to insert the recorder: {e}"),
@@ -355,15 +356,19 @@ impl Session {
                     // a native client is known by its executable, read before its first request
                     // (`trust`)
                     Ok(client) => {
-                        let identity = match client.get_credentials(&clients) {
-                            Ok(c) => crate::trust::Identity::of_pid(c.pid),
-                            Err(_) => crate::trust::Identity::Native {
+                        let credentials = client.get_credentials(&clients).ok();
+                        let identity = match &credentials {
+                            Some(c) => crate::trust::Identity::of_pid(c.pid),
+                            None => crate::trust::Identity::Native {
                                 exe: None,
                                 path: None,
                             },
                         };
                         if let Some(data) = client.get_data::<ClientState>() {
                             data.identify(identity);
+                            if let Some(c) = credentials {
+                                data.set_pid(c.pid);
+                            }
                         }
                     }
                     Err(e) => log_line!("[infynitae] Failed to insert client: {e}"),
@@ -392,8 +397,16 @@ impl Session {
             log_line!("[infynitae] Sandbox listener for {}", identity.describe());
             if let Err(e) = listeners.insert_source(source, move |stream, _, _| {
                 let state = ClientState::with_identity(identity.clone());
-                if let Err(e) = dh.insert_client(stream, Arc::new(state)) {
-                    log_line!("[infynitae] Failed to insert sandboxed client: {e}");
+                match dh.insert_client(stream, Arc::new(state)) {
+                    Ok(client) => {
+                        if let (Ok(c), Some(data)) = (
+                            client.get_credentials(&dh),
+                            client.get_data::<ClientState>(),
+                        ) {
+                            data.set_pid(c.pid);
+                        }
+                    }
+                    Err(e) => log_line!("[infynitae] Failed to insert sandboxed client: {e}"),
                 }
             }) {
                 log_line!("[infynitae] Failed to serve a sandbox listener: {e}");

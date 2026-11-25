@@ -525,3 +525,33 @@ fn audit_layers_locked_still_completes_layer_frame_callbacks() {
         r.ls.probe.frames
     );
 }
+
+/// The desktop journal says who locked the session and that it was unlocked, once each. The probe
+/// is the harness's own connection, named as the compositor's.
+#[test]
+fn a_lock_and_its_unlock_are_written_to_the_journal_once_each() {
+    let dir = infynitae_wayland::cursor::TestTempDir::new("t1_lock_journal");
+    let (mut r, _) = focused_w();
+    r.ls.state.open_journal(dir.path()).unwrap();
+    let (lock, _surface) = lock(&mut r, 1);
+    lock.unlock_and_destroy();
+    r.ls.pump();
+    unlock_releases(&mut r);
+    r.ls.state.journal().flush();
+    let text =
+        std::fs::read_to_string(infynitae_wayland::journal::current_file(dir.path())).unwrap();
+    let rows: Vec<Vec<&str>> = text.lines().map(|l| l.split('\t').collect()).collect();
+    let own = format!(
+        "{} (own connection)",
+        std::env::current_exe().unwrap().display()
+    );
+    let of = |event: &str| -> Vec<&Vec<&str>> { rows.iter().filter(|f| f[1] == event).collect() };
+    let locked = of("session-lock");
+    assert_eq!(locked.len(), 1, "{text}");
+    assert_eq!(locked[0][2], own);
+    assert_eq!(locked[0][5], "locked");
+    let unlocked = of("session-unlock");
+    assert_eq!(unlocked.len(), 1, "{text}");
+    assert_eq!(unlocked[0][2], own);
+    assert_eq!(unlocked[0][5], "unlocked");
+}

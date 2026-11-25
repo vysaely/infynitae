@@ -120,9 +120,38 @@ smithay::reexports::wayland_server::delegate_global_dispatch!(WaylandState: [
     smithay::reexports::wayland_protocols_misc::zwp_input_method_v2::server::zwp_input_method_manager_v2::ZwpInputMethodManagerV2:
     smithay::wayland::input_method::InputMethodManagerGlobalData
 ] => InputMethodManagerState);
-smithay::reexports::wayland_server::delegate_dispatch!(WaylandState: [
-    smithay::reexports::wayland_protocols_misc::zwp_input_method_v2::server::zwp_input_method_manager_v2::ZwpInputMethodManagerV2: ()
-] => InputMethodManagerState);
+/// An input method sees and may grab the keyboard: its creation goes in the journal.
+impl
+    Dispatch<
+        smithay::reexports::wayland_protocols_misc::zwp_input_method_v2::server::zwp_input_method_manager_v2::ZwpInputMethodManagerV2,
+        (),
+    > for WaylandState
+{
+    fn request(
+        state: &mut Self,
+        client: &Client,
+        resource: &smithay::reexports::wayland_protocols_misc::zwp_input_method_v2::server::zwp_input_method_manager_v2::ZwpInputMethodManagerV2,
+        request: smithay::reexports::wayland_protocols_misc::zwp_input_method_v2::server::zwp_input_method_manager_v2::Request,
+        data: &(),
+        dh: &DisplayHandle,
+        data_init: &mut DataInit<'_, Self>,
+    ) {
+        use smithay::reexports::wayland_protocols_misc::zwp_input_method_v2::server::zwp_input_method_manager_v2::Request;
+        if let Request::GetInputMethod { .. } = &request {
+            state.journal_client(
+                "input-method",
+                client,
+                "input method created: it sees typed keys".into(),
+                "allowed",
+            );
+        }
+        <InputMethodManagerState as Dispatch<
+            smithay::reexports::wayland_protocols_misc::zwp_input_method_v2::server::zwp_input_method_manager_v2::ZwpInputMethodManagerV2,
+            (),
+            WaylandState,
+        >>::request(state, client, resource, request, data, dh, data_init);
+    }
+}
 smithay::reexports::wayland_server::delegate_dispatch!(WaylandState: [
     smithay::reexports::wayland_protocols_misc::zwp_input_method_v2::server::zwp_input_method_keyboard_grab_v2::ZwpInputMethodKeyboardGrabV2:
     smithay::wayland::input_method::InputMethodKeyboardUserData<WaylandState>
@@ -141,9 +170,38 @@ smithay::reexports::wayland_server::delegate_global_dispatch!(WaylandState: [
     smithay::reexports::wayland_protocols_misc::zwp_virtual_keyboard_v1::server::zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1:
     smithay::wayland::virtual_keyboard::VirtualKeyboardManagerGlobalData
 ] => VirtualKeyboardManagerState);
-smithay::reexports::wayland_server::delegate_dispatch!(WaylandState: [
-    smithay::reexports::wayland_protocols_misc::zwp_virtual_keyboard_v1::server::zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1: ()
-] => VirtualKeyboardManagerState);
+/// A virtual keyboard types into whatever has focus: its creation goes in the journal.
+impl
+    Dispatch<
+        smithay::reexports::wayland_protocols_misc::zwp_virtual_keyboard_v1::server::zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1,
+        (),
+    > for WaylandState
+{
+    fn request(
+        state: &mut Self,
+        client: &Client,
+        resource: &smithay::reexports::wayland_protocols_misc::zwp_virtual_keyboard_v1::server::zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1,
+        request: smithay::reexports::wayland_protocols_misc::zwp_virtual_keyboard_v1::server::zwp_virtual_keyboard_manager_v1::Request,
+        data: &(),
+        dh: &DisplayHandle,
+        data_init: &mut DataInit<'_, Self>,
+    ) {
+        use smithay::reexports::wayland_protocols_misc::zwp_virtual_keyboard_v1::server::zwp_virtual_keyboard_manager_v1::Request;
+        if let Request::CreateVirtualKeyboard { .. } = &request {
+            state.journal_client(
+                "virtual-keyboard",
+                client,
+                "virtual keyboard created".into(),
+                "allowed",
+            );
+        }
+        <VirtualKeyboardManagerState as Dispatch<
+            smithay::reexports::wayland_protocols_misc::zwp_virtual_keyboard_v1::server::zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1,
+            (),
+            WaylandState,
+        >>::request(state, client, resource, request, data, dh, data_init);
+    }
+}
 
 /// The input method: while locked, nothing that changes text gets through. Requests that create
 /// an object (the keyboard grab, a popup) always do, the protocol needs them answered; the grab

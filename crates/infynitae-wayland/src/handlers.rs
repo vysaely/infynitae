@@ -1164,9 +1164,40 @@ impl smithay::wayland::selection::ext_data_control::DataControlHandler for Wayla
 smithay::reexports::wayland_server::delegate_global_dispatch!(WaylandState: [
     smithay::reexports::wayland_protocols_wlr::data_control::v1::server::zwlr_data_control_manager_v1::ZwlrDataControlManagerV1: smithay::wayland::selection::wlr_data_control::DataControlManagerGlobalData
 ] => smithay::wayland::selection::wlr_data_control::DataControlState);
-smithay::reexports::wayland_server::delegate_dispatch!(WaylandState: [
-    smithay::reexports::wayland_protocols_wlr::data_control::v1::server::zwlr_data_control_manager_v1::ZwlrDataControlManagerV1: smithay::wayland::selection::wlr_data_control::DataControlManagerUserData
-] => smithay::wayland::selection::wlr_data_control::DataControlState);
+/// A data-control device reads every clipboard and primary selection from then on, focused or not:
+/// its creation goes in the journal (a read itself is answered inside Smithay, unseen here).
+impl
+    smithay::reexports::wayland_server::Dispatch<
+        smithay::reexports::wayland_protocols_wlr::data_control::v1::server::zwlr_data_control_manager_v1::ZwlrDataControlManagerV1,
+        smithay::wayland::selection::wlr_data_control::DataControlManagerUserData,
+        WaylandState,
+    > for WaylandState
+{
+    fn request(
+        state: &mut Self,
+        client: &smithay::reexports::wayland_server::Client,
+        resource: &smithay::reexports::wayland_protocols_wlr::data_control::v1::server::zwlr_data_control_manager_v1::ZwlrDataControlManagerV1,
+        request: smithay::reexports::wayland_protocols_wlr::data_control::v1::server::zwlr_data_control_manager_v1::Request,
+        data: &smithay::wayland::selection::wlr_data_control::DataControlManagerUserData,
+        dh: &smithay::reexports::wayland_server::DisplayHandle,
+        data_init: &mut smithay::reexports::wayland_server::DataInit<'_, Self>,
+    ) {
+        use smithay::reexports::wayland_protocols_wlr::data_control::v1::server::zwlr_data_control_manager_v1::Request;
+        if let Request::GetDataDevice { .. } = &request {
+            state.journal_client(
+                "clipboard-reader",
+                client,
+                "wlr-data-control device: reads the clipboard without focus".into(),
+                "allowed",
+            );
+        }
+        <smithay::wayland::selection::wlr_data_control::DataControlState as smithay::reexports::wayland_server::Dispatch<
+            smithay::reexports::wayland_protocols_wlr::data_control::v1::server::zwlr_data_control_manager_v1::ZwlrDataControlManagerV1,
+            smithay::wayland::selection::wlr_data_control::DataControlManagerUserData,
+            Self,
+        >>::request(state, client, resource, request, data, dh, data_init);
+    }
+}
 smithay::reexports::wayland_server::delegate_dispatch!(WaylandState: [
     smithay::reexports::wayland_protocols_wlr::data_control::v1::server::zwlr_data_control_source_v1::ZwlrDataControlSourceV1: smithay::wayland::selection::wlr_data_control::DataControlSourceUserData
 ] => smithay::wayland::selection::wlr_data_control::DataControlState);
@@ -1223,9 +1254,38 @@ impl
 smithay::reexports::wayland_server::delegate_global_dispatch!(WaylandState: [
     smithay::reexports::wayland_protocols::ext::data_control::v1::server::ext_data_control_manager_v1::ExtDataControlManagerV1: smithay::wayland::selection::ext_data_control::ExtDataControlManagerGlobalData
 ] => smithay::wayland::selection::ext_data_control::DataControlState);
-smithay::reexports::wayland_server::delegate_dispatch!(WaylandState: [
-    smithay::reexports::wayland_protocols::ext::data_control::v1::server::ext_data_control_manager_v1::ExtDataControlManagerV1: smithay::wayland::selection::ext_data_control::ExtDataControlManagerUserData
-] => smithay::wayland::selection::ext_data_control::DataControlState);
+impl
+    smithay::reexports::wayland_server::Dispatch<
+        smithay::reexports::wayland_protocols::ext::data_control::v1::server::ext_data_control_manager_v1::ExtDataControlManagerV1,
+        smithay::wayland::selection::ext_data_control::ExtDataControlManagerUserData,
+        WaylandState,
+    > for WaylandState
+{
+    fn request(
+        state: &mut Self,
+        client: &smithay::reexports::wayland_server::Client,
+        resource: &smithay::reexports::wayland_protocols::ext::data_control::v1::server::ext_data_control_manager_v1::ExtDataControlManagerV1,
+        request: smithay::reexports::wayland_protocols::ext::data_control::v1::server::ext_data_control_manager_v1::Request,
+        data: &smithay::wayland::selection::ext_data_control::ExtDataControlManagerUserData,
+        dh: &smithay::reexports::wayland_server::DisplayHandle,
+        data_init: &mut smithay::reexports::wayland_server::DataInit<'_, Self>,
+    ) {
+        use smithay::reexports::wayland_protocols::ext::data_control::v1::server::ext_data_control_manager_v1::Request;
+        if let Request::GetDataDevice { .. } = &request {
+            state.journal_client(
+                "clipboard-reader",
+                client,
+                "ext-data-control device: reads the clipboard without focus".into(),
+                "allowed",
+            );
+        }
+        <smithay::wayland::selection::ext_data_control::DataControlState as smithay::reexports::wayland_server::Dispatch<
+            smithay::reexports::wayland_protocols::ext::data_control::v1::server::ext_data_control_manager_v1::ExtDataControlManagerV1,
+            smithay::wayland::selection::ext_data_control::ExtDataControlManagerUserData,
+            Self,
+        >>::request(state, client, resource, request, data, dh, data_init);
+    }
+}
 smithay::reexports::wayland_server::delegate_dispatch!(WaylandState: [
     smithay::reexports::wayland_protocols::ext::data_control::v1::server::ext_data_control_source_v1::ExtDataControlSourceV1: smithay::wayland::selection::ext_data_control::ExtDataControlSourceUserData
 ] => smithay::wayland::selection::ext_data_control::DataControlState);
