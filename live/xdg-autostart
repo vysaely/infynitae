@@ -8,6 +8,11 @@
 # or X-GNOME-Autostart-enabled=false, OnlyShowIn without one of $XDG_CURRENT_DESKTOP's names,
 # NotShowIn with one, a TryExec that is not there, a Type other than Application. Field codes
 # (%U, %f…) are dropped from Exec. --dry-run prints the commands instead (tools/test-xdg-autostart).
+#
+# The desktop journal (live/journal.sh) gets each entry that starts and was not there at the last
+# session start (autostart-added), and each that is gone (autostart-removed); the user's
+# ~/.config/infynitae/autostart.sh counts by its checksum. The list is kept in
+# $XDG_STATE_HOME/infynitae/journal/autostart.last. A dry run changes neither.
 set -u
 dry=false
 [ "${1:-}" = "--dry-run" ] && dry=true
@@ -20,6 +25,7 @@ for d in ${XDG_CONFIG_DIRS:-/etc/xdg}; do dirs="$dirs:$d/autostart"; done
 IFS=$old_ifs
 
 seen=" "
+listed=""
 IFS=:
 for dir in $dirs; do
     IFS=$old_ifs
@@ -62,6 +68,8 @@ for dir in $dirs; do
                 *) command -v "$try" >/dev/null 2>&1 || continue ;;
             esac
         fi
+        listed="$listed$f: $exec_line
+"
         if $dry; then
             printf '%s\n' "$exec_line"
         else
@@ -71,4 +79,22 @@ for dir in $dirs; do
     IFS=:
 done
 IFS=$old_ifs
+
+$dry && exit 0
+for _r in "$(dirname "$0")/journal.sh" "$HOME/infynitae/live/journal.sh"; do
+    [ -f "$_r" ] && { . "$_r"; break; }
+done
+script="$HOME/.config/infynitae/autostart.sh"
+[ -x "$script" ] && listed="$listed$script: cksum $(cksum < "$script" | cut -d ' ' -f 1)
+"
+last="${XDG_STATE_HOME:-$HOME/.local/state}/infynitae/journal/autostart.last"
+before=$(cat "$last" 2>/dev/null || true)
+printf '%s' "$listed" | while IFS= read -r line; do
+    printf '%s\n' "$before" | grep -Fxq -- "$line" || journal_write autostart-added "" "$line" new
+done
+printf '%s\n' "$before" | while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    printf '%s' "$listed" | grep -Fxq -- "$line" || journal_write autostart-removed "" "$line" gone
+done
+mkdir -p "${last%/*}" && printf '%s' "$listed" > "$last.tmp" && mv -f "$last.tmp" "$last"
 exit 0
