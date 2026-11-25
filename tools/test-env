@@ -157,3 +157,26 @@ if [ "$(tail -c 1 "$conf" | od -An -c | tr -d ' ')" != '\n' ]; then
     exit 1
 fi
 echo "ok portal files: written only when REMOTE_DESKTOP (or another input) changes them"
+
+# ---- 5. An installed portal that shares the screen itself (its stream name in the binary) gets
+# ScreenCast and Screenshot, and xdg-desktop-portal-wlr is no longer a default; an older one
+# leaves Screenshot to wlr. The stand-in is not executable, so env.sh does not start it.
+check_route() {
+    for line in "$@"; do
+        if ! grep -qx "$line" "$conf" && ! grep -q "^Interfaces=.*$line" "$pfile"; then
+            echo "FAIL portal routing ($route): no '$line'"
+            exit 1
+        fi
+    done
+}
+route="an older portal" check_route 'default=gtk;wlr' 'org.freedesktop.impl.portal.Screenshot=wlr'
+mkdir -p "$TMP/home4/.local/bin"
+printf 'infynitae-screencast\n' > "$TMP/home4/.local/bin/infynitae-portal"
+portal_env false
+route="own screen sharing" check_route 'default=gtk' 'org.freedesktop.impl.portal.Screenshot=infynitae' \
+    'org.freedesktop.impl.portal.ScreenCast=infynitae' 'org.freedesktop.impl.portal.ScreenCast;org.freedesktop.impl.portal.Screenshot;'
+portal_env true
+route="own screen sharing, REMOTE_DESKTOP" check_route 'default=gtk' 'org.freedesktop.impl.portal.RemoteDesktop=infynitae' \
+    'org.freedesktop.impl.portal.RemoteDesktop;org.freedesktop.impl.portal.ScreenCast;org.freedesktop.impl.portal.Screenshot;'
+rm -f "$TMP/home4/.local/bin/infynitae-portal"
+echo "ok portal routing: ScreenCast and Screenshot by our portal once it has them, wlr before"
