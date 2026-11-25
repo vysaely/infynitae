@@ -169,10 +169,12 @@ What this does not protect against:
 
 - The screen-sharing log (`~/.local/state/infynitae/screenshare.log`) names screens and counts
   windows; it never records a window's title.
-- Clipboard history (`CLIPBOARD_HISTORY`, cliphist) is kept on disk. A copied password stays out
-  of it only when the password manager marks it as sensitive and both wl-clipboard (2.2 or
-  newer, `CLIPBOARD_STATE`) and cliphist honour that mark; if yours do not, turn the history off
-  if you copy passwords.
+- Clipboard history (`CLIPBOARD_HISTORY`) is kept by the compositor in memory, never on disk, and
+  ends when you log out. A copy the app marks for password managers (`x-kde-passwordManagerHint`,
+  as KeePassXC does) and a copy made in a window hidden from captures are never read by the
+  compositor: not kept after their app closes and not in the history. Any process of yours can
+  read the history through the shell socket (`infynitae msg clipboard`), as it could read
+  cliphist's files. With a compositor from before 2026-11-25 the history is cliphist's, on disk.
 
 ## Drives named in /etc/fstab
 

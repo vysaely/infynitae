@@ -518,15 +518,16 @@ START_TERMINAL="true"
     # options: true  · false
 
 CLIPBOARD_PERSIST="true"
-    # Keep the clipboard after the app that copied closes (needs wl-clip-persist) [reload]
+    # Keep the clipboard after the app that copied closes: the compositor keeps a copy of its
+    # text and image, up to 32 MiB (an older compositor needs wl-clip-persist) [reload]
     # default: true
     # options: true  · false
 
 CLIPBOARD_HISTORY="true"
-    # Super+V clipboard history (needs cliphist and wl-paste) [reload]
-    # It is kept on disk. A password copied from a password manager stays out of it only
-    # when wl-clipboard (2.2 or newer) and cliphist both honour the manager's "sensitive"
-    # hint (CLIPBOARD_STATE); if yours do not, set this to false if you copy passwords
+    # Super+V clipboard history, kept by the compositor in memory until you log out: the last
+    # 300 copies, 64 MiB at most (an older compositor needs cliphist and wl-paste) [reload]
+    # A password manager's copy (KeePassXC marks it) and a copy from a window hidden from
+    # captures (PRIVACY_APPS) stay out of it
     # default: true
     # options: true  · false
 
