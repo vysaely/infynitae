@@ -36,11 +36,6 @@ XKB_DEFAULT_OPTIONS=""
     #   ""        none
     #    e.g. "grp:alt_shift_toggle,caps:swapescape"
 
-NIGHT_LIGHT_TEMP="4000"
-    # Night light's colour in kelvin (the nightlight switch in the control panel, or
-    # `infynitae msg night-light`): lower is warmer
-    # default: 4000   (6500 is daylight, 3000 very warm)
-
 KEYBOARD_REPEAT_DELAY="200"
     # Milliseconds before a held key repeats
     # default: 200
@@ -122,10 +117,10 @@ FOCUS_ON_ACTIVATE="user"
     #              (a link from Discord in the browser) only marks it
     #    always    · never
 
-FOCUS_CYCLE_NAVIGATE="1"
+FOCUS_CYCLE_NAVIGATE="true"
     # Super+Tab also centres the camera on the window (always on a window asking for attention)
-    # default: 1
-    # options: 1  · 0
+    # default: true
+    # options: true  · false   (1 and 0, the older spelling, still work)
 
 PLACEMENT_POLICY="cluster"
     # Where a new window goes
@@ -459,6 +454,11 @@ ZOOM_SHARPEN="after"
     #   after   once the zoom stops, at a whole scale (2x, 3x): text does not shift while zooming
     #   live    at each step while zooming (finer steps; a terminal re-flows its text at each)
 
+NIGHT_LIGHT_TEMP="4000"
+    # Night light's colour in kelvin (the nightlight switch in the control panel, or
+    # `infynitae msg night-light`): lower is warmer
+    # default: 4000   (6500 is daylight, 3000 very warm)
+
 VRR_ENABLED="auto"
     # Variable refresh rate (FreeSync)
     # default: auto
@@ -547,6 +547,7 @@ POLKIT_AGENT="auto"
     #   auto    infynitae-polkit  · none / false  · a path
 
 SCREENSHOT_DIR="$HOME/Pictures/Screenshots"
+    # Where screenshots are saved (Super+S, Super+Shift+S)
     # default: "$HOME/Pictures/Screenshots"
     # options: "$HOME/Pictures/Screenshots"  · any folder
 
@@ -709,7 +710,8 @@ PANELS_OVERLAP="false"
 # ═══ Lock & idle ═══════════════════════════════════════════════════════════════════ [save] ═══
 
 IDLE_SLEEP_TIMEOUT_MIN="15"
-    # Screens off after this many idle minutes
+    # Screens turn off after this many minutes without input; the PC keeps running (it does not
+    # sleep, whatever the name says)
     # default: 15
     # options: 15  · 0 never  · any number
 
@@ -836,14 +838,18 @@ REMOTE_DESKTOP="false"
 # infynitae-reload recorder.
 
 ENABLE_REPLAY_BUFFER="false"
+    # Keep the last minutes of the screen, so Super+Alt+C can save them as a clip. Off by default:
+    # it holds memory (or disk) and encodes all the time. Recording (Super+Alt+P) works without it
     # default: false
     # options: false  · true
 
 REPLAY_BUFFER_MINUTES="20"
+    # How many minutes the replay buffer keeps (a saved clip is this long at most)
     # default: 20
     # options: 20  · any number
 
 REPLAY_DIR="auto"
+    # Where the compositor's capture (REPLAY_BACKEND="infynitae") keeps the buffer's pieces
     # default: "auto"
     #   "auto"                         (RAM; on a machine whose RAM it would fill a quarter of,
     #                                   the disk cache ~/.cache/infynitae-replay)  · any folder
@@ -865,10 +871,12 @@ REPLAY_STORAGE="ram"
     # options: unset (commented)  · any folder
 
 CLIPS_DIR="$HOME/Videos/Clips"
+    # Where saved replay clips go
     # default: "$HOME/Videos/Clips"
     # options: "$HOME/Videos/Clips"  · any folder
 
 RECORDINGS_DIR="$HOME/Videos/Recordings"
+    # Where recordings (Super+Alt+P) go
     # default: "$HOME/Videos/Recordings"
     # options: "$HOME/Videos/Recordings"  · any folder
 
@@ -883,10 +891,13 @@ REPLAY_BACKEND="auto"
     #                         the GPU costs the compositor time on every frame)
 
 RECORD_FPS="60"
+    # Frames per second of the replay buffer and recordings
     # default: 60
     # options: 60  · e.g. 30, 120
 
 RECORD_CODEC="hevc"
+    # The video format. A GPU without HEVC encodes H.264 instead (or AV1, when gpu-screen-recorder
+    # finds only that); one that encodes none of them leaves H.264 to the CPU, which costs CPU time
     # default: hevc
     # options: hevc  · auto  · av1  · h264
 

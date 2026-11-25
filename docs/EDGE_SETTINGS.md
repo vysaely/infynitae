@@ -267,7 +267,7 @@ names in `/usr/share/X11/xkb/rules/evdev.lst` is a later step.
 | Super+Enter | Words | `SUPER_ENTER_ACTION` | Maximize, Fit | save |
 | M The view follows a new window | Pick | `TELEPORT_ON_OPEN` | Only ones you opened `user`, Always `1`, Never `0` | save |
 | M An app asks for the focus | Pick | `FOCUS_ON_ACTIVATE` | From you `user`, Always, Never | save |
-| M Super+Tab moves the view | Switch | `FOCUS_CYCLE_NAVIGATE` | `1` / `0` | save |
+| M Super+Tab moves the view | Switch | `FOCUS_CYCLE_NAVIGATE` | `true` / `false` (an older `1`, `yes` or `on` shows on: a true/false switch reads them as the compositor does) | save |
 | M Dragging the canvas | Pick | `PAN_MODE` | Pointer moves with it `free`, Pointer stays `grab`, Grip `rts` | save |
 | M Pan out of fullscreen | Switch | `FULLSCREEN_PAN` | | save |
 | M Keep on top | Text | `KEEP_ON_TOP` | Titles or apps, with commas | save |

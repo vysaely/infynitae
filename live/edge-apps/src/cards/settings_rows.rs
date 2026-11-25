@@ -387,6 +387,13 @@ fn fmt_number(v: f64) -> String {
     }
 }
 
+/// Whether a switch shows on: its own word, or for a true/false switch any word the compositor
+/// reads as on (parse_bool: 1, yes, on), so an older "1" line still shows on.
+fn switch_on(value: &str, on: &str) -> bool {
+    value.eq_ignore_ascii_case(on)
+        || (on == "true" && ["1", "yes", "on"].iter().any(|w| value.eq_ignore_ascii_case(w)))
+}
+
 fn snap(v: f64, min: f64, max: f64, step: f64) -> f64 {
     let v = v.clamp(min, max);
     if step > 0.0 {
@@ -450,7 +457,7 @@ impl Card for TableCard {
             let changed = !self.is_default(i) || self.restart.contains(s.key);
             match s.control {
                 Control::Switch { on, .. } => {
-                    let is_on = self.value(i).eq_ignore_ascii_case(on);
+                    let is_on = switch_on(&self.value(i), on);
                     ui::row(
                         cr,
                         cx,
@@ -647,7 +654,7 @@ impl Card for TableCard {
                 };
                 match s.control {
                     Control::Switch { on, off } => {
-                        let is_on = self.value(i).eq_ignore_ascii_case(on);
+                        let is_on = switch_on(&self.value(i), on);
                         self.set(i, if is_on { off } else { on }.to_string(), out);
                         true
                     }
@@ -1079,7 +1086,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    #[ignore = "AUDIT_CONFIG: Switch row only matches exact `on` token instead of bool aliases"]
     fn audit_config_switch_accepts_shell_bool_tokens() {
         let th = Theme::from_config(&crate::config::Config::from_text(""));
         let cx = test_cx(&th);
