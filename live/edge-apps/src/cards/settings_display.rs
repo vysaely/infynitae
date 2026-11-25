@@ -63,15 +63,6 @@ pub const TABLE: &[Setting] = &[
         needs: &[],
     },
     Setting {
-        name: "Sharper when zoomed in",
-        says: "",
-        key: "MAX_APP_SCALE",
-        control: Control::Pick(&[("1", "Never"), ("2", "2x"), ("3", "3x")]),
-        after: After::Save,
-        more: true,
-        needs: &[],
-    },
-    Setting {
         name: "Zoomed windows",
         says: "",
         key: "SCALING_FILTER",
@@ -2295,17 +2286,12 @@ mod tests {
         assert_eq!(headers.len(), 2);
         assert_eq!(headers[1].1, "All screens");
 
-        // At Size::M without wlr-randr, Order & VRR remain hidden while Sharper & Zoomed show.
+        // At Size::M without wlr-randr, Order & VRR remain hidden while Zoomed shows.
         let (rows_m, _, has_more_m) = card.build_layout(&cx_m);
         let names_m: Vec<_> = rows_m.iter().map(|r| r.name).collect();
         assert_eq!(
             names_m,
-            vec![
-                "Scale",
-                "Night light warmth",
-                "Sharper when zoomed in",
-                "Zoomed windows"
-            ]
+            vec!["Scale", "Night light warmth", "Zoomed windows"]
         );
         assert!(!has_more_m);
 
@@ -2346,7 +2332,6 @@ mod tests {
                 "VRR_ENABLED",
                 "NIGHT_LIGHT_TEMP",
                 "OUTPUT_ORDER",
-                "MAX_APP_SCALE",
                 "SCALING_FILTER",
             ]
         );
@@ -2367,7 +2352,7 @@ mod tests {
         let (q_rows, _, q_has_more) = card2.build_layout(&cx_s);
         assert!(!q_has_more);
         let q_keys: Vec<_> = q_rows.iter().map(|r| r.key.as_str()).collect();
-        assert_eq!(q_keys, vec!["MAX_APP_SCALE", "SCALING_FILTER"]);
+        assert_eq!(q_keys, vec!["SCALING_FILTER"]);
 
         assert!(card2.event(&Event::Text("no_such_setting"), &cx_s, &mut out));
         assert_eq!(card2.status(&cx_s), Status::Hidden);

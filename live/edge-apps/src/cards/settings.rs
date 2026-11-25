@@ -57,6 +57,7 @@ const KINDS: &[CardKind] = &[
     crate::cards::settings_lock::KIND,
     crate::cards::settings_windows::KIND,
     crate::cards::settings_keys::KIND,
+    crate::cards::settings_advanced::KIND,
 ];
 
 impl Provider for Settings {
@@ -105,6 +106,9 @@ impl Provider for Settings {
                 crate::cards::settings_windows::TABLE,
             ))),
             "keys" => Some(Box::new(crate::cards::settings_keys::KeysCard::new())),
+            "advanced" => Some(Box::new(crate::cards::settings_rows::TableCard::new(
+                crate::cards::settings_advanced::TABLE,
+            ))),
             "network" => Some(Box::new(NetworkCard::default())),
             "bluetooth" => Some(Box::new(BluetoothCard::default())),
             "power" => Some(Box::new(PowerCard::default())),

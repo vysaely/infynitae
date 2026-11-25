@@ -6,7 +6,7 @@
 //! Hit ID scheme:
 //! - `1..50` (`HIT_GROUP_BASE + group_idx`): group rows in GROUPS' order (`1` Personalization,
 //!   then one row per other card: Display, Keyboard and mouse, Windows, Keys, Apps, Games, Lock
-//!   and sleep, Privacy, Recording).
+//!   and sleep, Privacy, Recording, Advanced).
 //! - `50` (`HIT_OPEN_CONFIG`): `"Open the config file"` row.
 //! - `100..CHILD_STRIDE` (`HIT_FILE_BASE + idx`): `"In the file"` search rows.
 //! - `CHILD_STRIDE * (child_idx + 1) + child_hit` (`CHILD_STRIDE = 100_000`): child hits routed to
@@ -15,9 +15,9 @@
 
 use crate::card::{Action, Button, Card, Cx, Event, Hits, Rect, Status};
 use crate::cards::{
-    settings, settings_apps, settings_display, settings_games, settings_input, settings_keys,
-    settings_lock, settings_look, settings_privacy, settings_recording, settings_rows,
-    settings_windows,
+    settings, settings_advanced, settings_apps, settings_display, settings_games, settings_input,
+    settings_keys, settings_lock, settings_look, settings_privacy, settings_recording,
+    settings_rows, settings_windows,
 };
 use crate::draw::{self, Text};
 use crate::provider::{CardKind, Size};
@@ -53,7 +53,7 @@ struct Group {
     children: &'static [usize],
 }
 
-const GROUPS: [Group; 10] = [
+const GROUPS: [Group; 11] = [
     Group {
         title: "Personalization",
         children: &[0, 1, 2],
@@ -94,6 +94,10 @@ const GROUPS: [Group; 10] = [
         title: settings_recording::KIND.title,
         children: &[11],
     },
+    Group {
+        title: settings_advanced::KIND.title,
+        children: &[12],
+    },
 ];
 
 pub const KIND: CardKind = CardKind {
@@ -122,7 +126,7 @@ pub const KIND: CardKind = CardKind {
 };
 
 /// Child cards owned by `settings/all`, in section 1's order.
-pub const CHILD_KINDS: [CardKind; 12] = [
+pub const CHILD_KINDS: [CardKind; 13] = [
     settings_look::KIND_APPEARANCE,
     settings_look::KIND_WALLPAPER,
     settings_look::KIND_FONTS,
@@ -135,6 +139,7 @@ pub const CHILD_KINDS: [CardKind; 12] = [
     settings_lock::KIND,
     settings_privacy::KIND,
     settings_recording::KIND,
+    settings_advanced::KIND,
 ];
 
 fn make_children() -> Vec<Box<dyn Card>> {
@@ -151,6 +156,7 @@ fn make_children() -> Vec<Box<dyn Card>> {
         Box::new(settings_lock::LockCard::default()),
         Box::new(settings_privacy::PrivacyCard::new()),
         Box::new(settings_recording::RecordingCard::new()),
+        Box::new(settings_rows::TableCard::new(settings_advanced::TABLE)),
     ]
 }
 
@@ -387,6 +393,23 @@ impl SettingsAllCard {
                         .unwrap_or_default()
                 };
                 vec![focus, open]
+            }
+            "advanced" => {
+                let n = settings_advanced::TABLE
+                    .iter()
+                    .filter(|s| {
+                        cfg.now
+                            .get(s.key)
+                            .is_some_and(|v| Some(v) != cfg.default.get(s.key))
+                    })
+                    .count();
+                if n == 0 {
+                    vec!["Defaults".to_string()]
+                } else if n == 1 {
+                    vec!["1 changed".to_string()]
+                } else {
+                    vec![format!("{n} changed")]
+                }
             }
             "keys" => {
                 let n = cfg
@@ -1197,6 +1220,7 @@ pub(crate) fn on_any_card(key: &str) -> bool {
         settings_lock::TABLE,
         settings_privacy::TABLE,
         settings_recording::TABLE,
+        settings_advanced::TABLE,
     ]
     .into_iter()
     .any(|t| t.iter().any(|s| s.key == key))
@@ -1282,7 +1306,7 @@ pub(crate) fn parse_user_lines(user_text: &str) -> HashMap<String, usize> {
 /// The word a card shows for a value (its Pick label), so a summary says what the card says.
 fn shown_word(key: &str, value: &str) -> Option<&'static str> {
     use super::settings_rows::Control;
-    let tables: [&[super::settings_rows::Setting]; 8] = [
+    let tables: [&[super::settings_rows::Setting]; 9] = [
         super::settings_games::TABLE,
         super::settings_windows::TABLE,
         super::settings_input::TABLE,
@@ -1291,6 +1315,7 @@ fn shown_word(key: &str, value: &str) -> Option<&'static str> {
         super::settings_display::TABLE,
         super::settings_apps::TABLE,
         super::settings_recording::TABLE,
+        super::settings_advanced::TABLE,
     ];
     tables
         .iter()
@@ -1534,6 +1559,7 @@ mod tests {
             "lock",
             "privacy",
             "recording",
+            "advanced",
         ];
         let actual_order: Vec<&str> = CHILD_KINDS.iter().map(|k| k.id).collect();
         assert_eq!(actual_order, expected_order);
@@ -1606,9 +1632,9 @@ mod tests {
         let mut card = SettingsAllCard::with_paths(def_file, cfg_file);
         assert_eq!(card.status(&cx), Status::Loading);
 
-        // First with all 10 groups visible: 10 groups + Open the config file = 11 rows
+        // First with all 11 groups visible: 11 groups + Open the config file = 12 rows
         apply_all_sources(&mut card, &dir, &cfg);
-        assert_eq!(draw_card(&card, &cx, 404.0).0, 11.0 * ui::ROW_H);
+        assert_eq!(draw_card(&card, &cx, 404.0).0, 12.0 * ui::ROW_H);
 
         // Omit local_recorder -> recording returns Status::Hidden and its row disappears
         card.apply(
@@ -1621,8 +1647,8 @@ mod tests {
         assert_eq!(card.status(&cx), Status::Ready);
 
         let (h_closed, hits_closed) = draw_card(&card, &cx, 404.0);
-        // 9 visible groups + Open the config file
-        assert_eq!(h_closed, 10.0 * ui::ROW_H);
+        // 10 visible groups + Open the config file
+        assert_eq!(h_closed, 11.0 * ui::ROW_H);
         assert!(!hits_closed
             .list
             .iter()
@@ -1773,9 +1799,9 @@ mod tests {
         let matches = card.matching_file_entries();
         assert_eq!(matches[0].key, "BORDER_IGNORE_CSD");
 
-        // Also test key-name search (e.g. OVERLAY_PLANES)
-        card.event(&Event::Text("OVERLAY_PLANES"), &cx, &mut out);
-        assert_eq!(card.matching_file_entries()[0].key, "OVERLAY_PLANES");
+        // Also test key-name search (e.g. GPU_RELIEF)
+        card.event(&Event::Text("GPU_RELIEF"), &cx, &mut out);
+        assert_eq!(card.matching_file_entries()[0].key, "GPU_RELIEF");
         card.event(&Event::Text("border around apps"), &cx, &mut out);
         let _ = draw_card(&card, &cx, 404.0);
 
@@ -2125,6 +2151,37 @@ mod tests {
             .any(|(id, _)| (3 * CHILD_STRIDE..4 * CHILD_STRIDE).contains(id)));
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Advanced is the last group, its keys are on a card (not "In the file"), and its summary
+    /// counts the lines that differ from the shipped defaults.
+    #[test]
+    fn advanced_is_the_last_group_and_counts_changed_lines() {
+        assert_eq!(GROUPS[GROUPS.len() - 1].title, "Advanced");
+        assert!(on_any_card("OVERLAY_PLANES"));
+        assert!(on_any_card("SCREEN_LOCKER"));
+
+        let th = Theme::from_config(&Config::from_text(""));
+        let cx = test_cx(&th);
+        let defaults = parse_config("OVERLAY_PLANES=\"false\"\nFRAME_GUARD=\"33\"\n");
+        let mut card = SettingsAllCard::with_paths(
+            PathBuf::from("/nonexistent/d"),
+            PathBuf::from("/nonexistent/c"),
+        );
+        let last = GROUPS.len() - 1;
+        for (now, says) in [
+            ("OVERLAY_PLANES=\"false\"\n", "Defaults"),
+            ("OVERLAY_PLANES=\"true\"\n", "1 changed"),
+            ("OVERLAY_PLANES=\"true\"\nFRAME_GUARD=\"0\"\n", "2 changed"),
+        ] {
+            let cfg = crate::cards::settings_rows::ConfigData {
+                now: parse_config(now),
+                default: defaults.clone(),
+                programs: Default::default(),
+            };
+            card.apply("config", &cfg);
+            assert_eq!(card.summary(last, &cx), says, "{now}");
+        }
     }
 
     #[test]

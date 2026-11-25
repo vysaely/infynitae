@@ -1,6 +1,6 @@
 //! Settings: Games (docs/EDGE_SETTINGS.md, `settings/games`): the "Performance & latency" keys of
 //! config/config a person changes. Left to the file: GAME_QUIET, GPU_RELIEF, LATENCY,
-//! DIRECT_SCANOUT, FIT_IS_FULLSCREEN, HARDWARE_CURSOR, FRAME_GUARD, OVERLAY_PLANES, LATENCY_STATS.
+//! LATENCY_STATS; the expert ones are on `settings/advanced`.
 
 use super::settings_rows::{After, Control, Setting};
 use crate::provider::{CardKind, Size};

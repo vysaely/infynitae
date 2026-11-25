@@ -250,22 +250,6 @@ SWITCH_LOOK="rows"
     # default: rows
     # options: rows (an icon, its name and state)  · icons  · tiles
 
-CLIP_TO_GEOMETRY="true"
-    # Windows are drawn only inside their own edges, not in the margins apps keep for shadows
-    # default: true
-    #   true     clipped
-    #    false   whole buffer (stale pixels there can show as black blocks)
-
-WINE_TRANSPARENCY="true"
-    # No black boxes behind Wine/Proton/X11 layered windows
-    # default: true
-    # options: true  · false
-
-FORCE_TRANSPARENT_APPS=""
-    # More apps blended that way (by app id or title, comma separated)
-    # default: ""
-    #   ""    none  · e.g. "steam_app"
-
 
 # ═══ Performance & latency ═════════════════════════════════════════════════════════ [save] ═══
 
@@ -284,11 +268,6 @@ LATENCY_STATS="false"
     # default: false
     # options: false  · true
 
-DIRECT_SCANOUT="true"
-    # A fullscreen game's frames go straight to the screen
-    # default: true
-    # options: true  · false
-
 TEARING="true"
     # A fullscreen game shows each frame at once (lowest latency, a visible tear line)
     # default: true (as Windows: the game's own vsync setting decides)
@@ -296,16 +275,6 @@ TEARING="true"
     #            asking; Super+Shift+O turns it off for one window
     #    true    when it asks (vsync off) or after Super+Shift+O on its window
     #    false   never
-
-FIT_IS_FULLSCREEN="true"
-    # A window that exactly fills the screen, with no transparency, is treated as fullscreen though it
-    # never asked: shown directly when possible, and tearing applies, with game mode if it tears. It stops when it stops fitting.
-    # default: true
-
-FRAME_GUARD="33"
-    # LATENCY off: how late in a refresh, in percent, a frame waits for the next refresh instead of
-    # risking a miss. 0 turns it off; a quarter of it applies while a window is shown directly.
-    # default: 33
 
 GAME_MODE="true"
     # While a game is fullscreen, gamemode runs the CPU at full speed (when installed); ends
@@ -332,18 +301,6 @@ BACKGROUND_PRIORITY="true"
     # back when you see one (never a shared window, the game, or X11 apps)
     # default: true
     # options: true  · false
-
-HARDWARE_CURSOR="true"
-    # The cursor on the GPU's own cursor layer: it moves without a redraw, and a fullscreen game
-    # under it still goes to the screen directly (tearing, game mode)
-    # default: true
-    #   true     GPU cursor layer
-    #    false   drawn into the frame
-
-OVERLAY_PLANES="false"
-    # Also put windows' buffers on overlay planes
-    # default: false
-    # options: false  · true (on AMD this dropped frames whenever Electron apps like Discord drew)
 
 
 # ═══ Look ══════════════════════════════════════════════════════════════════════════ [reload] ═══
@@ -439,18 +396,6 @@ SCALING_FILTER="sharp"
     #   fsr        zoomed in: AMD FSR 1 (EASU + mild RCAS) · zoomed out: cached averaging
     #   fsr-sharp  zoomed in: AMD FSR 1 (EASU + stronger RCAS) · zoomed out: cached averaging
     #   (nearest and linear are accepted aliases for sharp and smooth)
-
-MAX_APP_SCALE="1"
-    # Apps redraw sharper as you zoom in, up to this scale
-    # default: 1
-    # options: 1 never: zooming only scales what is drawn (text soft when zoomed in, never
-    #            shifts)  · 2  · 3 sharper, apps redraw as you zoom (see ZOOM_SHARPEN)  · 4 …
-
-ZOOM_SHARPEN="after"
-    # When apps redraw sharper as you zoom
-    # default: after
-    #   after   once the zoom stops, at a whole scale (2x, 3x): text does not shift while zooming
-    #   live    at each step while zooming (finer steps; a terminal re-flows its text at each)
 
 NIGHT_LIGHT_TEMP="4000"
     # Night light's colour in kelvin (the nightlight switch in the control panel, or
@@ -549,11 +494,6 @@ SCREENSHOT_DIR="$HOME/Pictures/Screenshots"
     # default: "$HOME/Pictures/Screenshots"
     # options: "$HOME/Pictures/Screenshots"  · any folder
 
-SCREENSHOT_CMD=""
-    # Super+Shift+S or Print: the whole screen
-    # default: ""
-    #   ""    grim  · a command (it gets the file path)
-
 FREEZE_SCREENSHOT="true"
     # Super+S (or Super+Shift+R): the screen stays frozen at the key press while you pick the
     # region
@@ -603,11 +543,6 @@ TRAY_CARD="menu"
     # app's own [reload]
     # default: menu
     # options: menu  · menu-first (its menu, then its card)  · card-first
-
-MONITOR_LOG_DIR=""
-    # Folder of lab*.log files shown by the System monitor GPU card; empty reads none [use]
-    # default: ""
-    # options: ""  · a folder path
 
 NOTIFICATIONS="auto"
     # Who shows notifications [reload]: the edge's own pop-ups (top right, in the system's
@@ -720,11 +655,6 @@ SHUTDOWN_SCREEN="true"
     # Show the "Rebooting…" / "Shutting down…" screen on reboot or power off [use]
     # default: true
     # options: true  · false
-
-SCREEN_LOCKER="auto"
-    # Super+Shift+L [use]
-    # default: auto
-    #   auto    infynitae-lock  · a command
 
 START_LOCKED="false"
     # Start the session at the lock screen [at login]
@@ -894,13 +824,6 @@ RECORD_AUDIO="desktop"
     #RECORD_NOTIFY="false"   no notification when recording starts, stops or a clip is saved
 
 
-UPDATE_SIGNING_KEY=""
-    # infynitae-update takes a new version only when its commit is signed by this key [use]
-    # default: ""   (any version from the repository, as before)
-    # options: ""  · a GnuPG fingerprint · an SSH key as git shows it (SHA256:..., with
-    #            gpg.ssh.allowedSignersFile set in git)
-
-
 # ═══ Key bindings ══════════════════════════════════════════════════════════════════ [save] ═══
 # The built-in keys follow one rule: often used on the left hand, rare on the right.
 #   Often:  Super+Tab  last two windows (a window asking for attention first)
@@ -953,3 +876,84 @@ XWAYLAND_KEYS="modifiers"
 # ═══ Your own scripts ═══
 # ~/.config/infynitae/autostart.sh   run at session start (bars, notifications…)
 # ~/.config/infynitae/launch.sh      handles every shortcut action instead of the built-in one
+
+
+# ═══ Advanced ═════════════════════════════════════════════════════════════════════ [save] ═══
+# Workarounds for particular apps, drivers and GPUs, and commands that replace a built-in part.
+# The Settings app shows them under Advanced.
+
+CLIP_TO_GEOMETRY="true"
+    # Windows are drawn only inside their own edges, not in the margins apps keep for shadows
+    # default: true
+    #   true     clipped
+    #    false   whole buffer (stale pixels there can show as black blocks)
+
+WINE_TRANSPARENCY="true"
+    # No black boxes behind Wine/Proton/X11 layered windows
+    # default: true
+    # options: true  · false
+
+FORCE_TRANSPARENT_APPS=""
+    # More apps blended that way (by app id or title, comma separated)
+    # default: ""
+    #   ""    none  · e.g. "steam_app"
+
+DIRECT_SCANOUT="true"
+    # A fullscreen game's frames go straight to the screen
+    # default: true
+    # options: true  · false
+
+FIT_IS_FULLSCREEN="true"
+    # A window that exactly fills the screen, with no transparency, is treated as fullscreen though it
+    # never asked: shown directly when possible, and tearing applies, with game mode if it tears. It stops when it stops fitting.
+    # default: true
+
+FRAME_GUARD="33"
+    # LATENCY off: how late in a refresh, in percent, a frame waits for the next refresh instead of
+    # risking a miss. 0 turns it off; a quarter of it applies while a window is shown directly.
+    # default: 33
+
+HARDWARE_CURSOR="true"
+    # The cursor on the GPU's own cursor layer: it moves without a redraw, and a fullscreen game
+    # under it still goes to the screen directly (tearing, game mode)
+    # default: true
+    #   true     GPU cursor layer
+    #    false   drawn into the frame
+
+OVERLAY_PLANES="false"
+    # Also put windows' buffers on overlay planes
+    # default: false
+    # options: false  · true (on AMD this dropped frames whenever Electron apps like Discord drew)
+
+MAX_APP_SCALE="1"
+    # Apps redraw sharper as you zoom in, up to this scale
+    # default: 1
+    # options: 1 never: zooming only scales what is drawn (text soft when zoomed in, never
+    #            shifts)  · 2  · 3 sharper, apps redraw as you zoom (see ZOOM_SHARPEN)  · 4 …
+
+ZOOM_SHARPEN="after"
+    # When apps redraw sharper as you zoom
+    # default: after
+    #   after   once the zoom stops, at a whole scale (2x, 3x): text does not shift while zooming
+    #   live    at each step while zooming (finer steps; a terminal re-flows its text at each)
+
+SCREENSHOT_CMD=""
+    # Super+Shift+S or Print: the whole screen [use]
+    # default: ""
+    #   ""    infynitae-shot, else grim  · a command (it gets the file path)
+
+MONITOR_LOG_DIR=""
+    # Folder of lab*.log files shown by the System monitor GPU card; empty reads none [use]
+    # default: ""
+    # options: ""  · a folder path
+
+SCREEN_LOCKER="auto"
+    # Super+Shift+L [use]
+    # default: auto
+    #   auto    infynitae-lock  · a command
+
+UPDATE_SIGNING_KEY=""
+    # infynitae-update takes a new version only when its commit is signed by this key [use]
+    # default: ""   (any version from the repository, as before)
+    # options: ""  · a GnuPG fingerprint · an SSH key as git shows it (SHA256:..., with
+    #            gpg.ssh.allowedSignersFile set in git)

@@ -1,8 +1,7 @@
 //! Settings: Look (`docs/EDGE_SETTINGS.md` section 4): `settings/appearance`, `settings/wallpaper`,
 //! and `settings/fonts`. Left to the file: `BORDER_ACTIVE`, `SURFACE_COLOR`, `TEXT_COLOR`,
 //! `BORDER_INACTIVE`, `CANVAS_COLOR`, `THEME_SYNC`, `CORNERS`, `SQUARE_CORNERS`,
-//! `BORDER_IGNORE_CSD`, `CLIP_TO_GEOMETRY`, `WINE_TRANSPARENCY`, `FORCE_TRANSPARENT_APPS`,
-//! `SWITCH_LOOK`.
+//! `BORDER_IGNORE_CSD`, `SWITCH_LOOK`.
 
 use super::settings::sq;
 #[cfg(test)]
