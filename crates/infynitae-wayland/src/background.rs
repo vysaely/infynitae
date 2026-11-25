@@ -772,6 +772,10 @@ mod tests {
         };
 
         let mut bg = Background::default();
+        // the worker starts once per session: started here, so the turn timed is a turn's work
+        // (2026-11-25: on a busy CI runner the thread's start alone took about 2 ms)
+        bg.lower_app(u32::MAX, &[]);
+        bg.restore_app(u32::MAX, &[]);
         let started = Instant::now();
         bg.lower_app(pid, &[]);
         let lowering = started.elapsed();
