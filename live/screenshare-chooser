@@ -1,7 +1,9 @@
 #!/bin/sh
-# The screen-sharing portal's chooser (xdg-desktop-portal-wlr, chooser_type=dmenu): it gets one
-# "Monitor: DP-1" or "Window: title (app)" line per source the app asked for and prints the one
-# to share. Written into the portal's config by infynitae-reload from SCREENSHARE_ASK.
+# The screen-sharing portal's chooser: it gets one "Monitor: DP-1" or "Window: title (app)" line
+# per source the app asked for and prints the one to share. infynitae-portal runs it with no
+# arguments: MODE from SCREENSHARE_ASK ("true": ask, else first) and PICKER from MENU_PICKER. A
+# portal from before 2026-11-25 passes screen sharing to xdg-desktop-portal-wlr, whose config
+# (infynitae-reload) names both.
 #
 #   screenshare-chooser first PICKER   an app sharing a screen gets the first one at once; an app
 #                                      asking for a window (Discord's window tab) gets the menu
@@ -11,6 +13,13 @@
 # in the system's look) when the edge runs and the list fits it (12 lines), else fuzzel --dmenu.
 # Nothing printed: the share is cancelled.
 
+if [ $# -eq 0 ]; then
+    [ -f "$HOME/infynitae/live/config.sh" ] && . "$HOME/infynitae/live/config.sh"
+    case "${SCREENSHARE_ASK:-app}" in
+        1 | [Tt][Rr][Uu][Ee] | [Yy][Ee][Ss] | [Oo][Nn]) set -- ask "${MENU_PICKER:-}" ;;
+        *) set -- first "${MENU_PICKER:-}" ;;
+    esac
+fi
 mode="$1"
 picker="${2:-}"
 sources=$(cat)
