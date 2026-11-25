@@ -497,6 +497,12 @@ reload_autorotate() {
 reload_clipboard() {
     stop_matching wl-clip-persist "--clipboard regular"
     stop_matching wl-paste "cliphist store"
+    # a compositor that keeps the clipboard itself reads both settings from the config
+    infy_cli=$(infy_bin infynitae || true)
+    if [ -n "$infy_cli" ] && "$infy_cli" msg clipboard >/dev/null 2>&1; then
+        echo "clipboard: kept by the compositor"
+        return
+    fi
     restarted=0
     if infy_on "${CLIPBOARD_PERSIST:-true}" && command -v wl-clip-persist >/dev/null 2>&1; then
         spawn wl-clip-persist --clipboard regular
