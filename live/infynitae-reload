@@ -259,7 +259,7 @@ reload_bus_watch() {
     a=""
     s=""
     if infy_on "${AUTOMOUNT:-true}"; then
-        a=$(first "$BIN_DIR/infynitae-automount" "$LIVE/infynitae-automount")
+        a=$(first "$BIN_DIR/infynitae-automount" "$LIVE/infynitae-automount") || a=""
         if [ -z "$a" ] && command -v udiskie >/dev/null 2>&1; then
             spawn udiskie --no-tray --notify
             echo "automount: restarted"
@@ -268,11 +268,11 @@ reload_bus_watch() {
         echo "automount: stopped"
     fi
     if infy_on "${LOCK_WHEN_AWAY:-${SLEEP_LOCK:-true}}"; then
-        s=$(first "$BIN_DIR/infynitae-sleep-lock" "$LIVE/infynitae-sleep-lock")
+        s=$(first "$BIN_DIR/infynitae-sleep-lock" "$LIVE/infynitae-sleep-lock") || s=""
     else
         echo "sleep-lock: stopped (LOCK_WHEN_AWAY is off)"
     fi
-    w=$(first "$BIN_DIR/infynitae-bus-watch")
+    w=$(first "$BIN_DIR/infynitae-bus-watch") || w=""
     if [ -n "$w" ] && [ -n "$a$s" ]; then
         set --
         [ -n "$a" ] && set -- --udisks "$a"
@@ -282,8 +282,8 @@ reload_bus_watch() {
         [ -n "$a" ] && spawn "$a"
         [ -n "$s" ] && spawn "$s"
     fi
-    [ -n "$a" ] && echo "automount: restarted"
-    [ -n "$s" ] && echo "sleep-lock: restarted"
+    [ -z "$a" ] || echo "automount: restarted"
+    [ -z "$s" ] || echo "sleep-lock: restarted"
 }
 
 reload_notifications() {
