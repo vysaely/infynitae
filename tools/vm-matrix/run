@@ -1,0 +1,244 @@
+#!/bin/sh
+# tools/vm-matrix/run: boots the test VM in several shapes, one after another, and runs a smoke
+# check and the existing VM tests in each. Results in one table: shape, check, result, screenshot.
+#
+#   tools/vm-matrix/run                  every shape
+#   tools/vm-matrix/run scale-2 laptop   only these
+#   tools/vm-matrix/run --dry-run [...]  print the qemu lines and what each shape changes, run nothing
+#   tools/vm-matrix/run --list           the shapes
+#
+# The VM is the test VM in VM_DIR (default ~/.cache/infynitae-vm/run: disk.qcow2, key, user tester).
+# Each shape boots a throwaway copy-on-write layer over disk.qcow2 (qemu-img), so the shapes do not
+# change the VM's disk or each other. Software rendering (virtio-vga, no 3D): the host GPU stays free.
+# SSH on 127.0.0.1:2222 and the screen on VNC 127.0.0.1:5901 (VM_DIR/watch.sh), as vm.sh uses, so
+# only one VM may run at a time. Results go to OUT (default VM_DIR/matrix/DATE-TIME).
+# Environment: EVERYDAY_TESTS and VM_EDGE_TESTS replace the default test lists below; KEEP_DISKS=1
+# keeps each shape's layer.
+set -u
+
+REPO_DIR=$(cd "$(dirname "$0")/../.." && pwd)
+VM_DIR=${VM_DIR:-$HOME/.cache/infynitae-vm/run}
+OUT=${OUT:-$VM_DIR/matrix/$(date +%Y%m%d-%H%M%S)}
+PORT=2222
+SHAPES="scale-1 scale-1.25 scale-1.5 scale-2 two-screens odd-1366x768 laptop no-xwayland"
+# tests from tools/everyday-use-tests that leave the session running (not menu_logout, menu_reboot,
+# menu_poweroff) and need no app beyond a terminal, mousepad and xterm
+EVERYDAY_DEFAULT="spawn_keys screenshots focus_switching new_window_after_pan dialog_placement camera_keys"
+# tools/vm-edge scripts that take no argument; the ones built on ~/g/feat.py run only where the VM has it
+VM_EDGE_DEFAULT="plock.py ptwo.py poverview.py pflow.py pchild.py pwidgets.py pshot.py ptime.py"
+
+usage() { sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; }
+
+# shape NAME: sets RES (the first screen), HEADS, SCALES (per screen, comma-separated), CONFIG
+# (lines appended to the guest's ~/.config/infynitae/config), SMOKE (smoke.py's arguments) and EXTRA
+# (everyday tests for this shape only)
+shape() {
+    RES=1920x1080 HEADS=1 CONFIG="" EXTRA="" SMOKE=""
+    case "$1" in
+        scale-1 | scale-1.25 | scale-1.5 | scale-2)
+            SCALES=${1#scale-}
+            CONFIG="OUTPUT_SCALE=\"$SCALES\""
+            ;;
+        two-screens)
+            # both 1920x1080, Virtual-2 to the right at 1.5: one desktop over two scales
+            HEADS=2 SCALES=1,1.5 EXTRA=two_screens
+            CONFIG="OUTPUT_VIRTUAL_1_SCALE=\"1\"
+OUTPUT_VIRTUAL_2_SCALE=\"1.5\"
+OUTPUT_VIRTUAL_2_MODE=\"1920x1080\"
+OUTPUT_LAYOUT=\"left-to-right\""
+            ;;
+        odd-1366x768) RES=1366x768 SCALES=1 EXTRA=small_screen ;;
+        laptop)
+            SCALES=1 SMOKE=--laptop
+            CONFIG="TOUCHPAD_TAP=\"true\""
+            ;;
+        no-xwayland)
+            SCALES=1 SMOKE=--no-xwayland
+            CONFIG="XWAYLAND=\"false\""
+            ;;
+        *) return 1 ;;
+    esac
+    SMOKE="--screens $HEADS --scales $SCALES --mode $RES${SMOKE:+ $SMOKE}"
+}
+
+# the qemu line of a shape, as a shell command (vm.sh's machine; its own disk layer, monitor and
+# serial log): --dry-run prints it and run_shape runs the same text
+qemu_line() {
+    w=${RES%x*} h=${RES#*x}
+    gpu="virtio-vga,xres=$w,yres=$h"
+    [ "$HEADS" -gt 1 ] && gpu="$gpu,max_outputs=$HEADS"
+    echo "nice -n 19 qemu-system-x86_64 -enable-kvm -cpu host -smp 4 -m 4096 -machine q35" \
+        "-drive file=$1/disk.qcow2,if=virtio,cache=unsafe" \
+        "-nic user,model=virtio-net-pci,hostfwd=tcp:127.0.0.1:$PORT-:22" \
+        "-smbios 'type=1,serial=ds=nocloud;s=http://10.0.2.2:8765/'" \
+        "-device qemu-xhci -device usb-kbd -device usb-tablet" \
+        "-device $gpu -display none -vnc 127.0.0.1:1" \
+        "-monitor unix:$1/mon.sock,server,nowait -serial file:$1/serial.log"
+}
+
+# a second virtio-gpu screen is only connected once a QEMU window asks for it, and there is none: the
+# guest forces the connector on before tty1 starts the session (the kernel then offers its standard
+# modes; OUTPUT_VIRTUAL_2_MODE picks one)
+SECOND_SCREEN_SCRIPT='for i in $(seq 50); do
+    for s in /sys/class/drm/card*-Virtual-2/status; do
+        [ -e "$s" ] && echo on > "$s" && exit 0
+    done
+    sleep 0.2
+done
+echo "vm-matrix: no Virtual-2 connector" >&2
+exit 1'
+SECOND_SCREEN_UNIT='[Unit]
+Description=vm-matrix: the second virtio-gpu screen connected
+Before=getty@tty1.service
+[Service]
+Type=oneshot
+ExecStart=/bin/sh /etc/vm-matrix-second-screen.sh
+[Install]
+WantedBy=multi-user.target'
+
+DRY=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --dry-run) DRY=1 ;;
+        --list) echo "$SHAPES" | tr ' ' '\n'; exit 0 ;;
+        -h | --help) usage; exit 0 ;;
+        -*) usage >&2; exit 2 ;;
+        *) break ;;
+    esac
+    shift
+done
+[ $# -gt 0 ] && SHAPES="$*"
+for s in $SHAPES; do
+    shape "$s" || { echo "vm-matrix: no shape '$s' (--list shows them)" >&2; exit 2; }
+done
+EVERYDAY_TESTS=${EVERYDAY_TESTS-$EVERYDAY_DEFAULT}
+VM_EDGE_TESTS=${VM_EDGE_TESTS-$VM_EDGE_DEFAULT}
+# the qemu line is shell text with the paths unquoted: spaces in them would break it
+case "$VM_DIR$OUT" in *" "*) echo "vm-matrix: VM_DIR and OUT may not contain spaces" >&2; exit 2 ;; esac
+
+if [ "$DRY" = 1 ]; then
+    for s in $SHAPES; do
+        shape "$s"
+        echo "== $s"
+        echo "qemu-img create -f qcow2 -b $VM_DIR/disk.qcow2 -F qcow2 $OUT/$s/disk.qcow2"
+        qemu_line "$OUT/$s"
+        [ -n "$CONFIG" ] && printf 'config: %s\n' "$CONFIG" | sed '2,$s/^/config: /'
+        [ "$HEADS" -gt 1 ] && echo "guest: vm-matrix-second-screen.service (Virtual-2 forced on)"
+        echo "smoke: sudo -E python3 /home/tester/vm-matrix-smoke.py $SMOKE"
+        echo "everyday: $EVERYDAY_TESTS $EXTRA"
+        echo "vm-edge: $VM_EDGE_TESTS"
+    done
+    exit 0
+fi
+
+for f in disk.qcow2 key; do
+    [ -f "$VM_DIR/$f" ] || { echo "vm-matrix: no $VM_DIR/$f (the test VM)" >&2; exit 1; }
+done
+command -v qemu-img >/dev/null && command -v qemu-system-x86_64 >/dev/null \
+    || { echo "vm-matrix: needs qemu (qemu-img, qemu-system-x86_64)" >&2; exit 1; }
+if ss -ltnH "sport = :$PORT" 2>/dev/null | grep -q .; then
+    echo "vm-matrix: port $PORT is in use: is the test VM already running? Power it off first." >&2
+    exit 1
+fi
+
+O="-q -i $VM_DIR/key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=3 -o BatchMode=yes"
+vm() { ssh $O -p "$PORT" tester@127.0.0.1 "$@"; }
+mkdir -p "$OUT"
+TABLE="$OUT/results.tsv"
+printf 'shape\tcheck\tresult\tscreenshot\n' > "$TABLE"
+row() { printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "${4:--}" >> "$TABLE"; }
+# a guest screenshot path, as copied to the host
+host_shot() { [ -n "$2" ] && echo "$OUT/$1/shots/${2##*/}"; }
+QEMU=""
+trap '[ -n "$QEMU" ] && kill "$QEMU" 2>/dev/null' EXIT INT TERM
+
+# waits until COMMAND succeeds in the guest, at most SECONDS; prints how long it took
+wait_for() {
+    t0=$(date +%s)
+    while ! vm "$2" >/dev/null 2>&1; do
+        kill -0 "$QEMU" 2>/dev/null || return 1
+        [ $(($(date +%s) - t0)) -ge "$1" ] && return 1
+        sleep 3
+    done
+    echo $(($(date +%s) - t0))
+}
+
+run_shape() {
+    s=$1 D="$OUT/$1"
+    shape "$s"
+    mkdir -p "$D/shots"
+    qemu-img create -q -f qcow2 -b "$VM_DIR/disk.qcow2" -F qcow2 "$D/disk.qcow2" || { row "$s" "disk layer" FAIL; return; }
+    qemu_line "$D" > "$D/qemu-line"
+    sh -c "exec $(cat "$D/qemu-line")" 2> "$D/qemu.err" &
+    QEMU=$!
+    if ! took=$(wait_for 240 true); then
+        row "$s" "boots (ssh)" FAIL; kill "$QEMU" 2>/dev/null; wait "$QEMU"; QEMU=""; return
+    fi
+    row "$s" "boots (ssh after ${took} s)" PASS
+    # this shape's settings, the second screen's unit and the repo's test scripts, then a reboot so
+    # the session starts with them
+    printf '\n# vm-matrix shape %s\n%s\n' "$s" "$CONFIG" | vm 'mkdir -p ~/.config/infynitae ~/g && cat >> ~/.config/infynitae/config'
+    if [ "$HEADS" -gt 1 ]; then
+        printf '%s\n' "$SECOND_SCREEN_SCRIPT" | vm 'sudo tee /etc/vm-matrix-second-screen.sh >/dev/null'
+        printf '%s\n' "$SECOND_SCREEN_UNIT" | vm 'sudo tee /etc/systemd/system/vm-matrix-second-screen.service >/dev/null && sudo systemctl enable -q vm-matrix-second-screen.service'
+    fi
+    scp $O -P "$PORT" "$REPO_DIR/tools/vm-matrix/smoke.py" tester@127.0.0.1:vm-matrix-smoke.py
+    scp $O -P "$PORT" "$REPO_DIR/tools/everyday-use-tests" tester@127.0.0.1:g/everyday.py
+    scp $O -P "$PORT" "$REPO_DIR"/tools/vm-edge/*.py tester@127.0.0.1:
+    vm 'rm -rf ~/results; sudo systemctl reboot' 2>/dev/null
+    t0=$(date +%s)
+    while vm true 2>/dev/null; do
+        [ $(($(date +%s) - t0)) -ge 60 ] && break
+        sleep 2
+    done
+    if took=$(wait_for 300 'pgrep -x infynitae-lock'); then
+        row "$s" "session at its lock screen (${took} s after reboot)" PASS
+        sleep 3
+        vm 'tail -n 400 ~/.local/state/infynitae/session.log' > "$D/session-start.log" 2>&1
+        timeout 900 ssh $O -p "$PORT" tester@127.0.0.1 "sudo -E python3 /home/tester/vm-matrix-smoke.py $SMOKE" > "$D/smoke.txt" 2>&1
+        while IFS="$(printf '\t')" read -r res name _ shot; do
+            case "$res" in PASS | FAIL | SKIP) row "$s" "$name" "$res" "$(host_shot "$s" "$shot")" ;; esac
+        done < "$D/smoke.txt"
+        grep -q "^PASS$(printf '\t')session up" "$D/smoke.txt" || row "$s" "smoke check finished" FAIL "$D/smoke.txt"
+        tests="$EVERYDAY_TESTS $EXTRA"
+        if [ -n "${tests# }" ]; then
+            timeout 1800 ssh $O -p "$PORT" tester@127.0.0.1 "sudo -E python3 /home/tester/g/everyday.py $tests" > "$D/everyday.txt" 2>&1
+            # its lines: RESULT name: detail; SEE-SHOT needs a person, INFO is a number to read
+            sed -n 's/^\(PASS\|FAIL\|SEE-SHOT\|INFO\) *\([^:]*\):.*/\1\t\2/p' "$D/everyday.txt" | while IFS="$(printf '\t')" read -r res name; do
+                case "$res" in SEE-SHOT) res=LOOK ;; esac
+                row "$s" "everyday: $name" "$res" "$D/shots"
+            done
+        fi
+        has_feat=$(vm 'test -f ~/g/feat.py && echo yes')
+        for t in $VM_EDGE_TESTS; do
+            if [ "$has_feat" != yes ] && grep -qE 'g/feat\.py|/(pflow|papps|pcards)\.py' "$REPO_DIR/tools/vm-edge/$t"; then
+                row "$s" "vm-edge $t (needs ~/g/feat.py, not in this VM)" SKIP
+                continue
+            fi
+            timeout 900 ssh $O -p "$PORT" tester@127.0.0.1 "cd /home/tester && sudo -E python3 /home/tester/$t" > "$D/vm-edge-$t.txt" 2>&1
+            sed -n 's/^\(PASS\|FAIL\) \(.*\)/\1\t\2/p' "$D/vm-edge-$t.txt" | while IFS="$(printf '\t')" read -r res name; do
+                row "$s" "vm-edge $t: $(echo "$name" | cut -c1-90)" "$res"
+            done
+            grep -qE '^(PASS|FAIL) ' "$D/vm-edge-$t.txt" || row "$s" "vm-edge $t: no result line" FAIL "$D/vm-edge-$t.txt"
+        done
+        scp -q $O -P "$PORT" 'tester@127.0.0.1:results/*.png' "$D/shots/" 2>/dev/null
+        vm 'tac ~/.local/state/infynitae/session.log | sed "/Starting console compositor/q" | tac' > "$D/session.log" 2>&1
+    else
+        row "$s" "session at its lock screen" FAIL "$D/serial.log"
+        vm 'tail -n 60 ~/.local/state/infynitae/session.log' > "$D/session.log" 2>&1
+    fi
+    vm 'sudo systemctl poweroff' 2>/dev/null
+    t0=$(date +%s)
+    while kill -0 "$QEMU" 2>/dev/null && [ $(($(date +%s) - t0)) -lt 90 ]; do sleep 2; done
+    kill "$QEMU" 2>/dev/null
+    wait "$QEMU" 2>/dev/null
+    QEMU=""
+    [ "${KEEP_DISKS:-0}" = 1 ] || rm -f "$D/disk.qcow2"
+}
+
+for s in $SHAPES; do
+    echo "== $s"
+    run_shape "$s"
+done
+column -t -s "$(printf '\t')" "$TABLE"
+echo "table: $TABLE"
