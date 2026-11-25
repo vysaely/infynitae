@@ -38,6 +38,10 @@ recorded in `~/.config/infynitae/checkout`; without that file (an install from b
 `checkout_dir` (`crates/infynitae-wayland/src/lib.rs`), the edge with `paths::checkout_dir`, the
 portal with `checkout_dir` in `live/portal/remote-desktop.c`. `tools/test-checkout` checks it.
 
+The C helpers (`live/build-helpers.sh`) build against pkg-config libraries: GLib/GIO, wayland-client,
+xkbcommon, cairo, pango, gdk-pixbuf, polkit, PAM, xcb-res, and for the portal's screen sharing
+libpipewire-0.3, gbm and libdrm (since 2026-11-25; installed with PipeWire and Mesa).
+
 ## Tests and checks
 
 All of these run in CI on every push, and all must pass before a change lands on `main`:

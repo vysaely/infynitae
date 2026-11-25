@@ -1,0 +1,51 @@
+#!/bin/sh
+# tools/test-portal-screencast: the portal's own ScreenCast and Screenshot (live/portal/screencast.c,
+# screenshot.c), on a private D-Bus session (dbus-run-session) with a stand-in home and runtime
+# folder and no Wayland display, so nothing reaches the running desktop. Checks what the portal
+# announces (screens and windows, cursor hidden or drawn in), that Screenshot is there, and that
+# a caller other than xdg-desktop-portal is refused. A share itself needs a compositor and
+# PipeWire: the test VM. Run from the repository root.
+set -eu
+REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
+TMP=$(mktemp -d "/tmp/infynitae-test-portal-screencast.XXXXXX")
+trap 'rm -rf "$TMP"' EXIT INT TERM
+P="$REPO_DIR/live/portal"
+cc -O1 -o "$TMP/portal" "$P/infynitae-portal.c" "$P/remote-desktop.c" "$P/settings.c" \
+    "$P/screencast.c" "$P/screenshot.c" "$P/wlr-virtual-pointer-protocol.c" "$P/virtual-keyboard-protocol.c" \
+    "$P/xdg-output-protocol.c" "$P/ext-image-copy-capture-v1-protocol.c" "$P/ext-image-capture-source-v1-protocol.c" \
+    "$P/ext-foreign-toplevel-list-v1-protocol.c" "$P/linux-dmabuf-v1-protocol.c" \
+    $(pkg-config --cflags --libs gio-2.0 gio-unix-2.0 wayland-client xkbcommon libpipewire-0.3 gbm libdrm)
+fail=0
+check() {
+    if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1: expected $3, got $2"; fail=1; fi
+}
+if ! command -v dbus-run-session >/dev/null 2>&1 || ! command -v gdbus >/dev/null 2>&1; then
+    echo "skip: no dbus-run-session or gdbus"
+    exit 0
+fi
+mkdir -p "$TMP/home" "$TMP/run"
+cat > "$TMP/bus.sh" <<'BUS'
+set -u
+D=org.freedesktop.impl.portal.desktop.infynitae O=/org/freedesktop/portal/desktop
+SC=org.freedesktop.impl.portal.ScreenCast SS=org.freedesktop.impl.portal.Screenshot
+env -u WAYLAND_DISPLAY -u DISPLAY HOME="$1" XDG_RUNTIME_DIR="$2" "$3" > "$1/portal.log" 2>&1 &
+pid=$!
+for _ in $(seq 50); do gdbus introspect --session --dest $D --object-path $O 2>/dev/null | grep -q "$SC" && break; sleep 0.1; done
+get() { gdbus call --session --dest $D --object-path $O --method org.freedesktop.DBus.Properties.Get "$1" "$2" 2>&1; }
+echo "types=$(get $SC AvailableSourceTypes)"
+echo "cursors=$(get $SC AvailableCursorModes)"
+echo "version=$(get $SC version)"
+echo "ssversion=$(get $SS version)"
+echo "ss=$(gdbus call --session --dest $D --object-path $O --method $SS.Screenshot /r/1 app '' '{}' 2>&1 | grep -o AccessDenied)"
+echo "sc=$(gdbus call --session --dest $D --object-path $O --method $SC.CreateSession /r/2 /s/2 app '{}' 2>&1 | grep -o AccessDenied)"
+kill $pid 2>/dev/null
+BUS
+out=$(dbus-run-session -- sh "$TMP/bus.sh" "$TMP/home" "$TMP/run" "$TMP/portal" 2>&1)
+val() { printf '%s\n' "$out" | sed -n "s/^$1=//p"; }
+check "ScreenCast offers screens and windows" "$(val types)" "(<uint32 3>,)"
+check "ScreenCast offers the cursor hidden or drawn in" "$(val cursors)" "(<uint32 3>,)"
+check "ScreenCast is version 3 (no restore tokens)" "$(val version)" "(<uint32 3>,)"
+check "Screenshot is there" "$(val ssversion)" "(<uint32 1>,)"
+check "a Screenshot from another caller is refused" "$(val ss)" "AccessDenied"
+check "a ScreenCast session from another caller is refused" "$(val sc)" "AccessDenied"
+exit $fail
