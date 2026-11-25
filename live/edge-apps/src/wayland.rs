@@ -303,6 +303,7 @@ impl App {
             below: false,
             dirty: false,
             frame_pending: false,
+            release_pending: false,
         });
     }
 

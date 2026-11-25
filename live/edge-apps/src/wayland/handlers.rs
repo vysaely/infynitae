@@ -84,6 +84,8 @@ impl CompositorHandler for App {
                     os.render_if_needed(qh, &self.shell);
                 } else if os.clear_pending && !self.shell.visible_on(os.id) {
                     os.clear_and_commit(qh, self.shell.visible());
+                } else if os.release_pending && !self.shell.visible_on(os.id) {
+                    os.release_shown_buffer();
                 }
             }
             if ended || closed_finished {

@@ -4,7 +4,32 @@ use super::*;
 
 pub(super) struct BufferSlot {
     pub(super) buffer: Buffer,
+    /// what was drawn in this buffer: it is zero outside this box, all zero when None
     pub(super) prev_box: Option<(i32, i32, i32, i32)>,
+}
+
+/// Makes `bytes` zero, giving their whole pages back to the kernel (in the compositor's mapping of
+/// the shared memory too) instead of writing them: a page reads as zero until it is drawn on, so
+/// a buffer holds memory only where something was drawn since.
+pub(super) fn zero_by_release(bytes: &mut [u8]) {
+    let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) }.max(1) as usize;
+    let start = bytes.as_ptr() as usize;
+    let first = start.next_multiple_of(page) - start;
+    let end = ((start + bytes.len()) / page * page).saturating_sub(start);
+    if end <= first {
+        bytes.fill(0);
+        return;
+    }
+    let mid = &mut bytes[first..end];
+    if unsafe { libc::madvise(mid.as_mut_ptr().cast(), mid.len(), libc::MADV_REMOVE) } != 0 {
+        eprintln!(
+            "infynitae-edge-apps: madvise(MADV_REMOVE): {}",
+            std::io::Error::last_os_error()
+        );
+        mid.fill(0);
+    }
+    bytes[..first].fill(0);
+    bytes[end..].fill(0);
 }
 
 pub(super) fn scaled_dimension(logical: u32, scale_120: u32) -> u32 {
@@ -38,6 +63,9 @@ pub(super) struct OutputSurface {
     pub(super) below: bool,
     pub(super) dirty: bool,
     pub(super) frame_pending: bool,
+    /// a clear frame is committed: on its frame callback, when the compositor has read it, its
+    /// buffer's pages are given back (`release_shown_buffer`)
+    pub(super) release_pending: bool,
 }
 
 impl Drop for OutputSurface {
@@ -174,6 +202,7 @@ impl OutputSurface {
             self.dirty = true;
             self.mapped_closed = false;
             self.clear_pending = false;
+            self.release_pending = false;
             self.render_if_needed(qh, shell);
         } else {
             self.dirty = false;
@@ -202,12 +231,21 @@ impl OutputSurface {
         if w <= 0 || h <= 0 {
             return None;
         }
-        for i in 0..2 {
+        // the buffer not shown last first, when there is one: after a close the shown one's pages
+        // were given back (`release_shown_buffer`), and a compositor may release it at once
+        let other = 1 - self.last_slot;
+        let order = if self.slots[other].is_some() {
+            [other, self.last_slot]
+        } else {
+            [self.last_slot, other]
+        };
+        for i in order {
             if self.slots[i].is_none() {
-                if let Ok((buffer, _)) =
+                if let Ok((buffer, canvas)) =
                     self.pool
                         .create_buffer(w, h, w * 4, wl_shm::Format::Argb8888)
                 {
+                    zero_by_release(canvas);
                     self.slots[i] = Some(BufferSlot {
                         buffer,
                         prev_box: None,
@@ -269,11 +307,8 @@ impl OutputSurface {
         self.apply_surface_scale();
         let slot = self.slots[idx].as_mut().unwrap();
         let old = slot.prev_box.take();
-        if let Some(canvas) = slot.buffer.canvas(&mut self.pool) {
-            match old {
-                Some(r) => Self::clear_box(canvas, w * 4, w, h, r),
-                None => canvas.fill(0),
-            }
+        if let (Some(canvas), Some(r)) = (slot.buffer.canvas(&mut self.pool), old) {
+            Self::clear_box(canvas, w * 4, w, h, r);
         }
         let shown = self.committed_box.take();
         let wl = self.layer.wl_surface();
@@ -284,12 +319,26 @@ impl OutputSurface {
             wl.damage_buffer(x, y, bw, bh);
         }
         if slot.buffer.attach_to(wl).is_ok() {
+            wl.frame(qh, wl.clone());
+            self.release_pending = true;
             self.mapped_closed = true;
             self.last_slot = idx;
             self.layer.commit();
         }
         if !any_visible {
             crate::boxes::dump_closed();
+        }
+    }
+
+    /// Closed and its clear frame shown: that buffer's pages (all zero) given back, 8 MB on a
+    /// 1920×1080 screen. The other buffer stays in memory: the compositor holds the shown one,
+    /// so the next opening draws its first frame in the other, and there freed pages would come
+    /// back at a cost (2.3 ms for the rows of a 440 by 1080 panel, 0.02 ms when held).
+    pub(super) fn release_shown_buffer(&mut self) {
+        self.release_pending = false;
+        if let Some(slot) = &mut self.slots[self.last_slot] {
+            zero_by_release(self.pool.raw_data_mut(&slot.buffer.slot()));
+            slot.prev_box = None;
         }
     }
 
@@ -327,9 +376,8 @@ impl OutputSurface {
         let slot = self.slots[slot_idx].as_mut().unwrap();
         let old_box = slot.prev_box.replace(new_box);
         if let Some(canvas) = slot.buffer.canvas(&mut self.pool) {
-            match old_box {
-                Some(r) => Self::clear_box(canvas, stride, buf_w, buf_h, r),
-                None => canvas.fill(0),
+            if let Some(r) = old_box {
+                Self::clear_box(canvas, stride, buf_w, buf_h, r);
             }
             Self::clear_box(canvas, stride, buf_w, buf_h, new_box);
             if let Ok(surface) = unsafe {
@@ -379,6 +427,8 @@ pub(super) struct PopupLayer {
     pub(super) viewport: Option<WpViewport>,
     pub(super) layer: LayerSurface,
     pub(super) pool: SlotPool,
+    /// for a new pool when the strip unmaps
+    pub(super) shm: Shm,
     pub(super) buffer: Option<Buffer>,
     pub(super) width: u32,
     pub(super) height: u32,
@@ -477,6 +527,7 @@ impl PopupLayer {
             viewport,
             layer,
             pool,
+            shm: Shm::from(app.shm.wl_shm().clone()),
             buffer: None,
             width: 0,
             height: 0,
@@ -561,6 +612,12 @@ impl PopupLayer {
                 self.buffer = None;
                 self.pointer = None;
                 self.last_viewport_dest = None;
+                // the strip's pool (two buffers, 3.4 MB on a 1080-pixel-high screen) is not kept
+                // while no pop-up shows; each frame is drawn whole in a new buffer anyway
+                match SlotPool::new(4096, &self.shm) {
+                    Ok(pool) => self.pool = pool,
+                    Err(e) => eprintln!("infynitae-edge-apps: notification pool: {e}"),
+                }
             }
             return;
         }
@@ -732,6 +789,146 @@ mod tests {
         let c3 = mock.last_commit(sid);
         assert_eq!(c3.buffer_size, Some((2560, 1600)));
         assert_eq!(c3.buffer_scale, 2);
+    }
+
+    /// Bytes of `bytes` held in memory (its pages that are resident).
+    fn resident_bytes(bytes: &[u8]) -> usize {
+        let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as usize;
+        let start = bytes.as_ptr() as usize / page * page;
+        let len = bytes.as_ptr() as usize + bytes.len() - start;
+        let mut pages = vec![0u8; len.div_ceil(page)];
+        let r = unsafe { libc::mincore(start as *mut libc::c_void, len, pages.as_mut_ptr()) };
+        assert_eq!(r, 0, "mincore: {}", std::io::Error::last_os_error());
+        pages.iter().filter(|p| *p & 1 != 0).count() * page
+    }
+
+    fn slots_resident(os: &mut OutputSurface) -> Vec<usize> {
+        let slots: Vec<_> = os.slots.iter().flatten().map(|s| s.buffer.slot()).collect();
+        slots
+            .iter()
+            .map(|s| resident_bytes(os.pool.raw_data_mut(s)))
+            .collect()
+    }
+
+    #[test]
+    fn headless_closed_panel_gives_its_shown_buffers_pages_back_and_draws_again() {
+        let (_mock, conn) = MockWayland::start(
+            vec![MockOutputSpec {
+                width: 1280,
+                height: 800,
+                scale: 1,
+                fractional_120: 120,
+            }],
+            false,
+        );
+        let sh = Shell::new(
+            crate::config::Config::from_text(
+                "PANEL_CONTROL=\"SUPER+A top right 380 settings/session\"\n",
+            ),
+            Vec::new(),
+        );
+        let (fetch_tx, _fetch_rx) = channel::channel::<Fetched>();
+        let (mut app, mut eq) = init_app(&conn, sh, fetch_tx).unwrap();
+        app.config_path = Some(std::env::temp_dir().join("infynitae-edge-test-no-config"));
+        eq.roundtrip(&mut app).unwrap();
+        let full = 1280 * 800 * 4;
+
+        let target = app.key_target_output();
+        assert!(app.shell.toggle_named_on(target, "control"));
+        app.shell.open_ms = f64::INFINITY;
+        app.shell.opened_at = None;
+        app.sync_all();
+        for _ in 0..3 {
+            eq.roundtrip(&mut app).unwrap();
+        }
+        assert!(surface_has_nonzero_pixels(&mut app.outputs[0]));
+        let open = slots_resident(&mut app.outputs[0]);
+        assert!(open.iter().any(|&b| b > 0), "{open:?}");
+
+        // closed (its leaving fade already over): the clear frame, then on its callback the pages go
+        let faded = Instant::now() - Duration::from_millis(500);
+        assert!(app.shell.close_at(faded));
+        app.sync_all();
+        for _ in 0..4 {
+            eq.roundtrip(&mut app).unwrap();
+        }
+        assert!(!app.shell.visible());
+        assert!(!app.outputs[0].release_pending);
+        let shown = app.outputs[0].last_slot;
+        let closed = slots_resident(&mut app.outputs[0]);
+        assert_eq!(closed.len(), 2);
+        assert_eq!(
+            closed[shown], 0,
+            "the shown clear buffer is held: {closed:?}"
+        );
+        // kept, holding only the pages drawn on: a new buffer is zeroed without touching them
+        let kept = closed[1 - shown];
+        assert!(kept > 0 && kept < full, "the other is kept: {closed:?}");
+
+        // open again: the first frame is drawn in the kept buffer, as before
+        assert!(app.shell.toggle_named_on(target, "control"));
+        app.shell.open_ms = f64::INFINITY;
+        app.shell.opened_at = None;
+        app.sync_all();
+        assert_eq!(app.outputs[0].last_slot, 1 - shown);
+        eq.roundtrip(&mut app).unwrap();
+        assert!(surface_has_nonzero_pixels(&mut app.outputs[0]));
+    }
+
+    #[test]
+    fn headless_notification_strip_drops_its_pool_when_the_last_popup_goes() {
+        let (_mock, conn) = MockWayland::start(
+            vec![MockOutputSpec {
+                width: 1280,
+                height: 800,
+                scale: 1,
+                fractional_120: 120,
+            }],
+            false,
+        );
+        let sh = Shell::new(crate::config::Config::from_text(""), Vec::new());
+        let (fetch_tx, _fetch_rx) = channel::channel::<Fetched>();
+        let (mut app, mut eq) = init_app(&conn, sh, fetch_tx).unwrap();
+        app.config_path = Some(std::env::temp_dir().join("infynitae-edge-test-no-config"));
+        eq.roundtrip(&mut app).unwrap();
+
+        let note = crate::notify::Note {
+            id: 1,
+            app: "Test".into(),
+            summary: "Copied".into(),
+            body: String::new(),
+            actions: vec![],
+            urgency: 1,
+            value: None,
+            sync: None,
+            expire: Some(None),
+            transient: false,
+            resident: false,
+            time: "12:00".into(),
+        };
+        let quiet = crate::notify::Quiet::No;
+        assert!(app.shell.notify.receive(note, Instant::now(), quiet));
+        app.sync_popups();
+        for _ in 0..3 {
+            eq.roundtrip(&mut app).unwrap();
+        }
+        let pl = app
+            .popups
+            .as_ref()
+            .expect("the strip is made with the first pop-up");
+        assert!(pl.mapped);
+        let drawn = pl.pool.len();
+        assert!(drawn >= (POPUP_STRIP_W * 800 * 4) as usize, "{drawn}");
+
+        assert!(app.shell.notify.close(1));
+        app.sync_popups();
+        let pl = app.popups.as_ref().unwrap();
+        assert!(!pl.mapped);
+        assert_eq!(
+            pl.pool.len(),
+            4096,
+            "the drawn pool ({drawn} bytes) is let go"
+        );
     }
 
     #[test]
