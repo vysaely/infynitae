@@ -169,7 +169,7 @@ fn decode_hit(hit: u32) -> Option<(usize, bool)> {
     Some((idx, is_close))
 }
 
-fn resolve_app_name<'a>(apps: &'a [App], win: &'a Window) -> &'a str {
+pub(crate) fn resolve_app_name<'a>(apps: &'a [App], win: &'a Window) -> &'a str {
     apps.iter()
         .find(|a| app_matches_window_id(a, &win.app_id))
         .map(|a| a.name.as_str())

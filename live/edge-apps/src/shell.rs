@@ -1400,10 +1400,12 @@ impl Shell {
         let card = format!("{}/{}", pc.word.owner, pc.word.kind);
         let mut requery = None;
         let mut show = None;
+        let mut reopen = None;
         let mut remove = false;
         for a in out {
             match a {
                 Action::ShowCards(w) => show = Some(w),
+                Action::OpenPanel(name, q) => reopen = Some((name, q)),
                 Action::ClosePanel => {
                     self.close();
                     return true;
@@ -1418,6 +1420,16 @@ impl Shell {
         }
         if let Some(w) = show {
             self.show_cards(idx, w);
+            return true;
+        }
+        if let Some((name, q)) = reopen {
+            let output = self.open_output;
+            self.close();
+            if let Some(i) = self.panels.iter().position(|p| p.panel.name == name) {
+                self.open_panel_on(output, i, false, Instant::now());
+                self.query = q;
+                self.send_text(i);
+            }
             return true;
         }
         if let Some(q) = requery {

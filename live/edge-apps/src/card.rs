@@ -406,6 +406,12 @@ pub enum Action {
     RemoveCard,
     /// a JSON request line sent to `$XDG_RUNTIME_DIR/infynitae/shell.sock`
     ShellCommand(String),
+    /// files by name with plocate, the search before cancelled ("": only cancel); the answer comes
+    /// to the card's "located" source key (`crate::locate`)
+    Locate(String),
+    /// the panel named so opens in this one's place with this query typed (a settings row found by
+    /// the launcher's search)
+    OpenPanel(String, String),
 }
 
 /// The fixture's values (`INFYNITAE_EDGE_RENDER_DATA`: `key=value` lines, `\n` and `\t` escaped),

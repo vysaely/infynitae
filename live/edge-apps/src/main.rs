@@ -11,6 +11,7 @@ mod dbus;
 mod draw;
 mod edit;
 mod icons;
+mod locate;
 mod notify;
 mod notify_server;
 mod panel;

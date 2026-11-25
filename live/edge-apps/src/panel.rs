@@ -211,8 +211,14 @@ pub fn cards(p: &Panel) -> Vec<CardRef> {
             continue;
         }
         if let Some(c) = read_word(raw) {
-            if !out.iter().any(|o| o.owner == c.owner && o.kind == c.kind) {
-                out.push(c);
+            // the old word `apps` (the launcher's list): the search's other results under it,
+            // unless the list was placed by hand
+            let results = (c.old.as_deref() == Some("apps") && c.place.is_none())
+                .then(|| CardRef::new("apps", "results"));
+            for c in std::iter::once(c).chain(results) {
+                if !out.iter().any(|o| o.owner == c.owner && o.kind == c.kind) {
+                    out.push(c);
+                }
             }
         }
     }

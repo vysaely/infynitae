@@ -163,6 +163,8 @@ struct App {
     workers: HashMap<SourceId, SourceWorker>,
     /// cards with a command running, and distinct commands waiting in order
     queued: std::sync::Arc<std::sync::Mutex<CommandQueue>>,
+    /// the launcher's file search (`Action::Locate`)
+    locator: crate::locate::Locator,
     /// tests: the commands the actions asked for, in order, recorded when asked (the worker does
     /// not run them in tests: they would change the machine's settings; and its exit, which
     /// empties `queued`, does not race a test's check)
@@ -546,7 +548,11 @@ impl App {
                     }
                 }
             }
-            None => self.app_refresh.sync_closed(),
+            None => {
+                self.app_refresh.sync_closed();
+                // a file search still running for a panel no longer shown
+                self.locator.cancel();
+            }
         }
         let Some(shown) = self.shown_key() else {
             self.fetch.sync_panel(None, &[]);
@@ -693,8 +699,17 @@ impl App {
                         }
                     }
                 }
+                Action::Locate(q) => {
+                    let tx = self.fetch_tx.clone();
+                    self.locator.start(&q, move |found| {
+                        let _ = tx.send(Fetched::Data("apps", "located", Box::new(found)));
+                    });
+                }
                 // the shell takes these before they get here
-                Action::SetQuery(_) | Action::ShowCards(_) | Action::RemoveCard => {}
+                Action::SetQuery(_)
+                | Action::ShowCards(_)
+                | Action::RemoveCard
+                | Action::OpenPanel(..) => {}
             }
         }
         if notes_changed {
@@ -928,6 +943,7 @@ fn init_app(
         app_refresh: AppRefresh::new(app_dirs, apps_mtime),
         workers: HashMap::new(),
         queued: Default::default(),
+        locator: crate::locate::Locator::new("plocate"),
         #[cfg(test)]
         ran: Vec::new(),
         was_animating: false,
