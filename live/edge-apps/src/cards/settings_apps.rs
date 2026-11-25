@@ -755,7 +755,7 @@ mod tests {
         assert_eq!(
             out,
             vec![Action::Run(
-                "sh \"$HOME/infynitae/live/settings.sh\" log TERMINAL 'old'\\''term' && sh \"$HOME/infynitae/live/settings.sh\" set TERMINAL 'kitty '\\''a'\\''' >/dev/null 2>&1"
+                "sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" log TERMINAL 'old'\\''term' && sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" set TERMINAL 'kitty '\\''a'\\''' >/dev/null 2>&1"
                     .to_string()
             )]
         );
@@ -769,7 +769,7 @@ mod tests {
         assert_eq!(
             out,
             vec![Action::Run(
-                "sh \"$HOME/infynitae/live/settings.sh\" log SESSION_RESTORE 'true' && sh \"$HOME/infynitae/live/settings.sh\" set SESSION_RESTORE 'restart' >/dev/null 2>&1 && sh \"$HOME/infynitae/live/infynitae-reload\" restore >/dev/null 2>&1"
+                "sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" log SESSION_RESTORE 'true' && sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" set SESSION_RESTORE 'restart' >/dev/null 2>&1 && sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/infynitae-reload\" restore >/dev/null 2>&1"
                     .to_string()
             )]
         );
@@ -782,7 +782,7 @@ mod tests {
         assert_eq!(
             out,
             vec![Action::Run(
-                "sh \"$HOME/infynitae/live/settings.sh\" log AUTOMOUNT 'true' && sh \"$HOME/infynitae/live/settings.sh\" set AUTOMOUNT 'false' >/dev/null 2>&1 && sh \"$HOME/infynitae/live/infynitae-reload\" automount >/dev/null 2>&1"
+                "sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" log AUTOMOUNT 'true' && sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" set AUTOMOUNT 'false' >/dev/null 2>&1 && sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/infynitae-reload\" automount >/dev/null 2>&1"
                     .to_string()
             )]
         );
@@ -791,7 +791,7 @@ mod tests {
         assert_eq!(
             out,
             vec![Action::Run(
-                "sh \"$HOME/infynitae/live/settings.sh\" log START_TERMINAL - && sh \"$HOME/infynitae/live/settings.sh\" set START_TERMINAL 'true' >/dev/null 2>&1"
+                "sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" log START_TERMINAL - && sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" set START_TERMINAL 'true' >/dev/null 2>&1"
                     .to_string()
             )]
         );
@@ -801,7 +801,7 @@ mod tests {
         assert_eq!(
             out,
             vec![Action::Run(
-                "sh \"$HOME/infynitae/live/settings.sh\" log DRIVE_NAMES 'roman' && sh \"$HOME/infynitae/live/settings.sh\" set DRIVE_NAMES 'label' >/dev/null 2>&1 && sh \"$HOME/infynitae/live/infynitae-reload\" automount >/dev/null 2>&1"
+                "sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" log DRIVE_NAMES 'roman' && sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" set DRIVE_NAMES 'label' >/dev/null 2>&1 && sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/infynitae-reload\" automount >/dev/null 2>&1"
                     .to_string()
             )]
         );

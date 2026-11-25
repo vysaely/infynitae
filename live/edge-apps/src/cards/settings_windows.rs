@@ -403,8 +403,8 @@ mod tests {
         assert_eq!(
             out[0],
             Action::Run(
-                "sh \"$HOME/infynitae/live/settings.sh\" log FOCUS_FOLLOWS_MOUSE 'strict' && \
-                 sh \"$HOME/infynitae/live/settings.sh\" set FOCUS_FOLLOWS_MOUSE 'sloppy' >/dev/null 2>&1"
+                "sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" log FOCUS_FOLLOWS_MOUSE 'strict' && \
+                 sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" set FOCUS_FOLLOWS_MOUSE 'sloppy' >/dev/null 2>&1"
                     .into()
             )
         );
@@ -418,8 +418,8 @@ mod tests {
         assert_eq!(
             out,
             vec![Action::Run(
-                "sh \"$HOME/infynitae/live/settings.sh\" log SUPER_ENTER_ACTION - && \
-                 sh \"$HOME/infynitae/live/settings.sh\" set SUPER_ENTER_ACTION 'fit' >/dev/null 2>&1"
+                "sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" log SUPER_ENTER_ACTION - && \
+                 sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" set SUPER_ENTER_ACTION 'fit' >/dev/null 2>&1"
                     .into()
             )]
         );
@@ -436,8 +436,8 @@ mod tests {
         assert_eq!(
             out,
             vec![Action::Run(
-                "sh \"$HOME/infynitae/live/settings.sh\" log FOCUS_CYCLE_NAVIGATE - && \
-                 sh \"$HOME/infynitae/live/settings.sh\" set FOCUS_CYCLE_NAVIGATE 'false' >/dev/null 2>&1"
+                "sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" log FOCUS_CYCLE_NAVIGATE - && \
+                 sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" set FOCUS_CYCLE_NAVIGATE 'false' >/dev/null 2>&1"
                     .into()
             )]
         );
@@ -447,8 +447,8 @@ mod tests {
         assert_eq!(
             out,
             vec![Action::Run(
-                "sh \"$HOME/infynitae/live/settings.sh\" log FULLSCREEN_PAN - && \
-                 sh \"$HOME/infynitae/live/settings.sh\" set FULLSCREEN_PAN 'false' >/dev/null 2>&1"
+                "sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" log FULLSCREEN_PAN - && \
+                 sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" set FULLSCREEN_PAN 'false' >/dev/null 2>&1"
                     .into()
             )]
         );

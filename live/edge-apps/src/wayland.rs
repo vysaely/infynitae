@@ -651,7 +651,7 @@ impl App {
                     if let Some(app) = self.shell.apps.iter().find(|x| x.id == id) {
                         let cmd = if app.terminal {
                             format!(
-                                "\"$HOME/infynitae/live/launch.sh\" terminal sh -c {}",
+                                "\"${{INFYNITAE_DIR:-$HOME/infynitae}}/live/launch.sh\" terminal sh -c {}",
                                 crate::cards::settings::sq(&app.exec)
                             )
                         } else {

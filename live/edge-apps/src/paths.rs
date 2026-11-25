@@ -118,6 +118,20 @@ pub(crate) fn state_dir_from(
         .map(|h| h.join(".local/state"))
 }
 
+/// The Infynitae checkout the desktop scripts run from, as they resolve it: the one install.sh
+/// recorded in `~/.config/infynitae/checkout` (its first line), else `~/infynitae`.
+pub fn checkout_dir(home: &Path) -> PathBuf {
+    std::fs::read_to_string(home.join(".config/infynitae/checkout"))
+        .ok()
+        .and_then(|s| {
+            s.lines()
+                .next()
+                .filter(|l| !l.is_empty())
+                .map(PathBuf::from)
+        })
+        .unwrap_or_else(|| home.join("infynitae"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -238,5 +252,23 @@ mod tests {
             runtime_or_cache_dir_from(Some(OsStr::new("/run/user/1000")), home),
             PathBuf::from("/run/user/1000")
         );
+    }
+
+    /// The installer's record, else `~/infynitae`.
+    #[test]
+    fn the_checkout_is_the_recorded_one_else_home_infynitae() {
+        let home = std::env::temp_dir().join(format!("edge-checkout-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join(".config/infynitae")).unwrap();
+        assert_eq!(checkout_dir(&home), home.join("infynitae"));
+        std::fs::write(home.join(".config/infynitae/checkout"), "").unwrap();
+        assert_eq!(checkout_dir(&home), home.join("infynitae"));
+        std::fs::write(
+            home.join(".config/infynitae/checkout"),
+            "/src/my infynitae\n",
+        )
+        .unwrap();
+        assert_eq!(checkout_dir(&home), PathBuf::from("/src/my infynitae"));
+        std::fs::remove_dir_all(&home).unwrap();
     }
 }

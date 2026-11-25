@@ -1165,8 +1165,8 @@ P: Phys=usb-0000:75:00.4-2.4/input0
             out,
             vec![Action::Run(
                 "v=$(\"$HOME/.local/bin/infynitae-edge\" ask --text --default 'us,de' 'Layouts') || exit 0; \
-                 sh \"$HOME/infynitae/live/settings.sh\" log XKB_DEFAULT_LAYOUT 'us,de' && \
-                 sh \"$HOME/infynitae/live/settings.sh\" set XKB_DEFAULT_LAYOUT \"$v\" >/dev/null 2>&1"
+                 sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" log XKB_DEFAULT_LAYOUT 'us,de' && \
+                 sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" set XKB_DEFAULT_LAYOUT \"$v\" >/dev/null 2>&1"
                     .to_string()
             )]
         );
@@ -1201,8 +1201,8 @@ P: Phys=usb-0000:75:00.4-2.4/input0
         assert_eq!(
             out,
             vec![Action::Run(
-                "sh \"$HOME/infynitae/live/settings.sh\" log MOUSE_ACCEL_SPEED '0.0' && \
-                 sh \"$HOME/infynitae/live/settings.sh\" set MOUSE_ACCEL_SPEED '0.5' >/dev/null 2>&1"
+                "sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" log MOUSE_ACCEL_SPEED '0.0' && \
+                 sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" set MOUSE_ACCEL_SPEED '0.5' >/dev/null 2>&1"
                     .to_string()
             )]
         );
@@ -1214,8 +1214,8 @@ P: Phys=usb-0000:75:00.4-2.4/input0
         assert_eq!(
             out,
             vec![Action::Run(
-                "sh \"$HOME/infynitae/live/settings.sh\" log MOUSE_ACCEL_PROFILE 'flat' && \
-                 sh \"$HOME/infynitae/live/settings.sh\" set MOUSE_ACCEL_PROFILE 'adaptive' >/dev/null 2>&1"
+                "sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" log MOUSE_ACCEL_PROFILE 'flat' && \
+                 sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" set MOUSE_ACCEL_PROFILE 'adaptive' >/dev/null 2>&1"
                     .to_string()
             )]
         );
@@ -1230,8 +1230,8 @@ P: Phys=usb-0000:75:00.4-2.4/input0
         assert_eq!(
             out,
             vec![Action::Run(
-                "sh \"$HOME/infynitae/live/settings.sh\" log XKB_DEFAULT_OPTIONS '' && \
-                 sh \"$HOME/infynitae/live/settings.sh\" set XKB_DEFAULT_OPTIONS 'grp:win_space_toggle' >/dev/null 2>&1"
+                "sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" log XKB_DEFAULT_OPTIONS '' && \
+                 sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" set XKB_DEFAULT_OPTIONS 'grp:win_space_toggle' >/dev/null 2>&1"
                     .to_string()
             )]
         );

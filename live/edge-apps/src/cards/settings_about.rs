@@ -31,9 +31,9 @@ pub const KIND: CardKind = CardKind {
 pub const KEYS: &[&str] = &["UPDATE_CHECK"];
 
 const UPDATE_COMMAND: &str = r#"sh "$HOME/.local/bin/xdg-terminal-exec" infynitae-update"#;
-const EDIT_COMMAND: &str =
-    r#"sh "$HOME/.local/bin/xdg-terminal-exec" sh "$HOME/infynitae/live/settings.sh" edit"#;
-const SAVE_COMMAND: &str = r#"sh "$HOME/infynitae/live/settings.sh" export >/dev/null 2>&1"#;
+const EDIT_COMMAND: &str = r#"sh "$HOME/.local/bin/xdg-terminal-exec" sh "${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh" edit"#;
+const SAVE_COMMAND: &str =
+    r#"sh "${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh" export >/dev/null 2>&1"#;
 
 const INFO_ROW_H: f64 = 26.0;
 const SIDE_PAD: f64 = 8.0;
@@ -717,10 +717,14 @@ fn undo_command(entry: &UndoEntry) -> String {
     } else {
         let k = settings::sq(&entry.key);
         if entry.old == "-" {
-            format!(r#"sh "$HOME/infynitae/live/settings.sh" unset {k} >/dev/null 2>&1"#)
+            format!(
+                r#"sh "${{INFYNITAE_DIR:-$HOME/infynitae}}/live/settings.sh" unset {k} >/dev/null 2>&1"#
+            )
         } else {
             let v = settings::sq(&entry.old);
-            format!(r#"sh "$HOME/infynitae/live/settings.sh" set {k} {v} >/dev/null 2>&1"#)
+            format!(
+                r#"sh "${{INFYNITAE_DIR:-$HOME/infynitae}}/live/settings.sh" set {k} {v} >/dev/null 2>&1"#
+            )
         }
     };
     // only while the log's last line is still the change the button shows: data read when the panel
@@ -737,7 +741,7 @@ fn preview_command(path: &str) -> String {
         "d=\"${{XDG_RUNTIME_DIR:-$HOME/.cache}}/infynitae\"; mkdir -p \"$d\"; \
          t=$(mktemp \"$d/.load-preview.XXXXXX\") || exit 1; \
          id=$(date +%s%N 2>/dev/null || date +%s)-$$; \
-         if k=$(sh \"$HOME/infynitae/live/settings.sh\" import-preview {q} 2>\"$t.err\"); then \
+         if k=$(sh \"${{INFYNITAE_DIR:-$HOME/infynitae}}/live/settings.sh\" import-preview {q} 2>\"$t.err\"); then \
          printf 'id=%s\\npath=%s\\nok=1\\n%s\\n' \"$id\" {q} \"$k\" > \"$t\"; \
          else \
          err=$(head -n 1 \"$t.err\"); \
@@ -755,14 +759,14 @@ fn apply_load_command(path: &str) -> String {
     let q = settings::sq(path);
     format!(
         "d=\"${{XDG_RUNTIME_DIR:-$HOME/.cache}}/infynitae\"; mkdir -p \"$d\"; \
-         if sh \"$HOME/infynitae/live/settings.sh\" import {q} >/dev/null 2>&1; then \
+         if sh \"${{INFYNITAE_DIR:-$HOME/infynitae}}/live/settings.sh\" import {q} >/dev/null 2>&1; then \
          rm -f \"$d/settings-load-preview\"; : > \"$d/settings-load-active\"; \
          else false; fi"
     )
 }
 
 fn undo_load_command() -> String {
-    r#"d="${XDG_RUNTIME_DIR:-$HOME/.cache}/infynitae"; rm -f "$d/settings-load-active"; c="${CONFIG_FILE:-$HOME/.config/infynitae/config}"; b="${c}.before-load"; if [ -f "$b" ]; then mv -f "$b" "$c" && sh "$HOME/infynitae/live/settings.sh" apply >/dev/null 2>&1; fi"#.to_string()
+    r#"d="${XDG_RUNTIME_DIR:-$HOME/.cache}/infynitae"; rm -f "$d/settings-load-active"; c="${CONFIG_FILE:-$HOME/.config/infynitae/config}"; b="${c}.before-load"; if [ -f "$b" ]; then mv -f "$b" "$c" && sh "${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh" apply >/dev/null 2>&1; fi"#.to_string()
 }
 
 fn key_count_word(n: usize) -> String {
@@ -2285,7 +2289,7 @@ mod tests {
         assert_eq!(
             out,
             vec![Action::Run(
-                r#"p="$HOME/.local/state/infynitae/settings-changes"; if [ "$(tail -n 1 "$p" | cut -f 2-)" = "$(printf '%s\t%s' 'CURSOR_THEME' 'a'\''b $(touch /tmp/pwn)')" ] && sh "$HOME/infynitae/live/settings.sh" set 'CURSOR_THEME' 'a'\''b $(touch /tmp/pwn)' >/dev/null 2>&1; then t="$p.tmp.$$"; sed '$d' "$p" > "$t" && mv "$t" "$p" || rm -f "$t"; fi"#.into()
+                r#"p="$HOME/.local/state/infynitae/settings-changes"; if [ "$(tail -n 1 "$p" | cut -f 2-)" = "$(printf '%s\t%s' 'CURSOR_THEME' 'a'\''b $(touch /tmp/pwn)')" ] && sh "${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh" set 'CURSOR_THEME' 'a'\''b $(touch /tmp/pwn)' >/dev/null 2>&1; then t="$p.tmp.$$"; sed '$d' "$p" > "$t" && mv "$t" "$p" || rm -f "$t"; fi"#.into()
             )]
         );
 
@@ -2295,7 +2299,7 @@ mod tests {
         });
         assert_eq!(
             unset_cmd,
-            r#"p="$HOME/.local/state/infynitae/settings-changes"; if [ "$(tail -n 1 "$p" | cut -f 2-)" = "$(printf '%s\t%s' 'GAPS_IN' '-')" ] && sh "$HOME/infynitae/live/settings.sh" unset 'GAPS_IN' >/dev/null 2>&1; then t="$p.tmp.$$"; sed '$d' "$p" > "$t" && mv "$t" "$p" || rm -f "$t"; fi"#
+            r#"p="$HOME/.local/state/infynitae/settings-changes"; if [ "$(tail -n 1 "$p" | cut -f 2-)" = "$(printf '%s\t%s' 'GAPS_IN' '-')" ] && sh "${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh" unset 'GAPS_IN' >/dev/null 2>&1; then t="$p.tmp.$$"; sed '$d' "$p" > "$t" && mv "$t" "$p" || rm -f "$t"; fi"#
         );
 
         // Execute undo command against an isolated stub HOME to verify quoting and tail removal.
@@ -2337,6 +2341,7 @@ mod tests {
         let status = Command::new("sh")
             .args(["-c", cmd])
             .env("HOME", h)
+            .env_remove("INFYNITAE_DIR")
             .status()
             .unwrap();
         assert!(status.success());
@@ -2359,6 +2364,7 @@ mod tests {
                 }),
             ])
             .env("HOME", h)
+            .env_remove("INFYNITAE_DIR")
             .status()
             .unwrap();
         assert!(status.success());
@@ -2382,6 +2388,7 @@ mod tests {
         let status = Command::new("sh")
             .args(["-c", &stale])
             .env("HOME", h)
+            .env_remove("INFYNITAE_DIR")
             .status()
             .unwrap();
         assert!(status.success());
@@ -2531,6 +2538,7 @@ mod tests {
         let status = Command::new("sh")
             .args(["-c", cmd])
             .env("HOME", dir)
+            .env_remove("INFYNITAE_DIR")
             .env("XDG_RUNTIME_DIR", dir.join("rt"))
             .status()
             .unwrap();
@@ -2647,6 +2655,7 @@ mod tests {
             Command::new("sh")
                 .args(["-c", cmd])
                 .env("HOME", h)
+                .env_remove("INFYNITAE_DIR")
                 .env("XDG_RUNTIME_DIR", &rt_dir)
                 .env_remove("CONFIG_FILE")
                 .status()

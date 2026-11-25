@@ -33,8 +33,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-const EDIT_COMMAND: &str =
-    r#"sh "$HOME/.local/bin/xdg-terminal-exec" sh "$HOME/infynitae/live/settings.sh" edit"#;
+const EDIT_COMMAND: &str = r#"sh "$HOME/.local/bin/xdg-terminal-exec" sh "${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh" edit"#;
 const PLUS_LINE_EDITORS: &[&str] = &["nano", "vim", "nvim", "vi", "micro"];
 
 const HIT_GROUP_BASE: u32 = 1;
@@ -1971,6 +1970,7 @@ mod tests {
             .arg("-c")
             .arg(&cmd)
             .env("HOME", &dir)
+            .env_remove("INFYNITAE_DIR")
             .status()
             .unwrap();
         assert!(status.success());

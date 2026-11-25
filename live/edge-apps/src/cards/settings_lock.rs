@@ -167,9 +167,12 @@ impl Default for LockCard {
 }
 
 fn battery_limit_set_value(cmd: &str) -> Option<&str> {
-    let rest = cmd.strip_prefix("sh \"$HOME/infynitae/live/settings.sh\" log BATTERY_LIMIT ")?;
-    let (_, after_set) =
-        rest.split_once(" && sh \"$HOME/infynitae/live/settings.sh\" set BATTERY_LIMIT ")?;
+    let rest = cmd.strip_prefix(
+        "sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" log BATTERY_LIMIT ",
+    )?;
+    let (_, after_set) = rest.split_once(
+        " && sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" set BATTERY_LIMIT ",
+    )?;
     after_set.strip_suffix(" >/dev/null 2>&1")
 }
 
@@ -233,7 +236,7 @@ impl Card for LockCard {
             if let Action::Run(cmd) = action {
                 if let Some(val) = battery_limit_set_value(cmd) {
                     cmd.push_str(&format!(
-                        " && sh \"$HOME/infynitae/live/battery-limit\" {val} >/dev/null 2>&1"
+                        " && sh \"${{INFYNITAE_DIR:-$HOME/infynitae}}/live/battery-limit\" {val} >/dev/null 2>&1"
                     ));
                 }
             }
@@ -490,7 +493,7 @@ mod tests {
         assert_eq!(
             out,
             vec![Action::Run(
-                "sh \"$HOME/infynitae/live/settings.sh\" log IDLE_SLEEP_TIMEOUT_MIN '15' && sh \"$HOME/infynitae/live/settings.sh\" set IDLE_SLEEP_TIMEOUT_MIN '5' >/dev/null 2>&1".into()
+                "sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" log IDLE_SLEEP_TIMEOUT_MIN '15' && sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" set IDLE_SLEEP_TIMEOUT_MIN '5' >/dev/null 2>&1".into()
             )]
         );
 
@@ -500,7 +503,7 @@ mod tests {
         assert_eq!(
             out,
             vec![Action::Run(
-                "sh \"$HOME/infynitae/live/settings.sh\" log LOCK_WHEN_AWAY 'true' && sh \"$HOME/infynitae/live/settings.sh\" set LOCK_WHEN_AWAY 'false' >/dev/null 2>&1 && sh \"$HOME/infynitae/live/infynitae-reload\" sleep-lock >/dev/null 2>&1".into()
+                "sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" log LOCK_WHEN_AWAY 'true' && sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" set LOCK_WHEN_AWAY 'false' >/dev/null 2>&1 && sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/infynitae-reload\" sleep-lock >/dev/null 2>&1".into()
             )]
         );
 
@@ -511,7 +514,7 @@ mod tests {
         assert_eq!(
             out,
             vec![Action::Run(
-                "sh \"$HOME/infynitae/live/settings.sh\" log BATTERY_LIMIT 'off' && sh \"$HOME/infynitae/live/settings.sh\" set BATTERY_LIMIT '80' >/dev/null 2>&1 && sh \"$HOME/infynitae/live/battery-limit\" '80' >/dev/null 2>&1".into()
+                "sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" log BATTERY_LIMIT 'off' && sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" set BATTERY_LIMIT '80' >/dev/null 2>&1 && sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/battery-limit\" '80' >/dev/null 2>&1".into()
             )]
         );
 
@@ -521,7 +524,7 @@ mod tests {
         assert_eq!(
             out,
             vec![Action::Run(
-                "sh \"$HOME/infynitae/live/settings.sh\" log START_LOCKED - && sh \"$HOME/infynitae/live/settings.sh\" set START_LOCKED 'true' >/dev/null 2>&1".into()
+                "sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" log START_LOCKED - && sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" set START_LOCKED 'true' >/dev/null 2>&1".into()
             )]
         );
 
@@ -530,7 +533,7 @@ mod tests {
         assert_eq!(
             out,
             vec![Action::Run(
-                "sh \"$HOME/infynitae/live/settings.sh\" log SHUTDOWN_SCREEN - && sh \"$HOME/infynitae/live/settings.sh\" set SHUTDOWN_SCREEN 'false' >/dev/null 2>&1".into()
+                "sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" log SHUTDOWN_SCREEN - && sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" set SHUTDOWN_SCREEN 'false' >/dev/null 2>&1".into()
             )]
         );
 
@@ -545,7 +548,7 @@ mod tests {
         assert_eq!(
             out,
             vec![Action::Run(
-                "sh \"$HOME/infynitae/live/settings.sh\" log BATTERY_LIMIT 'a'\\''b' && sh \"$HOME/infynitae/live/settings.sh\" set BATTERY_LIMIT '90' >/dev/null 2>&1 && sh \"$HOME/infynitae/live/battery-limit\" '90' >/dev/null 2>&1".into()
+                "sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" log BATTERY_LIMIT 'a'\\''b' && sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" set BATTERY_LIMIT '90' >/dev/null 2>&1 && sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/battery-limit\" '90' >/dev/null 2>&1".into()
             )]
         );
 
@@ -565,7 +568,7 @@ mod tests {
         assert_eq!(
             out,
             vec![Action::Run(
-                "sh \"$HOME/infynitae/live/settings.sh\" log LOCK_WHEN_AWAY - && sh \"$HOME/infynitae/live/settings.sh\" set LOCK_WHEN_AWAY 'true' >/dev/null 2>&1 && sh \"$HOME/infynitae/live/infynitae-reload\" sleep-lock >/dev/null 2>&1".into()
+                "sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" log LOCK_WHEN_AWAY - && sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" set LOCK_WHEN_AWAY 'true' >/dev/null 2>&1 && sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/infynitae-reload\" sleep-lock >/dev/null 2>&1".into()
             )]
         );
     }

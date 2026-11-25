@@ -210,6 +210,11 @@ fn run(panel: Option<&str>) -> ExitCode {
 }
 
 fn main() -> ExitCode {
+    // the shell commands the cards run name the session scripts as
+    // `${INFYNITAE_DIR:-$HOME/infynitae}/live/…`; set here, before any thread starts
+    if let Some(home) = paths::home() {
+        std::env::set_var("INFYNITAE_DIR", paths::checkout_dir(&home));
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     let a: Vec<&str> = args.iter().map(String::as_str).collect();
     match a.as_slice() {
