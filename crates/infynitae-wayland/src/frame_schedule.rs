@@ -63,9 +63,12 @@ const SAMPLES: usize = 128;
 const RECENT: usize = 8;
 /// A missed refresh widens the margin by this much.
 const MISS_STEP: Duration = Duration::from_micros(750);
-/// Frames made in a row before the margin shrinks by a whole step: from the widest back to the
-/// narrowest in about seven seconds at 165 Hz (a tenth of a step took about a minute, so a few early
-/// misses cost a game most of `LATENCY="direct"`'s gain for that long; review 2026-11-12).
+/// Frames made before the margin shrinks by a whole step: from the widest back to the narrowest in
+/// about seven seconds at 165 Hz (a tenth of a step took about a minute, so a few early misses cost
+/// a game most of `LATENCY="direct"`'s gain for that long; review 2026-11-12). A miss does not
+/// restart the count, as it has widened the margin already: the margin grows while more than one
+/// frame in this many misses. Counted in a row, misses at about 0.3% held the desktop's margin above
+/// its floor for 92% of its frames (owner's log, 2026-11-22 to 25).
 const SHRINK_AFTER: u32 = 240;
 /// After the mode changes (a game starts being shown directly) this many refreshes do not widen the
 /// margin: the first frames carry the switch's own work, not the game's.
@@ -96,7 +99,8 @@ struct Lane {
     filled: usize,
     next: usize,
     margin: Duration,
-    made_in_a_row: u32,
+    /// Late-scheduled frames made since the margin last shrank (SHRINK_AFTER).
+    made_since_shrink: u32,
     /// Refreshes left in which a miss does not widen the margin (SETTLE_REFRESHES after a switch).
     settling: u32,
     /// Refreshes left drawn at once (PAUSE_REFRESHES, or doubled while saturated).
@@ -115,7 +119,7 @@ impl Lane {
             filled: 0,
             next: 0,
             margin: start_margin,
-            made_in_a_row: 0,
+            made_since_shrink: 0,
             settling: 0,
             paused: 0,
             pauses: 0,
@@ -158,9 +162,6 @@ impl Lane {
         (start_margin, floor): (Duration, Duration),
         backoff: bool,
     ) {
-        if missed {
-            self.made_in_a_row = 0;
-        }
         let settling = self.settling > 0;
         self.settling = self.settling.saturating_sub(1);
         if late_scheduled && missed && settling {
@@ -191,9 +192,9 @@ impl Lane {
                     self.margin = (self.margin + MISS_STEP).min(MARGIN_MAX);
                 }
             } else {
-                self.made_in_a_row += 1;
-                if self.made_in_a_row >= SHRINK_AFTER {
-                    self.made_in_a_row = 0;
+                self.made_since_shrink += 1;
+                if self.made_since_shrink >= SHRINK_AFTER {
+                    self.made_since_shrink = 0;
                     self.margin = self.margin.saturating_sub(MISS_STEP).max(floor);
                 }
                 if backoff && self.pause_hold > PAUSE_REFRESHES {
@@ -867,6 +868,43 @@ mod tests {
         assert_eq!(s.margin(), Duration::from_micros(500));
         // at 165 Hz that is under ten seconds
         assert!(SHRINK_AFTER as u128 * steps < 165 * 10);
+    }
+
+    /// The desktop margin comes down to its floor while fewer than one frame in SHRINK_AFTER misses,
+    /// and still climbs while more do. The owner's log (2026-11-22 to 25, 165 Hz) missed 0.21% of
+    /// composited frames at a 0.5 ms margin and 0.32 to 0.50% at 1.25 to 4 ms; with a miss
+    /// restarting the count of frames made, misses at about 0.3% held the margin above its floor for
+    /// 92% of composited frames (at 1.25 ms or more for 90%), each shown that much later.
+    #[test]
+    fn sparse_misses_let_the_margin_come_down_and_frequent_ones_raise_it() {
+        let run = |made_between: u32, cycles: u32| {
+            let mut s = warmed(LatencyMode::Direct, 0.3);
+            let mut t = ms(100.0);
+            s.vblank(t);
+            for _ in 0..cycles {
+                for _ in 0..made_between {
+                    s.rendered(t + P - ms(2.0), t + P - ms(1.0));
+                    t += P;
+                    s.vblank(t);
+                }
+                s.rendered(t + ms(1.0), t + ms(2.0));
+                t += P * 2;
+                s.vblank(t);
+            }
+            for _ in 0..SHRINK_AFTER {
+                s.rendered(t + P - ms(2.0), t + P - ms(1.0));
+                t += P;
+                s.vblank(t);
+            }
+            s
+        };
+        // one miss in 300 frames (0.33%): back at the 0.5 ms floor one SHRINK_AFTER after the last
+        let sparse = run(299, 20);
+        assert_eq!(sparse.counts().1, 20);
+        assert_eq!(sparse.margin(), ms(0.5));
+        // one in 120 (0.83%): wider than it started
+        let frequent = run(119, 4);
+        assert!(frequent.margin() > ms(1.5), "{:?}", frequent.margin());
     }
 
     /// The refreshes right after the mode changes (a game starts going to the screen directly) do not
