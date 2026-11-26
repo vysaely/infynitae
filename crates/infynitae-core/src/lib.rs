@@ -36,6 +36,7 @@ mod entry;
 mod shell_tests;
 
 pub use entry::authority;
+pub use entry::priority::{AppFacts, USED_HOLD_US};
 use std::time::Duration;
 
 #[cfg(any(
@@ -239,6 +240,12 @@ pub enum ShellCommand {
     KeepOnTop {
         element: stage::ElementRef,
         on: Option<bool>,
+    },
+    /// Keeps `element`'s app at full CPU priority out of sight, or no more (`BACKGROUND_KEEP`,
+    /// the window menu's "Keep at full speed in the background").
+    BackgroundKeep {
+        element: stage::ElementRef,
+        on: bool,
     },
     /// Minimizes `element` (as a client minimize does).
     MinimizeElement { element: stage::ElementRef },
@@ -472,6 +479,10 @@ pub struct Core {
     /// Titles or app_ids (lowercase) of windows kept on top from the start (`KEEP_ON_TOP`):
     /// picture-in-picture by default (owner, 2026-11-07).
     keep_on_top: Vec<String>,
+    /// App ids (lowercase) kept at full CPU priority out of sight (`BACKGROUND_KEEP`).
+    background_keep: Vec<String>,
+    /// The input-clock time of the last key press or click into each window (`app_in_use`).
+    last_used: std::collections::HashMap<stage::ElementId, u64>,
     /// Each camera's centre and zoom when the windows kept on top last followed it: they keep
     /// their place on the screen when the view moves.
     on_top_view: Vec<(usize, geom::CanvasPos, f64)>,
@@ -665,6 +676,8 @@ impl Core {
                     .iter()
                     .map(|s| s.to_string())
                     .collect(),
+                background_keep: Vec::new(),
+                last_used: std::collections::HashMap::new(),
                 on_top_view: Vec::new(),
                 fullscreen: Vec::new(),
                 premap_fullscreen: Vec::new(),
@@ -1621,6 +1634,7 @@ impl Core {
             | E::TogglePrivacy
             | E::ToggleIdleInhibit
             | E::KeptOnTop { .. }
+            | E::BackgroundKept { .. }
             | E::ToggleTearing
             | E::SaveReplay
             | E::ToggleRecording

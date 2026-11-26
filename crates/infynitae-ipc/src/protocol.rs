@@ -257,6 +257,15 @@ fn request(v: &Value, core: &Core) -> Result<Request, RequestError> {
                 on,
             })
         }
+        "background_keep" => {
+            let Some(Value::Bool(on)) = v.get("on") else {
+                return Err(Invalid);
+            };
+            Request::Command(ShellCommand::BackgroundKeep {
+                element: element("element")?,
+                on: *on,
+            })
+        }
         "minimize_element" | "minimize" => Request::Command(ShellCommand::MinimizeElement {
             element: element("element")?,
         }),

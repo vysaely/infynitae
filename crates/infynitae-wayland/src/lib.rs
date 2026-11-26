@@ -51,6 +51,7 @@ pub mod session;
 mod shortcuts_inhibit;
 mod signals;
 mod snapshot;
+mod streams;
 mod syncobj;
 pub mod tearing;
 pub mod trust;
@@ -1502,6 +1503,10 @@ impl WaylandState {
                             "KEEP_ON_TOP" => {
                                 self.core
                                     .set_keep_on_top(&val.split(',').collect::<Vec<_>>());
+                            }
+                            "BACKGROUND_KEEP" => {
+                                self.core
+                                    .set_background_keep(&val.split(',').collect::<Vec<_>>());
                             }
                             "PLACEMENT_POLICY" => match val.to_lowercase().as_str() {
                                 "center" | "centred" | "centered" => {

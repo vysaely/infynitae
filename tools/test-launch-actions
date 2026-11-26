@@ -267,6 +267,11 @@ remember KEEP_ON_TOP mpv on
 check "keep on top keeps titles with spaces whole" "$(line KEEP_ON_TOP)" 'KEEP_ON_TOP="Picture-in-Picture, Picture in picture, mpv"'
 remember KEEP_ON_TOP "picture in picture" off
 check "  and takes one out by its name, any case" "$(line KEEP_ON_TOP)" 'KEEP_ON_TOP="Picture-in-Picture, mpv"'
+remember BACKGROUND_KEEP Blender on
+check "full speed in the background adds the app" "$(line BACKGROUND_KEEP)" 'BACKGROUND_KEEP="blender"'
+remember BACKGROUND_KEEP org.kde.kdenlive on
+remember BACKGROUND_KEEP blender off
+check "  and takes it out" "$(line BACKGROUND_KEEP)" 'BACKGROUND_KEEP="org.kde.kdenlive"'
 remember DISCORD_KEY_PATCH evil on
 check "any other setting is refused" "$(grep -c DISCORD "$HOMEDIR/.config/infynitae/config" || true)" 0
 printf '%s\n' 'TERMINAL="kitty"' > "$HOMEDIR/.config/infynitae/config"

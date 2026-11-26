@@ -276,6 +276,9 @@ impl WaylandState {
                 Effect::KeptOnTop { element, on } => {
                     self.remember_for_app(element, "KEEP_ON_TOP", on);
                 }
+                Effect::BackgroundKept { element, on } => {
+                    self.remember_for_app(element, "BACKGROUND_KEEP", on);
+                }
                 Effect::ToggleTearing => {
                     self.toggle_tearing_focused();
                 }

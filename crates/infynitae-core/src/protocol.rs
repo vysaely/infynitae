@@ -207,6 +207,9 @@ pub enum Effect {
     /// The user turned keep-on-top on or off for a window (Super+Shift+K): the adapter remembers it for the
     /// window's app (`KEEP_ON_TOP`), so the app's windows open that way after a restart.
     KeptOnTop { element: ElementId, on: bool },
+    /// The user kept a window's app at full priority out of sight, or no more (the window menu):
+    /// the adapter writes it into `BACKGROUND_KEEP`.
+    BackgroundKept { element: ElementId, on: bool },
     /// Toggle tearing for the focused window while it is fullscreen (by default Super+Shift+O, or
     /// Super+Shift+T).
     ToggleTearing,

@@ -224,6 +224,12 @@ impl Core {
                     out.push(Effect::KeptOnTop { element: id, on });
                 }
             }
+            ShellCommand::BackgroundKeep { element, on } => {
+                let id = self.shell_mapped(element)?;
+                if self.keep_in_background(id, on) {
+                    out.push(Effect::BackgroundKept { element: id, on });
+                }
+            }
             ShellCommand::MinimizeElement { element } => {
                 let id = self.shell_mapped(element)?;
                 if self.fullscreen_of(id).is_some() {

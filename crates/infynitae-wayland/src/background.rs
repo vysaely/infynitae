@@ -4,9 +4,11 @@
 //! screen has shown for [`HIDE_AFTER`] runs at nice [`BACKGROUND_NICE`], every thread of it and
 //! of the processes it started (a browser's tabs), and back at its own nice as soon as one of its
 //! windows is in sight or it has no window left. Nice only matters when the CPU is busy: an app
-//! out of sight still runs, it just goes after the ones you look at. Never lowered: an app with
-//! a window being shared (captured in the last [`CAPTURE_HOLD`]), the game, and X11 apps (one
-//! xwayland-satellite serves them all). A thread is lowered only when its process may raise it
+//! out of sight still runs, it just goes after the ones you look at. Never lowered: an app that
+//! interacts with the person, as Core decides (`Core::app_in_use`: a key or click into it in the
+//! last five minutes, its app id in `BACKGROUND_KEEP`, a window being shared (captured in the
+//! last [`CAPTURE_HOLD`]), the game, a sound stream of it playing or recording
+//! ([`crate::streams`])), and X11 apps (one xwayland-satellite serves them all). A thread is lowered only when its process may raise it
 //! back (`RLIMIT_NICE`, which the installer sets so apps return to nice 0 and never above it);
 //! without that limit nothing is lowered. A thread of its own walks /proc and sets the nice
 //! values, in the order the main loop decided them: an app of hundreds of threads is hundreds of
@@ -22,12 +24,14 @@ use std::sync::mpsc::{Sender, channel};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use infynitae_core::AppFacts;
 use infynitae_core::output::OutputId;
 use infynitae_core::stage::ElementId;
 use smithay::reexports::rustix::process::{Pid, getpid, getpriority_process, setpriority_process};
 
 use crate::WaylandState;
 use crate::log_line;
+use crate::streams::{Running, Streams};
 
 /// How long an app's windows are all out of sight before it is lowered.
 pub const HIDE_AFTER: Duration = Duration::from_secs(15);
@@ -65,6 +69,8 @@ pub struct Background {
     captured: HashMap<ElementId, Instant>,
     /// The game: its window and app.
     pub(crate) game: Option<(ElementId, u32)>,
+    /// The sound streams running (an app playing or recording keeps its priority).
+    streams: Streams,
     /// When the game was last seen off screen, while game mode is on.
     pub(crate) game_off_since: Option<Instant>,
     /// The last scan of the apps out of sight (`background_update`).
@@ -84,6 +90,7 @@ impl Default for Background {
             captured: HashMap::new(),
             game: None,
             game_off_since: None,
+            streams: Streams::default(),
         }
     }
 }
@@ -140,14 +147,14 @@ struct Plan {
 }
 
 impl Background {
-    /// The decision, from each windowed app and whether it is in sight now (a window shown,
-    /// shared or the game's): the apps to lower and to restore. Pure but for its timers.
+    /// The decision, from each windowed app and whether it is in use now
+    /// (`Core::app_in_use`): the apps to lower and to restore. Pure but for its timers.
     fn plan(&mut self, now: Instant, apps: &BTreeMap<u32, bool>) -> Plan {
         let mut plan = Plan::default();
         self.hidden_since
             .retain(|pid, _| apps.get(pid) == Some(&false));
-        for (&pid, &in_sight) in apps {
-            if in_sight || !self.enabled {
+        for (&pid, &in_use) in apps {
+            if in_use || !self.enabled {
                 if self.lowered.contains(&pid) {
                     plan.restore.push(pid);
                 }
@@ -382,7 +389,8 @@ impl WaylandState {
             .retain(|e, t| mapped.contains(e) && now.duration_since(*t) < CAPTURE_HOLD);
         let game = self.background.game.map(|(_, pid)| pid);
         let own = getpid().as_raw_nonzero().get() as u32;
-        let mut apps: BTreeMap<u32, bool> = BTreeMap::new();
+        // each windowed app: its windows, and whether one of them is being shared
+        let mut windows: BTreeMap<u32, (Vec<ElementId>, bool)> = BTreeMap::new();
         for e in mapped {
             let pid = match self.background.pids.get(&e) {
                 Some(pid) => *pid,
@@ -395,10 +403,28 @@ impl WaylandState {
                 }
             };
             let Some(pid) = pid else { continue };
-            let in_sight = self.core.membership().is_observed(e)
-                || self.background.captured.contains_key(&e)
-                || game == Some(pid);
-            *apps.entry(pid).or_insert(false) |= in_sight;
+            let app = windows.entry(pid).or_default();
+            app.0.push(e);
+            app.1 |= self.background.captured.contains_key(&e);
+        }
+        let mut apps: BTreeMap<u32, bool> = BTreeMap::new();
+        let mut streams = None;
+        for (&pid, (ws, captured)) in &windows {
+            let mut facts = AppFacts {
+                captured: *captured,
+                game: game == Some(pid),
+                ..AppFacts::default()
+            };
+            let mut in_use = self.core.app_in_use(ws, facts);
+            // the sound server is asked only about an app nothing else keeps
+            if !in_use && self.background.enabled {
+                let running = streams.get_or_insert_with(|| self.background.streams.running(now));
+                let windowed = |p| windows.contains_key(&p);
+                facts.playing = Running::of(&running.playing, pid, windowed);
+                facts.recording = Running::of(&running.recording, pid, windowed);
+                in_use = self.core.app_in_use(ws, facts);
+            }
+            apps.insert(pid, in_use);
         }
 
         let plan = self.background.plan(now, &apps);

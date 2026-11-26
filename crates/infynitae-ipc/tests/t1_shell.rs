@@ -1080,9 +1080,26 @@ fn show_window_menu_emits_ipc_event_and_window_menu_commands_apply() {
     assert_eq!(ev.get("on_top"), Some(&Value::Bool(false)));
     assert_eq!(ev.get("maximized"), Some(&Value::Bool(false)));
     assert_eq!(ev.get("fullscreen"), Some(&Value::Bool(false)));
+    // no app id yet: nothing to keep at full speed by
+    assert_eq!(ev.get("background_keep"), Some(&Value::Null));
 
     let mut cmd = connect(&mut server);
     let w_ref = eref(&core, w);
+    core.toplevel_metadata(w, None, Some("Blender")).unwrap();
+    assert_eq!(core.background_kept(w), Some(false));
+    let r0 = cmd.reply(
+        &mut server,
+        &mut core,
+        &format!(r#"{{"id":7,"cmd":"background_keep","element":{w_ref},"on":true}}"#),
+    );
+    assert_eq!(r0.get("ok"), Some(&Value::Bool(true)));
+    assert_eq!(core.background_kept(w), Some(true));
+    let bad = cmd.reply(
+        &mut server,
+        &mut core,
+        &format!(r#"{{"id":8,"cmd":"background_keep","element":{w_ref}}}"#),
+    );
+    assert_eq!(bad.get("ok"), Some(&Value::Bool(false)), "on is required");
     let r1 = cmd.reply(
         &mut server,
         &mut core,

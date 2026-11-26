@@ -298,9 +298,17 @@ GPU_RELIEF="true"
 
 BACKGROUND_PRIORITY="true"
     # An app whose windows have all been out of sight for 15 s runs at a lower CPU priority,
-    # back when you see one (never a shared window, the game, or X11 apps)
+    # back when you see one. Never lowered: an app playing sound or recording, one you typed or
+    # clicked into in the last 5 minutes, a shared window, the game, X11 apps, and the apps in
+    # BACKGROUND_KEEP
     # default: true
     # options: true  · false
+
+BACKGROUND_KEEP=""
+    # Apps kept at full speed out of sight, by app id, comma separated (a long render, a
+    # download). The window menu's "Keep at full speed in the background" adds an app and takes
+    # it out
+    # default: ""
 
 
 # ═══ Look ══════════════════════════════════════════════════════════════════════════ [reload] ═══
