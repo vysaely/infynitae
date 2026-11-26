@@ -34,6 +34,8 @@ pub(super) fn recover_renderer(data: &mut LoopData) {
     let _ = renderer.upscale_filter(tex_filter);
     data.zoom_programs = smooth::zoom_programs(&mut renderer);
     data.state.corners_drawn = smooth::init_corners(&mut renderer);
+    // the copy thread may still read the old renderer's mappings
+    data.capture_worker.wait();
     data.renderer = renderer;
     // copies started on the lost renderer cannot be read: their captures fail (the client asks again)
     for c in data.capture_copies.drain(..) {

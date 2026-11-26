@@ -205,7 +205,7 @@ fn format_capture_log(program: Option<&str>, path: Option<&str>, gpu: bool) -> S
     let via = if gpu {
         "a GPU buffer (dmabuf)"
     } else {
-        "memory (shm), copied on the main thread"
+        "memory (shm), read back from the GPU"
     };
     format!("[infynitae] Capture started by {who}: into {via}")
 }
@@ -395,6 +395,7 @@ fn handle_screencopy<E>(
         mapping,
         sync,
         watched: false,
+        job: None,
         output_id,
         reqs: remaining,
         size,
@@ -460,25 +461,13 @@ fn has_pending_readback(copies: &[PendingCopy], output_id: OutputId) -> bool {
     copies.iter().any(|c| c.output_id == output_id)
 }
 
-fn take_ready<T>(items: &mut Vec<T>, mut is_ready: impl FnMut(&T) -> bool) -> Vec<T> {
-    let mut ready = Vec::with_capacity(items.len());
-    let mut pending = Vec::new();
-    for item in items.drain(..) {
-        if is_ready(&item) {
-            ready.push(item);
-        } else {
-            pending.push(item);
-        }
-    }
-    *items = pending;
-    ready
-}
-
 /// A capture into memory whose copy out of the GPU was started: handed over by `deliver_copies`.
 pub(super) struct PendingCopy {
     pub(super) mapping: <GlesRenderer as ExportMem>::TextureMapping,
     pub(super) sync: SyncPoint,
     pub(super) watched: bool,
+    /// The copy thread's job filling the clients' buffers, sent once the GPU finished.
+    pub(super) job: Option<u64>,
     pub(super) output_id: OutputId,
     pub(super) reqs: Vec<infynitae_wayland::screencopy::PendingFrame>,
     pub(super) size: (i32, i32),
@@ -487,107 +476,248 @@ pub(super) struct PendingCopy {
     pub(super) now: std::time::Duration,
 }
 
-/// Hands over the captures copied out of the GPU whose fence has signalled, leaving unfinished
-/// readbacks in `copies` so `map_texture` never stalls the event loop.
+/// A finished readback's mapped pixels, read by the copy thread.
+struct Pixels {
+    ptr: *const u8,
+    len: usize,
+}
+
+// SAFETY: the pixels are only read, and stay mapped while a job reads them: the `PendingCopy`
+// owning the mapping is dropped only after its job is reported done (`deliver_copies`),
+// `recover_renderer` waits for the copy thread before the renderer goes, and `CopyWorker` is
+// dropped (its thread joined) before the renderer (`LoopData`'s field order).
 #[allow(unsafe_code)]
+unsafe impl Send for Pixels {}
+
+impl Pixels {
+    #[allow(unsafe_code)]
+    fn slice(&self) -> &[u8] {
+        // SAFETY: see `Send for Pixels`
+        unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
+    }
+}
+
+type CopyJob = Box<dyn FnOnce() -> Vec<bool> + Send>;
+
+/// Copies finished readbacks into the clients' memory on a thread of its own: a 2560x1440 screen
+/// is 14.7 MB a frame, copied in the compositor's turn before.
+pub(super) struct CopyWorker {
+    jobs: Option<std::sync::mpsc::Sender<(u64, CopyJob)>>,
+    done: std::sync::mpsc::Receiver<(u64, Vec<bool>)>,
+    thread: Option<std::thread::JoinHandle<()>>,
+    next: u64,
+    in_flight: usize,
+    /// Jobs done, each with whether each buffer was filled, not yet taken by `finished`.
+    finished: Vec<(u64, Vec<bool>)>,
+}
+
+impl CopyWorker {
+    /// `wake` is pinged after each job, so the loop hands its captures over.
+    pub(super) fn new(wake: smithay::reexports::calloop::ping::Ping) -> std::io::Result<Self> {
+        let (jobs, todo) = std::sync::mpsc::channel::<(u64, CopyJob)>();
+        let (report, done) = std::sync::mpsc::channel();
+        let thread = std::thread::Builder::new()
+            .name("capture copy".into())
+            .spawn(move || {
+                for (id, job) in todo {
+                    if report.send((id, job())).is_err() {
+                        return;
+                    }
+                    wake.ping();
+                }
+            })?;
+        Ok(Self {
+            jobs: Some(jobs),
+            done,
+            thread: Some(thread),
+            next: 0,
+            in_flight: 0,
+            finished: Vec::new(),
+        })
+    }
+
+    /// The job's id, or `None` when the thread is gone (it panicked).
+    fn send(&mut self, job: CopyJob) -> Option<u64> {
+        let id = self.next;
+        self.next += 1;
+        self.jobs.as_ref()?.send((id, job)).ok()?;
+        self.in_flight += 1;
+        Some(id)
+    }
+
+    fn finished(&mut self) -> Vec<(u64, Vec<bool>)> {
+        self.finished.extend(self.done.try_iter());
+        self.in_flight = self.in_flight.saturating_sub(self.finished.len());
+        std::mem::take(&mut self.finished)
+    }
+
+    /// Blocks until every job sent so far is done: before the mappings they read go away.
+    pub(super) fn wait(&mut self) {
+        while self.in_flight > 0 {
+            let Ok(done) = self.done.recv() else { break };
+            self.finished.push(done);
+            self.in_flight -= 1;
+        }
+        self.in_flight = 0;
+    }
+}
+
+impl Drop for CopyWorker {
+    fn drop(&mut self) {
+        // the thread ends after the jobs already sent
+        drop(self.jobs.take());
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+/// Hands over the captures the copy thread filled, and sends it those whose GPU fence has
+/// signalled, leaving unfinished readbacks in `copies` so `map_texture` never stalls the loop.
 pub(super) fn deliver_copies(
     renderer: &mut GlesRenderer,
     copies: &mut Vec<PendingCopy>,
+    worker: &mut CopyWorker,
     woken_outputs: &mut Vec<OutputId>,
 ) {
-    let ready = take_ready(copies, |c| c.sync.is_reached());
-    for PendingCopy {
-        mapping,
-        sync: _,
-        watched: _,
-        output_id,
-        reqs: remaining,
-        size,
-        view,
-        transform,
-        now,
-    } in ready
-    {
-        if !woken_outputs.contains(&output_id) {
-            woken_outputs.push(output_id);
-        }
-        let slice = match ExportMem::map_texture(renderer, &mapping) {
-            Ok(s) => s,
-            Err(e) => {
-                log_line!("[screencopy] Failed to map texture: {e:?}");
-                for p in remaining {
-                    p.fail();
-                }
-                continue;
-            }
+    for (id, copied) in worker.finished() {
+        // gone: failed when the renderer was made again (`recover_renderer`)
+        let Some(pos) = copies.iter().position(|c| c.job == Some(id)) else {
+            continue;
         };
-
-        let src_stride = (size.0 * 4) as usize;
-
-        for req in remaining {
-            // the region's place in the whole-screen buffer (the panel's orientation)
-            let (rx, ry) = req
-                .region
-                .map(|r| convert::capture_region_in_buffer(r, view, transform))
-                .map(|(x, y, _, _)| (x.max(0) as usize, y.max(0) as usize))
-                .unwrap_or((0, 0));
-
-            let copy_result = with_buffer_contents_mut(&req.buffer, |ptr, len, buffer_data| {
-                if buffer_data.format
-                    != smithay::reexports::wayland_server::protocol::wl_shm::Format::Argb8888
-                    && buffer_data.format
-                        != smithay::reexports::wayland_server::protocol::wl_shm::Format::Xrgb8888
-                {
-                    return false;
-                }
-                let h = (buffer_data.height.max(0) as usize).min(size.1 as usize);
-                let w_bytes = (buffer_data.width.max(0) as usize).min(size.0 as usize) * 4;
-                let dest_stride = buffer_data.stride.max(0) as usize;
-                let offset = buffer_data.offset.max(0) as usize;
-
-                if dest_stride < w_bytes {
-                    return false;
-                }
-                let total_required = match dest_stride
-                    .checked_mul(h.saturating_sub(1))
-                    .and_then(|v| v.checked_add(w_bytes))
-                    .and_then(|v| v.checked_add(offset))
-                {
-                    Some(bytes) => bytes,
-                    None => return false,
-                };
-                if total_required > len {
-                    return false;
-                }
-
-                // SAFETY: bounds verified: `dest_stride >= w_bytes`, `total_required <= len`,
-                // and `src_offset + w_bytes <= slice.len()`.
-                unsafe {
-                    let dest_base = ptr.add(offset);
-                    for row in 0..h {
-                        let src_row_idx = (ry + row).min(size.1.max(0) as usize);
-                        let src_offset = src_row_idx * src_stride + rx * 4;
-                        if src_offset + w_bytes <= slice.len() {
-                            let src_row = &slice[src_offset..(src_offset + w_bytes)];
-                            let dest_row = dest_base.add(row * dest_stride);
-                            std::ptr::copy_nonoverlapping(src_row.as_ptr(), dest_row, w_bytes);
-                        }
-                    }
-                }
-                true
-            });
-
-            if matches!(copy_result, Ok(true)) {
+        // the mapping is let go here, on the renderer's thread
+        let copy = copies.remove(pos);
+        if !woken_outputs.contains(&copy.output_id) {
+            woken_outputs.push(copy.output_id);
+        }
+        for (req, filled) in copy.reqs.into_iter().zip(copied) {
+            if filled {
                 let target_size = req
                     .region
-                    .map(|(_, _, w, h)| convert::capture_buffer_size((w, h), transform))
-                    .unwrap_or(size);
-                req.ready((target_size.0 as u32, target_size.1 as u32), now);
+                    .map(|(_, _, w, h)| convert::capture_buffer_size((w, h), copy.transform))
+                    .unwrap_or(copy.size);
+                req.ready((target_size.0 as u32, target_size.1 as u32), copy.now);
             } else {
                 req.fail();
             }
         }
     }
+
+    let mut i = 0;
+    while i < copies.len() {
+        let c = &mut copies[i];
+        if c.job.is_some() || !c.sync.is_reached() {
+            i += 1;
+            continue;
+        }
+        c.job = match ExportMem::map_texture(renderer, &c.mapping) {
+            Ok(slice) => {
+                let pixels = Pixels {
+                    ptr: slice.as_ptr(),
+                    len: slice.len(),
+                };
+                let targets: Vec<_> = c
+                    .reqs
+                    .iter()
+                    .map(|r| (r.buffer.clone(), r.region))
+                    .collect();
+                let (size, view, transform) = (c.size, c.view, c.transform);
+                let job = worker.send(Box::new(move || {
+                    targets
+                        .iter()
+                        .map(|(buffer, region)| {
+                            copy_into_shm(pixels.slice(), buffer, *region, size, view, transform)
+                        })
+                        .collect()
+                }));
+                if job.is_none() {
+                    log_line!("[screencopy] The capture copy thread stopped");
+                }
+                job
+            }
+            Err(e) => {
+                log_line!("[screencopy] Failed to map texture: {e:?}");
+                None
+            }
+        };
+        if c.job.is_some() {
+            i += 1;
+            continue;
+        }
+        let copy = copies.remove(i);
+        if !woken_outputs.contains(&copy.output_id) {
+            woken_outputs.push(copy.output_id);
+        }
+        for p in copy.reqs {
+            p.fail();
+        }
+    }
+}
+
+/// Copies the readback `slice` (`size` px, the panel's orientation) into a client's shm
+/// `buffer`: all of it, or the `region` of `view`. False if the buffer cannot take it.
+#[allow(unsafe_code)]
+fn copy_into_shm(
+    slice: &[u8],
+    buffer: &smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer,
+    region: Option<(i32, i32, i32, i32)>,
+    size: (i32, i32),
+    view: (i32, i32),
+    transform: infynitae_core::output::Transform,
+) -> bool {
+    let src_stride = (size.0 * 4) as usize;
+    // the region's place in the whole-screen buffer (the panel's orientation)
+    let (rx, ry) = region
+        .map(|r| convert::capture_region_in_buffer(r, view, transform))
+        .map(|(x, y, _, _)| (x.max(0) as usize, y.max(0) as usize))
+        .unwrap_or((0, 0));
+
+    let copy_result = with_buffer_contents_mut(buffer, |ptr, len, buffer_data| {
+        if buffer_data.format
+            != smithay::reexports::wayland_server::protocol::wl_shm::Format::Argb8888
+            && buffer_data.format
+                != smithay::reexports::wayland_server::protocol::wl_shm::Format::Xrgb8888
+        {
+            return false;
+        }
+        let h = (buffer_data.height.max(0) as usize).min(size.1 as usize);
+        let w_bytes = (buffer_data.width.max(0) as usize).min(size.0 as usize) * 4;
+        let dest_stride = buffer_data.stride.max(0) as usize;
+        let offset = buffer_data.offset.max(0) as usize;
+
+        if dest_stride < w_bytes {
+            return false;
+        }
+        let total_required = match dest_stride
+            .checked_mul(h.saturating_sub(1))
+            .and_then(|v| v.checked_add(w_bytes))
+            .and_then(|v| v.checked_add(offset))
+        {
+            Some(bytes) => bytes,
+            None => return false,
+        };
+        if total_required > len {
+            return false;
+        }
+
+        // SAFETY: bounds verified: `dest_stride >= w_bytes`, `total_required <= len`,
+        // and `src_offset + w_bytes <= slice.len()`.
+        unsafe {
+            let dest_base = ptr.add(offset);
+            for row in 0..h {
+                let src_row_idx = (ry + row).min(size.1.max(0) as usize);
+                let src_offset = src_row_idx * src_stride + rx * 4;
+                if src_offset + w_bytes <= slice.len() {
+                    let src_row = &slice[src_offset..(src_offset + w_bytes)];
+                    let dest_row = dest_base.add(row * dest_stride);
+                    std::ptr::copy_nonoverlapping(src_row.as_ptr(), dest_row, w_bytes);
+                }
+            }
+        }
+        true
+    });
+
+    matches!(copy_result, Ok(true))
 }
 
 #[cfg(test)]
@@ -613,48 +743,31 @@ mod tests {
                 Some("org.obsproject.Studio (sandboxed by flatpak)"),
                 false,
             ),
-            "[infynitae] Capture started by org.obsproject.Studio (sandboxed by flatpak): into memory (shm), copied on the main thread"
+            "[infynitae] Capture started by org.obsproject.Studio (sandboxed by flatpak): into memory (shm), read back from the GPU"
         );
     }
 
     #[test]
-    fn take_ready_leaves_unsignaled_fences_pending() {
-        use smithay::backend::renderer::sync::{Fence, Interrupted, SyncPoint};
-        use std::os::unix::io::OwnedFd;
-        use std::sync::atomic::{AtomicBool, Ordering};
-
-        #[derive(Debug)]
-        struct TestFence(Arc<AtomicBool>);
-
-        impl Fence for TestFence {
-            fn is_signaled(&self) -> bool {
-                self.0.load(Ordering::Acquire)
-            }
-            fn wait(&self) -> Result<(), Interrupted> {
-                Ok(())
-            }
-            fn is_exportable(&self) -> bool {
-                false
-            }
-            fn export(&self) -> Option<OwnedFd> {
-                None
-            }
-        }
-
-        let slow_flag = Arc::new(AtomicBool::new(false));
-        let mut items = vec![
-            (1u32, SyncPoint::from(TestFence(slow_flag.clone()))),
-            (2u32, SyncPoint::signaled()),
-        ];
-
-        let ready = take_ready(&mut items, |(_, sync)| sync.is_reached());
-        assert_eq!(ready.iter().map(|(id, _)| *id).collect::<Vec<_>>(), [2]);
-        assert_eq!(items.iter().map(|(id, _)| *id).collect::<Vec<_>>(), [1]);
-
-        slow_flag.store(true, Ordering::Release);
-        let ready = take_ready(&mut items, |(_, sync)| sync.is_reached());
-        assert_eq!(ready.iter().map(|(id, _)| *id).collect::<Vec<_>>(), [1]);
-        assert!(items.is_empty());
+    fn copy_thread_runs_jobs_while_the_loop_goes_on() {
+        let (ping, _wake) = smithay::reexports::calloop::ping::make_ping().expect("ping");
+        let mut worker = CopyWorker::new(ping).expect("copy thread");
+        let (release, gate) = std::sync::mpsc::channel::<()>();
+        let first = worker
+            .send(Box::new(move || {
+                gate.recv().expect("released");
+                vec![true, false]
+            }))
+            .expect("sent");
+        let second = worker.send(Box::new(|| vec![true])).expect("sent");
+        // the loop is not held while a copy runs
+        assert!(worker.finished().is_empty());
+        release.send(()).expect("release");
+        worker.wait();
+        assert_eq!(
+            worker.finished(),
+            [(first, vec![true, false]), (second, vec![true])]
+        );
+        assert!(worker.finished().is_empty());
     }
 
     #[test]
@@ -742,6 +855,7 @@ mod tests {
             mapping,
             sync,
             watched: false,
+            job: None,
             output_id: id1,
             reqs: Vec::new(),
             size,
@@ -752,8 +866,15 @@ mod tests {
         assert!(has_pending_readback(&copies, id1));
         assert!(!has_pending_readback(&copies, id2));
 
+        let (ping, _wake) = smithay::reexports::calloop::ping::make_ping().expect("ping");
+        let mut worker = CopyWorker::new(ping).expect("copy thread");
         let mut woken = Vec::new();
-        deliver_copies(&mut renderer, &mut copies, &mut woken);
+        // mapped and sent to the copy thread; handed over on a later turn
+        deliver_copies(&mut renderer, &mut copies, &mut worker, &mut woken);
+        assert!(copies[0].job.is_some());
+        assert!(woken.is_empty());
+        worker.wait();
+        deliver_copies(&mut renderer, &mut copies, &mut worker, &mut woken);
         assert!(copies.is_empty());
         assert_eq!(woken, [id1]);
     }

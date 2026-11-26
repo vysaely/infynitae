@@ -29,7 +29,9 @@ mod timing;
 pub use input::{calculate_abs_pointer_delta_scale, parse_lock_when_away, resolve_touchpad_tap};
 pub use screens::{VIRTUAL_SCREEN_SIZE, virtual_screen_change};
 
-use capture::{CaptureSeen, PendingCopy, deliver_copies, serve_captures, watch_copy_sync};
+use capture::{
+    CaptureSeen, CopyWorker, PendingCopy, deliver_copies, serve_captures, watch_copy_sync,
+};
 use input::{
     apply_virtual_input, configure_input_device, core_key, core_touch, dispatch_libinput_event,
 };
@@ -412,6 +414,8 @@ struct LoopData {
     input_port: InputPort,
     output_token: OutputLifecycleToken,
     drm: DrmDevice,
+    /// Before `renderer`: dropped first, so its thread is done reading the renderer's mappings.
+    capture_worker: CopyWorker,
     renderer: GlesRenderer,
     screens: Vec<Screen>,
     gamma_screens: Arc<Mutex<HashMap<OutputId, DrmScreenGamma>>>,
@@ -950,6 +954,14 @@ pub fn run_console_with(
             }
         })
         .map_err(|e| format!("idle inhibit channel: {e}"))?;
+    // the capture copy thread wakes the loop to hand its captures over
+    let (copy_ping, copy_wake) = smithay::reexports::calloop::ping::make_ping()
+        .map_err(|e| format!("capture copy wake: {e}"))?;
+    handle
+        .insert_source(copy_wake, |_, _, _| {})
+        .map_err(|e| format!("capture copy wake: {e}"))?;
+    let capture_worker =
+        CopyWorker::new(copy_ping).map_err(|e| format!("capture copy thread: {e}"))?;
     handle
         .insert_source(drm_notifier, |event, meta, data| match event {
             DrmEvent::VBlank(crtc) => {
@@ -1079,6 +1091,7 @@ pub fn run_console_with(
         input_port,
         output_token,
         drm,
+        capture_worker,
         renderer,
         screens,
         gamma_screens: gamma_screens.clone(),
@@ -1567,7 +1580,12 @@ pub fn run_console_with(
         turn.mark("new windows");
         if !data.capture_copies.is_empty() && data.active {
             let mut woken = Vec::new();
-            deliver_copies(&mut data.renderer, &mut data.capture_copies, &mut woken);
+            deliver_copies(
+                &mut data.renderer,
+                &mut data.capture_copies,
+                &mut data.capture_worker,
+                &mut woken,
+            );
             for id in woken {
                 if let Some(pos) = data
                     .capture_readback_deferred
