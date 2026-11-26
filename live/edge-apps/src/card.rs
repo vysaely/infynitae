@@ -222,6 +222,9 @@ pub struct Hits {
     pub list: Vec<(u32, Rect)>,
     /// hits that respond to a pointer/touch drag (sliders) instead of panel scrolling
     pub draggable: Vec<u32>,
+    /// optional `(hit_id, text)` annotations for `INFYNITAE_EDGE_BOXES` (`Some(id)` labels a
+    /// hit; `None` is unclickable status text drawn by the card)
+    pub texts: Vec<(Option<u32>, String)>,
 }
 
 fn inside(r: Rect, (x, y): (f64, f64)) -> bool {
@@ -235,7 +238,18 @@ impl Hits {
             selected,
             list: Vec::new(),
             draggable: Vec::new(),
+            texts: Vec::new(),
         }
+    }
+
+    /// Records `text` for hit `id` in `INFYNITAE_EDGE_BOXES`.
+    pub fn label(&mut self, id: u32, text: impl Into<String>) {
+        self.texts.push((Some(id), text.into()));
+    }
+
+    /// Records unclickable status text in `INFYNITAE_EDGE_BOXES`.
+    pub fn note(&mut self, text: impl Into<String>) {
+        self.texts.push((None, text.into()));
     }
 
     /// Registers a clickable rectangle under the card's own `id`. True when the pointer is over it:
@@ -406,6 +420,12 @@ pub enum Action {
     RemoveCard,
     /// a JSON request line sent to `$XDG_RUNTIME_DIR/infynitae/shell.sock`
     ShellCommand(String),
+    /// files by name with plocate, the search before cancelled ("": only cancel); the answer comes
+    /// to the card's "located" source key (`crate::locate`)
+    Locate(String),
+    /// the panel named so opens in this one's place with this query typed (a settings row found by
+    /// the launcher's search)
+    OpenPanel(String, String),
 }
 
 /// The fixture's values (`INFYNITAE_EDGE_RENDER_DATA`: `key=value` lines, `\n` and `\t` escaped),

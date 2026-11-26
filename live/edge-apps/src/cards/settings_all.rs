@@ -175,6 +175,34 @@ struct DrawnHit {
     rect: Rect,
 }
 
+fn collect_child_hits(
+    child: usize,
+    child_hits: Hits,
+    hits: &mut Hits,
+    recorded: &mut Vec<DrawnHit>,
+) {
+    let base = CHILD_STRIDE * (child as u32 + 1);
+    for (cid, rect) in child_hits.list {
+        let emitted = base + cid;
+        let _ = hits.add(emitted, rect);
+        if child_hits.draggable.contains(&cid) {
+            hits.mark_draggable(emitted);
+        }
+        recorded.push(DrawnHit {
+            emitted,
+            child,
+            child_id: cid,
+            rect,
+        });
+    }
+    for (cid, text) in child_hits.texts {
+        match cid {
+            Some(id) => hits.label(base + id, text),
+            None => hits.note(text),
+        }
+    }
+}
+
 pub struct SettingsAllCard {
     children: Vec<Box<dyn Card>>,
     open: Option<usize>,
@@ -805,20 +833,7 @@ impl Card for SettingsAllCard {
                 let child_sel = selected_target.and_then(|(c, cid)| (c == i).then_some(cid));
                 let mut child_hits = Hits::new(hits.pointer, child_sel);
                 child.draw(cr, &child_cx, (body.0, y, body.2, ch), &mut child_hits);
-                let base = CHILD_STRIDE * (i as u32 + 1);
-                for (cid, rect) in child_hits.list {
-                    let emitted = base + cid;
-                    let _ = hits.add(emitted, rect);
-                    if child_hits.draggable.contains(&cid) {
-                        hits.mark_draggable(emitted);
-                    }
-                    recorded_hits.push(DrawnHit {
-                        emitted,
-                        child: i,
-                        child_id: cid,
-                        rect,
-                    });
-                }
+                collect_child_hits(i, child_hits, hits, &mut recorded_hits);
                 y += ch;
             }
 
@@ -918,6 +933,7 @@ impl Card for SettingsAllCard {
                     right: 8.0,
                 },
             );
+            hits.label(HIT_GROUP_BASE + g as u32, group.title);
             y += ui::ROW_H;
 
             if self.open == Some(g) {
@@ -962,17 +978,7 @@ impl Card for SettingsAllCard {
                             (body.0 + INNER_X, y, inner_w, h),
                             &mut child_hits,
                         );
-                        let base = CHILD_STRIDE * (i as u32 + 1);
-                        for (cid, rect) in child_hits.list {
-                            let emitted = base + cid;
-                            let _ = hits.add(emitted, rect);
-                            recorded_hits.push(DrawnHit {
-                                emitted,
-                                child: i,
-                                child_id: cid,
-                                rect,
-                            });
-                        }
+                        collect_child_hits(i, child_hits, hits, &mut recorded_hits);
                         h
                     };
                     y += ch;

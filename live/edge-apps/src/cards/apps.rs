@@ -92,6 +92,7 @@ const KINDS: &[CardKind] = &[
         sources: &["background"],
     },
     crate::cards::tray_menu::KIND,
+    crate::cards::search::KIND,
 ];
 
 pub struct Apps;
@@ -127,6 +128,9 @@ impl Provider for Apps {
                 ..SearchCard::default()
             })),
             "background" if argument.is_none() => Some(Box::new(BackgroundCard::default())),
+            "results" if argument.is_none() => {
+                Some(Box::new(crate::cards::search::ResultsCard::default()))
+            }
             "menu" => argument
                 .map(|a| Box::new(crate::cards::tray_menu::MenuCard::new(a)) as Box<dyn Card>),
             _ => None,
@@ -137,6 +141,7 @@ impl Provider for Apps {
         match key {
             "background" | "tray" => Some(Box::new(BackgroundSource::default())),
             "traymenu" => Some(Box::new(crate::cards::tray_menu::MenusSource)),
+            "search" => Some(Box::new(crate::cards::search::SearchSource::default())),
             _ => None,
         }
     }
@@ -177,7 +182,7 @@ fn draw_tile(
     draw::text_center(cr, x + size / 2.0, y + (size - th_h) / 2.0, &t);
 }
 
-fn draw_subhead(cr: &Context, th: &Theme, body: Rect, y: f64, label: &str) {
+pub(crate) fn draw_subhead(cr: &Context, th: &Theme, body: Rect, y: f64, label: &str) {
     draw::text_max(
         cr,
         body.0 + 8.0,
@@ -527,6 +532,7 @@ impl Card for AppsListCard {
                             note_accent: false,
                         },
                     );
+                    hits.label(app_idx as u32, format!("{} {}", app.id, app.name));
                 }
             }
             y += h;
@@ -949,6 +955,7 @@ impl Card for SearchCard {
                             note_accent: false,
                         },
                     );
+                    hits.label(hit_id, format!("{} {}", app.id, app.name));
                     y += ROW_H;
                 }
             }
@@ -1682,7 +1689,14 @@ mod tests {
         let ids: Vec<&str> = Apps.cards().iter().map(|k| k.id).collect();
         assert_eq!(
             ids,
-            vec!["list", "favorites", "search", "background", "menu"]
+            vec![
+                "list",
+                "favorites",
+                "search",
+                "background",
+                "menu",
+                "results"
+            ]
         );
         // the menu is a tray app's: only with its id
         assert!(Apps.card("menu", None).is_none());
@@ -1697,10 +1711,15 @@ mod tests {
         assert!(Apps.card("search", Some("settings")).is_some());
         assert!(Apps.card("background", None).is_some());
         assert!(Apps.card("background", Some("arg")).is_none());
+        assert!(Apps.card("results", None).is_some());
+        assert!(Apps.card("results", Some("arg")).is_none());
         assert!(Apps.card("unknown", None).is_none());
 
         assert!(Apps.source("background").is_some());
         assert!(Apps.source("tray").is_some());
+        assert!(Apps.source("search").is_some());
+        // plocate's answers come under it; nothing fetches it
+        assert!(Apps.source("located").is_none());
         assert!(Apps.source("other").is_none());
     }
 

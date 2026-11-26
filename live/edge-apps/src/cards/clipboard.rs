@@ -72,28 +72,42 @@ enum ClipKind {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct ClipItem {
+pub(crate) struct ClipItem {
     raw_line: String,
-    preview: String,
-    time: String,
+    pub(crate) preview: String,
+    pub(crate) time: String,
     is_image: bool,
     pinned: bool,
 }
 
+impl ClipItem {
+    /// The command that puts it back on the clipboard.
+    pub(crate) fn copy(&self) -> String {
+        copy_command(&self.raw_line)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct ClipboardData {
+pub(crate) struct ClipboardData {
     installed: bool,
-    items: Vec<ClipItem>,
+    pub(crate) items: Vec<ClipItem>,
 }
 
 #[derive(Default)]
-struct ClipboardSource {
+pub(crate) struct ClipboardSource {
     /// Optional `PATH` override so tests can check binary detection without env races.
-    path: Option<OsString>,
+    pub(crate) path: Option<OsString>,
 }
 
 impl Source for ClipboardSource {
     fn fetch(&mut self) -> Data {
+        Box::new(self.read())
+    }
+}
+
+impl ClipboardSource {
+    /// The history as the card shows it (also the launcher's search, `cards/search.rs`).
+    pub(crate) fn read(&mut self) -> ClipboardData {
         if let (None, Some(render_file)) =
             (&self.path, std::env::var_os("INFYNITAE_EDGE_RENDER_DATA"))
         {
@@ -101,16 +115,16 @@ impl Source for ClipboardSource {
                 .ok()
                 .is_some_and(|s| parse_render_data(&s).contains_key("clipboard"));
             if !has_key {
-                return Box::new(ClipboardData {
+                return ClipboardData {
                     installed: false,
                     items: Vec::new(),
-                });
+                };
             }
             let out = run_sh("clipboard", CMD);
-            return Box::new(ClipboardData {
+            return ClipboardData {
                 installed: true,
                 items: parse_cliphist(&out),
-            });
+            };
         }
 
         let installed = match &self.path {
@@ -120,17 +134,17 @@ impl Source for ClipboardSource {
                 .is_some_and(|p| has_executable("cliphist", p)),
         };
         if !installed {
-            return Box::new(ClipboardData {
+            return ClipboardData {
                 installed: false,
                 items: Vec::new(),
-            });
+            };
         }
 
         let out = run_sh("clipboard", CMD);
-        Box::new(ClipboardData {
+        ClipboardData {
             installed: true,
             items: parse_cliphist(&out),
-        })
+        }
     }
 }
 

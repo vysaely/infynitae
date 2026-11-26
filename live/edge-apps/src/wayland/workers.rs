@@ -1029,4 +1029,102 @@ mod tests {
         assert!(sh.command_done("settings/network", &results[1], now));
         assert_eq!(sh.card_deadline(), None);
     }
+
+    /// The launcher's file search: plocate runs off the loop, the next keystroke kills the run
+    /// before (only its answer reaches the card), and closing the panel kills the one in flight.
+    #[test]
+    fn the_launcher_s_file_search_is_cancelled_by_the_next_keystroke_and_by_closing() {
+        let pid_file = crate::locate::tests::stub("harness", "")
+            .parent()
+            .unwrap()
+            .join("pid");
+        let plocate = crate::locate::tests::stub(
+            "harness",
+            &format!(
+                r#"if [ "$6" = slow ]; then echo $$ > {}; exec sleep 30; fi; echo "/home/a/$6.txt""#,
+                pid_file.display()
+            ),
+        );
+        let wait_pid = || {
+            let t0 = Instant::now();
+            while !pid_file.exists() && t0.elapsed() < Duration::from_secs(5) {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            let pid = std::fs::read_to_string(&pid_file).unwrap();
+            std::fs::remove_file(&pid_file).unwrap();
+            format!("/proc/{}", pid.trim())
+        };
+        let located = |rx: &channel::Channel<Fetched>, within: Duration| {
+            let t0 = Instant::now();
+            while t0.elapsed() < within {
+                if let Ok(Fetched::Data("apps", "located", data)) = rx.try_recv() {
+                    return Some(data);
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            None
+        };
+
+        let (_mock, conn) = MockWayland::start(
+            vec![MockOutputSpec {
+                width: 1280,
+                height: 800,
+                scale: 1,
+                fractional_120: 120,
+            }],
+            false,
+        );
+        let sh = Shell::new(crate::config::Config::from_text(""), Vec::new());
+        let (fetch_tx, fetch_rx) = channel::channel::<Fetched>();
+        let (mut app, _eq) = init_app(&conn, sh, fetch_tx).unwrap();
+        app.locator = crate::locate::Locator::new(plocate.as_os_str());
+        let target = app.key_target_output();
+        assert!(app.shell.toggle_named_on(target, "apps"));
+
+        app.shell.type_text("slow");
+        app.run_actions();
+        let slow = wait_pid();
+        app.shell.type_text("fast");
+        app.run_actions();
+        let data = located(&fetch_rx, Duration::from_secs(5)).expect("the answer for fast");
+        assert!(
+            !std::path::Path::new(&slow).exists(),
+            "the run for the keystroke before still goes"
+        );
+        assert!(app.shell.apply("apps", "located", data.as_ref()));
+        assert!(
+            located(&fetch_rx, Duration::from_millis(300)).is_none(),
+            "only one answer"
+        );
+        // no app or other kind matches: Enter opens the file found
+        assert!(app.shell.key(crate::shell::Key::Enter));
+        assert!(
+            app.shell
+                .actions
+                .iter()
+                .any(|(a, ..)| *a == Action::OpenUri("/home/a/fast.txt".into())),
+            "{:?}",
+            app.shell
+                .actions
+                .iter()
+                .map(|(a, ..)| a)
+                .collect::<Vec<_>>()
+        );
+        app.shell.actions.clear();
+
+        // closing while one runs kills it, and its answer never comes
+        app.shell.close();
+        assert!(app.shell.toggle_named_on(target, "apps"));
+        app.shell.type_text("slow");
+        app.run_actions();
+        let slow = wait_pid();
+        app.shell.close();
+        app.fetch_due(false);
+        assert!(
+            !std::path::Path::new(&slow).exists(),
+            "plocate outlived the panel"
+        );
+        assert!(located(&fetch_rx, Duration::from_millis(300)).is_none());
+        let _ = std::fs::remove_dir_all(plocate.parent().unwrap());
+    }
 }

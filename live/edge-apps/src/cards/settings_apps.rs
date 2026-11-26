@@ -154,6 +154,9 @@ pub const KEYS: &[&str] = &[FOUND[0].key, FOUND[1].key, FOUND[2].key, FOUND[3].k
 // Hit IDs outside TableCard's range (ROW 100.., LIST 5000.., MORE 9000).
 const FOUND_LIST: u32 = 20_000;
 
+/// Under the rows while plocate is missing: the launcher's search finds no files by name then.
+const NO_PLOCATE: &str = "Searching files by name needs plocate, which is not installed";
+
 /// Settings card for `settings/defaults`: app-list pickers from `cx.apps` above a `TableCard` for
 /// the boolean rows.
 pub struct DefaultsCard {
@@ -219,6 +222,10 @@ impl DefaultsCard {
                 !a.exec.is_empty() && cats.iter().all(|c| a.categories.iter().any(|ac| ac == c))
             })
             .collect()
+    }
+
+    fn shows_no_plocate(&self) -> bool {
+        self.query.trim().is_empty() && self.data.as_ref().is_some_and(|d| !d.has("plocate"))
     }
 
     fn matches_found(&self, f: &FoundSetting) -> bool {
@@ -352,7 +359,12 @@ impl Card for DefaultsCard {
         } else {
             self.rest.height(cx, width)
         };
-        found_h + rest_h
+        let note_h = if self.shows_no_plocate() {
+            ui::LIST_ROW_H
+        } else {
+            0.0
+        };
+        found_h + rest_h + note_h
     }
 
     fn draw(&self, cr: &Context, cx: &Cx, body: Rect, hits: &mut Hits) {
@@ -442,8 +454,31 @@ impl Card for DefaultsCard {
             }
         }
         if !matches!(self.rest.status(cx), Status::Hidden) {
-            let rest_h = (body.1 + body.3 - y).max(0.0);
+            let note_h = if self.shows_no_plocate() {
+                ui::LIST_ROW_H
+            } else {
+                0.0
+            };
+            let rest_h = (body.1 + body.3 - y - note_h).max(0.0);
             self.rest.draw(cr, cx, (body.0, y, body.2, rest_h), hits);
+            y += rest_h;
+        }
+        if self.shows_no_plocate() {
+            hits.note(NO_PLOCATE);
+            let t = Text {
+                text: NO_PLOCATE,
+                size: draw::SIZE_SMALL,
+                bold: false,
+                color: cx.theme.muted,
+            };
+            let (_, th) = draw::measure(cr, &t);
+            draw::text_max(
+                cr,
+                body.0 + 8.0,
+                y + (ui::LIST_ROW_H - th) / 2.0,
+                (body.2 - 16.0).max(0.0),
+                &t,
+            );
         }
     }
 
@@ -596,7 +631,7 @@ mod tests {
             &data(
                 &[],
                 &[("TERMINAL", "auto"), ("BROWSER", "auto")],
-                &["kitty"],
+                &["kitty", "plocate"],
             ) as &dyn Any,
         );
         // Terminal (0) and Browser (2) have matching apps; Files (1) has none;
@@ -613,7 +648,10 @@ mod tests {
 
         // Adding udisksctl reveals AUTOMOUNT and DRIVE_NAMES too; Size::M shows everything without
         // a More row.
-        c.apply("config", &data(&[], &[], &["udisksctl"]) as &dyn Any);
+        c.apply(
+            "config",
+            &data(&[], &[], &["udisksctl", "plocate"]) as &dyn Any,
+        );
         assert_eq!(c.height(&cx, 400.0), 8.0 * ui::ROW_H);
         cx.size = Size::M;
         assert_eq!(c.height(&cx, 400.0), 7.0 * ui::ROW_H);
@@ -803,7 +841,7 @@ mod tests {
                     ("BROWSER", "auto"),
                     ("SYSTEM_MONITOR", "auto"),
                 ],
-                &["kitty", "udisksctl"],
+                &["kitty", "udisksctl", "plocate"],
             ) as &dyn Any,
         );
 
@@ -835,9 +873,42 @@ mod tests {
         let apps_no_term = &apps[1..];
         cx.apps = apps_no_term;
         let mut c2 = DefaultsCard::new();
-        c2.apply("config", &data(&[], &[], &["udisksctl"]) as &dyn Any);
+        c2.apply(
+            "config",
+            &data(&[], &[], &["udisksctl", "plocate"]) as &dyn Any,
+        );
         c2.show_list();
         assert_bottom_matches_height(&c2, &cx, "show_list M");
+    }
+
+    #[test]
+    fn a_line_says_when_plocate_is_missing_and_goes_while_searching() {
+        let th = Theme::from_config(&crate::config::Config::from_text(""));
+        let cx = test_cx(&th);
+        let mut c = DefaultsCard::new();
+        c.apply("config", &data(&[], &[], &["plocate"]) as &dyn Any);
+        let with = c.height(&cx, 400.0);
+        c.apply("config", &data(&[], &[], &[]) as &dyn Any);
+        assert_eq!(c.height(&cx, 400.0), with + ui::LIST_ROW_H);
+
+        let mut surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 420, 400).unwrap();
+        let h = c.height(&cx, 400.0);
+        {
+            let cr = Context::new(&surf).unwrap();
+            c.draw(&cr, &cx, (0.0, 0.0, 400.0, h), &mut Hits::new(None, None));
+        }
+        surf.flush();
+        let stride = surf.stride() as usize;
+        let data = surf.data().unwrap();
+        // something drawn in the line's band at the bottom
+        let band = (h - ui::LIST_ROW_H) as usize..h as usize;
+        assert!(band
+            .flat_map(|y| data[y * stride..y * stride + 400 * 4].chunks(4))
+            .any(|px| px[3] != 0));
+        drop(data);
+
+        c.event(&Event::Text("reopen"), &cx, &mut Vec::new());
+        assert!(!c.shows_no_plocate());
     }
 
     #[test]

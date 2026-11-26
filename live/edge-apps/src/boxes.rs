@@ -1,10 +1,15 @@
 //! INFYNITAE_EDGE_BOXES (docs/EDGE_APPS.md section 9): after each drawing, a file the VM scripts read
-//! to find what to click: `panel NAME x y w h locked SIDE`, `module WORD x y w h` for a card read from
-//! today's module word (so today's scripts pass unchanged), `card OWNER/KIND x y w h` for every card,
-//! and `hit OWNER/KIND ID x y w h` for each of its hits; `ask x y w h` while the question shows;
-//! `osd x y w h VALUE LABEL` while the OSD shows; `closed` while closed.
+//! to find what to click: `panel NAME x y w h locked SIDE`, `query TEXT` when typed, `module WORD x y w h`
+//! for a card read from today's module word (so today's scripts pass unchanged), `card OWNER/KIND x y w h`
+//! for every card, `hit OWNER/KIND ID x y w h` for each of its hits, and `label OWNER/KIND ID TEXT` /
+//! `note OWNER/KIND TEXT` where cards annotate them; `ask x y w h` while the question shows; `osd x y w h
+//! VALUE LABEL` while the OSD shows; `closed` while closed.
 
 use crate::shell::Shell;
+
+fn clean_text(s: &str) -> String {
+    s.replace(['\r', '\n', '\t'], " ")
+}
 
 fn boxes_path() -> Option<std::ffi::OsString> {
     std::env::var_os("INFYNITAE_EDGE_BOXES").filter(|p| !p.is_empty())
@@ -114,6 +119,9 @@ fn text_on(shell: &Shell, output: Option<crate::shell::OutputId>, w: f64, h: f64
         if editing { "editing" } else { "locked" },
         ps.panel.side.word()
     );
+    if !shell.query.is_empty() {
+        out += &format!("query {}\n", clean_text(&shell.query));
+    }
     for &(ci, r) in &local_rects {
         let pc = &ps.cards[ci];
         let sx = ox + r.0;
@@ -133,6 +141,21 @@ fn text_on(shell: &Shell, output: Option<crate::shell::OutputId>, w: f64, h: f64
                 "hit {}/{} {id} {:.0} {:.0} {:.0} {:.0}\n",
                 pc.word.owner, pc.word.kind, r.0, r.1, r.2, r.3
             );
+        }
+        for (id, text) in hits.texts {
+            let text = clean_text(&text);
+            let text = text.trim();
+            if text.is_empty() {
+                continue;
+            }
+            match id {
+                Some(id) => {
+                    out += &format!("label {}/{} {id} {text}\n", pc.word.owner, pc.word.kind);
+                }
+                None => {
+                    out += &format!("note {}/{} {text}\n", pc.word.owner, pc.word.kind);
+                }
+            }
         }
     }
     if let Some(r) = shell.edit_menu_rect(w, h) {
@@ -265,6 +288,128 @@ mod tests {
         assert!(
             open_osd.ends_with("osd 840 1000 240 56 65 Volume\n"),
             "{open_osd}"
+        );
+    }
+
+    fn hit_center(dump: &str, prefix: &str) -> (f64, f64) {
+        let line = dump
+            .lines()
+            .find(|l| l.starts_with(prefix))
+            .unwrap_or_else(|| panic!("missing line starting with {prefix:?} in:\n{dump}"));
+        let nums: Vec<f64> = line
+            .split_whitespace()
+            .rev()
+            .take(4)
+            .filter_map(|s| s.parse().ok())
+            .collect();
+        assert_eq!(nums.len(), 4, "bad box coordinates on line: {line}");
+        (nums[3] + nums[1] * 0.5, nums[2] + nums[0] * 0.5)
+    }
+
+    fn draw_dump(sh: &mut Shell) -> String {
+        sh.open_ms = f64::INFINITY;
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 1920, 1080).unwrap();
+        let cr = cairo::Context::new(&surf).unwrap();
+        sh.draw(&cr, 1920.0, 1080.0);
+        text(sh, 1920.0, 1080.0)
+    }
+
+    #[test]
+    fn text_dumps_query_labels_and_plocate_note() {
+        let apps = vec![crate::app::App {
+            id: "org.alacritty.Alacritty".into(),
+            name: "Alacritty".into(),
+            icon: String::new(),
+            exec: "alacritty".into(),
+            categories: vec![],
+            wm_class: None,
+            terminal: false,
+        }];
+        let mut sh = Shell::new(crate::config::Config::from_text(""), apps);
+        sh.windows = vec![crate::card::Window {
+            id: 7,
+            title: "alpha\twin".into(),
+            app_id: "org.example.Alpha".into(),
+            focused: false,
+        }];
+
+        assert!(sh.toggle_named_on(None, "apps"));
+        sh.type_text("alacr");
+        let app_dump = draw_dump(&mut sh);
+        assert!(app_dump.contains("query alacr\n"), "{app_dump}");
+        assert!(
+            app_dump.contains("label apps/list 0 org.alacritty.Alacritty Alacritty\n"),
+            "{app_dump}"
+        );
+
+        assert!(sh.toggle_named_on(None, "apps"));
+        assert!(sh.toggle_named_on(None, "apps"));
+        sh.type_text("alpha");
+        sh.apply(
+            "apps",
+            "located",
+            &crate::locate::Located {
+                query: "alpha".into(),
+                paths: vec!["/tmp/alpha-doc.txt".into()],
+            } as &dyn std::any::Any,
+        );
+        let res_dump = draw_dump(&mut sh);
+        assert!(res_dump.contains("query alpha\n"), "{res_dump}");
+        assert!(
+            res_dump
+                .lines()
+                .any(|l| l.starts_with("label apps/results ") && l.ends_with(" windows alpha win")),
+            "{res_dump}"
+        );
+        assert!(
+            res_dump.lines().any(
+                |l| l.starts_with("label apps/results ") && l.ends_with(" files alpha-doc.txt")
+            ),
+            "{res_dump}"
+        );
+
+        let mut cfg = crate::cards::settings_rows::ConfigData {
+            now: std::collections::HashMap::new(),
+            default: std::collections::HashMap::new(),
+            programs: std::collections::HashSet::new(),
+        };
+        let screens = crate::cards::settings_display::ScreensData::default();
+        assert!(sh.toggle_named_on(None, "settings"));
+        sh.apply("settings", "config", &cfg as &dyn std::any::Any);
+        sh.apply("settings", "screens", &screens as &dyn std::any::Any);
+        sh.type_text("night light");
+        let disp_dump = draw_dump(&mut sh);
+        assert!(disp_dump.contains("query night light\n"), "{disp_dump}");
+        assert!(
+            disp_dump.contains("label settings/all 400100 Night light warmth\n"),
+            "{disp_dump}"
+        );
+
+        assert!(sh.toggle_named_on(None, "settings"));
+        assert!(sh.toggle_named_on(None, "settings"));
+        sh.apply("settings", "config", &cfg as &dyn std::any::Any);
+        sh.apply("settings", "screens", &screens as &dyn std::any::Any);
+        let groups_dump = draw_dump(&mut sh);
+        assert!(
+            groups_dump.contains("label settings/all 6 Apps\n"),
+            "{groups_dump}"
+        );
+        let (ax, ay) = hit_center(&groups_dump, "hit settings/all 6 ");
+        assert!(sh.click(1920.0, 1080.0, ax, ay, crate::card::Button::Left));
+        let missing_dump = draw_dump(&mut sh);
+        assert!(
+            missing_dump.contains(
+                "note settings/all Searching files by name needs plocate, which is not installed\n"
+            ),
+            "{missing_dump}"
+        );
+
+        cfg.programs.insert("plocate".into());
+        sh.apply("settings", "config", &cfg as &dyn std::any::Any);
+        let present_dump = draw_dump(&mut sh);
+        assert!(
+            !present_dump.contains("Searching files by name needs plocate"),
+            "{present_dump}"
         );
     }
 }

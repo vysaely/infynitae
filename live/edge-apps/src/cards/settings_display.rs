@@ -1568,6 +1568,7 @@ impl Card for DisplayCard {
             first = false;
 
             let id = H_ROW_BASE + i as u32;
+            hits.label(id, row.name);
             let rh = Self::row_height(row);
             let row_r: Rect = (body.0, y, body.2, rh);
             let restarted = self.restarted.contains(&row.key);

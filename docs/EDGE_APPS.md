@@ -93,7 +93,7 @@ panel is edited and saved; the line from before goes to `~/.config/infynitae/pan
 | `memory` | `monitor/memory` | |
 | `system` | `monitor/gpu` | |
 | `drives` | `files/drives` | |
-| `search` `favorites` `apps` | `apps/search` `apps/favorites` `apps/list` | looks `hidden`, `bar` kept as `:s`, `:m` |
+| `search` `favorites` `apps` | `apps/search` `apps/favorites` `apps/list` | looks `hidden`, `bar` kept as `:s`, `:m`; `apps` also places `apps/results` under the list (unless placed by hand) |
 | `windows` | `windows/list` | |
 | `clipboard` | `clipboard/history` | |
 | `tray` | `apps/background` | |
@@ -510,6 +510,19 @@ and go to `simple`; the Steam card lists the games without them.
 have no app (under "Infynitae"), then the claimed apps ("Rich cards"), then the rest ("Simple card"),
 each group by name. Picking one shows its kinds (`CardKind::title`, `about`) with an Add button each.
 
+### The launcher's other results (`apps/results`, `cards/search.rs`)
+
+Under the app list, while something is typed: open windows, settings rows (by the label in the
+Settings cards' tables; a pick opens the Settings panel searching that label), clipboard history,
+the file names in `CLIPS_DIR` and `RECORDINGS_DIR`, `recently-used.xbel`, and files by name from
+plocate. Four rows a kind, under its heading. Enter with no app found opens the first.
+
+Its source (`search`) reads the clipboard, the two folders and the xbel once per opening, off the UI
+thread; a keystroke compares against that in memory. plocate (`-i -b -l 40`) runs on a thread of its
+own (`locate.rs`); the next keystroke or the panel closing kills it, and an answer for an older
+query is dropped. The edge never runs `updatedb`. Without plocate, Settings, Apps says so. Closed,
+the card holds nothing.
+
 ## 5. Surfaces, the animation clock, input, damage
 
 Kept as in `live/edge-rs/src/wayland.rs`, which was measured and fixed over several rounds. The new
@@ -740,7 +753,7 @@ that calls `infynitae-edge` must not be able to tell which edge answered.
 | `--print-panels` | `tools/test-edge-panel-lines`, `tools/test-edge-rs` | prints the panels as now, the cards as new words; an old line prints mapped. The test's expected output changes in the same commit, old-word lines kept as inputs |
 | `--print-theme` | `live/settings.sh` (the look file `~/.cache/infynitae/look`: LOOK_CARD, LOOK_EDGE, LOOK_TEXT, LOOK_ACCENT, LOOK_CORNERS...) | `theme.rs` copied; same lines (`theme.rs:121-146`) |
 | `--render NAME WxH FILE`, `--render widgets WxH FILE`, with `INFYNITAE_EDGE_RENDER_DATA`, `_TIME`, `_POINTER`, `_EDIT`, `_ADD`, `_ASK`, `_SEARCH`, `_SELECT`, `_SUB`, `_RECT` | `tools/test-edge-render`, `tools/test-edge-rs` | the same arguments and variables (`main.rs:2194-2470`). The fixture keys stay as listed at the top of `modules/mod.rs` (wifi, bluetooth, power, volume...), since the stage 1 sources run the same commands. `_SUB` (a list open) names a card kind |
-| `INFYNITAE_EDGE_BOXES`: after each drawing a file with `panel NAME x y w h editing|locked SIDE`, one `module WORD x y w h` per card, `bar`, `barbutton`, the open list's and the add sheet's boxes; `closed` when closed | `tools/vm-edge/*.py` | `dump_boxes` (`modules/mod.rs:1016`) kept. For a card that came from an old word the line keeps `module <old word>` so today's VM scripts pass unchanged; every card also gets `card OWNER/KIND x y w h`, and each hit `hit OWNER/KIND ID x y w h` so new scripts click controls by id |
+| `INFYNITAE_EDGE_BOXES`: after each drawing a file with `panel NAME x y w h editing|locked SIDE`, optional `query TEXT`, one `module WORD x y w h` per card, `card OWNER/KIND x y w h`, `hit OWNER/KIND ID x y w h`, `label OWNER/KIND ID TEXT` / `note OWNER/KIND TEXT`, `bar`, `barbutton`, the open list's and the add sheet's boxes; `closed` when closed | `tools/vm-edge/*.py` | `dump_boxes` (`modules/mod.rs:1016`) kept. For a card that came from an old word the line keeps `module <old word>` so today's VM scripts pass unchanged; every card also gets `card OWNER/KIND x y w h`, each hit `hit OWNER/KIND ID x y w h`, and optional `query` / `label` / `note` lines so search and settings scripts check hit ids and row text |
 | The notification server: `org.freedesktop.Notifications` on the session bus (Notify, CloseNotification, GetCapabilities, GetServerInformation; the signals NotificationClosed and ActionInvoked), the name asked for without queueing so another daemon that holds it keeps working | every app that sends notifications; `live/session.sh` and `live/infynitae-reload` on that branch decide whether to start mako | `notify_server.rs` and `modules/notify.rs` copied from `origin/feat/edge-notify` with their tests; started in `run_loop` as there (`wayland.rs:2138`). Its history is `cx.notes`, read by the Notifications, chat and simple cards. That branch is not merged to `main` yet: if it changes before it merges, the copy follows it |
 | The tray watcher: `org.kde.StatusNotifierWatcher` at `/StatusNotifierWatcher` (RegisterStatusNotifierItem by bus name or object path, RegisterStatusNotifierHost, RegisteredStatusNotifierItems, IsStatusNotifierHostRegistered, ProtocolVersion; the signals StatusNotifierItemRegistered, StatusNotifierItemUnregistered and StatusNotifierHostRegistered; an item goes when its bus name does). The name is asked for in the queue and may be taken over, so a bar or desktop that serves the watcher keeps it; the edge registers as a host with whichever watcher serves | tray apps (Discord, Steam, Telegram...); the Background card reads the list back over the bus | `tray_watcher.rs`, started in `run_loop`; the C edge served the same interface (`live/edge/infynitae-edge.c:594-760`) |
 | `PANEL_<NAME>`, `WIDGETS`, `FAVORITES`, `CONTROL_MODULES`, `EDGE_POSITION`, `EDGE_CONTROL_SIDE`, `PANELS_SNAP`, `PANELS_OVERLAP`, the look settings | the owner's config | read as now (`config.rs:623-790`); section 1 for the card words |
