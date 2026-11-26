@@ -1,0 +1,8 @@
+#!/bin/sh
+# greetd's greeter (/etc/greetd/config.toml): Infynitae with only the login screen in it, as the
+# greeter account. Its copies of the programs are in its own ~/.local/bin, owned by root
+# (live/greeter/install: the compositor trusts the lock screen there). It ends when the login
+# screen has signed someone in; greetd then starts that person's desktop.
+B="$HOME/.local/bin"
+export XDG_SESSION_TYPE=wayland
+exec "$B/infynitae" --tty --exec "$B/infynitae-greeter-screen"

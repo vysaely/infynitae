@@ -1,0 +1,6 @@
+#!/bin/sh
+# The login screen inside the greeter's compositor. When it has signed someone in (exit 0), the
+# compositor (its parent) is told to end, so greetd can start that person's session. If it ends any
+# other way (a crash), it starts again: the greeter never shows an empty screen.
+until "$HOME/.local/bin/infynitae-lock" --greeter; do sleep 1; done
+kill -TERM "$PPID"

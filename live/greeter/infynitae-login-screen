@@ -1,0 +1,73 @@
+#!/bin/sh
+# infynitae-login-screen on|off|status: the login screen in the lock screen's look, through greetd.
+#   on      install greetd if missing, give its greeter account copies of the compositor and the
+#           lock screen, let greetd own tty1 (the text login and autologin there stop)
+#   off     back to the text login on tty1 as it was; greetd stays installed but stopped
+#   status  what is in use now
+# Run with sudo from the account that has Infynitae installed. tty2 (Ctrl+Alt+F2) keeps a text
+# login either way, so a broken login screen never locks anyone out.
+set -eu
+[ "$(id -u)" = 0 ] || { echo "Run with sudo: sudo $0 ${1:-status}" >&2; exit 1; }
+OWNER=${SUDO_USER:-}
+[ -n "$OWNER" ] && [ "$OWNER" != root ] || { echo "Run it with sudo from your own account" >&2; exit 1; }
+OWNER_BIN=$(getent passwd "$OWNER" | cut -d: -f6)/.local/bin
+CONF=/etc/greetd/config.toml
+BACKUP=/etc/greetd/config.toml.before-infynitae
+HERE=$(cd "$(dirname "$0")" && pwd)
+
+greeter_home() { getent passwd greeter | cut -d: -f6; }
+
+case "${1:-status}" in
+on)
+    for f in infynitae infynitae-lock; do
+        [ -x "$OWNER_BIN/$f" ] || { echo "$OWNER_BIN/$f is missing: install Infynitae first" >&2; exit 1; }
+    done
+    command -v greetd >/dev/null 2>&1 || pacman -S --needed --noconfirm greetd
+    H=$(greeter_home)
+    [ -n "$H" ] && [ -d "$H" ] || { echo "greetd's greeter account has no home folder" >&2; exit 1; }
+    # the programs, owned by root so the greeter account cannot replace them
+    install -d -o root -g root -m 755 "$H/.local" "$H/.local/bin"
+    for f in infynitae infynitae-lock; do install -o root -g root -m 755 "$OWNER_BIN/$f" "$H/.local/bin/$f"; done
+    for f in infynitae-greeter infynitae-greeter-screen; do install -o root -g root -m 755 "$HERE/$f" "$H/.local/bin/$f"; done
+    # the look: the theme's colours and font from the owner's look file (no wallpaper: the greeter
+    # cannot read the owner's files)
+    LOOK=$(getent passwd "$OWNER" | cut -d: -f6)/.cache/infynitae/look
+    if [ -r "$LOOK" ]; then
+        install -d -o greeter -m 755 "$H/.cache/infynitae"
+        install -o greeter -m 644 "$LOOK" "$H/.cache/infynitae/look"
+    fi
+    [ -f "$CONF" ] && [ ! -f "$BACKUP" ] && cp -p "$CONF" "$BACKUP"
+    cat > "$CONF" <<EOF
+# Written by infynitae-login-screen on (the text login: infynitae-login-screen off)
+[terminal]
+vt = 1
+
+[default_session]
+command = "$H/.local/bin/infynitae-greeter"
+user = "greeter"
+EOF
+    # the keyring opens with the login password, as the lock screen's PAM file does
+    if [ -f /etc/pam.d/greetd ] && ! grep -q pam_gnome_keyring /etc/pam.d/greetd && [ -e /usr/lib/security/pam_gnome_keyring.so ]; then
+        cp -p /etc/pam.d/greetd /etc/pam.d/greetd.before-infynitae
+        printf 'auth       optional     pam_gnome_keyring.so\nsession    optional     pam_gnome_keyring.so auto_start\n' >> /etc/pam.d/greetd
+    fi
+    systemctl disable getty@tty1.service >/dev/null 2>&1 || true
+    systemctl enable greetd.service
+    echo "The login screen is on from the next boot. Undo: sudo $0 off (or log in on Ctrl+Alt+F2 and run it)."
+    ;;
+off)
+    systemctl disable greetd.service >/dev/null 2>&1 || true
+    [ -f "$BACKUP" ] && mv -f "$BACKUP" "$CONF"
+    [ -f /etc/pam.d/greetd.before-infynitae ] && mv -f /etc/pam.d/greetd.before-infynitae /etc/pam.d/greetd
+    systemctl enable getty@tty1.service >/dev/null 2>&1 || true
+    echo "The text login on tty1 is back from the next boot."
+    ;;
+status)
+    if systemctl is-enabled --quiet greetd.service 2>/dev/null && grep -q infynitae-greeter "$CONF" 2>/dev/null; then
+        echo "on: greetd with the Infynitae login screen"
+    else
+        echo "off: the text login on tty1"
+    fi
+    ;;
+*) echo "usage: $0 on|off|status" >&2; exit 2 ;;
+esac
