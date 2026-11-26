@@ -8,6 +8,7 @@
 //! watcher's name and register again with each new owner (by the spec), so nothing is moved over.
 
 use std::sync::{Arc, Mutex, MutexGuard};
+#[cfg(test)]
 use zbus::blocking::connection::Builder;
 use zbus::blocking::{fdo::DBusProxy, Connection};
 use zbus::fdo::{RequestNameFlags, RequestNameReply};
@@ -165,12 +166,23 @@ fn register_host(conn: &Connection, host: &str) {
 
 /// Serves the watcher on the session bus; the connection it returns keeps it served.
 pub fn start() -> Result<Connection, String> {
-    start_on(Builder::session().map_err(|e| e.to_string())?)
+    let addr = zbus::Address::session().map_err(|e| e.to_string())?;
+    let state = Arc::new(Mutex::new(State::default()));
+    let conn = crate::dbus::build_on(&addr, |b| {
+        b.serve_at(
+            PATH,
+            Watcher {
+                state: state.clone(),
+            },
+        )
+    })
+    .map_err(|e| e.to_string())?;
+    start_connected(conn, state)
 }
 
 /// `start` on any bus (the tests run a private one).
+#[cfg(test)]
 pub fn start_on(builder: Builder<'_>) -> Result<Connection, String> {
-    let e = |e: zbus::Error| e.to_string();
     let state = Arc::new(Mutex::new(State::default()));
     let conn = builder
         .serve_at(
@@ -179,9 +191,14 @@ pub fn start_on(builder: Builder<'_>) -> Result<Connection, String> {
                 state: state.clone(),
             },
         )
-        .map_err(e)?
+        .map_err(|e| e.to_string())?
         .build()
-        .map_err(e)?;
+        .map_err(|e| e.to_string())?;
+    start_connected(conn, state)
+}
+
+fn start_connected(conn: Connection, state: Arc<Mutex<State>>) -> Result<Connection, String> {
+    let e = |e: zbus::Error| e.to_string();
     // subscribed before the names are asked for, so no item that goes away is missed
     let dbus = DBusProxy::new(&conn).map_err(e)?;
     let changes = dbus.receive_name_owner_changed().map_err(e)?;

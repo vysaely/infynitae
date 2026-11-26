@@ -180,10 +180,10 @@ impl Source for MenusSource {
             return Box::new(parse_fixture(&run_sh("traymenu", "")));
         }
         let mut d = MenusData::default();
-        let Ok(conn) = zbus::blocking::Connection::session() else {
+        let Ok(conn) = crate::dbus::session() else {
             return Box::new(d);
         };
-        let (items, _) = super::apps::tray_items();
+        let (items, _) = super::apps::fetch_dbus_tray_on(&conn);
         for it in items {
             if it.menu_path.is_empty() || !safe_token(&it.bus_name) || !safe_token(&it.menu_path) {
                 continue;
