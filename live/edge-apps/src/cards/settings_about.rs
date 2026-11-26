@@ -3,13 +3,17 @@
 //! (docs/EDGE_SETTINGS.md section 4).
 
 use crate::card::{self, Action, Button, Card, Cx, Data, Event, Hits, Rect, Source, Status};
-use crate::cards::settings;
+use crate::cards::{
+    settings,
+    settings_rows::{self, After, ConfigData},
+};
 use crate::draw::{self, Text};
 use crate::provider::{CardKind, Size};
 use crate::theme::Theme;
 use crate::ui::{self, Row};
 use cairo::Context;
 use std::any::Any;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, UNIX_EPOCH};
@@ -21,8 +25,10 @@ pub const KIND: CardKind = CardKind {
     sizes: &[Size::S, Size::M],
     default: Size::S,
     half: false,
-    sources: &["pc"],
+    sources: &["pc", "config"],
 };
+
+pub const KEYS: &[&str] = &["UPDATE_CHECK"];
 
 const UPDATE_COMMAND: &str = r#"sh "$HOME/.local/bin/xdg-terminal-exec" infynitae-update"#;
 const EDIT_COMMAND: &str =
@@ -48,6 +54,8 @@ const HIT_LOAD: u32 = 5;
 const HIT_UNDO_LOAD: u32 = 6;
 const HIT_LOAD_APPLY: u32 = 7;
 const HIT_LOAD_CANCEL: u32 = 8;
+const HIT_UPDATE_CHECK_ROW: u32 = 9;
+const HIT_UPDATE_CHECK_SWITCH: u32 = 10;
 const HIT_LOAD_ITEM_BASE: u32 = 100;
 
 /// Keys tagged `[restart]` in `config/config` ([`is_restart_key`]).
@@ -73,6 +81,13 @@ struct ImportPreview {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct UpdateStatus {
+    system: Option<u32>,
+    infynitae: Option<u32>,
+    checkupdates: Option<bool>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct PcInfo {
     hostname: Option<String>,
     system: Option<String>,
@@ -86,6 +101,7 @@ struct PcInfo {
     saved_files: Vec<SavedFile>,
     preview: Option<ImportPreview>,
     load_active: bool,
+    updates: UpdateStatus,
 }
 
 #[derive(Clone, Debug)]
@@ -101,6 +117,8 @@ struct PcPaths {
     export_dir: PathBuf,
     preview_file: PathBuf,
     load_active_file: PathBuf,
+    update_status: PathBuf,
+    path_env: Option<OsString>,
     run_external_cmds: bool,
 }
 
@@ -115,6 +133,57 @@ pub(crate) fn clear_load_state() {
     let _ = std::fs::remove_file(dir.join("settings-load-preview"));
 }
 
+fn resolve_infynitae_repo(checkout_file: Option<&Path>, home: Option<&Path>) -> Option<PathBuf> {
+    if let Some(path) = checkout_file {
+        if let Ok(raw) = std::fs::read_to_string(path) {
+            if let Some(line) = raw
+                .lines()
+                .map(str::trim)
+                .find(|l| !l.is_empty() && !l.starts_with('#'))
+            {
+                return Some(crate::paths::expand_home_with(line, home));
+            }
+        }
+    }
+    home.map(|h| h.join("infynitae"))
+}
+
+fn is_executable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path).is_ok_and(|m| m.is_file() && (m.permissions().mode() & 0o111 != 0))
+}
+
+fn program_on_path(name: &str, path_env: &OsStr) -> bool {
+    std::env::split_paths(path_env)
+        .any(|dir| !dir.as_os_str().is_empty() && is_executable(&dir.join(name)))
+}
+
+fn parse_update_status(raw: Option<&str>, path_checkupdates: Option<bool>) -> UpdateStatus {
+    let mut status = UpdateStatus {
+        checkupdates: path_checkupdates,
+        ..UpdateStatus::default()
+    };
+    if let Some(raw) = raw {
+        for line in raw.lines() {
+            let Some((k, v)) = line.split_once('=') else {
+                continue;
+            };
+            let v = v.trim();
+            match k.trim() {
+                "system" => status.system = v.parse::<u32>().ok(),
+                "infynitae" => status.infynitae = v.parse::<u32>().ok(),
+                "checkupdates" if status.checkupdates.is_none() => match v {
+                    "present" => status.checkupdates = Some(true),
+                    "missing" => status.checkupdates = Some(false),
+                    _ => {}
+                },
+                _ => {}
+            }
+        }
+    }
+    status
+}
+
 impl PcPaths {
     fn system() -> Self {
         let home = crate::paths::home();
@@ -127,7 +196,16 @@ impl PcPaths {
             .map(|h| h.join("Documents/Infynitae"))
             .unwrap_or_default();
         let rt_dir = runtime_infynitae_dir();
-        let infynitae_repo = home.map(|h| h.join("infynitae"));
+        let config_dir = std::env::var_os("XDG_CONFIG_HOME")
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| home.as_ref().map(|h| h.join(".config")));
+        let checkout_file = config_dir.map(|d| d.join("infynitae/checkout"));
+        let infynitae_repo = resolve_infynitae_repo(checkout_file.as_deref(), home.as_deref());
+        let update_status = crate::paths::state_dir()
+            .map(|d| d.join("infynitae/update-status"))
+            .unwrap_or_default();
+        let path_env = Some(std::env::var_os("PATH").unwrap_or_default());
         let wayland_socket = match (
             std::env::var_os("XDG_RUNTIME_DIR").filter(|v| !v.is_empty()),
             std::env::var_os("WAYLAND_DISPLAY").filter(|v| !v.is_empty()),
@@ -147,6 +225,8 @@ impl PcPaths {
             export_dir,
             preview_file: rt_dir.join("settings-load-preview"),
             load_active_file: rt_dir.join("settings-load-active"),
+            update_status,
+            path_env,
             run_external_cmds: true,
         }
     }
@@ -217,6 +297,20 @@ impl Source for PcSource {
         let load_active = card::render_value("pc_load_active")
             .map(|v| v == "1" || v == "true")
             .unwrap_or_else(|| self.paths.load_active_file.is_file());
+        let path_checkupdates = card::render_value("pc_checkupdates")
+            .and_then(|v| match v.trim() {
+                "1" | "true" | "present" => Some(true),
+                "0" | "false" | "missing" => Some(false),
+                _ => None,
+            })
+            .or_else(|| {
+                self.paths
+                    .path_env
+                    .as_deref()
+                    .map(|p| program_on_path("checkupdates", p))
+            });
+        let updates_raw = read_or_render(&self.paths.update_status, "pc_updates");
+        let updates = parse_update_status(updates_raw.as_deref(), path_checkupdates);
 
         let info = PcInfo {
             hostname: hostname_raw.as_deref().and_then(parse_hostname),
@@ -237,6 +331,7 @@ impl Source for PcSource {
             saved_files,
             preview,
             load_active,
+            updates,
         };
         Box::new(info)
     }
@@ -693,10 +788,41 @@ fn preview_summary(keys: &[String]) -> Option<String> {
     }
 }
 
+fn count_phrase(n: u32, singular: &str, plural: &str) -> String {
+    if n == 1 {
+        format!("1 {singular}")
+    } else {
+        format!("{n} {plural}")
+    }
+}
+
+fn format_waiting_message(system: u32, infynitae: u32) -> String {
+    match (system > 0, infynitae > 0) {
+        (true, true) => format!(
+            "{} and {} are waiting",
+            count_phrase(system, "system update", "system updates"),
+            count_phrase(infynitae, "Infynitae change", "Infynitae changes")
+        ),
+        (true, false) => format!(
+            "{} {} waiting",
+            count_phrase(system, "system update", "system updates"),
+            if system == 1 { "is" } else { "are" }
+        ),
+        (false, true) => format!(
+            "{} {} waiting",
+            count_phrase(infynitae, "Infynitae change", "Infynitae changes"),
+            if infynitae == 1 { "is" } else { "are" }
+        ),
+        (false, false) => String::new(),
+    }
+}
+
 #[derive(Default)]
 pub struct AboutCard {
     loaded: bool,
     info: PcInfo,
+    config: Option<ConfigData>,
+    pending_update_check: Option<String>,
     query: String,
     load_open: bool,
     load_scroll: usize,
@@ -822,11 +948,128 @@ impl AboutCard {
             && self.matches("load settings checking")
     }
 
+    fn update_check_on(&self) -> bool {
+        let raw = self.pending_update_check.as_deref().or_else(|| {
+            self.config.as_ref().and_then(|c| {
+                c.now
+                    .get("UPDATE_CHECK")
+                    .or_else(|| c.default.get("UPDATE_CHECK"))
+                    .map(String::as_str)
+            })
+        });
+        !matches!(
+            raw.unwrap_or("true").to_ascii_lowercase().as_str(),
+            "0" | "false" | "no" | "off"
+        )
+    }
+
+    fn updates_row_status(&self) -> (String, bool) {
+        if !self.update_check_on() {
+            return (String::new(), false);
+        }
+        let u = &self.info.updates;
+        let sys = u.system.unwrap_or(0);
+        let infy = u.infynitae.unwrap_or(0);
+        if u.checkupdates == Some(false) {
+            if infy > 0 {
+                return (
+                    format!(
+                        "{}; install pacman-contrib",
+                        format_waiting_message(0, infy)
+                    ),
+                    true,
+                );
+            }
+            return (
+                "Install pacman-contrib to see system updates".to_string(),
+                false,
+            );
+        }
+        if sys > 0 || infy > 0 {
+            return (format_waiting_message(sys, infy), true);
+        }
+        if u.system == Some(0) && u.infynitae == Some(0) {
+            return ("Up to date".to_string(), false);
+        }
+        (String::new(), false)
+    }
+
+    fn update_rows_state(&self) -> (bool, bool, String, bool) {
+        let (state, attention) = self.updates_row_status();
+        let show_check = self.matches(&format!("check for updates update {state}"));
+        let show_auto = self.matches("check for updates automatically update_check every 6 hours");
+        (show_check, show_auto, state, attention)
+    }
+
+    fn measure_and_draw_updates(
+        &self,
+        cr: &Context,
+        cx: &Cx,
+        body: Rect,
+        mut y: f64,
+        hits: &mut Option<&mut Hits>,
+    ) -> f64 {
+        let (show_check, show_auto, state, attention) = self.update_rows_state();
+        if !show_check && !show_auto {
+            return y;
+        }
+        if y > body.1 {
+            y += ACTS_TOP_GAP;
+        }
+        if show_check {
+            if let Some(h) = hits.as_deref_mut() {
+                ui::row(
+                    cr,
+                    cx,
+                    h,
+                    HIT_UPDATE,
+                    (body.0, y, body.2, ui::ROW_H),
+                    &Row {
+                        icon: None,
+                        name: "Check for updates",
+                        state: &state,
+                        on: attention,
+                        right: 0.0,
+                    },
+                );
+            }
+            y += ui::ROW_H;
+        }
+        if show_auto {
+            let auto_on = self.update_check_on();
+            let row_rect = (body.0, y, body.2, ui::ROW_H);
+            if let Some(h) = hits.as_deref_mut() {
+                ui::row(
+                    cr,
+                    cx,
+                    h,
+                    HIT_UPDATE_CHECK_ROW,
+                    row_rect,
+                    &Row {
+                        icon: None,
+                        name: "Check for updates automatically",
+                        state: "Every 6 hours",
+                        on: false,
+                        right: 46.0,
+                    },
+                );
+                ui::switch(
+                    cr,
+                    cx,
+                    h,
+                    HIT_UPDATE_CHECK_SWITCH,
+                    row_rect,
+                    body.0 + body.2 - 8.0,
+                    auto_on,
+                );
+            }
+            y += ui::ROW_H;
+        }
+        y
+    }
+
     fn visible_buttons(&self, cr: &Context, th: &Theme, max_w: f64) -> Vec<(u32, String)> {
         let mut out = Vec::new();
-        if self.matches("check for updates update") {
-            out.push((HIT_UPDATE, "Check for updates".to_string()));
-        }
         if self.matches("open the config file edit settings") {
             out.push((HIT_EDIT, "Open the config file".to_string()));
         }
@@ -929,7 +1172,9 @@ impl AboutCard {
             y += INFO_ROW_H;
         }
 
-        let btn_start_y = if !rows.is_empty() && !self.visible_buttons(cr, th, inner_w).is_empty() {
+        y = self.measure_and_draw_updates(cr, cx, body, y, &mut hits);
+
+        let btn_start_y = if y > body.1 && !self.visible_buttons(cr, th, inner_w).is_empty() {
             y + ACTS_TOP_GAP
         } else {
             y
@@ -1188,12 +1433,14 @@ impl AboutCard {
         {
             return true;
         }
+        let (show_check, show_auto, _, _) = self.update_rows_state();
         let undo_match = self.info.undo.as_ref().is_some_and(|e| {
             let old_word = undo_old_word_for(&e.key, &e.old);
             self.matches(&format!("undo {} {} {old_word}", e.key, e.old))
         });
         let undo_load_match = self.undo_load && self.matches("undo load restore settings");
-        self.matches("check for updates update")
+        show_check
+            || show_auto
             || self.matches("open the config file edit settings")
             || self.matches("save my settings export backup archive")
             || self.matches("load settings import restore archive")
@@ -1245,26 +1492,37 @@ fn draw_info_row(
 
 impl Card for AboutCard {
     fn apply(&mut self, key: &str, data: &dyn Any) -> bool {
-        if key != "pc" {
-            return false;
+        match key {
+            "pc" => {
+                let Some(info) = data.downcast_ref::<PcInfo>() else {
+                    return false;
+                };
+                let preview_changed = self.info.preview != info.preview;
+                if preview_changed
+                    && info.preview.as_ref().map(|p| &p.id) != self.dismissed_preview.as_ref()
+                {
+                    self.loading_name = None;
+                }
+                let load_active_changed = !self.loaded || self.info.load_active != info.load_active;
+                if load_active_changed {
+                    self.undo_load = info.load_active;
+                }
+                let changed = !self.loaded || self.info != *info;
+                self.info = info.clone();
+                self.loaded = true;
+                changed
+            }
+            "config" => {
+                let Some(cfg) = data.downcast_ref::<ConfigData>() else {
+                    return false;
+                };
+                let had_pending = self.pending_update_check.take().is_some();
+                let changed = self.config.as_ref() != Some(cfg);
+                self.config = Some(cfg.clone());
+                changed || had_pending
+            }
+            _ => false,
         }
-        let Some(info) = data.downcast_ref::<PcInfo>() else {
-            return false;
-        };
-        let preview_changed = self.info.preview != info.preview;
-        if preview_changed
-            && info.preview.as_ref().map(|p| &p.id) != self.dismissed_preview.as_ref()
-        {
-            self.loading_name = None;
-        }
-        let load_active_changed = !self.loaded || self.info.load_active != info.load_active;
-        if load_active_changed {
-            self.undo_load = info.load_active;
-        }
-        let changed = !self.loaded || self.info != *info;
-        self.info = info.clone();
-        self.loaded = true;
-        changed
     }
 
     fn status(&self, cx: &Cx) -> Status {
@@ -1322,6 +1580,22 @@ impl Card for AboutCard {
                     out.push(Action::Run(UPDATE_COMMAND.to_string()));
                     out.push(Action::ClosePanel);
                     false
+                }
+                HIT_UPDATE_CHECK_ROW | HIT_UPDATE_CHECK_SWITCH => {
+                    let currently_on = self.update_check_on();
+                    let new_val = if currently_on { "false" } else { "true" };
+                    let old = self
+                        .config
+                        .as_ref()
+                        .and_then(|c| c.now.get("UPDATE_CHECK").map(String::as_str));
+                    out.push(Action::Run(settings_rows::change_command(
+                        "UPDATE_CHECK",
+                        old,
+                        new_val,
+                        After::Use,
+                    )));
+                    self.pending_update_check = Some(new_val.to_string());
+                    true
                 }
                 HIT_EDIT => {
                     out.push(Action::Run(EDIT_COMMAND.to_string()));
@@ -1395,6 +1669,7 @@ impl Card for AboutCard {
     }
 
     fn panel_closed(&mut self) {
+        self.pending_update_check = None;
         self.load_open = false;
         self.load_scroll = 0;
         self.loading_name = None;
@@ -1458,7 +1733,7 @@ mod tests {
     fn provider_wires_about_card_and_pc_source() {
         let p = crate::cards::settings::Settings;
         let k = p.kind("about").expect("about kind");
-        assert_eq!(k.sources, ["pc"]);
+        assert_eq!(k.sources, ["pc", "config"]);
         assert!(p.card("about", None).is_some());
         assert!(p.card("about", Some("extra")).is_none());
         let src = p.source("pc").expect("pc source registered");
@@ -1557,6 +1832,8 @@ mod tests {
             export_dir: dir.join("missing-exports"),
             preview_file: dir.join("missing-preview"),
             load_active_file: dir.join("missing-active"),
+            update_status: dir.join("missing-update-status"),
+            path_env: None,
             run_external_cmds: false,
         });
         let data = src.fetch();
@@ -1600,6 +1877,8 @@ mod tests {
             export_dir: dir.join("missing-exports"),
             preview_file: dir.join("missing-preview"),
             load_active_file: dir.join("missing-active"),
+            update_status: dir.join("missing-update-status"),
+            path_env: None,
             run_external_cmds: false,
         });
         let data = src.fetch();
@@ -1704,6 +1983,251 @@ mod tests {
 
         assert!(card.event(&Event::Text("zzz-missing-zzz"), &cx, &mut out));
         assert_eq!(card.status(&cx), Status::Hidden);
+    }
+
+    #[test]
+    fn update_status_reads_file_checkout_and_missing_checkupdates() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = TestDir::new("update-status-src");
+        let dir = tmp.path();
+        let bin = dir.join("bin");
+        let empty_bin = dir.join("empty-bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&empty_bin).unwrap();
+        let cu = bin.join("checkupdates");
+        std::fs::write(&cu, "#!/bin/sh\nexit 2\n").unwrap();
+        std::fs::set_permissions(&cu, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let checkout_file = dir.join("checkout");
+        std::fs::write(&checkout_file, "\n# recorded checkout\n~/custom-infy\n").unwrap();
+        assert_eq!(
+            resolve_infynitae_repo(Some(&checkout_file), Some(dir)),
+            Some(dir.join("custom-infy"))
+        );
+        assert_eq!(
+            resolve_infynitae_repo(Some(&dir.join("missing-checkout")), Some(dir)),
+            Some(dir.join("infynitae"))
+        );
+
+        let status_file = dir.join("update-status");
+        std::fs::write(
+            &status_file,
+            "system=12\ninfynitae=3\ncheckupdates=present\nchecked_at=1764160000\n",
+        )
+        .unwrap();
+
+        let mut src = PcSource::with_paths(PcPaths {
+            hostname: dir.join("h"),
+            os_release: dir.join("o"),
+            kernel_osrelease: dir.join("k"),
+            cpuinfo: dir.join("c"),
+            meminfo: dir.join("m"),
+            settings_changes: dir.join("sc"),
+            wayland_socket: None,
+            infynitae_repo: None,
+            export_dir: dir.join("e"),
+            preview_file: dir.join("p"),
+            load_active_file: dir.join("a"),
+            update_status: status_file.clone(),
+            path_env: Some(bin.into_os_string()),
+            run_external_cmds: false,
+        });
+        let data = src.fetch();
+        let info = data.downcast_ref::<PcInfo>().unwrap();
+        assert_eq!(
+            info.updates,
+            UpdateStatus {
+                system: Some(12),
+                infynitae: Some(3),
+                checkupdates: Some(true),
+            }
+        );
+
+        std::fs::write(&status_file, "system=\ninfynitae=1\ncheckupdates=missing\n").unwrap();
+        let mut src_missing = PcSource::with_paths(PcPaths {
+            hostname: dir.join("h"),
+            os_release: dir.join("o"),
+            kernel_osrelease: dir.join("k"),
+            cpuinfo: dir.join("c"),
+            meminfo: dir.join("m"),
+            settings_changes: dir.join("sc"),
+            wayland_socket: None,
+            infynitae_repo: None,
+            export_dir: dir.join("e"),
+            preview_file: dir.join("p"),
+            load_active_file: dir.join("a"),
+            update_status: status_file,
+            path_env: Some(empty_bin.into_os_string()),
+            run_external_cmds: false,
+        });
+        let data_missing = src_missing.fetch();
+        let info_missing = data_missing.downcast_ref::<PcInfo>().unwrap();
+        assert_eq!(
+            info_missing.updates,
+            UpdateStatus {
+                system: None,
+                infynitae: Some(1),
+                checkupdates: Some(false),
+            }
+        );
+    }
+
+    #[test]
+    fn update_rows_render_states_toggle_and_heights() {
+        let th = Theme::from_config(&Config::from_text(""));
+        let cx = test_cx(&th);
+        let mut card = AboutCard::default();
+        let mut info = sample_info();
+
+        info.updates = UpdateStatus {
+            system: Some(12),
+            infynitae: Some(3),
+            checkupdates: Some(true),
+        };
+        card.apply("pc", &info);
+        assert_eq!(
+            card.updates_row_status(),
+            (
+                "12 system updates and 3 Infynitae changes are waiting".to_string(),
+                true
+            )
+        );
+
+        info.updates = UpdateStatus {
+            system: Some(1),
+            infynitae: Some(1),
+            checkupdates: Some(true),
+        };
+        card.apply("pc", &info);
+        assert_eq!(
+            card.updates_row_status(),
+            (
+                "1 system update and 1 Infynitae change are waiting".to_string(),
+                true
+            )
+        );
+
+        info.updates = UpdateStatus {
+            system: Some(1),
+            infynitae: Some(0),
+            checkupdates: Some(true),
+        };
+        card.apply("pc", &info);
+        assert_eq!(
+            card.updates_row_status(),
+            ("1 system update is waiting".to_string(), true)
+        );
+
+        info.updates = UpdateStatus {
+            system: Some(0),
+            infynitae: Some(2),
+            checkupdates: Some(true),
+        };
+        card.apply("pc", &info);
+        assert_eq!(
+            card.updates_row_status(),
+            ("2 Infynitae changes are waiting".to_string(), true)
+        );
+
+        info.updates = UpdateStatus {
+            system: Some(0),
+            infynitae: Some(0),
+            checkupdates: Some(true),
+        };
+        card.apply("pc", &info);
+        assert_eq!(card.updates_row_status(), ("Up to date".to_string(), false));
+
+        info.updates = UpdateStatus {
+            system: None,
+            infynitae: Some(0),
+            checkupdates: Some(true),
+        };
+        card.apply("pc", &info);
+        assert_eq!(card.updates_row_status(), (String::new(), false));
+
+        info.updates = UpdateStatus {
+            system: None,
+            infynitae: None,
+            checkupdates: Some(false),
+        };
+        card.apply("pc", &info);
+        assert_eq!(
+            card.updates_row_status(),
+            (
+                "Install pacman-contrib to see system updates".to_string(),
+                false
+            )
+        );
+
+        info.updates = UpdateStatus {
+            system: None,
+            infynitae: Some(2),
+            checkupdates: Some(false),
+        };
+        card.apply("pc", &info);
+        assert_eq!(
+            card.updates_row_status(),
+            (
+                "2 Infynitae changes are waiting; install pacman-contrib".to_string(),
+                true
+            )
+        );
+
+        let mut cfg = ConfigData::default();
+        cfg.default.insert("UPDATE_CHECK".into(), "true".into());
+        assert!(card.apply("config", &cfg));
+        assert!(card.update_check_on());
+
+        let mut out = Vec::new();
+        assert!(card.event(&press(HIT_UPDATE_CHECK_SWITCH), &cx, &mut out));
+        assert!(!card.update_check_on());
+        assert_eq!(
+            card.updates_row_status(),
+            (String::new(), false),
+            "pending off clears waiting status immediately"
+        );
+        assert!(matches!(
+            out.as_slice(),
+            [Action::Run(cmd)] if cmd.contains("log UPDATE_CHECK -") && cmd.contains("set UPDATE_CHECK 'false'")
+        ));
+
+        cfg.now.insert("UPDATE_CHECK".into(), "false".into());
+        card.apply("config", &cfg);
+        assert!(!card.update_check_on());
+
+        out.clear();
+        assert!(card.event(&press(HIT_UPDATE_CHECK_ROW), &cx, &mut out));
+        assert!(card.update_check_on());
+        assert!(matches!(
+            out.as_slice(),
+            [Action::Run(cmd)] if cmd.contains("log UPDATE_CHECK 'false'") && cmd.contains("set UPDATE_CHECK 'true'")
+        ));
+
+        card.panel_closed();
+        assert!(!card.update_check_on());
+
+        // Clicking the Check for updates row runs UPDATE_COMMAND and closes panel.
+        out.clear();
+        assert!(!card.event(&press(HIT_UPDATE), &cx, &mut out));
+        assert!(matches!(
+            out.as_slice(),
+            [Action::Run(cmd), Action::ClosePanel] if cmd == UPDATE_COMMAND
+        ));
+
+        // Search filter keeps the toggle row visible when searching for UPDATE_CHECK.
+        assert!(card.event(&Event::Text("update_check"), &cx, &mut out));
+        assert_eq!(card.status(&cx), Status::Ready);
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 500, 600).unwrap();
+        let cr = Context::new(&surf).unwrap();
+        let mut hits = Hits::default();
+        let h = card.height(&cx, 420.0);
+        let drawn = card.measure_and_draw(&cr, &cx, (10.0, 20.0, 420.0, h), Some(&mut hits));
+        assert!((h - drawn).abs() < 0.01);
+        assert!(hits
+            .list
+            .iter()
+            .any(|(id, _)| *id == HIT_UPDATE_CHECK_SWITCH));
     }
 
     #[test]
@@ -1934,6 +2458,8 @@ mod tests {
             export_dir: exports,
             preview_file: dir.join("rt/infynitae/settings-load-preview"),
             load_active_file: dir.join("rt/infynitae/settings-load-active"),
+            update_status: dir.join("missing-update-status"),
+            path_env: None,
             run_external_cmds: false,
         });
         let data = src.fetch();

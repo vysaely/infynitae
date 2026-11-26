@@ -1038,6 +1038,7 @@ pub(crate) mod tests {
             settings_apps::KEYS,
             settings_privacy::KEYS,
             settings_recording::KEYS,
+            crate::cards::settings_about::KEYS,
         ] {
             for &k in ks {
                 assert!(on_cards.insert(k), "duplicate extra card key {k}");
