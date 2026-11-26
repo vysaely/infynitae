@@ -225,6 +225,9 @@ fn serve_wayland(listener: UnixListener, stop: Arc<AtomicBool>, commits: Arc<Ato
     ];
     let mut surface_to_layer = HashMap::new();
     let mut layer_configured = HashSet::new();
+    let mut layer_size: HashMap<u32, (u32, u32)> = HashMap::new();
+    let mut layer_was_mapped: HashSet<u32> = HashSet::new();
+    let mut layer_unmapped: HashSet<u32> = HashSet::new();
     let mut surface_buf: HashMap<u32, Option<u32>> = HashMap::new();
     let mut pending_frames: HashMap<u32, Vec<u32>> = HashMap::new();
     let mut serial = 10u32;
@@ -359,6 +362,11 @@ fn serve_wayland(listener: UnixListener, stop: Arc<AtomicBool>, commits: Arc<Ato
                     objs.insert(lid, Obj::LayerSurface);
                     surface_to_layer.insert(sid, lid);
                 }
+                Some(Obj::LayerSurface) if opcode == 0 => {
+                    let w = read_u32(body, &mut off);
+                    let h = read_u32(body, &mut off);
+                    layer_size.insert(obj_id, (w, h));
+                }
                 Some(Obj::Surface) => match opcode {
                     1 => {
                         let bid = read_u32(body, &mut off);
@@ -370,12 +378,28 @@ fn serve_wayland(listener: UnixListener, stop: Arc<AtomicBool>, commits: Arc<Ato
                     }
                     6 => {
                         if let Some(&lid) = surface_to_layer.get(&obj_id) {
-                            if layer_configured.insert(lid) {
+                            let first = layer_configured.insert(lid);
+                            let mapped = surface_buf.get(&obj_id).copied().flatten().is_some();
+                            let was_mapped = layer_was_mapped.contains(&lid);
+                            let unmapped = layer_unmapped.contains(&lid);
+                            let remap = !mapped && !was_mapped && unmapped;
+                            if mapped {
+                                layer_was_mapped.insert(lid);
+                            } else {
+                                layer_was_mapped.remove(&lid);
+                            }
+                            if !mapped && (was_mapped || remap) {
+                                layer_unmapped.insert(lid);
+                            } else {
+                                layer_unmapped.remove(&lid);
+                            }
+                            if first || remap {
                                 serial += 1;
+                                let (rw, rh) = layer_size.get(&lid).copied().unwrap_or((0, 0));
                                 let mut cb = Vec::new();
                                 push_u32(&mut cb, serial);
-                                push_u32(&mut cb, 1280);
-                                push_u32(&mut cb, 800);
+                                push_u32(&mut cb, if rw == 0 { 1280 } else { rw });
+                                push_u32(&mut cb, if rh == 0 { 800 } else { rh });
                                 out.extend(wl_msg(lid, 0, &cb));
                             }
                         }
@@ -464,9 +488,17 @@ fn assert_zero_idle_wakeups(pid: u32, label: &str) {
     );
 }
 
-#[test]
-fn closed_edge_has_no_blocking_thread_and_zero_idle_wakeups() {
-    let tmp = TempDir::new("idle-wakeups");
+struct RunningEdge {
+    _tmp: TempDir,
+    _dbus: ChildGuard,
+    wayland: WaylandServer,
+    edge: ChildGuard,
+    dbus_addr: String,
+    probe: zbus::blocking::Connection,
+}
+
+fn spawn_test_edge(tag: &str, config: &str, boxes_file: Option<&Path>) -> Option<RunningEdge> {
+    let tmp = TempDir::new(tag);
     let dbus_dir = tmp.path().join("dbus");
     let rt_dir = tmp.path().join("runtime");
     let home_dir = tmp.path().join("home");
@@ -479,11 +511,7 @@ fn closed_edge_has_no_blocking_thread_and_zero_idle_wakeups() {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&rt_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
     }
-    std::fs::write(
-        cfg_dir.join("config"),
-        "PANEL_CONTROL=\"SUPER+A top right 380 apps/background music/playing\"\n",
-    )
-    .unwrap();
+    std::fs::write(cfg_dir.join("config"), config).unwrap();
 
     let spawned = Command::new("dbus-daemon")
         .arg("--session")
@@ -496,7 +524,7 @@ fn closed_edge_has_no_blocking_thread_and_zero_idle_wakeups() {
         Ok(d) => d,
         Err(e) => {
             eprintln!("skipped: no dbus-daemon to run a private bus: {e}");
-            return;
+            return None;
         }
     };
     let mut dbus_addr = String::new();
@@ -504,23 +532,23 @@ fn closed_edge_has_no_blocking_thread_and_zero_idle_wakeups() {
         .read_line(&mut dbus_addr)
         .unwrap();
     let dbus_addr = dbus_addr.trim().to_string();
-    let _dbus_guard = ChildGuard::new(dbus);
+    let dbus_guard = ChildGuard::new(dbus);
 
     let wayland = WaylandServer::start(&rt_dir.join("wayland-test"));
-    let mut edge = ChildGuard::new(
-        Command::new(env!("CARGO_BIN_EXE_infynitae-edge-apps"))
-            .env_clear()
-            .env("PATH", "/usr/local/bin:/usr/bin:/bin")
-            .env("HOME", &home_dir)
-            .env("XDG_RUNTIME_DIR", &rt_dir)
-            .env("WAYLAND_DISPLAY", "wayland-test")
-            .env("DBUS_SESSION_BUS_ADDRESS", &dbus_addr)
-            .env("LANG", "C.UTF-8")
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap(),
-    );
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_infynitae-edge-apps"));
+    cmd.env_clear()
+        .env("PATH", "/usr/local/bin:/usr/bin:/bin")
+        .env("HOME", &home_dir)
+        .env("XDG_RUNTIME_DIR", &rt_dir)
+        .env("WAYLAND_DISPLAY", "wayland-test")
+        .env("DBUS_SESSION_BUS_ADDRESS", &dbus_addr)
+        .env("LANG", "C.UTF-8")
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+    if let Some(p) = boxes_file {
+        cmd.env("INFYNITAE_EDGE_BOXES", p);
+    }
+    let mut edge = ChildGuard::new(cmd.spawn().unwrap());
 
     let probe = zbus::blocking::connection::Builder::address(dbus_addr.as_str())
         .unwrap()
@@ -552,28 +580,48 @@ fn closed_edge_has_no_blocking_thread_and_zero_idle_wakeups() {
         std::thread::sleep(Duration::from_millis(20));
     }
 
+    Some(RunningEdge {
+        _tmp: tmp,
+        _dbus: dbus_guard,
+        wayland,
+        edge,
+        dbus_addr,
+        probe,
+    })
+}
+
+#[test]
+fn closed_edge_has_no_blocking_thread_and_zero_idle_wakeups() {
+    let Some(run) = spawn_test_edge(
+        "idle-wakeups",
+        "PANEL_CONTROL=\"SUPER+A top right 380 apps/background music/playing\"\n",
+        None,
+    ) else {
+        return;
+    };
+
     // Keep `probe` connected across the idle sample so its disconnect does not emit
     // NameOwnerChanged to `tray_watcher`; wait for async-io's post-startup backoff (~20 ms).
     std::thread::sleep(Duration::from_millis(150));
 
-    let pid = edge.id();
+    let pid = run.edge.id();
     assert_zero_idle_wakeups(pid, "initial closed state");
 
     // Toggle the control panel open (background + music cards fetch over the shared D-Bus
     // connection), let it render and fetch, then toggle it closed and verify it stays idle.
-    let before_open = wayland.commits.load(Ordering::Acquire);
+    let before_open = run.wayland.commits.load(Ordering::Acquire);
     assert_eq!(unsafe { libc::kill(pid as i32, libc::SIGUSR2) }, 0);
     let open_deadline = Instant::now() + Duration::from_secs(3);
-    while wayland.commits.load(Ordering::Acquire) == before_open {
+    while run.wayland.commits.load(Ordering::Acquire) == before_open {
         assert!(Instant::now() < open_deadline, "panel did not open/commit");
         std::thread::sleep(Duration::from_millis(20));
     }
     std::thread::sleep(Duration::from_millis(350));
 
-    let before_close = wayland.commits.load(Ordering::Acquire);
+    let before_close = run.wayland.commits.load(Ordering::Acquire);
     assert_eq!(unsafe { libc::kill(pid as i32, libc::SIGUSR2) }, 0);
     let close_deadline = Instant::now() + Duration::from_secs(3);
-    while wayland.commits.load(Ordering::Acquire) == before_close {
+    while run.wayland.commits.load(Ordering::Acquire) == before_close {
         assert!(
             Instant::now() < close_deadline,
             "panel did not close/commit"
@@ -581,11 +629,11 @@ fn closed_edge_has_no_blocking_thread_and_zero_idle_wakeups() {
         std::thread::sleep(Duration::from_millis(20));
     }
     // Wait for the leave animation (200 ms) and any final closed commit to settle.
-    let mut last_commits = wayland.commits.load(Ordering::Acquire);
+    let mut last_commits = run.wayland.commits.load(Ordering::Acquire);
     let settle_deadline = Instant::now() + Duration::from_secs(3);
     loop {
         std::thread::sleep(Duration::from_millis(120));
-        let now_commits = wayland.commits.load(Ordering::Acquire);
+        let now_commits = run.wayland.commits.load(Ordering::Acquire);
         if now_commits == last_commits {
             break;
         }
@@ -596,6 +644,146 @@ fn closed_edge_has_no_blocking_thread_and_zero_idle_wakeups() {
 
     assert_zero_idle_wakeups(pid, "closed after opening D-Bus cards");
 
-    drop(dbus_proxy);
-    drop(probe);
+    drop(run.probe);
+}
+
+#[test]
+fn osd_via_notify_send_replaces_skips_history_expires_and_stays_idle() {
+    let boxes_dir = TempDir::new("osd-boxes");
+    let boxes_path = boxes_dir.path().join("boxes");
+    let Some(run) = spawn_test_edge(
+        "osd-dbus",
+        "PANEL_CONTROL=\"SUPER+A top right 380 notifications/list settings/session\"\n",
+        Some(&boxes_path),
+    ) else {
+        return;
+    };
+    let pid = run.edge.id();
+
+    let wait_boxes = |want: &dyn Fn(&str) -> bool, timeout: Duration, label: &str| {
+        let start = Instant::now();
+        let deadline = start + timeout;
+        loop {
+            if let Ok(text) = std::fs::read_to_string(&boxes_path) {
+                if want(&text) {
+                    return (start.elapsed(), text);
+                }
+            }
+            assert!(
+                Instant::now() < deadline,
+                "{label}: timed out; last boxes = {:?}",
+                std::fs::read_to_string(&boxes_path)
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    };
+
+    let notify = |args: &[&str]| {
+        let status = Command::new("notify-send")
+            .env_clear()
+            .env("PATH", "/usr/local/bin:/usr/bin:/bin")
+            .env("DBUS_SESSION_BUS_ADDRESS", &run.dbus_addr)
+            .env("LANG", "C.UTF-8")
+            .args(args)
+            .status();
+        match status {
+            Ok(s) => {
+                assert!(s.success(), "notify-send {args:?} exited {s}");
+                true
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                eprintln!("skipped: notify-send not installed: {e}");
+                false
+            }
+            Err(e) => panic!("notify-send {args:?}: {e}"),
+        }
+    };
+
+    let t0 = Instant::now();
+    if !notify(&[
+        "-a",
+        "Volume",
+        "-h",
+        "string:x-canonical-private-synchronous:volume",
+        "-h",
+        "int:value:55",
+        "-t",
+        "1200",
+        "Volume: 55%",
+    ]) {
+        return;
+    }
+    let (_, first) = wait_boxes(
+        &|s| s == "osd 520 720 240 56 55 Volume\n",
+        Duration::from_secs(2),
+        "first volume OSD",
+    );
+    let first_ms = t0.elapsed().as_millis();
+    assert_eq!(first.lines().count(), 1);
+    eprintln!("TIMING osd notify-send->first-frame ms {first_ms}");
+
+    // Same mute format as live/launch.sh (sync tag without int:value) replaces without stacking.
+    assert!(notify(&[
+        "-a",
+        "Audio",
+        "-h",
+        "string:x-canonical-private-synchronous:volume",
+        "-t",
+        "1200",
+        "Muted",
+    ]));
+    let (_, muted) = wait_boxes(
+        &|s| s == "osd 520 720 240 56 0 Muted\n",
+        Duration::from_secs(2),
+        "mute OSD replacement",
+    );
+    assert_eq!(muted.lines().count(), 1);
+
+    // After ~1.2 s it disappears and returns boxes to closed.
+    wait_boxes(
+        &|s| s == "closed\n",
+        Duration::from_secs(3),
+        "OSD expiry after mute",
+    );
+
+    // Brightness arrives after expiry -> remaps cleanly and expires again.
+    assert!(notify(&[
+        "-a",
+        "Brightness",
+        "-h",
+        "string:x-canonical-private-synchronous:brightness",
+        "-h",
+        "int:value:80",
+        "-t",
+        "1200",
+        "Brightness: 80%",
+    ]));
+    wait_boxes(
+        &|s| s == "osd 520 720 240 56 80 Brightness\n",
+        Duration::from_secs(2),
+        "brightness OSD remap",
+    );
+    wait_boxes(
+        &|s| s == "closed\n",
+        Duration::from_secs(3),
+        "brightness OSD expiry",
+    );
+
+    // No leftover polling/timers after OSD hides.
+    std::thread::sleep(Duration::from_millis(150));
+    assert_zero_idle_wakeups(pid, "closed after OSD expired");
+
+    // Notification history never received the OSD entries.
+    assert_eq!(unsafe { libc::kill(pid as i32, libc::SIGUSR2) }, 0);
+    let (_, panel) = wait_boxes(
+        &|s| s.contains("panel control") && s.contains("settings/session"),
+        Duration::from_secs(3),
+        "control panel open after OSD",
+    );
+    assert!(
+        !panel.contains("notifications/list"),
+        "OSD must not enter notification history: {panel}"
+    );
+    assert_eq!(unsafe { libc::kill(pid as i32, libc::SIGUSR2) }, 0);
+    drop(run.probe);
 }

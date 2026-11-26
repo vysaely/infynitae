@@ -207,7 +207,7 @@ impl OutputSurface {
         } else {
             self.dirty = false;
             self.frame_pending = false;
-            self.clear_and_commit(qh, shell.visible());
+            self.clear_and_commit(qh, shell);
         }
     }
 
@@ -286,13 +286,21 @@ impl OutputSurface {
 
     /// Closed: a clear frame, damaging what this buffer held and what is on screen (the other
     /// buffer's box); with both buffers still held, again on the next frame callback.
-    pub(super) fn clear_and_commit(&mut self, qh: &QueueHandle<App>, any_visible: bool) {
+    pub(super) fn clear_and_commit(&mut self, qh: &QueueHandle<App>, shell: &Shell) {
+        let any_visible = shell.visible();
+        let dump = |this: &Self| {
+            if !any_visible {
+                if this.width > 0 && this.height > 0 {
+                    crate::boxes::dump(shell, f64::from(this.width), f64::from(this.height));
+                } else if shell.notify.osd.is_none() {
+                    crate::boxes::dump_closed();
+                }
+            }
+        };
         if self.mapped_closed && self.buf_size == self.target_buf_size() {
             self.apply_surface_scale();
             self.layer.commit();
-            if !any_visible {
-                crate::boxes::dump_closed();
-            }
+            dump(self);
             return;
         }
         let Some(idx) = self.acquire_slot() else {
@@ -325,9 +333,7 @@ impl OutputSurface {
             self.last_slot = idx;
             self.layer.commit();
         }
-        if !any_visible {
-            crate::boxes::dump_closed();
-        }
+        dump(self);
     }
 
     /// Closed and its clear frame shown: that buffer's pages (all zero) given back, 8 MB on a
@@ -415,19 +421,27 @@ impl OutputSurface {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum SurfaceKind {
+    Popups,
+    Widgets,
+    Osd,
+}
+
 /// The notification pop-ups' surface (in place of mako): a strip down the right of the first
 /// screen on the Top layer, taking the pointer only on the cards, and unmapped (no buffer) while
 /// there is nothing to show, so it costs nothing and is never one more surface over a full-screen
-/// window. The desktop's widgets have one of these too (`widgets`): the whole first screen on the
-/// Bottom layer, under the windows, taking the pointer only on the widgets.
+/// window. The desktop's widgets (`Widgets`) sit on the Bottom layer on the first screen, and the
+/// volume/brightness OSD (`Osd`) sits at the bottom centre on the Top layer with no input region
+/// and unmapped when hidden.
 pub(super) struct PopupLayer {
-    pub(super) widgets: bool,
+    pub(super) kind: SurfaceKind,
     pub(super) output: wl_output::WlOutput,
     pub(super) frac_scale: Option<WpFractionalScaleV1>,
     pub(super) viewport: Option<WpViewport>,
     pub(super) layer: LayerSurface,
     pub(super) pool: SlotPool,
-    /// for a new pool when the strip unmaps
+    /// for a new pool when the surface unmaps
     pub(super) shm: Shm,
     pub(super) buffer: Option<Buffer>,
     pub(super) width: u32,
@@ -437,6 +451,7 @@ pub(super) struct PopupLayer {
     pub(super) last_buffer_scale: i32,
     pub(super) last_viewport_dest: Option<(i32, i32)>,
     pub(super) configured: bool,
+    pub(super) awaiting_configure: bool,
     /// a buffer is attached (the surface shows)
     pub(super) mapped: bool,
     pub(super) frame_pending: bool,
@@ -462,8 +477,12 @@ pub(super) const POPUP_STRIP_W: u32 =
     (crate::notify::POPUP_W + crate::notify::MARGIN + 16.0) as u32;
 
 impl PopupLayer {
-    /// The pop-ups' strip (`widgets` false) or the widgets' surface (true) on `output`.
-    pub(super) fn new(app: &App, output: wl_output::WlOutput, widgets: bool) -> Option<PopupLayer> {
+    /// Creates a `Popups`, `Widgets`, or `Osd` layer surface on `output`.
+    pub(super) fn new(
+        app: &App,
+        output: wl_output::WlOutput,
+        kind: SurfaceKind,
+    ) -> Option<PopupLayer> {
         let pool = SlotPool::new(4096, &app.shm).ok()?;
         let integer_scale = app
             .outputs
@@ -489,28 +508,43 @@ impl PopupLayer {
             ),
             _ => (None, None),
         };
-        // the compositor's layer rules know both names
-        let layer = if widgets {
-            let l = app.layer_shell.create_layer_surface(
-                &app.qh,
-                surface,
-                Layer::Bottom,
-                Some("infynitae-widgets"),
-                Some(&output),
-            );
-            l.set_anchor(Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT);
-            l
-        } else {
-            let l = app.layer_shell.create_layer_surface(
-                &app.qh,
-                surface,
-                Layer::Top,
-                Some("infynitae-notifications"),
-                Some(&output),
-            );
-            l.set_anchor(Anchor::TOP | Anchor::RIGHT | Anchor::BOTTOM);
-            l.set_size(POPUP_STRIP_W, 0);
-            l
+        let layer = match kind {
+            SurfaceKind::Widgets => {
+                let l = app.layer_shell.create_layer_surface(
+                    &app.qh,
+                    surface,
+                    Layer::Bottom,
+                    Some("infynitae-widgets"),
+                    Some(&output),
+                );
+                l.set_anchor(Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT);
+                l
+            }
+            SurfaceKind::Popups => {
+                let l = app.layer_shell.create_layer_surface(
+                    &app.qh,
+                    surface,
+                    Layer::Top,
+                    Some("infynitae-notifications"),
+                    Some(&output),
+                );
+                l.set_anchor(Anchor::TOP | Anchor::RIGHT | Anchor::BOTTOM);
+                l.set_size(POPUP_STRIP_W, 0);
+                l
+            }
+            SurfaceKind::Osd => {
+                let l = app.layer_shell.create_layer_surface(
+                    &app.qh,
+                    surface,
+                    Layer::Top,
+                    Some("infynitae-osd"),
+                    Some(&output),
+                );
+                l.set_anchor(Anchor::BOTTOM);
+                l.set_size(crate::notify::OSD_W as u32, crate::notify::OSD_H as u32);
+                l.set_margin(0, 0, crate::notify::MARGIN as i32, 0);
+                l
+            }
         };
         layer.set_exclusive_zone(-1);
         layer.set_keyboard_interactivity(KeyboardInteractivity::None);
@@ -521,7 +555,7 @@ impl PopupLayer {
         }
         layer.commit();
         Some(PopupLayer {
-            widgets,
+            kind,
             output,
             frac_scale,
             viewport,
@@ -536,6 +570,7 @@ impl PopupLayer {
             last_buffer_scale: 1,
             last_viewport_dest: None,
             configured: false,
+            awaiting_configure: true,
             mapped: false,
             frame_pending: false,
             again: false,
@@ -585,56 +620,71 @@ impl PopupLayer {
         }
     }
 
-    /// Shows the pop-ups as they are now (or unmaps the strip when there are none), or the
-    /// widgets.
+    fn unmap(&mut self) -> bool {
+        if !self.mapped {
+            return false;
+        }
+        // no buffer: unmapped; it maps again after a commit and the configure answering it
+        self.layer.wl_surface().attach(None, 0, 0);
+        self.layer.commit();
+        self.mapped = false;
+        self.configured = false;
+        self.awaiting_configure = false;
+        self.buffer = None;
+        self.pointer = None;
+        self.last_viewport_dest = None;
+        // the pool is not kept while nothing shows; each frame is drawn whole in a new buffer
+        match SlotPool::new(4096, &self.shm) {
+            Ok(pool) => self.pool = pool,
+            Err(e) => eprintln!("infynitae-edge-apps: notification pool: {e}"),
+        }
+        true
+    }
+
+    /// Shows the pop-ups, widgets, or OSD as they are now (unmapping when empty). Returns `true`
+    /// when a buffer was committed or the surface unmapped.
     pub(super) fn render(
         &mut self,
         qh: &QueueHandle<App>,
         compositor: &CompositorState,
         shell: &Shell,
-    ) {
-        if self.widgets {
-            // a frame after each: the cards' animations (a list opening) go on from there
-            let region = shell.widget_region();
-            self.present(qh, compositor, &region, true, |cr, _, _| {
-                shell.draw_widgets(cr)
-            });
-            return;
-        }
-        let n = &shell.notify;
-        if n.popups.is_empty() {
-            if self.mapped {
-                // no buffer: unmapped; it maps again after a commit and the configure answering it
-                self.layer.wl_surface().attach(None, 0, 0);
-                self.layer.commit();
-                self.mapped = false;
-                self.configured = false;
-                self.buffer = None;
-                self.pointer = None;
-                self.last_viewport_dest = None;
-                // the strip's pool (two buffers, 3.4 MB on a 1080-pixel-high screen) is not kept
-                // while no pop-up shows; each frame is drawn whole in a new buffer anyway
-                match SlotPool::new(4096, &self.shm) {
-                    Ok(pool) => self.pool = pool,
-                    Err(e) => eprintln!("infynitae-edge-apps: notification pool: {e}"),
-                }
+    ) -> bool {
+        match self.kind {
+            SurfaceKind::Widgets => {
+                // a frame after each: the cards' animations (a list opening) go on from there
+                let region = shell.widget_region();
+                self.present(qh, compositor, &region, true, |cr, _, _| {
+                    shell.draw_widgets(cr)
+                })
             }
-            return;
+            SurfaceKind::Popups => {
+                let n = &shell.notify;
+                if n.popups.is_empty() {
+                    return self.unmap();
+                }
+                let now = Instant::now();
+                // only the cards take the pointer; the rest of the strip lets clicks through
+                let region: Vec<(i32, i32, i32, i32)> = crate::notify::layout(n, self.width as f64)
+                    .into_iter()
+                    .map(|(_, r)| (r.0 as i32, r.1 as i32, r.2.ceil() as i32, r.3.ceil() as i32))
+                    .collect();
+                // a card still sliding in: the next frame too
+                let arriving = n.popups.iter().any(|p| {
+                    now.saturating_duration_since(p.born).as_secs_f64() * 1000.0
+                        < crate::notify::ARRIVE_MS
+                });
+                let pointer = self.pointer;
+                self.present(qh, compositor, &region, arriving, |cr, lw, _| {
+                    crate::notify::draw(cr, &shell.theme, n, lw, pointer, now)
+                })
+            }
+            SurfaceKind::Osd => match &shell.notify.osd {
+                Some(osd) => self.present(qh, compositor, &[], false, |cr, lw, lh| {
+                    crate::notify::draw_osd(cr, &shell.theme, osd, lw, lh)
+                }),
+                None => self.unmap(),
+            },
         }
-        let now = Instant::now();
-        // only the cards take the pointer; the rest of the strip lets clicks through
-        let region: Vec<(i32, i32, i32, i32)> = crate::notify::layout(n, self.width as f64)
-            .into_iter()
-            .map(|(_, r)| (r.0 as i32, r.1 as i32, r.2.ceil() as i32, r.3.ceil() as i32))
-            .collect();
-        // a card still sliding in: the next frame too
-        let arriving = n.popups.iter().any(|p| {
-            now.saturating_duration_since(p.born).as_secs_f64() * 1000.0 < crate::notify::ARRIVE_MS
-        });
-        let pointer = self.pointer;
-        self.present(qh, compositor, &region, arriving, |cr, lw, _| {
-            crate::notify::draw(cr, &shell.theme, n, lw, pointer, now)
-        });
     }
 
     /// One frame drawn by `draw` (given the surface's logical size), the pointer taken only on
@@ -646,29 +696,30 @@ impl PopupLayer {
         region: &[(i32, i32, i32, i32)],
         more: bool,
         draw: impl FnOnce(&cairo::Context, f64, f64),
-    ) {
+    ) -> bool {
         if !self.configured {
-            if !self.mapped {
+            if !self.mapped && !self.awaiting_configure {
                 self.layer.commit();
+                self.awaiting_configure = true;
             }
-            return;
+            return false;
         }
         if self.frame_pending {
             self.again = true;
-            return;
+            return false;
         }
         let (lw, lh) = (self.width as f64, self.height as f64);
         let (bw_u, bh_u) = self.target_buf_size();
         let (bw, bh) = (bw_u as i32, bh_u as i32);
         if bw <= 0 || bh <= 0 {
-            return;
+            return false;
         }
         let stride = bw * 4;
         let Ok((buffer, canvas)) =
             self.pool
                 .create_buffer(bw, bh, stride, wl_shm::Format::Argb8888)
         else {
-            return;
+            return false;
         };
         canvas.fill(0);
         let (sx, sy) = (f64::from(bw) / lw, f64::from(bh) / lh);
@@ -702,12 +753,16 @@ impl PopupLayer {
             wl.frame(qh, wl.clone());
             self.frame_pending = true;
         }
-        if buffer.attach_to(wl).is_ok() {
+        let committed = if buffer.attach_to(wl).is_ok() {
             self.layer.commit();
             self.mapped = true;
             self.buffer = Some(buffer);
-        }
+            true
+        } else {
+            false
+        };
         self.again = false;
+        committed
     }
 }
 
@@ -984,5 +1039,152 @@ mod tests {
         assert_eq!(c2.viewport_dest, Some((1280, 800)));
         assert_eq!(c2.buffer_scale, 1);
         assert!((app.last_display_scale - 2.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn headless_osd_surface_shows_at_bottom_centre_replaces_unmaps_and_remaps() {
+        use smithay_client_toolkit::reexports::client::Proxy;
+
+        let (mock, conn) = MockWayland::start(
+            vec![MockOutputSpec {
+                width: 1280,
+                height: 800,
+                scale: 1,
+                fractional_120: 120,
+            }],
+            false,
+        );
+        let sh = Shell::new(crate::config::Config::from_text(""), Vec::new());
+        let (fetch_tx, _fetch_rx) = channel::channel::<Fetched>();
+        let (mut app, mut eq) = init_app(&conn, sh, fetch_tx).unwrap();
+        app.config_path = Some(std::env::temp_dir().join("infynitae-edge-test-no-config"));
+        eq.roundtrip(&mut app).unwrap();
+        assert!(app.osd_layer.is_none());
+
+        let osd_layers = || {
+            mock.state
+                .lock()
+                .unwrap()
+                .layer_kind
+                .values()
+                .filter(|(_, name)| name == "infynitae-osd")
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        assert!(osd_layers().is_empty());
+
+        let osd_note = |id, sync: &str, value: Option<i32>, summary: &str| crate::notify::Note {
+            id,
+            app: "Audio".into(),
+            summary: summary.into(),
+            body: String::new(),
+            actions: vec![],
+            urgency: 1,
+            value,
+            sync: Some(sync.into()),
+            expire: Some(Some(Duration::from_millis(1200))),
+            transient: true,
+            resident: false,
+            time: "12:00".into(),
+        };
+
+        let t0 = Instant::now();
+        assert!(app.shell.notify.receive(
+            osd_note(1, "volume", Some(60), "Volume: 60%"),
+            t0,
+            crate::notify::Quiet::No,
+        ));
+        assert!(app.shell.notify.history.is_empty());
+        assert!(app.shell.notify.popups.is_empty());
+        app.sync_popups();
+        for _ in 0..3 {
+            eq.roundtrip(&mut app).unwrap();
+        }
+
+        assert_eq!(osd_layers(), vec![(2, "infynitae-osd".to_string())]);
+        let sid = app
+            .osd_layer
+            .as_ref()
+            .expect("osd surface")
+            .layer
+            .wl_surface()
+            .id()
+            .protocol_id();
+        let c1 = mock.last_commit(sid);
+        assert_eq!(c1.buffer_size, Some((240, 56)));
+        assert_eq!(c1.keyboard_interactivity, 0);
+        assert!(c1.input_rects.is_empty());
+        assert_eq!(
+            crate::boxes::text(&app.shell, 1280.0, 800.0),
+            "osd 520 720 240 56 60 Volume\n"
+        );
+        let px1 = {
+            let ol = app.osd_layer.as_mut().unwrap();
+            assert!(ol.mapped);
+            assert_eq!(ol.kind, SurfaceKind::Osd);
+            ol.buffer
+                .as_ref()
+                .unwrap()
+                .canvas(&mut ol.pool)
+                .unwrap()
+                .to_vec()
+        };
+        assert!(px1.iter().any(|&b| b != 0));
+
+        // Second press (launch.sh mute format without int:value) replaces in place on the same surface.
+        assert!(app.shell.notify.receive(
+            osd_note(2, "volume", None, "Muted"),
+            t0 + Duration::from_millis(100),
+            crate::notify::Quiet::No,
+        ));
+        assert!(app.shell.notify.history.is_empty());
+        app.sync_popups();
+        eq.roundtrip(&mut app).unwrap();
+        eq.roundtrip(&mut app).unwrap();
+        assert_eq!(osd_layers().len(), 1);
+        assert_eq!(
+            crate::boxes::text(&app.shell, 1280.0, 800.0),
+            "osd 520 720 240 56 0 Muted\n"
+        );
+        let px2 = {
+            let ol = app.osd_layer.as_mut().unwrap();
+            ol.buffer
+                .as_ref()
+                .unwrap()
+                .canvas(&mut ol.pool)
+                .unwrap()
+                .to_vec()
+        };
+        assert_ne!(px1, px2);
+
+        // Expiry after 1.2 s unmaps the layer surface and releases the buffer pool.
+        assert!(app
+            .shell
+            .notify
+            .expire(t0 + Duration::from_millis(100) + crate::notify::OSD_TIMEOUT));
+        app.sync_popups();
+        eq.roundtrip(&mut app).unwrap();
+        let ol = app.osd_layer.as_ref().unwrap();
+        assert!(!ol.mapped);
+        assert_eq!(ol.pool.len(), 4096);
+        assert_eq!(mock.last_commit(sid).buffer_size, None);
+        assert_eq!(crate::boxes::text(&app.shell, 1280.0, 800.0), "closed\n");
+
+        // Pressing brightness afterward remaps the existing OSD surface cleanly.
+        assert!(app.shell.notify.receive(
+            osd_note(3, "brightness", Some(80), "Brightness: 80%"),
+            t0 + Duration::from_millis(2000),
+            crate::notify::Quiet::No,
+        ));
+        app.sync_popups();
+        for _ in 0..3 {
+            eq.roundtrip(&mut app).unwrap();
+        }
+        assert!(app.osd_layer.as_ref().unwrap().mapped);
+        assert_eq!(mock.last_commit(sid).buffer_size, Some((240, 56)));
+        assert_eq!(
+            crate::boxes::text(&app.shell, 1280.0, 800.0),
+            "osd 520 720 240 56 80 Brightness\n"
+        );
     }
 }

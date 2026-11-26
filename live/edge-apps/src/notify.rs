@@ -1,16 +1,18 @@
 //! The edge's own notifications (in place of mako): what the D-Bus server
-//! (`crate::notify_server`) received, the pop-ups at the top right and the history the
-//! Notifications card lists. Pure state, layout and drawing; the server thread and the pop-up
-//! surface live in `notify_server.rs` and `wayland.rs`.
+//! (`crate::notify_server`) received, the pop-ups at the top right, the bottom-centre OSD for
+//! synchronous level keys, and the history the Notifications card lists. Pure state, layout and
+//! drawing; the server thread and surfaces live in `notify_server.rs` and `wayland.rs`.
 //!
-//! - A pop-up stays `timeout` (the sender's, else 4 s low, 6 s normal, never critical; 2 s for a
-//!   level such as the volume keys'), pauses while pointed at, and goes on a click (its default
-//!   action), its x, one of its buttons, or `CloseNotification`.
-//! - One with the same `x-canonical-private-synchronous` / `synchronous` tag replaces the last one
-//!   (the volume keys: one bar that moves, not a stack).
+//! - A pop-up stays `timeout` (the sender's, else 4 s low, 6 s normal, never critical), pauses
+//!   while pointed at, and goes on a click (its default action), its x, one of its buttons, or
+//!   `CloseNotification`.
+//! - Synchronous level notifications (`x-canonical-private-synchronous` with `int:value`, and
+//!   `volume` / `brightness` tags such as `launch.sh` mute) show as one bottom-centre OSD without
+//!   entering the history, gone after 1.2 s by default and replaced on each press.
+//! - One with the same `x-canonical-private-synchronous` / `synchronous` tag replaces the last one.
 //! - Do not disturb (`$XDG_RUNTIME_DIR/infynitae/do-not-disturb`) shows only critical ones; a game
 //!   (`.../game-quiet`, launch.sh's GAME_QUIET) shows none: a pop-up over a game ends its direct
-//!   path to the screen. Either way they go to the history.
+//!   path to the screen. Either way non-OSD notifications go to the history.
 
 use crate::card::Rect;
 use crate::draw::{self, Text, PAD_X};
@@ -24,8 +26,11 @@ pub const MAX_POPUPS: usize = 4;
 pub const MAX_HISTORY: usize = 50;
 pub const POPUP_W: f64 = 360.0;
 pub const POPUP_GAP: f64 = 12.0;
-/// From the screen's top and right edge.
+/// From the screen's top and right edge (and bottom margin for the OSD).
 pub const MARGIN: f64 = 24.0;
+pub const OSD_W: f64 = 240.0;
+pub const OSD_H: f64 = 56.0;
+pub const OSD_TIMEOUT: Duration = Duration::from_millis(1200);
 const PAD_Y: f64 = 14.0;
 const APP_H: f64 = 18.0;
 const TITLE_H: f64 = 20.0;
@@ -78,6 +83,93 @@ impl Note {
             },
         }
     }
+
+    /// How long an OSD shows: the sender's timeout when positive, else 1.2 s.
+    pub fn osd_shown_for(&self) -> Duration {
+        match self.expire {
+            Some(Some(d)) => d,
+            _ => OSD_TIMEOUT,
+        }
+    }
+}
+
+/// Active bottom-centre on-screen display for synchronous volume/brightness keys.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Osd {
+    pub note: Note,
+    pub label: String,
+    pub value: i32,
+    pub muted: bool,
+    pub until: Instant,
+}
+
+/// Synchronous notifications with a value hint (or volume/brightness tags such as `launch.sh` mute)
+/// render as the bottom-centre OSD instead of a notification pop-up or history entry.
+pub fn is_osd_note(note: &Note) -> bool {
+    note.sync.is_some()
+        && (note.value.is_some() || matches!(note.sync.as_deref(), Some("volume" | "brightness")))
+}
+
+fn contains_word_ci(haystack: &str, word: &str) -> bool {
+    haystack
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|w| w.eq_ignore_ascii_case(word))
+}
+
+fn first_percent(text: &str) -> Option<i32> {
+    let b = text.as_bytes();
+    let i = text.find('%')?;
+    let mut j = i;
+    while j > 0 && b[j - 1].is_ascii_digit() {
+        j -= 1;
+    }
+    (j < i)
+        .then(|| text[j..i].parse::<i32>().ok())
+        .flatten()
+        .map(|v| v.clamp(0, 100))
+}
+
+fn osd_from_note(note: Note, until: Instant) -> Osd {
+    let muted = contains_word_ci(&note.summary, "muted");
+    let sync_tag = note.sync.as_deref().unwrap_or("");
+    let label = if muted {
+        "Muted".to_string()
+    } else if sync_tag.eq_ignore_ascii_case("brightness")
+        || contains_word_ci(&note.summary, "brightness")
+        || note.app.eq_ignore_ascii_case("display")
+    {
+        "Brightness".to_string()
+    } else if sync_tag.eq_ignore_ascii_case("volume")
+        || contains_word_ci(&note.summary, "volume")
+        || contains_word_ci(&note.summary, "unmuted")
+        || note.app.eq_ignore_ascii_case("audio")
+    {
+        "Volume".to_string()
+    } else {
+        note.summary
+            .split(':')
+            .next()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .or_else(|| note.sync.clone())
+            .unwrap_or_default()
+    };
+    let value = if muted {
+        0
+    } else {
+        note.value
+            .or_else(|| first_percent(&note.summary))
+            .unwrap_or(0)
+            .clamp(0, 100)
+    };
+    Osd {
+        note,
+        label,
+        value,
+        muted,
+        until,
+    }
 }
 
 /// What the server thread hands the edge.
@@ -113,6 +205,8 @@ pub struct Notify {
     pub popups: Vec<Popup>,
     /// newest first
     pub history: Vec<Note>,
+    /// the active bottom-centre OSD, replaced in place
+    pub osd: Option<Osd>,
     /// the pop-up under the pointer (its time is held)
     pub hovered: Option<u32>,
     /// signals to send
@@ -202,30 +296,40 @@ pub fn clean_body(s: &str) -> String {
 }
 
 impl Notify {
-    /// A notification came: into the history (unless transient or a level), and a pop-up unless
-    /// held back. One with the same id or synchronous tag takes the old one's place. Says whether
-    /// anything shows differently.
+    /// A notification came: synchronous level notifications go to the bottom-centre OSD without
+    /// entering the history; others go into the history (unless transient or a level) and a pop-up
+    /// unless held back. One with the same id or synchronous tag takes the old one's place. Says
+    /// whether anything shows differently.
     pub fn receive(&mut self, note: Note, now: Instant, quiet: Quiet) -> bool {
         let same = |n: &Note| n.id == note.id || (note.sync.is_some() && n.sync == note.sync);
+        let osd = is_osd_note(&note);
         // a notification that leaves without the sender being told keeps the sender waiting for
         // NotificationClosed forever (2026-11-24: a drive's "mounted" notification held three
-        // processes for hours): one replaced under its synchronous tag by a new id, or pushed out
-        // of the history, is told it closed
-        let replaced: Vec<u32> = self
+        // processes for hours): one replaced under its synchronous tag or in the OSD by a new id,
+        // or pushed out of the history, is told it closed
+        let mut replaced: Vec<u32> = self
             .history
             .iter()
             .chain(self.popups.iter().map(|p| &p.note))
             .filter(|n| same(n) && n.id != note.id)
             .map(|n| n.id)
             .collect();
+        if let Some(old_osd) = self.osd.as_ref().filter(|o| osd || same(&o.note)) {
+            if old_osd.note.id != note.id {
+                replaced.push(old_osd.note.id);
+            }
+        }
         self.history.retain(|n| !same(n));
-        if !note.transient && note.value.is_none() {
+        if !note.transient && note.value.is_none() && !osd {
             self.history.insert(0, note.clone());
             for old in self.history.drain(MAX_HISTORY.min(self.history.len())..) {
                 if !self.popups.iter().any(|p| p.note.id == old.id) {
                     self.out.push(Outgoing::Closed(old.id, 1));
                 }
             }
+        }
+        if osd || self.osd.as_ref().is_some_and(|o| same(&o.note)) {
+            self.osd = None;
         }
         let mut told = Vec::new();
         for id in replaced {
@@ -245,10 +349,23 @@ impl Notify {
             if let Some(i) = old {
                 self.popups.remove(i);
             }
+            if quiet == Quiet::Game {
+                if let Some(stale) = self.osd.take() {
+                    self.out.push(Outgoing::Closed(stale.note.id, 1));
+                }
+            }
             // held back and kept nowhere: it is over for the sender too
             if !self.history.iter().any(|n| n.id == note.id) {
                 self.out.push(Outgoing::Closed(note.id, 1));
             }
+            return true;
+        }
+        if osd {
+            if let Some(i) = old {
+                self.popups.remove(i);
+            }
+            let until = now + note.osd_shown_for();
+            self.osd = Some(osd_from_note(note, until));
             return true;
         }
         let until = note.shown_for().map(|d| now + d);
@@ -279,18 +396,23 @@ impl Notify {
 
     /// CloseNotification: gone from the screen and the history, NotificationClosed(id, 3).
     pub fn close(&mut self, id: u32) -> bool {
-        let before = self.popups.len() + self.history.len();
+        let before = self.popups.len() + self.history.len() + usize::from(self.osd.is_some());
         self.popups.retain(|p| p.note.id != id);
         self.history.retain(|n| n.id != id);
-        let changed = before != self.popups.len() + self.history.len();
+        if self.osd.as_ref().is_some_and(|o| o.note.id == id) {
+            self.osd = None;
+        }
+        let after = self.popups.len() + self.history.len() + usize::from(self.osd.is_some());
+        let changed = before != after;
         if changed {
             self.out.push(Outgoing::Closed(id, 3));
         }
         changed
     }
 
-    /// Pop-ups whose time is up go (they stay in the history), NotificationClosed(id, 1) unless
-    /// still listed there. The one pointed at waits. Says whether any went.
+    /// Pop-ups and the OSD whose time is up go (pop-ups stay in the history),
+    /// NotificationClosed(id, 1) unless still listed there. The pop-up pointed at waits. Says
+    /// whether anything went.
     pub fn expire(&mut self, now: Instant) -> bool {
         let hovered = self.hovered;
         let mut gone = Vec::new();
@@ -306,7 +428,16 @@ impl Notify {
                 self.out.push(Outgoing::Closed(*id, 1));
             }
         }
-        !gone.is_empty()
+        let mut osd_gone = false;
+        if let Some(o) = &self.osd {
+            if now >= o.until {
+                let id = o.note.id;
+                self.osd = None;
+                self.out.push(Outgoing::Closed(id, 1));
+                osd_gone = true;
+            }
+        }
+        !gone.is_empty() || osd_gone
     }
 
     /// The pointer is over pop-up `id` (or none): its time stops while it is, and it gets at
@@ -326,24 +457,29 @@ impl Notify {
         true
     }
 
-    /// The next moment something changes by itself: a pop-up's time up.
+    /// The next moment something changes by itself: a pop-up's or the OSD's time up.
     pub fn next_deadline(&self) -> Option<Instant> {
         self.popups
             .iter()
             .filter(|p| Some(p.note.id) != self.hovered)
             .filter_map(|p| p.until)
+            .chain(self.osd.as_ref().map(|o| o.until))
             .min()
     }
 
     /// The user dismissed `id` (its x, or the card's): gone everywhere, NotificationClosed(id, 2).
     pub fn dismiss(&mut self, id: u32) -> bool {
-        let before = self.popups.len() + self.history.len();
+        let before = self.popups.len() + self.history.len() + usize::from(self.osd.is_some());
         self.popups.retain(|p| p.note.id != id);
         self.history.retain(|n| n.id != id);
+        if self.osd.as_ref().is_some_and(|o| o.note.id == id) {
+            self.osd = None;
+        }
         if self.hovered == Some(id) {
             self.hovered = None;
         }
-        let changed = before != self.popups.len() + self.history.len();
+        let after = self.popups.len() + self.history.len() + usize::from(self.osd.is_some());
+        let changed = before != after;
         if changed {
             self.out.push(Outgoing::Closed(id, 2));
         }
@@ -380,6 +516,7 @@ impl Notify {
             .iter()
             .map(|n| n.id)
             .chain(self.popups.iter().map(|p| p.note.id))
+            .chain(self.osd.iter().map(|o| o.note.id))
             .collect();
         let mut any = false;
         for id in ids {
@@ -603,16 +740,7 @@ fn draw_one(
         ty += lines as f64 * BODY_LINE;
     }
     if let Some(v) = note.value {
-        let part = (v.clamp(0, 100) as f64) / 100.0;
-        let by = ty + 9.0;
-        draw::round_rect(cr, tx, by, tw, 4.0, 2.0);
-        draw::set(cr, th.track);
-        let _ = cr.fill();
-        if part > 0.0 {
-            draw::round_rect(cr, tx, by, (tw * part).max(4.0), 4.0, 2.0);
-            draw::set(cr, th.accent);
-            let _ = cr.fill();
-        }
+        draw_value_bar(cr, th, tx, ty + 9.0, tw, v);
     }
     for (k, br) in button_rects(Some(cr), note, r) {
         let label = note
@@ -655,6 +783,60 @@ fn draw_body(cr: &Context, x: f64, y: f64, w: f64, lines: usize, body: &str, th:
     draw::set(cr, th.muted);
     cr.move_to(x.round(), y.round());
     pangocairo::functions::show_layout(cr, &l);
+}
+
+fn draw_value_bar(cr: &Context, th: &Theme, x: f64, y: f64, w: f64, value: i32) {
+    let part = (value.clamp(0, 100) as f64) / 100.0;
+    draw::round_rect(cr, x, y, w, 4.0, 2.0);
+    draw::set(cr, th.track);
+    let _ = cr.fill();
+    if part > 0.0 {
+        draw::round_rect(cr, x, y, (w * part).max(4.0), 4.0, 2.0);
+        draw::set(cr, th.accent);
+        let _ = cr.fill();
+    }
+}
+
+/// The OSD card's screen rectangle at the bottom centre of a `w x h` output.
+pub fn osd_rect(w: f64, h: f64) -> Rect {
+    let ow = OSD_W.min((w - 2.0 * MARGIN).max(120.0));
+    let x = ((w - ow) / 2.0).round().max(0.0);
+    let y = (h - MARGIN - OSD_H).round().max(0.0);
+    (x, y, ow, OSD_H)
+}
+
+/// Draws the bottom-centre OSD (no icon, the word, a bar for the value, theme colours & corners).
+pub fn draw_osd(cr: &Context, th: &Theme, osd: &Osd, w: f64, h: f64) {
+    let r = if w <= OSD_W + 1.0 && h <= OSD_H + 1.0 {
+        (0.0, 0.0, w, h)
+    } else {
+        osd_rect(w, h)
+    };
+    draw::with_font(&th.font, || {
+        draw::card(cr, th, r.0, r.1, r.2, r.3);
+        let tx = r.0 + PAD_X;
+        let tw = (r.2 - 2.0 * PAD_X).max(0.0);
+        draw::text_max(
+            cr,
+            tx,
+            r.1 + 13.0,
+            tw,
+            &Text {
+                size: draw::SIZE_BODY,
+                bold: true,
+                color: th.text,
+                text: &osd.label,
+            },
+        );
+        draw_value_bar(
+            cr,
+            th,
+            tx,
+            r.1 + r.3 - 14.0 - 4.0,
+            tw,
+            if osd.muted { 0 } else { osd.value },
+        );
+    });
 }
 
 #[cfg(test)]
@@ -718,22 +900,187 @@ mod tests {
         let t0 = Instant::now();
         let mut v = note(10);
         v.app = "Audio".into();
+        v.summary = "Volume: 40%".into();
         v.value = Some(40);
         v.sync = Some("volume".into());
         n.receive(v.clone(), t0, Quiet::No);
         n.receive(note(11), t0, Quiet::No);
         let mut v2 = v.clone();
         v2.id = 12;
+        v2.summary = "Volume: 45%".into();
         v2.value = Some(45);
         n.receive(v2, t0 + Duration::from_millis(500), Quiet::No);
-        assert_eq!(n.popups.len(), 2, "one bar, not two");
-        let bar = n.popups.iter().find(|p| p.note.app == "Audio").unwrap();
-        assert_eq!(bar.note.value, Some(45));
-        assert_eq!(bar.born, t0, "it does not arrive again");
+        assert_eq!(n.popups.len(), 1, "level uses OSD, not popups");
+        let osd = n.osd.as_ref().expect("active OSD");
+        assert_eq!(osd.label, "Volume");
+        assert_eq!(osd.value, 45);
+        assert_eq!(osd.until, t0 + Duration::from_millis(500) + OSD_TIMEOUT);
+        assert_eq!(n.out, vec![Outgoing::Closed(10, 4)]);
         assert!(
             n.history.iter().all(|h| h.app != "Audio"),
             "levels stay out of the history"
         );
+    }
+
+    #[test]
+    fn osd_handles_volume_brightness_mute_replacement_and_expiry() {
+        let mut n = Notify::default();
+        let t0 = Instant::now();
+
+        let mut vol = note(1);
+        vol.app = "Audio".into();
+        vol.summary = "Volume: 60%".into();
+        vol.value = Some(60);
+        vol.sync = Some("volume".into());
+        vol.expire = Some(Some(Duration::from_millis(1200)));
+        assert!(n.receive(vol, t0, Quiet::No));
+        assert!(n.popups.is_empty());
+        assert!(n.history.is_empty());
+        let osd = n.osd.as_ref().unwrap();
+        assert_eq!(osd.label, "Volume");
+        assert_eq!(osd.value, 60);
+        assert!(!osd.muted);
+        assert_eq!(n.next_deadline(), Some(t0 + Duration::from_millis(1200)));
+
+        // Brightness replaces volume (not stacked) and closes the superseded id.
+        let mut bright = note(2);
+        bright.app = "Display".into();
+        bright.summary = "Brightness: 80%".into();
+        bright.value = Some(80);
+        bright.sync = Some("brightness".into());
+        assert!(n.receive(bright, t0 + Duration::from_millis(200), Quiet::No));
+        let osd = n.osd.as_ref().unwrap();
+        assert_eq!(osd.label, "Brightness");
+        assert_eq!(osd.value, 80);
+        assert!(n.history.is_empty());
+        assert_eq!(n.out, vec![Outgoing::Closed(1, 4)]);
+        n.out.clear();
+
+        // Mute from launch.sh (sync="volume", no int:value hint) still makes an OSD showing "Muted".
+        let mut muted = note(3);
+        muted.app = "Audio".into();
+        muted.summary = "Muted".into();
+        muted.value = None;
+        muted.sync = Some("volume".into());
+        muted.expire = Some(Some(Duration::from_millis(1200)));
+        assert!(n.receive(muted, t0 + Duration::from_millis(400), Quiet::No));
+        let osd = n.osd.as_ref().unwrap();
+        assert_eq!(osd.label, "Muted");
+        assert_eq!(osd.value, 0);
+        assert!(osd.muted);
+        assert!(n.history.is_empty());
+        assert_eq!(n.out, vec![Outgoing::Closed(2, 4)]);
+        n.out.clear();
+
+        // Unmute from launch.sh ("Unmuted (60%)" without int:value hint) restores "Volume" with 60%.
+        let mut unmuted = note(3);
+        unmuted.app = "Audio".into();
+        unmuted.summary = "Unmuted (60%)".into();
+        unmuted.value = None;
+        unmuted.sync = Some("volume".into());
+        assert!(n.receive(unmuted, t0 + Duration::from_millis(600), Quiet::No));
+        let osd = n.osd.as_ref().unwrap();
+        assert_eq!(osd.label, "Volume");
+        assert_eq!(osd.value, 60);
+        assert!(!osd.muted);
+        assert!(n.out.is_empty(), "same id updated in place");
+
+        // Expires after 1.2 s and tells the sender.
+        assert!(!n.expire(t0 + Duration::from_millis(1700)));
+        assert!(n.expire(t0 + Duration::from_millis(1800)));
+        assert!(n.osd.is_none());
+        assert_eq!(n.next_deadline(), None);
+        assert_eq!(n.out, vec![Outgoing::Closed(3, 1)]);
+    }
+
+    #[test]
+    fn non_level_sync_notifications_stay_regular_popups() {
+        let mut n = Notify::default();
+        let t0 = Instant::now();
+        let mut privacy = note(1);
+        privacy.app = "Infynitae".into();
+        privacy.summary = "This window is hidden from captures".into();
+        privacy.sync = Some("privacy".into());
+        privacy.value = None;
+        n.receive(privacy, t0, Quiet::No);
+        assert!(n.osd.is_none());
+        assert_eq!(n.popups.len(), 1);
+        assert_eq!(n.history.len(), 1);
+    }
+
+    #[test]
+    fn osd_follows_quiet_rules_and_draws_with_theme_only() {
+        let mut n = Notify::default();
+        let t0 = Instant::now();
+        let mut vol = note(5);
+        vol.app = "Audio".into();
+        vol.summary = "Volume: 50%".into();
+        vol.sync = Some("volume".into());
+        vol.value = Some(50);
+
+        // Held during a game, not added to history, sender told it closed.
+        n.receive(vol.clone(), t0, Quiet::Game);
+        assert!(n.osd.is_none());
+        assert!(n.history.is_empty());
+        assert_eq!(n.out, vec![Outgoing::Closed(5, 1)]);
+        n.out.clear();
+
+        // Also held under Do not disturb for normal urgency, and active OSD clears if a game starts.
+        n.receive(vol.clone(), t0, Quiet::Dnd);
+        assert!(n.osd.is_none());
+        n.out.clear();
+        n.receive(vol.clone(), t0, Quiet::No);
+        assert!(n.osd.is_some());
+        let mut other = note(6);
+        other.sync = Some("brightness".into());
+        other.value = Some(40);
+        n.receive(other, t0, Quiet::Game);
+        assert!(n.osd.is_none());
+        assert_eq!(n.out, vec![Outgoing::Closed(5, 4), Outgoing::Closed(6, 1)]);
+
+        // Drawing checks: card background, bar accent for positive volume, no accent when muted.
+        let cfg = crate::config::Config::from_text(
+            "SURFACE_COLOR=\"#101216\"\nTEXT_COLOR=\"#eef2f8\"\nACCENT=\"#e05090\"\nCORNERS=\"10\"\n",
+        );
+        let th = Theme::from_config(&cfg);
+        let draw_bytes = |osd: &Osd| {
+            let mut surf =
+                cairo::ImageSurface::create(cairo::Format::ARgb32, OSD_W as i32, OSD_H as i32)
+                    .unwrap();
+            {
+                let cr = cairo::Context::new(&surf).unwrap();
+                draw::grey_text_edges(&cr);
+                draw_osd(&cr, &th, osd, OSD_W, OSD_H);
+            }
+            surf.flush();
+            let bytes = surf.data().unwrap().to_vec();
+            bytes
+        };
+        let osd_on = Osd {
+            note: vol.clone(),
+            label: "Volume".into(),
+            value: 50,
+            muted: false,
+            until: t0 + OSD_TIMEOUT,
+        };
+        let mut osd_muted = osd_on.clone();
+        osd_muted.label = "Muted".into();
+        osd_muted.value = 0;
+        osd_muted.muted = true;
+
+        let px_on = draw_bytes(&osd_on);
+        let px_muted = draw_bytes(&osd_muted);
+        let at = |buf: &[u8], x: usize, y: usize| -> [u8; 4] {
+            let i = (y * OSD_W as usize + x) * 4;
+            [buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]
+        };
+        // Corner pixel outside rounded radius (10 px) is transparent.
+        assert_eq!(at(&px_on, 0, 0), [0, 0, 0, 0]);
+        // At 50% volume, left quarter of bar (x=40, y=39) is accent; right quarter (x=180, y=39) is track.
+        assert_ne!(at(&px_on, 40, 39), at(&px_on, 180, 39));
+        // When muted, both sides of the bar match the track colour.
+        assert_eq!(at(&px_muted, 40, 39), at(&px_muted, 180, 39));
+        assert_ne!(at(&px_on, 40, 39), at(&px_muted, 40, 39));
     }
 
     #[test]

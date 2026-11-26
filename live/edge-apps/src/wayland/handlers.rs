@@ -30,18 +30,26 @@ impl CompositorHandler for App {
                 }
             }
         }
-        if let Some(pl) = self
+        let mut osd_changed = false;
+        for pl in self
             .popups
             .iter_mut()
             .chain(self.widget_layer.iter_mut())
-            .find(|p| p.layer.wl_surface() == surface)
+            .chain(self.osd_layer.iter_mut())
+            .filter(|p| p.layer.wl_surface() == surface)
         {
             if pl.integer_scale != factor {
                 pl.integer_scale = factor;
-                if pl.viewport.is_none() {
-                    pl.render(qh, &self.compositor, &self.shell);
+                if pl.viewport.is_none()
+                    && pl.render(qh, &self.compositor, &self.shell)
+                    && pl.kind == SurfaceKind::Osd
+                {
+                    osd_changed = true;
                 }
             }
+        }
+        if osd_changed {
+            self.dump_osd_boxes();
         }
         if need_sync {
             self.sync_all();
@@ -83,7 +91,7 @@ impl CompositorHandler for App {
                 if os.dirty && self.shell.visible_on(os.id) {
                     os.render_if_needed(qh, &self.shell);
                 } else if os.clear_pending && !self.shell.visible_on(os.id) {
-                    os.clear_and_commit(qh, self.shell.visible());
+                    os.clear_and_commit(qh, &self.shell);
                 } else if os.release_pending && !self.shell.visible_on(os.id) {
                     os.release_shown_buffer();
                 }
@@ -100,6 +108,16 @@ impl CompositorHandler for App {
         {
             pl.frame_pending = false;
             pl.render(qh, &self.compositor, &self.shell);
+        }
+        if let Some(ol) = self
+            .osd_layer
+            .as_mut()
+            .filter(|p| p.layer.wl_surface() == surface)
+        {
+            ol.frame_pending = false;
+            if ol.again && ol.render(qh, &self.compositor, &self.shell) {
+                self.dump_osd_boxes();
+            }
         }
         if self
             .widget_layer
@@ -164,6 +182,9 @@ impl OutputHandler for App {
             self.popups = None;
             self.popup_touch = None;
         }
+        if self.osd_layer.as_ref().is_some_and(|o| o.output == output) {
+            self.osd_layer = None;
+        }
         if self
             .widget_layer
             .as_ref()
@@ -183,6 +204,9 @@ impl LayerShellHandler for App {
         if self.popups.as_ref().is_some_and(|p| &p.layer == layer) {
             self.popups = None;
             self.popup_touch = None;
+        }
+        if self.osd_layer.as_ref().is_some_and(|o| &o.layer == layer) {
+            self.osd_layer = None;
         }
         if self
             .widget_layer
@@ -207,16 +231,24 @@ impl LayerShellHandler for App {
             os.configured = true;
             os.apply_mode(qh, &self.compositor, &self.shell);
         }
+        let mut osd_changed = false;
         if let Some(pl) = self
             .popups
             .iter_mut()
             .chain(self.widget_layer.iter_mut())
+            .chain(self.osd_layer.iter_mut())
             .find(|p| &p.layer == layer)
         {
             pl.width = configure.new_size.0.max(1);
             pl.height = configure.new_size.1.max(1);
             pl.configured = true;
-            pl.render(qh, &self.compositor, &self.shell);
+            pl.awaiting_configure = false;
+            if pl.render(qh, &self.compositor, &self.shell) && pl.kind == SurfaceKind::Osd {
+                osd_changed = true;
+            }
+        }
+        if osd_changed {
+            self.dump_osd_boxes();
         }
     }
 }
@@ -789,16 +821,23 @@ impl Dispatch<WpFractionalScaleV1, wl_surface::WlSurface> for App {
                 }
             }
         }
+        let mut osd_changed = false;
         if let Some(pl) = state
             .popups
             .iter_mut()
             .chain(state.widget_layer.iter_mut())
+            .chain(state.osd_layer.iter_mut())
             .find(|p| p.layer.wl_surface() == surface)
         {
             if pl.fractional_scale_120 != Some(scale) {
                 pl.fractional_scale_120 = Some(scale);
-                pl.render(qh, &state.compositor, &state.shell);
+                if pl.render(qh, &state.compositor, &state.shell) && pl.kind == SurfaceKind::Osd {
+                    osd_changed = true;
+                }
             }
+        }
+        if osd_changed {
+            state.dump_osd_boxes();
         }
         if need_sync {
             state.sync_all();
