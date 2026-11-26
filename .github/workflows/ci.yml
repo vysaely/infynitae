@@ -102,6 +102,7 @@ jobs:
       - run: ./tools/test-readme-shortcuts
       - run: ./tools/test-readme-shortcuts --self-test
       - run: sh tools/test-reload-match
+      - run: sh tools/test-upstream-check
       - run: sh tools/test-launch-fast
       - run: sh tools/test-launch-actions
       - run: sh tools/test-xkill

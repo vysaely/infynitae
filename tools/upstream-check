@@ -1,0 +1,118 @@
+#!/bin/sh
+# tools/upstream-check: the newest Smithay and xwayland-satellite releases against the versions
+# Infynitae builds (vendor/smithay-*, live/build-satellite.sh), and the entries of their release
+# notes since ours that name a security-relevant change (crash, overflow, leak, unsound...). For
+# Smithay also the unreleased part of CHANGELOG.md on its main branch: its fixes wait there for
+# months (none released between 0.7.0 and 2026-11-26). Reads GitHub without a token (2 API requests
+# of the 60 an hour it allows); changes nothing. How to take a fix in: patches/README.md.
+# Exit status 1 when something could not be read.
+set -u
+
+REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/infynitae-upstream-check.XXXXXX") || exit 1
+trap 'rm -rf "$TMP"' EXIT INT TERM
+
+smithay=$(sed -n 's|^smithay = { path = "vendor/smithay-\(.*\)" }$|\1|p' "$REPO_DIR/Cargo.toml")
+satellite=$(sed -n 's/^TAG="\(.*\)"$/\1/p' "$REPO_DIR/live/build-satellite.sh")
+if [ -z "$smithay" ] || [ -z "$satellite" ]; then
+    echo "upstream-check: our versions were not found in Cargo.toml ([patch] smithay) or live/build-satellite.sh (TAG)" >&2
+    exit 1
+fi
+
+fetch() {
+    curl -fsSL --max-time 30 -H "Accept: application/vnd.github+json" "$1" -o "$2"
+}
+
+# The entries of release notes or a changelog section that name a security-relevant change, one
+# per line. An entry is a bullet or a paragraph, its wrapped lines joined.
+cat > "$TMP/entries.py" << 'PY'
+import json, re, sys
+
+PATTERN = re.compile(
+    r"security|\bcve-|vulnerab|exploit|overflow|use[- ]after[- ]free|out[- ]of[- ]bounds"
+    r"|unsound|undefined behaviou?r|crash|panic|abort|denial of service|malicious|untrusted"
+    r"|leak|privilege|sandbox",
+    re.IGNORECASE,
+)
+
+
+def entries(text):
+    item = []
+    for line in text.replace("\r", "").split("\n"):
+        s = line.strip()
+        if not s or s.startswith(("- ", "* ", "#")):
+            if item:
+                yield " ".join(item)
+            item = [] if not s or s.startswith("#") else [s[2:]]
+        else:
+            item.append(s)
+    if item:
+        yield " ".join(item)
+
+
+def relevant(text, indent):
+    found = [e for e in entries(text) if PATTERN.search(e)]
+    for e in found:
+        print(indent + (e if len(e) <= 200 else e[:199] + "…"))
+    if not found:
+        print(indent + "no entry names a security-relevant change")
+
+
+def releases(name, ours, path):
+    with open(path, encoding="utf-8") as f:
+        listed = [r for r in json.load(f) if not r.get("draft")]
+    tags = [r["tag_name"] for r in listed]
+    if ours not in tags:
+        print(f"{name}: ours {ours} is not among its last {len(tags)} releases")
+        return 1
+    newest = listed[0]
+    print(f"{name}: ours {ours}, newest release {newest['tag_name']} ({newest['published_at'][:10]})")
+    newer = listed[: tags.index(ours)]
+    if not newer:
+        print("  no newer release")
+    for r in reversed(newer):
+        pre = ", pre-release" if r.get("prerelease") else ""
+        print(f"  {r['tag_name']} ({r['published_at'][:10]}{pre}) {r['html_url']}")
+        relevant(r.get("body") or "", "    ")
+    return 0
+
+
+def unreleased(path):
+    with open(path, encoding="utf-8") as f:
+        text = f.read()
+    m = re.search(r"^## Unreleased\s*$(.*?)(?=^## )", text, re.MULTILINE | re.DOTALL)
+    print("  unreleased on the main branch (CHANGELOG.md):")
+    if m is None:
+        print("    no Unreleased section")
+        return
+    relevant(m.group(1), "    ")
+
+
+if sys.argv[1] == "releases":
+    sys.exit(releases(*sys.argv[2:5]))
+unreleased(sys.argv[2])
+PY
+
+status=0
+
+if fetch "https://api.github.com/repos/Smithay/smithay/releases?per_page=30" "$TMP/smithay.json"; then
+    python3 -I "$TMP/entries.py" releases Smithay "v$smithay" "$TMP/smithay.json" || status=1
+    if fetch "https://raw.githubusercontent.com/Smithay/smithay/HEAD/CHANGELOG.md" "$TMP/smithay.md"; then
+        python3 -I "$TMP/entries.py" unreleased "$TMP/smithay.md" || status=1
+    else
+        echo "  could not read CHANGELOG.md of github.com/Smithay/smithay"
+        status=1
+    fi
+else
+    echo "Smithay: could not read the releases of github.com/Smithay/smithay"
+    status=1
+fi
+
+if fetch "https://api.github.com/repos/Supreeeme/xwayland-satellite/releases?per_page=30" "$TMP/satellite.json"; then
+    python3 -I "$TMP/entries.py" releases xwayland-satellite "$satellite" "$TMP/satellite.json" || status=1
+else
+    echo "xwayland-satellite: could not read the releases of github.com/Supreeeme/xwayland-satellite"
+    status=1
+fi
+
+exit $status
