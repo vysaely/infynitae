@@ -222,7 +222,7 @@ pub struct SettingsAllCard {
 impl Default for SettingsAllCard {
     fn default() -> Self {
         let defaults_path = crate::paths::home()
-            .map(|h| h.join("infynitae/config/config"))
+            .map(|h| crate::paths::checkout_dir(&h).join("config/config"))
             .unwrap_or_default();
         let config_path = crate::config::config_path().unwrap_or_default();
         Self::with_paths(defaults_path, config_path)

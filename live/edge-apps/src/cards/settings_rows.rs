@@ -117,7 +117,7 @@ impl ConfigSource {
         ConfigSource {
             config: crate::config::config_path().unwrap_or_default(),
             defaults: crate::paths::home()
-                .map(|h| h.join("infynitae/config/config"))
+                .map(|h| crate::paths::checkout_dir(&h).join("config/config"))
                 .unwrap_or_default(),
             path: std::env::var("PATH").unwrap_or_default(),
         }
