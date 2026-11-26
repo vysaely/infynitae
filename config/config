@@ -829,7 +829,7 @@ RECORD_AUDIO="desktop"
 #   Often:  Super+Tab  last two windows (a window asking for attention first)
 #           Super+Shift+Tab  overview    Super+arrows  nearest window that way
 #           Super+Q / E  terminal / files    Super+W  apps
-#           Super+A  control menu
+#           Super+A  control panel
 #           Super+S  region screenshot    Super+Shift+S  whole screen    Super+V  clipboard
 #           Super+Shift+C  close    Super+Space  centre    Super+1..9  window slots
 #   Rare:   Super+Shift+Delete  force close    Super+L  open windows    Super+Shift+L  lock    Super+Shift+Escape  system monitor

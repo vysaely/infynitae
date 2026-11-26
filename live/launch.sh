@@ -689,19 +689,17 @@ GM_ARGS
         fi
         ;;
     toggle-idle-inhibit|inhibit-idle)
-        # Ask compositor to toggle idle inhibit
         if [ -S "$XDG_RUNTIME_DIR/infynitae/shortcuts.sock" ]; then
             "$INFYNITAE_BIN" msg shortcut idle_inhibit 2>/dev/null || true
         fi
         ;;
     toggle-privacy|privacy)
-        # Ask compositor to toggle privacy
         if [ -S "$XDG_RUNTIME_DIR/infynitae/shortcuts.sock" ]; then
             "$INFYNITAE_BIN" msg shortcut privacy 2>/dev/null || true
         fi
         ;;
     save-replay|clip-save|clip)
-        # Super+Alt+C: Save rolling 20-minute replay clip
+        # Super+Alt+C: the replay saved as a clip (its length: REPLAY_BUFFER_MINUTES)
         if [ -x "$HOME/.local/bin/infynitae-recorder" ]; then
             exec "$HOME/.local/bin/infynitae-recorder" save-replay
         elif [ -x "$HOME/infynitae/live/record/infynitae-recorder" ]; then
@@ -709,7 +707,7 @@ GM_ARGS
         fi
         ;;
     record-toggle|toggle-record)
-        # Super+Alt+P (Super+Alt+R too): Toggle continuous screen recording
+        # Super+Alt+P (Super+Alt+R too): a recording started or stopped
         if [ -x "$HOME/.local/bin/infynitae-recorder" ]; then
             exec "$HOME/.local/bin/infynitae-recorder" record-toggle
         elif [ -x "$HOME/infynitae/live/record/infynitae-recorder" ]; then

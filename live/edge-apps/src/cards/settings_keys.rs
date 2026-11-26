@@ -104,7 +104,7 @@ const ACTIONS: &[BuiltinAction] = &[
     },
     BuiltinAction {
         action: "CONTROL",
-        name: "Open control menu",
+        name: "Open control panel",
         defaults: &["SUPER+A"],
         more: false,
     },
