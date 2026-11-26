@@ -196,3 +196,84 @@ stop autorotate" ] || fail "autorotate: calls were $(cat "$parts/calls")"
         || fail "portal: said $(cat "$parts/out")"
 ) || exit 1
 echo "ok reload parts: battery-limit, autorotate, and portal on a routing change"
+
+# ---- Wallpaper reload: empty WALLPAPER (autodetect default) must still restart the wallpaper
+# daemon, and infynitae-reload must find and harden it while running on infynitae.previous.
+sed -n '/^reload_wallpaper() {/,/^}/p' "$here/live/infynitae-reload" > "$parts/fn_reload_wallpaper"
+(
+    LIVE="$parts/none" BIN_DIR="$parts/wpbin" WALLPAPER="" WALLPAPER_MODE=""
+    mkdir -p "$BIN_DIR"
+    printf '#!/bin/sh\n' > "$BIN_DIR/infynitae-wallpaper"
+    chmod +x "$BIN_DIR/infynitae-wallpaper"
+    . "$parts/fn_first"
+    . "$parts/fn_reload_wallpaper"
+    spawn() { echo "spawn $*" >> "$parts/wp_calls"; }
+    : > "$parts/wp_calls"
+    out=$(reload_wallpaper)
+    [ "$out" = "wallpaper: restarted" ] || { echo "FAIL reload_wallpaper empty WALLPAPER said: $out"; exit 1; }
+    [ "$(cat "$parts/wp_calls")" = "spawn $BIN_DIR/infynitae-wallpaper" ] \
+        || { echo "FAIL reload_wallpaper empty WALLPAPER calls: $(cat "$parts/wp_calls")"; exit 1; }
+) || exit 1
+
+wp_dir="$tmp/wp_prev"
+wp_home="$wp_dir/home"
+mkdir -p "$wp_home/.config/infynitae" "$wp_home/.local/bin" "$wp_home/.local/state/infynitae" "$wp_dir/bin"
+printf 'WALLPAPER=""\nENABLE_EDGE="false"\n' > "$wp_home/.config/infynitae/config"
+cp "$(command -v sleep)" "$wp_home/.local/bin/infynitae.previous"
+"$wp_home/.local/bin/infynitae.previous" 30 &
+comp_pid=$!
+trap 'kill $a $b "$comp_pid" 2>/dev/null || true; rm -rf "$tmp"' EXIT INT TERM
+printf '%s\n' "$comp_pid" > "$wp_home/.local/state/infynitae/compositor.pid"
+i=0
+while [ ! -d "/proc/$comp_pid" ] && [ $i -lt 50 ]; do sleep 0.05; i=$((i + 1)); done
+
+cat > "$wp_dir/bin/setpriv" <<EOF
+#!/bin/sh
+echo "\$*" >> "$wp_dir/setpriv_calls"
+exec /usr/bin/setpriv "\$@"
+EOF
+chmod +x "$wp_dir/bin/setpriv"
+
+cat > "$wp_home/.local/bin/infynitae-wallpaper" <<EOF
+#!/bin/sh
+awk '/^NoNewPrivs:/ { print \$2 }' /proc/self/status > "$wp_dir/wp_nnp"
+EOF
+chmod +x "$wp_home/.local/bin/infynitae-wallpaper"
+
+out_wp=$(HOME="$wp_home" WAYLAND_DISPLAY="wayland-prev" PATH="$wp_dir/bin:$wp_home/.local/bin:$PATH" \
+    sh "$here/live/infynitae-reload" wallpaper 2>&1) || {
+    echo "FAIL infynitae-reload wallpaper on infynitae.previous failed: $out_wp"
+    exit 1
+}
+[ "$out_wp" = "wallpaper: restarted" ] || {
+    echo "FAIL infynitae-reload wallpaper output: $out_wp"
+    exit 1
+}
+i=0
+while [ ! -s "$wp_dir/wp_nnp" ] && [ $i -lt 50 ]; do sleep 0.05; i=$((i + 1)); done
+got_nnp=$(cat "$wp_dir/wp_nnp" 2>/dev/null || echo missing)
+[ "$got_nnp" = "1" ] || {
+    echo "FAIL reload wallpaper NoNewPrivs: expected 1, got $got_nnp"
+    exit 1
+}
+grep -q -- "--no-new-privs --inh-caps=-all .*infynitae-wallpaper" "$wp_dir/setpriv_calls" 2>/dev/null || {
+    echo "FAIL reload wallpaper did not use setpriv --no-new-privs --inh-caps=-all"
+    exit 1
+}
+status_out=$(HOME="$wp_home" WAYLAND_DISPLAY="wayland-prev" PATH="$wp_dir/bin:$wp_home/.local/bin:$PATH" \
+    sh "$here/live/infynitae-reload" status 2>&1) || {
+    echo "FAIL infynitae-reload status on infynitae.previous failed: $status_out"
+    exit 1
+}
+echo "$status_out" | grep -q "infynitae[[:space:]]*$comp_pid" || {
+    echo "FAIL status missed fallback compositor pid $comp_pid: $status_out"
+    exit 1
+}
+echo "$status_out" | grep -q "running the previous fallback binary" || {
+    echo "FAIL status missed fallback binary notice: $status_out"
+    exit 1
+}
+kill "$comp_pid" 2>/dev/null || true
+wait "$comp_pid" 2>/dev/null || true
+trap 'kill $a $b 2>/dev/null || true; rm -rf "$tmp"' EXIT INT TERM
+echo "ok reload wallpaper: autodetect restart, NoNewPrivs=1, and fallback compositor status"

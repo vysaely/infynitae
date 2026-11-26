@@ -373,7 +373,11 @@ GM_ARGS
                 for out in $("$INFYNITAE_BIN" msg snapshot 2>/dev/null \
                     | grep -o '"name":"[^"]*"' | cut -d'"' -f4); do
                     grim -o "$out" "$FREEZE_DIR/$out.png" 2>/dev/null || continue
-                    "$FREEZER" --overlay --output "$out" "$FREEZE_DIR/$out.png" stretch &
+                    if command -v setpriv >/dev/null 2>&1; then
+                        setpriv --no-new-privs --inh-caps=-all "$FREEZER" --overlay --output "$out" "$FREEZE_DIR/$out.png" stretch &
+                    else
+                        "$FREEZER" --overlay --output "$out" "$FREEZE_DIR/$out.png" stretch &
+                    fi
                     FREEZERS="$FREEZERS $!"
                 done
                 # the frozen pictures on screen before slurp opens above them
