@@ -129,6 +129,25 @@ install_default_apps
 want_foreign_apps && install_foreign_apps "$REPO_DIR"
 
 # 8. a running session: restart the helpers in place (windows stay open)
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/infynitae"
+STATUS_FILE="$STATE_DIR/update-status"
+if [ -f "$STATUS_FILE" ]; then
+    sys_val=$(sed -n 's/^system=//p' "$STATUS_FILE" | head -n1)
+    cu_val=$(sed -n 's/^checkupdates=//p' "$STATUS_FILE" | head -n1)
+    now_ts=$(date +%s 2>/dev/null || printf '0')
+    {
+        printf 'system=%s\n' "$sys_val"
+        printf 'infynitae=0\n'
+        printf 'checkupdates=%s\n' "${cu_val:-present}"
+        printf 'checked_at=%s\n' "$now_ts"
+    } > "$STATUS_FILE.tmp.$$" && mv -f "$STATUS_FILE.tmp.$$" "$STATUS_FILE"
+    case "$sys_val" in
+        ''|0) rm -f "$STATE_DIR/update-notified" ;;
+        *) printf '%s:0\n' "$sys_val" > "$STATE_DIR/update-notified.tmp.$$" \
+            && mv -f "$STATE_DIR/update-notified.tmp.$$" "$STATE_DIR/update-notified" ;;
+    esac
+fi
+
 if pgrep -x infynitae >/dev/null 2>&1; then
     echo "==> Restarting the helpers (windows stay open)..."
     "$HOME/.local/bin/infynitae-reload" settings wallpaper edge portal polkit || true

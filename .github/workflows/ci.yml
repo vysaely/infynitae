@@ -54,6 +54,7 @@ jobs:
       - run: sh tools/test-disk-guard
       - run: sh tools/test-format-drive
       - run: sh tools/test-sleep-lock
+      - run: sh tools/test-update-check
       - run: sh tools/test-recorder-backend
       - run: sh tools/test-edge-pick
       - run: sh tools/test-control-menu

@@ -1,0 +1,250 @@
+#!/bin/sh
+# Tests for live/infynitae-update-check: Arch + Infynitae update checking, dedup,
+# notification action, config toggle, and missing checkupdates handling.
+set -eu
+
+REPO=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+SCRIPT="$REPO/live/infynitae-update-check"
+
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
+
+PASS=0
+FAIL=0
+check() {
+    name=$1; shift
+    if "$@"; then
+        echo "  ok: $name"
+        PASS=$((PASS + 1))
+    else
+        echo "  FAIL: $name"
+        FAIL=$((FAIL + 1))
+    fi
+}
+
+if [ ! -f "$SCRIPT" ]; then
+    echo "FAIL: missing $SCRIPT" >&2
+    exit 1
+fi
+
+BIN="$TMP/bin"
+HOME_DIR="$TMP/home"
+BARE_MAIN="$TMP/remote-main.git"
+BARE_ALT="$TMP/remote-alt.git"
+STATE_DIR="$HOME_DIR/.local/state/infynitae"
+NOTIFY_LOG="$TMP/notify.log"
+NOTIFY_MODE="$TMP/notify.mode"
+CHECKUPDATES_LOG="$TMP/checkupdates.log"
+CHECKUPDATES_MODE="$TMP/checkupdates.mode"
+TERM_LOG="$TMP/term.log"
+
+mkdir -p "$BIN" "$HOME_DIR/.config/infynitae" "$HOME_DIR/.local/bin"
+
+# Mock notify-send: records args on one line per call and optionally prints an action.
+cat > "$BIN/notify-send" <<EOF
+#!/bin/sh
+{
+    printf 'CALL'
+    for arg in "\$@"; do
+        printf '|%s' "\$arg"
+    done
+    printf '\n'
+} >> "$NOTIFY_LOG"
+mode=\$(cat "$NOTIFY_MODE" 2>/dev/null || printf 'none')
+case "\$mode" in
+    update) printf 'update\n' ;;
+    error)  exit 1 ;;
+esac
+exit 0
+EOF
+chmod +x "$BIN/notify-send"
+
+# Mock checkupdates controlling exit code and package lines via CHECKUPDATES_MODE.
+cat > "$BIN/checkupdates" <<EOF
+#!/bin/sh
+printf 'called\n' >> "$CHECKUPDATES_LOG"
+mode=\$(cat "$CHECKUPDATES_MODE" 2>/dev/null || printf '0')
+case "\$mode" in
+    12)
+        i=1
+        while [ "\$i" -le 12 ]; do
+            printf 'pkg%d 1.0-1 -> 1.1-1\n' "\$i"
+            i=\$((i + 1))
+        done
+        exit 0
+        ;;
+    1)
+        printf 'linux 6.1-1 -> 6.2-1\n'
+        exit 0
+        ;;
+    0)
+        exit 2
+        ;;
+    err)
+        exit 1
+        ;;
+esac
+EOF
+chmod +x "$BIN/checkupdates"
+
+# Mock xdg-terminal-exec matching UPDATE_COMMAND in settings_about.rs.
+cat > "$HOME_DIR/.local/bin/xdg-terminal-exec" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$TERM_LOG"
+exit 0
+EOF
+chmod +x "$HOME_DIR/.local/bin/xdg-terminal-exec"
+
+# Helper to push N commits onto a bare git repo from a scratch worktree.
+seed_bare_repo() {
+    bare=$1
+    work=$2
+    git -c init.defaultBranch=main init --bare "$bare" >/dev/null 2>&1
+    git clone "$bare" "$work" >/dev/null 2>&1
+    git -C "$work" config user.name test
+    git -C "$work" config user.email test@example.com
+    printf 'base\n' > "$work/file"
+    git -C "$work" add file
+    git -C "$work" commit -m "base" >/dev/null 2>&1
+    git -C "$work" push -u origin main >/dev/null 2>&1
+}
+
+push_commits() {
+    bare=$1
+    count=$2
+    stage="$TMP/stage-$$"
+    rm -rf "$stage"
+    git clone "$bare" "$stage" >/dev/null 2>&1
+    git -C "$stage" config user.name test
+    git -C "$stage" config user.email test@example.com
+    n=1
+    while [ "$n" -le "$count" ]; do
+        printf 'c%d\n' "$n" >> "$stage/file"
+        git -C "$stage" add file
+        git -C "$stage" commit -m "commit $n" >/dev/null 2>&1
+        n=$((n + 1))
+    done
+    git -C "$stage" push origin main >/dev/null 2>&1
+    rm -rf "$stage"
+}
+
+seed_bare_repo "$BARE_MAIN" "$HOME_DIR/infynitae"
+push_commits "$BARE_MAIN" 3
+
+run_check() {
+    PATH_ARG=$1
+    HOME="$HOME_DIR" \
+    XDG_CONFIG_HOME="$HOME_DIR/.config" \
+    XDG_STATE_HOME="$HOME_DIR/.local/state" \
+    INFYNITAE_UPDATE_NOTIFY_WAIT=5 \
+    PATH="$PATH_ARG" \
+    sh "$SCRIPT"
+}
+
+line_count() {
+    if [ ! -f "$1" ]; then
+        printf '0\n'
+        return
+    fi
+    wc -l < "$1" | tr -d ' '
+}
+
+last_line_has() {
+    tail -n 1 "$1" | grep -q -- "$2"
+}
+
+TEST_PATH="$BIN:/usr/bin:/bin"
+
+echo "1. both system updates (12) and Infynitae changes (3) from default ~/infynitae"
+printf '12\n' > "$CHECKUPDATES_MODE"
+printf 'none\n' > "$NOTIFY_MODE"
+run_check "$TEST_PATH"
+check "notify called once" test "$(line_count "$NOTIFY_LOG")" -eq 1
+check "notify message matches 12 system and 3 Infynitae" grep -q -- '-a|Infynitae|-A|update=Update|Updates waiting|12 system updates and 3 Infynitae changes are waiting' "$NOTIFY_LOG"
+check "status has system=12" grep -q '^system=12$' "$STATE_DIR/update-status"
+check "status has infynitae=3" grep -q '^infynitae=3$' "$STATE_DIR/update-status"
+check "status has checkupdates=present" grep -q '^checkupdates=present$' "$STATE_DIR/update-status"
+
+echo "2. repeated run with same counts does not re-notify"
+run_check "$TEST_PATH"
+check "notify count stayed 1" test "$(line_count "$NOTIFY_LOG")" -eq 1
+
+echo "3. ~/.config/infynitae/checkout overrides ~/infynitae and changed counts re-notify"
+seed_bare_repo "$BARE_ALT" "$TMP/custom-checkout"
+push_commits "$BARE_ALT" 1
+printf '%s\n' "$TMP/custom-checkout" > "$HOME_DIR/.config/infynitae/checkout"
+printf '1\n' > "$CHECKUPDATES_MODE"
+run_check "$TEST_PATH"
+check "notify count is 2" test "$(line_count "$NOTIFY_LOG")" -eq 2
+check "singular counts notify accurately" last_line_has "$NOTIFY_LOG" '|1 system update and 1 Infynitae change are waiting'
+check "status updated to system=1" grep -q '^system=1$' "$STATE_DIR/update-status"
+check "status updated to infynitae=1" grep -q '^infynitae=1$' "$STATE_DIR/update-status"
+
+echo "4. dropping to 0 updates writes 0/0 without notifying, then rising notifies again"
+printf '0\n' > "$CHECKUPDATES_MODE"
+git -C "$TMP/custom-checkout" pull --ff-only >/dev/null 2>&1
+run_check "$TEST_PATH"
+check "notify count stayed 2 at zero updates" test "$(line_count "$NOTIFY_LOG")" -eq 2
+check "status records system=0" grep -q '^system=0$' "$STATE_DIR/update-status"
+check "status records infynitae=0" grep -q '^infynitae=0$' "$STATE_DIR/update-status"
+push_commits "$BARE_ALT" 2
+printf 'update\n' > "$NOTIFY_MODE"
+run_check "$TEST_PATH"
+check "notify count is 3 after rising from 0" test "$(line_count "$NOTIFY_LOG")" -eq 3
+check "infynitae-only notification text" last_line_has "$NOTIFY_LOG" '|2 Infynitae changes are waiting'
+check "Update action ran xdg-terminal-exec infynitae-update" grep -qx 'infynitae-update' "$TERM_LOG"
+
+echo "5. system-only singular notification"
+printf 'none\n' > "$NOTIFY_MODE"
+git -C "$TMP/custom-checkout" pull --ff-only >/dev/null 2>&1
+printf '1\n' > "$CHECKUPDATES_MODE"
+run_check "$TEST_PATH"
+check "notify count is 4" test "$(line_count "$NOTIFY_LOG")" -eq 4
+check "system-only singular text" last_line_has "$NOTIFY_LOG" '|1 system update is waiting'
+
+echo "6. UPDATE_CHECK=false skips checkupdates, git check, and notifications"
+printf 'UPDATE_CHECK="false"\n' > "$HOME_DIR/.config/infynitae/config"
+before_check=$(line_count "$CHECKUPDATES_LOG")
+before_notify=$(line_count "$NOTIFY_LOG")
+push_commits "$BARE_ALT" 1
+printf '12\n' > "$CHECKUPDATES_MODE"
+run_check "$TEST_PATH"
+check "checkupdates not called when disabled" test "$(line_count "$CHECKUPDATES_LOG")" -eq "$before_check"
+check "notify not called when disabled" test "$(line_count "$NOTIFY_LOG")" -eq "$before_notify"
+
+echo "7. missing checkupdates emits no error notification and still checks Infynitae"
+rm -f "$HOME_DIR/.config/infynitae/config" "$STATE_DIR/update-status" "$STATE_DIR/update-notified"
+NO_CU_BIN="$TMP/no-cu-bin"
+mkdir -p "$NO_CU_BIN"
+cp "$BIN/notify-send" "$NO_CU_BIN/notify-send"
+git -C "$TMP/custom-checkout" pull --ff-only >/dev/null 2>&1
+before_notify=$(line_count "$NOTIFY_LOG")
+run_check "$NO_CU_BIN:/usr/bin:/bin"
+check "missing checkupdates with 0 infynitae emits no notification" test "$(line_count "$NOTIFY_LOG")" -eq "$before_notify"
+check "status marks checkupdates=missing" grep -q '^checkupdates=missing$' "$STATE_DIR/update-status"
+push_commits "$BARE_ALT" 1
+run_check "$NO_CU_BIN:/usr/bin:/bin"
+check "missing checkupdates still notifies for 1 Infynitae change" test "$(line_count "$NOTIFY_LOG")" -eq $((before_notify + 1))
+check "1 Infynitae change message" last_line_has "$NOTIFY_LOG" '|1 Infynitae change is waiting'
+
+echo "8. checkupdates failure (exit 1) emits no error notification and leaves script exiting 0"
+git -C "$TMP/custom-checkout" pull --ff-only >/dev/null 2>&1
+printf 'err\n' > "$CHECKUPDATES_MODE"
+before_notify=$(line_count "$NOTIFY_LOG")
+run_check "$TEST_PATH"
+check "checkupdates error emits no error notification" test "$(line_count "$NOTIFY_LOG")" -eq "$before_notify"
+check "status keeps checkupdates=present" grep -q '^checkupdates=present$' "$STATE_DIR/update-status"
+
+echo "9. notify-send delivery failure allows retry on next run"
+printf '1\n' > "$CHECKUPDATES_MODE"
+printf 'error\n' > "$NOTIFY_MODE"
+before_notify=$(line_count "$NOTIFY_LOG")
+run_check "$TEST_PATH"
+check "notify-send attempted on error run" test "$(line_count "$NOTIFY_LOG")" -eq $((before_notify + 1))
+printf 'none\n' > "$NOTIFY_MODE"
+run_check "$TEST_PATH"
+check "next run retries notification after D-Bus error" test "$(line_count "$NOTIFY_LOG")" -eq $((before_notify + 2))
+
+echo ""
+echo "Results: $PASS passed, $FAIL failed"
+[ "$FAIL" -eq 0 ]
