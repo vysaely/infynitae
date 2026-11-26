@@ -241,14 +241,16 @@ impl Dispatch<zwlr_data_control_source_v1::ZwlrDataControlSourceV1, ()> for Clip
     }
 }
 
-/// Prints `output_path` to stdout, offers `png_bytes` as `image/png` via data-control, and forks
+/// Prints `output_path` (when the picture was saved) to stdout, offers `png_bytes` as `image/png` via data-control, and forks
 /// a background child to serve paste requests until another client claims the clipboard.
 ///
 /// The parent exits immediately via `_exit(0)` once the selection is registered so callers
 /// unblock while keeping the Wayland connection alive in the child.
-pub fn publish_and_fork_clipboard(output_path: &Path, png_bytes: Vec<u8>) -> ! {
+pub fn publish_and_fork_clipboard(output_path: Option<&Path>, png_bytes: Vec<u8>) -> ! {
     // Print and flush the written path before forking or redirecting descriptors.
-    println!("{}", output_path.display());
+    if let Some(path) = output_path {
+        println!("{}", path.display());
+    }
     let _ = io::stdout().flush();
     let _ = io::stderr().flush();
 

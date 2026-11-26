@@ -31,7 +31,17 @@ Modes:
 
 Options:
   --live   Do not capture before showing the overlay; capture after picking
-  -h, --help  Show this help message"
+  -h, --help  Show this help message
+
+While picking:
+  Control+A    the whole output under the pointer
+  Shift        held as the pick ends: save it as it is, without the editor
+
+After a pick, the editor (keys or a click on the toolbar):
+  A arrow  B box  P pen  T text  X pixelate  C crop  1 2 3 colour  Control+Z undo
+  Enter      copy the marked-up picture (no file)
+  Control+S  save it to FILE and copy it
+  Escape     save and copy the capture without marks"
 }
 
 /// Parses command-line arguments (excluding `argv[0]`). Returns a one-line message on error.
