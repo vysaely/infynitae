@@ -8,11 +8,12 @@
 //! interacts with the person, as Core decides (`Core::app_in_use`: a key or click into it in the
 //! last five minutes, its app id in `BACKGROUND_KEEP`, a window being shared (captured in the
 //! last [`CAPTURE_HOLD`]), the game, a sound stream of it playing or recording
-//! ([`crate::streams`])), and X11 apps (one xwayland-satellite serves them all). A thread is lowered only when its process may raise it
-//! back (`RLIMIT_NICE`, which the installer sets so apps return to nice 0 and never above it);
-//! without that limit nothing is lowered. A thread of its own walks /proc and sets the nice
-//! values, in the order the main loop decided them: an app of hundreds of threads is hundreds of
-//! calls (2026-11-23, 25 game clients: 11 to 14 ms a turn on the main loop).
+//! ([`crate::streams`])), and X11 apps (one xwayland-satellite serves them all). A thread is
+//! lowered only when its process may raise it back (`RLIMIT_NICE`, which the installer sets so
+//! apps return to nice 0 and never above it); without that limit nothing is lowered. A thread
+//! of its own walks /proc and sets the nice values, in the order the main loop decided them: an
+//! app of hundreds of threads is hundreds of calls (2026-11-23, 25 game clients: 11 to 14 ms a
+//! turn on the main loop).
 //!
 //! Game mode (`GAME_MODE`, on by default): a fullscreen window with a frame on screen, shown
 //! directly or composited ([`WaylandState::fullscreen_frame_shown`]), is a game. Its app is registered with Feral's
