@@ -1,0 +1,130 @@
+#!/bin/sh
+#
+# load-test: how the desktop keeps up while a heavy job runs, in app.slice at the default weights
+# (as jobs ran before infynitae-bg) and in infynitae-background.slice (infynitae-bg).
+#
+# Three phases of SECONDS each: no load; the load in app.slice; the load through infynitae-bg.
+# For each, the compositor's own lines the phase added to the session log (LATENCY_STATS="true"
+# writes them every 10 s while frames are drawn): input to screen p50 (mean over the lines) and
+# p95 (the worst line), frames that missed their refresh, "Slow turn" lines; and the CPU time the
+# job got (its cgroup's cpu.stat), against what all CPUs could give in the phase.
+#
+# Run it in the session (the VM), with LATENCY_STATS="true" and something moving on the screen
+# while it runs (the pointer, a video), else no Latency line is written:
+#   tools/load-test [SECONDS] [-- COMMAND...]
+# The load is one busy loop per CPU, or COMMAND (e.g. -- cargo build --release in a clean tree;
+# the same command runs in both load phases, so a build must start clean each time).
+#   tools/load-test --summarize LOG      the summary of a log excerpt
+#   tools/load-test --self-test          checks the summary against a fixed excerpt
+
+set -eu
+export LC_ALL=C
+
+LOG="${INFYNITAE_SESSION_LOG:-$HOME/.local/state/infynitae/session.log}"
+SECONDS_EACH=60
+
+# The summary of the session log lines in $1: one line of key=value.
+summarize() {
+	awk '
+	/\[infynitae\] Latency / {
+		lines++
+		match($0, /p50 [0-9.]+ ms/); p50 += substr($0, RSTART + 4, RLENGTH - 7)
+		match($0, /p95 [0-9.]+ ms/); v = substr($0, RSTART + 4, RLENGTH - 7) + 0
+		if (v > p95) p95 = v
+		# the counts are since the start, per screen: the phase is the last minus the first
+		match($0, /Latency [^:]*:/); screen = substr($0, RSTART, RLENGTH)
+		match($0, /[0-9]+ of [0-9]+ frames in a run missed/)
+		split(substr($0, RSTART, RLENGTH), c, " ")
+		if (!(screen in first_m)) { first_m[screen] = c[1]; first_f[screen] = c[3] }
+		last_m[screen] = c[1]; last_f[screen] = c[3]
+	}
+	/\[infynitae\] Slow turn / { slow++ }
+	END {
+		for (s in last_m) { missed += last_m[s] - first_m[s]; frames += last_f[s] - first_f[s] }
+		if (lines == 0) { printf "latency_lines=0 slow_turns=%d\n", slow; exit }
+		printf "latency_lines=%d p50_ms=%.2f p95_max_ms=%.2f missed=%d frames=%d slow_turns=%d\n",
+			lines, p50 / lines, p95, missed, frames, slow
+	}' "$1"
+}
+
+self_test() {
+	tmp=$(mktemp)
+	cat > "$tmp" <<'EOF'
+[infynitae] Latency OutputId(1): input to screen p50 6.00 ms, p95 9.00 ms, max 12.00 ms (100 frames); budget 0.13 ms, margin 1.00 ms, 10 of 1000 frames in a run missed their refresh (0 of 5 after pause); paused 0 times
+[infynitae] Slow turn 9.1 ms: element building 8.9 ms, other 0.2 ms
+[infynitae] Latency OutputId(1): input to screen p50 8.00 ms, p95 14.50 ms, max 20.00 ms (90 frames); budget 0.13 ms, margin 1.00 ms, 25 of 1600 frames in a run missed their refresh (0 of 5 after pause); paused 0 times
+[infynitae] Latency OutputId(2): input to screen p50 7.00 ms, p95 11.00 ms, max 12.00 ms (80 frames); budget 0.10 ms, margin 1.00 ms (direct 1.00, composited 1.00), 3 of 500 frames in a run missed their refresh (0 of 0 after pause); paused 1 times (now)
+[infynitae] Latency OutputId(2): input to screen p50 7.00 ms, p95 10.00 ms, max 12.00 ms (80 frames); budget 0.10 ms, margin 1.00 ms, 7 of 900 frames in a run missed their refresh (0 of 0 after pause); paused 1 times
+EOF
+	got=$(summarize "$tmp")
+	: > "$tmp"
+	empty=$(summarize "$tmp")
+	rm -f "$tmp"
+	want="latency_lines=4 p50_ms=7.00 p95_max_ms=14.50 missed=19 frames=1000 slow_turns=1"
+	fail=0
+	[ "$got" = "$want" ] || { echo "FAIL summary: expected '$want', got '$got'"; fail=1; }
+	[ "$empty" = "latency_lines=0 slow_turns=0" ] || { echo "FAIL empty: got '$empty'"; fail=1; }
+	[ $fail -eq 0 ] && echo "ok   self-test"
+	return $fail
+}
+
+case "${1:-}" in
+	--self-test) self_test; exit ;;
+	--summarize) summarize "$2"; exit ;;
+	-h|--help) sed -n '3,19p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+esac
+if [ $# -gt 0 ] && [ "$1" != "--" ]; then
+	SECONDS_EACH=$1
+	shift
+fi
+[ "${1:-}" = "--" ] && shift
+
+[ -f "$LOG" ] || { echo "load-test: no session log at $LOG" >&2; exit 1; }
+BG=$(command -v infynitae-bg || echo "$(dirname "$0")/../live/infynitae-bg")
+CPUS=$(nproc)
+if [ $# -eq 0 ]; then
+	set -- sh -c 'i=0; while [ $i -lt '"$CPUS"' ]; do sh -c "while :; do :; done" & i=$((i + 1)); done; wait'
+fi
+
+# The cgroup of a process, under /sys/fs/cgroup.
+cgroup_of() {
+	echo "/sys/fs/cgroup$(sed -n 's/^0:://p' "/proc/$1/cgroup")"
+}
+
+# One phase: $1 its name, $2 how the load starts (none, app, bg), then the load command.
+phase() {
+	name=$1 how=$2
+	shift 2
+	start=$(wc -c < "$LOG")
+	cpu=""
+	case "$how" in
+		none) sleep "$SECONDS_EACH" ;;
+		*)
+			if [ "$how" = app ]; then
+				systemd-run --user --scope --quiet --collect --slice=app.slice -- "$@" &
+			else
+				"$BG" "$@" &
+			fi
+			pid=$!
+			sleep 1
+			cg=$(cgroup_of "$pid")
+			before=$(sed -n 's/^usage_usec //p' "$cg/cpu.stat")
+			sleep "$((SECONDS_EACH - 1))"
+			after=$(sed -n 's/^usage_usec //p' "$cg/cpu.stat")
+			systemctl --user stop "$(basename "$cg")" 2>/dev/null || kill "$pid" 2>/dev/null || true
+			wait "$pid" 2>/dev/null || true
+			cpu=$(awk -v a="$after" -v b="$before" -v n="$CPUS" -v t="$((SECONDS_EACH - 1))" \
+				'BEGIN { printf " job_cpu_s=%.1f of=%d", (a - b) / 1e6, n * t }')
+			;;
+	esac
+	excerpt=$(mktemp)
+	tail -c +"$((start + 1))" "$LOG" > "$excerpt"
+	echo "$name: $(summarize "$excerpt")$cpu"
+	rm -f "$excerpt"
+	sleep 5
+}
+
+echo "load-test: $SECONDS_EACH s a phase, $CPUS CPUs, log $LOG"
+phase "no load    " none "$@"
+phase "app.slice  " app "$@"
+phase "background " bg "$@"
