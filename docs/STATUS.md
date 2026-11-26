@@ -184,7 +184,10 @@ These pass the test suite but have not run on a real screen or device yet:
   this way if it waits for its frame callbacks.
 - **Apps out of sight yield the CPU** (`BACKGROUND_PRIORITY`): an app none of whose windows has
   been on a screen for 15 seconds runs at nice 10, with the processes it started, and returns at
-  once when one is seen. A shared window, the game and X11 apps are never lowered. It needs the
+  once when one is seen. Never lowered (2026-11-26): an app playing sound or recording (its
+  streams in PipeWire, read with `pactl subscribe`), one typed or clicked into in the last 5
+  minutes, a shared window, the game, X11 apps, and the apps in `BACKGROUND_KEEP` (the window
+  menu's "Keep at full speed in the background"; Settings, Games). It needs the
   installer's limit (`/etc/security/limits.d/90-infynitae-nice.conf`) and a new login; before
   that nothing is lowered.
 - **Battery limit** (`BATTERY_LIMIT`, control menu): the battery stops charging at a level

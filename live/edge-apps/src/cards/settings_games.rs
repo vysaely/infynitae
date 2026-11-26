@@ -52,6 +52,15 @@ pub const TABLE: &[Setting] = &[
         more: true,
         needs: &[],
     },
+    Setting {
+        key: "BACKGROUND_KEEP",
+        name: "Apps kept at full speed",
+        says: "App ids, comma separated; the window menu adds them",
+        control: Control::Text,
+        after: After::Save,
+        more: true,
+        needs: &[],
+    },
 ];
 
 #[cfg(test)]
@@ -77,7 +86,7 @@ mod tests {
                 _ => {}
             }
         }
-        assert_eq!(TABLE.len(), 3);
+        assert_eq!(TABLE.len(), 4);
         assert!(def.contains_key("LATENCY"));
         assert!(!TABLE.iter().any(|s| s.key == "LATENCY"));
     }
