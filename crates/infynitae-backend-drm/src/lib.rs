@@ -596,6 +596,7 @@ pub fn run_console_with(
     let display: Display<WaylandState> = Display::new()?;
     let mut state = WaylandState::new(&display.handle(), core);
     state.set_console_target();
+    state.watch_sound = true;
     // ext-session-lock: the console draws locked frames and routes keys through lock_key
     state.enable_session_lock();
     if options.locked {

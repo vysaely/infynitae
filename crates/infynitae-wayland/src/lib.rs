@@ -610,6 +610,10 @@ pub struct WaylandState {
     /// Directory holding portal communication sockets (`bound_keys`, `shortcuts.sock`).
     /// `None` disables portal shortcut notification (e.g. in test harnesses).
     pub portal_runtime_dir: Option<std::path::PathBuf>,
+    /// Whether background priority asks the sound server which apps play or record (`streams`):
+    /// off unless a backend that runs a session turns it on, so a test never reaches the host's
+    /// PipeWire.
+    pub watch_sound: bool,
     /// The session's own Wayland socket, X display and cookie, given to the shortcut actions
     /// (`launch.sh`) as to every other client the session starts (INV-XWAYLAND-1); `None` until
     /// the session listens (`set_client_env`). Before 2026-11-06 the actions got none of it and
@@ -976,6 +980,7 @@ impl WaylandState {
             launches: launch::Launches::default(),
             live_dir,
             portal_runtime_dir,
+            watch_sound: false,
             client_env: None,
             focus_open_user_only: false,
             focus_open_priority: true,

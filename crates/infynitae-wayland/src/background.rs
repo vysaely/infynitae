@@ -417,7 +417,7 @@ impl WaylandState {
             };
             let mut in_use = self.core.app_in_use(ws, facts);
             // the sound server is asked only about an app nothing else keeps
-            if !in_use && self.background.enabled {
+            if !in_use && self.background.enabled && self.watch_sound {
                 let running = streams.get_or_insert_with(|| self.background.streams.running(now));
                 let windowed = |p| windows.contains_key(&p);
                 facts.playing = Running::of(&running.playing, pid, windowed);
