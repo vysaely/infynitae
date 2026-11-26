@@ -9,6 +9,22 @@ LIVE="$REPO/live"
 mkdir -p "$BIN"
 FAILED=""
 
+save_and_install_bin() {
+    _staged="$1"
+    _target="$2"
+    chmod 755 "$_staged" || return 1
+    if [ -e "$_target" ]; then
+        if cmp -s "$_staged" "$_target"; then
+            rm -f "$_staged"
+            return 0
+        fi
+        cp -pf "$_target" "$_target.previous.tmp" \
+            && mv -f "$_target.previous.tmp" "$_target.previous" \
+            || { rm -f "$_target.previous.tmp"; return 1; }
+    fi
+    mv -f "$_staged" "$_target"
+}
+
 # build <name> <pkg-config modules> <sources...> [-- extra link flags]
 build() {
     name="$1"
@@ -26,9 +42,8 @@ build() {
         return
     fi
     # shellcheck disable=SC2086
-    if gcc -O2 -Wall $(pkg-config --cflags $mods) -o "$BIN/$name.new" $srcs $(pkg-config --libs $mods) "$@"; then
-        chmod 755 "$BIN/$name.new"
-        mv -f "$BIN/$name.new" "$BIN/$name"
+    if gcc -O2 -Wall $(pkg-config --cflags $mods) -o "$BIN/$name.new" $srcs $(pkg-config --libs $mods) "$@" \
+        && save_and_install_bin "$BIN/$name.new" "$BIN/$name"; then
         echo "==> Built $name"
     else
         rm -f "$BIN/$name.new"
@@ -57,9 +72,8 @@ build_rust() {
     if command -v cargo >/dev/null 2>&1; then
         if cargo build --release --locked --quiet --manifest-path "$_rust_dir/Cargo.toml" \
             --target-dir "$_rust_dir/target" \
-            && cp -f "$_rust_dir/target/release/$_rust_name" "$BIN/$_rust_name.new"; then
-            chmod 755 "$BIN/$_rust_name.new"
-            mv -f "$BIN/$_rust_name.new" "$BIN/$_rust_name"
+            && cp -f "$_rust_dir/target/release/$_rust_name" "$BIN/$_rust_name.new" \
+            && save_and_install_bin "$BIN/$_rust_name.new" "$BIN/$_rust_name"; then
             echo "==> Built $_rust_name"
         else
             rm -f "$BIN/$_rust_name.new"

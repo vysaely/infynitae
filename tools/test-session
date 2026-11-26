@@ -264,3 +264,86 @@ got=$(watch true false)
 sleep 0.3
 [ ! -e "$TMP/script_ran" ] || { echo "FAIL a script was started beside the bus watcher"; exit 1; }
 echo "ok   each switch off leaves its script out, and no script runs beside the watcher"
+
+# ---- 8. infynitae-session fallback: 2 fast crashes on new binary fall back to ~/.local/bin/infynitae.previous and notify owner
+HOME7="$TMP/home7"
+mkdir -p "$HOME7/.local/bin" "$HOME7/.local/state/infynitae" "$HOME7/infynitae/live" "$TMP/bin7"
+cp "$REPO_DIR/live/session.sh" "$HOME7/infynitae/live/session.sh"
+cp "$REPO_DIR/live/log-rotate.sh" "$HOME7/infynitae/live/log-rotate.sh" 2>/dev/null || true
+cat > "$HOME7/infynitae/live/env.sh" <<'EOF'
+# test no-op env
+EOF
+cat > "$HOME7/.local/bin/notify-send" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" > "$TMP/fb_notify"
+touch "$HOME7/.local/state/infynitae/stop"
+EOF
+cat > "$HOME7/.local/bin/infynitae-lock" <<'EOF'
+#!/bin/sh
+echo "Screen locked"
+sleep 10
+EOF
+cat > "$HOME7/.local/bin/infynitae" <<EOF
+#!/bin/sh
+echo "new" >> "$TMP/fb_starts"
+exit 42
+EOF
+cat > "$HOME7/.local/bin/infynitae.previous" <<EOF
+#!/bin/sh
+echo "previous" >> "$TMP/fb_starts"
+export WAYLAND_DISPLAY="wayland-fb" START_TERMINAL="false" START_LOCKED="0" SESSION_RESTORE="false" NOTIFICATIONS="none"
+sh "$HOME7/infynitae/live/session.sh" >/dev/null 2>&1
+i=0
+while [ ! -s "$TMP/fb_notify" ] && [ \$i -lt 100 ]; do sleep 0.05; i=\$((i + 1)); done
+exit 0
+EOF
+chmod +x "$HOME7/.local/bin/notify-send" "$HOME7/.local/bin/infynitae-lock" "$HOME7/.local/bin/infynitae" "$HOME7/.local/bin/infynitae.previous"
+
+(
+    export HOME="$HOME7" PATH="$HOME7/.local/bin:$PATH" XDG_RUNTIME_DIR="$TMP/rt7"
+    mkdir -p "$XDG_RUNTIME_DIR"
+    sh "$REPO_DIR/live/infynitae-session" </dev/null >/dev/null 2>&1
+)
+starts=$(tr '\n' ' ' < "$TMP/fb_starts")
+if [ "$starts" != "new new previous " ]; then
+    echo "FAIL compositor fallback start sequence: expected 'new new previous ', got '$starts'"
+    exit 1
+fi
+echo "ok compositor fallback starts: new, new, then .previous"
+if ! grep -q "Started previous Infynitae" "$TMP/fb_notify" 2>/dev/null; then
+    echo "FAIL compositor fallback did not notify owner: $(cat "$TMP/fb_notify" 2>/dev/null || true)"
+    exit 1
+fi
+echo "ok compositor fallback notified owner via notify-send"
+
+# When .previous also crashes 3 times, infynitae-session stops cleanly (exit 1)
+HOME8="$TMP/home8"
+mkdir -p "$HOME8/.local/bin" "$HOME8/.local/state/infynitae" "$HOME8/infynitae/live"
+cat > "$HOME8/infynitae/live/env.sh" <<'EOF'
+# test no-op env
+EOF
+cat > "$HOME8/.local/bin/infynitae" <<EOF
+#!/bin/sh
+echo "new" >> "$TMP/fb8_starts"
+exit 42
+EOF
+cat > "$HOME8/.local/bin/infynitae.previous" <<EOF
+#!/bin/sh
+echo "previous" >> "$TMP/fb8_starts"
+exit 43
+EOF
+chmod +x "$HOME8/.local/bin/infynitae" "$HOME8/.local/bin/infynitae.previous"
+if (
+    export HOME="$HOME8" PATH="$HOME8/.local/bin:$PATH" XDG_RUNTIME_DIR="$TMP/rt8"
+    mkdir -p "$XDG_RUNTIME_DIR"
+    sh "$REPO_DIR/live/infynitae-session" </dev/null >/dev/null 2>&1
+); then
+    echo "FAIL fallback crash loop did not exit non-zero"
+    exit 1
+fi
+starts8=$(tr '\n' ' ' < "$TMP/fb8_starts")
+if [ "$starts8" != "new new previous previous previous " ]; then
+    echo "FAIL fallback crash loop sequence: expected 'new new previous previous previous ', got '$starts8'"
+    exit 1
+fi
+echo "ok fallback stops after 3 failures of .previous too"

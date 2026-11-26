@@ -250,22 +250,22 @@ signed_by() {
 # is said and skipped: the rest of Infynitae still installs.
 warn() { echo "==> $*" >&2; }
 
-# The binaries and scripts into ~/.local/bin, from the source at $1. Replaced by rename: a
-# running compositor or script keeps its old file until it restarts.
-install_programs() {
-    local src="$1" bin="$HOME/.local/bin" from to
+# Compiled binaries installed into ~/.local/bin (each keeps one .previous generation).
+infynitae_binary_names() {
+    printf '%s\n' \
+        infynitae xwayland-satellite \
+        infynitae-portal infynitae-polkit infynitae-lock \
+        infynitae-wallpaper infynitae-record-stream infynitae-xres-pid \
+        infynitae-edge-apps infynitae-shot infynitae-sandbox-socket
+}
+
+# Scripts from the source into ~/.local/bin ($1 source, $2 bin dir).
+install_scripts() {
+    local src="$1" bin="${2:-$HOME/.local/bin}" from to
     mkdir -p "$bin"
     put() {
         install -m 755 "$1" "$2.new" && mv -f "$2.new" "$2" || warn "Could not install $2"
     }
-    # the compositor only when its content changed: a running one then still runs the installed
-    # file, and COMPOSITOR_CHANGED tells infynitae-update whether a new start brings anything
-    if cmp -s "$src/${CARGO_TARGET_DIR:-target}/release/infynitae" "$bin/infynitae"; then
-        COMPOSITOR_CHANGED=false
-    else
-        COMPOSITOR_CHANGED=true
-        put "$src/${CARGO_TARGET_DIR:-target}/release/infynitae" "$bin/infynitae"
-    fi
     while read -r from to; do
         [ -n "$from" ] && put "$src/$from" "$bin/$to"
     done <<'LIST'
@@ -293,11 +293,111 @@ live/greeter/infynitae-login-screen infynitae-login-screen
 live/greeter/infynitae-greeter infynitae-greeter
 live/greeter/infynitae-greeter-screen infynitae-greeter-screen
 LIST
+}
+
+# Copy live/ scripts to ~/infynitae/live when updating from another checkout.
+sync_live_dir() {
+    local src="$1" src_live dst_live
+    mkdir -p "$HOME/infynitae/live"
+    src_live="$(cd "$src/live" 2>/dev/null && pwd -P || echo "")"
+    dst_live="$(cd "$HOME/infynitae/live" 2>/dev/null && pwd -P || echo "")"
+    if [ -n "$src_live" ] && [ "$src_live" != "$dst_live" ]; then
+        cp -rf "$src/live/"* "$HOME/infynitae/live/"
+    fi
+}
+
+# Swap each installed binary with its .previous generation in place.
+rollback_binaries() {
+    local bin="${1:-$HOME/.local/bin}" b swapped=0 compositor_swapped=false satellite_swapped=false
+    while IFS= read -r b; do
+        if [ -e "$bin/$b" ] && [ -e "$bin/$b.previous" ] && ! cmp -s "$bin/$b" "$bin/$b.previous"; then
+            cp -pf "$bin/$b" "$bin/$b.prev.tmp" \
+                && mv -f "$bin/$b.previous" "$bin/$b.next.tmp" \
+                && mv -f "$bin/$b.prev.tmp" "$bin/$b.previous" \
+                && mv -f "$bin/$b.next.tmp" "$bin/$b" \
+                || {
+                    rm -f "$bin/$b.prev.tmp" "$bin/$b.next.tmp"
+                    warn "Could not swap $bin/$b with $bin/$b.previous"
+                    return 1
+                }
+            swapped=$((swapped + 1))
+            [ "$b" = "infynitae" ] && compositor_swapped=true
+            [ "$b" = "xwayland-satellite" ] && satellite_swapped=true
+        fi
+    done <<EOF
+$(infynitae_binary_names)
+EOF
+    if [ "$satellite_swapped" = true ]; then
+        rm -f "$bin/.xwayland-satellite.stamp"
+    fi
+    ROLLBACK_SWAPPED="$swapped"
+    ROLLBACK_COMPOSITOR_SWAPPED="$compositor_swapped"
+    return 0
+}
+
+# The binaries and scripts into ~/.local/bin, from the source at $1. Replaced by rename: a
+# running compositor or script keeps its old file until it restarts, and each changed binary
+# preserves one previous generation at ~/.local/bin/<name>.previous.
+install_programs() {
+    local src="$1" bin="$HOME/.local/bin" target_dir b sum
+    local -A pre_sum=() post_sum=()
+    BINARIES_CHANGED=false
+    mkdir -p "$bin"
+    while IFS= read -r b; do
+        [ -e "$bin/$b" ] && pre_sum[$b]=$(cksum < "$bin/$b")
+    done <<EOF
+$(infynitae_binary_names)
+EOF
+    put_bin() {
+        if [ -e "$2" ]; then
+            cp -pf "$2" "$2.previous.tmp" && mv -f "$2.previous.tmp" "$2.previous" \
+                || { rm -f "$2.previous.tmp"; warn "Could not back up $2.previous"; }
+        fi
+        install -m 755 "$1" "$2.new" && mv -f "$2.new" "$2" || warn "Could not install $2"
+    }
+    case "${CARGO_TARGET_DIR:-target}" in
+        /*) target_dir="$CARGO_TARGET_DIR" ;;
+        *)  target_dir="$src/${CARGO_TARGET_DIR:-target}" ;;
+    esac
+    # the compositor only when its content changed: a running one then still runs the installed
+    # file, and COMPOSITOR_CHANGED tells infynitae-update whether a new start brings anything
+    if cmp -s "$target_dir/release/infynitae" "$bin/infynitae"; then
+        COMPOSITOR_CHANGED=false
+    else
+        COMPOSITOR_CHANGED=true
+        put_bin "$target_dir/release/infynitae" "$bin/infynitae"
+    fi
+    install_scripts "$src" "$bin"
     # xwayland-satellite with our patch; a failed build keeps the copy already installed
     sh "$src/live/build-satellite.sh" "$src" "$bin"
     # the C helpers (portal, bus watcher, polkit agent, lock screen, wallpaper, recorder stream, X11 window process)
     sh "$src/live/build-helpers.sh" "$src" "$bin" \
         || warn "Some helpers were not built (see above); Infynitae runs without them"
+    while IFS= read -r b; do
+        if [ -e "$bin/$b" ]; then
+            sum=$(cksum < "$bin/$b")
+            post_sum[$b]="$sum"
+            if [ -n "${pre_sum[$b]:-}" ] && [ "$sum" != "${pre_sum[$b]}" ]; then
+                BINARIES_CHANGED=true
+            fi
+        fi
+    done <<EOF
+$(infynitae_binary_names)
+EOF
+    # Keep all pre-existing .previous files at the exact state before this update when any binary
+    # or script commit moved; leave existing .previous untouched on a no-op update.
+    if [ "$BINARIES_CHANGED" = true ] || [ "${UPDATE_SCRIPTS_CHANGED:-false}" = true ]; then
+        while IFS= read -r b; do
+            if [ -n "${pre_sum[$b]:-}" ] && [ -e "$bin/$b" ] \
+                && [ "${post_sum[$b]:-}" = "${pre_sum[$b]}" ]; then
+                cp -pf "$bin/$b" "$bin/$b.previous.tmp" \
+                    && mv -f "$bin/$b.previous.tmp" "$bin/$b.previous" \
+                    || { rm -f "$bin/$b.previous.tmp"; warn "Could not sync $bin/$b.previous"; }
+            fi
+        done <<EOF
+$(infynitae_binary_names)
+EOF
+    fi
 }
 
 # A file as root, only when it changed ($1 source, $2 destination, $3 mode).

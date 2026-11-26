@@ -224,9 +224,19 @@ if [ -n "$NOTIFY_CMD" ]; then
     sh -c "$NOTIFY_CMD" >/dev/null 2>&1 &
 fi
 
-# 6c2. The last crash (infynitae-session wrote a report): said once, in a notification
+# 6c2. Fallback to previous compositor, or the last crash: said once, in a notification
+FALLBACK_NOTE="$HOME/.local/state/infynitae/fallback-previous"
 CRASH_NOTE="$HOME/.local/state/infynitae/crashed"
-if [ -f "$CRASH_NOTE" ]; then
+if [ -f "$FALLBACK_NOTE" ]; then
+    IFS="$(printf '\t')" read -r FB_REPORT FB_WHAT < "$FALLBACK_NOTE"
+    rm -f "$FALLBACK_NOTE" "$CRASH_NOTE"
+    if command -v notify-send >/dev/null 2>&1; then
+        FB_REPORT=$(printf '%s' "$FB_REPORT" | sed "s|^$HOME|~|")
+        (sleep 2; notify-send -a Infynitae -u critical "Started previous Infynitae" \
+            "$FB_WHAT. Run infynitae-update --rollback to keep it.
+Report: $FB_REPORT") &
+    fi
+elif [ -f "$CRASH_NOTE" ]; then
     IFS="$(printf '\t')" read -r CRASH_REPORT CRASH_WHAT < "$CRASH_NOTE"
     rm -f "$CRASH_NOTE"
     if command -v notify-send >/dev/null 2>&1; then
