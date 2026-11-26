@@ -61,6 +61,18 @@ impl Kind {
             Kind::Files => "Files",
         }
     }
+
+    fn tag(self) -> &'static str {
+        match self {
+            Kind::Windows => "windows",
+            Kind::Settings => "settings",
+            Kind::Clipboard => "clipboard",
+            Kind::Clips => "clips",
+            Kind::Recordings => "recordings",
+            Kind::Recent => "recent",
+            Kind::Files => "files",
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -537,6 +549,7 @@ impl Card for ResultsCard {
                         right: 0.0,
                     },
                 );
+                hits.label(hit, format!("{} {}", kind.tag(), item.name));
                 hit += 1;
                 y += ui::ROW_H;
             }
@@ -874,6 +887,72 @@ mod tests {
         assert_eq!(ids, (HIT_BASE..HIT_BASE + 5).collect::<Vec<_>>());
         let bottom = hits.list.iter().map(|(_, r)| r.1 + r.3).fold(0.0, f64::max);
         assert_eq!(bottom, h);
+    }
+
+    #[test]
+    fn draw_labels_each_hit_with_its_kind_and_name() {
+        let th = theme();
+        let mut cx = test_cx(&th);
+        let win = [Window {
+            id: 1,
+            title: "find window".into(),
+            app_id: "app".into(),
+            focused: false,
+        }];
+        cx.windows = &win;
+        let data = SearchData {
+            clipboard: vec![entry("find clip", "", Open::Copy("find clip".into()))],
+            clips: vec![file("find-clip.mkv", "")],
+            recordings: vec![file("find-rec.mp4", "")],
+            recent: vec![file("find-recent.txt", "")],
+        };
+        let mut c = open_card(data, &cx);
+        type_q(&mut c, "find", &cx);
+        c.apply(
+            "located",
+            &crate::locate::Located {
+                query: "find".into(),
+                paths: vec!["/tmp/find-file.pdf".into()],
+            } as &dyn Any,
+        );
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 400, 600).unwrap();
+        let cr = Context::new(&surf).unwrap();
+        let mut hits = Hits::new(None, None);
+        c.draw(&cr, &cx, (0.0, 0.0, 400.0, c.height(&cx, 400.0)), &mut hits);
+        let labels: Vec<&str> = hits
+            .texts
+            .iter()
+            .filter_map(|(id, text)| id.is_some().then_some(text.as_str()))
+            .collect();
+        assert_eq!(
+            labels,
+            vec![
+                "windows find window",
+                "clipboard find clip",
+                "clips find-clip.mkv",
+                "recordings find-rec.mp4",
+                "recent find-recent.txt",
+                "files find-file.pdf",
+            ]
+        );
+        assert_eq!(labels.len(), hits.list.len());
+
+        type_q(&mut c, "night", &cx);
+        let mut setting_hits = Hits::new(None, None);
+        c.draw(
+            &cr,
+            &cx,
+            (0.0, 0.0, 400.0, c.height(&cx, 400.0)),
+            &mut setting_hits,
+        );
+        assert!(
+            setting_hits
+                .texts
+                .iter()
+                .any(|(id, text)| *id == Some(HIT_BASE) && text == "settings Night light warmth"),
+            "{:?}",
+            setting_hits.texts
+        );
     }
 
     #[test]

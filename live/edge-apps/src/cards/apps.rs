@@ -532,6 +532,7 @@ impl Card for AppsListCard {
                             note_accent: false,
                         },
                     );
+                    hits.label(app_idx as u32, format!("{} {}", app.id, app.name));
                 }
             }
             y += h;
@@ -954,6 +955,7 @@ impl Card for SearchCard {
                             note_accent: false,
                         },
                     );
+                    hits.label(hit_id, format!("{} {}", app.id, app.name));
                     y += ROW_H;
                 }
             }

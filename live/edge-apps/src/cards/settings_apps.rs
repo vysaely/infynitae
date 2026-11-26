@@ -464,6 +464,7 @@ impl Card for DefaultsCard {
             y += rest_h;
         }
         if self.shows_no_plocate() {
+            hits.note(NO_PLOCATE);
             let t = Text {
                 text: NO_PLOCATE,
                 size: draw::SIZE_SMALL,
