@@ -474,7 +474,7 @@ install_update_check() {
     dry="${2:-}"
     svc="$src/live/update-check/infynitae-update-check.service"
     tmr="$src/live/update-check/infynitae-update-check.timer"
-    unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+    unit_dir="$HOME/.config/systemd/user"
     [ -f "$svc" ] && [ -f "$tmr" ] || return 0
     if [ "$dry" = "--dry-run" ]; then
         return 0
