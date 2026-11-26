@@ -276,11 +276,12 @@ struct TouchState {
     mode: TouchMode,
 }
 
-/// One of the five items in the compositor's window menu (`xdg_toplevel.show_window_menu`
-/// or `BIND_WINDOW_MENU`).
+/// One of the items in the compositor's window menu (`xdg_toplevel.show_window_menu` or
+/// `BIND_WINDOW_MENU`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WindowMenuAction {
     KeepOnTop,
+    BackgroundKeep,
     Minimize,
     Maximize,
     Fullscreen,
@@ -295,26 +296,43 @@ pub struct WindowMenu {
     pub on_top: bool,
     pub maximized: bool,
     pub fullscreen: bool,
+    /// its app kept at full speed out of sight (`BACKGROUND_KEEP`); `None`: the window has no
+    /// app id to keep it by, and the item is not shown
+    pub background_keep: Option<bool>,
 }
+
+/// The window menu's width; wider with the full speed item, whose label is the longest.
+const WINDOW_MENU_W: f64 = 180.0;
+const WINDOW_MENU_W_KEEP: f64 = 300.0;
 
 impl WindowMenu {
     /// The menu's items in order: `(action, label, checked)`.
-    pub fn items(&self) -> [(WindowMenuAction, &'static str, bool); 5] {
-        [
-            (WindowMenuAction::KeepOnTop, "Keep on top", self.on_top),
-            (WindowMenuAction::Minimize, "Minimize", false),
+    pub fn items(&self) -> Vec<(WindowMenuAction, &'static str, bool)> {
+        let keep = self.background_keep.map(|on| {
             (
-                WindowMenuAction::Maximize,
-                if self.maximized {
-                    "Restore"
-                } else {
-                    "Maximize"
-                },
-                false,
-            ),
-            (WindowMenuAction::Fullscreen, "Fullscreen", false),
-            (WindowMenuAction::Close, "Close", false),
-        ]
+                WindowMenuAction::BackgroundKeep,
+                "Keep at full speed in the background",
+                on,
+            )
+        });
+        [(WindowMenuAction::KeepOnTop, "Keep on top", self.on_top)]
+            .into_iter()
+            .chain(keep)
+            .chain([
+                (WindowMenuAction::Minimize, "Minimize", false),
+                (
+                    WindowMenuAction::Maximize,
+                    if self.maximized {
+                        "Restore"
+                    } else {
+                        "Maximize"
+                    },
+                    false,
+                ),
+                (WindowMenuAction::Fullscreen, "Fullscreen", false),
+                (WindowMenuAction::Close, "Close", false),
+            ])
+            .collect()
     }
 
     /// The shell IPC command line for `action` on `self.element`.
@@ -324,6 +342,10 @@ impl WindowMenu {
             WindowMenuAction::KeepOnTop => format!(
                 "{{\"id\":1,\"cmd\":\"keep_on_top\",\"element\":[{inst},{elem}],\"on\":{}}}\n",
                 !self.on_top
+            ),
+            WindowMenuAction::BackgroundKeep => format!(
+                "{{\"id\":1,\"cmd\":\"background_keep\",\"element\":[{inst},{elem}],\"on\":{}}}\n",
+                self.background_keep != Some(true)
             ),
             WindowMenuAction::Minimize => {
                 format!("{{\"id\":1,\"cmd\":\"minimize\",\"element\":[{inst},{elem}]}}\n")
@@ -342,7 +364,9 @@ impl WindowMenu {
         }
     }
 
-    /// Parses `INFYNITAE_EDGE_RENDER_WINDOW_MENU` (`"x,y[,on_top|off_top|maximized|fullscreen]"`).
+    /// Parses `INFYNITAE_EDGE_RENDER_WINDOW_MENU`
+    /// (`"x,y[,on_top|off_top|maximized|fullscreen|app|full_speed]"`: `app` shows the full speed
+    /// item off, `full_speed` on).
     pub fn from_render_env(raw: &str) -> Self {
         let mut wm = Self {
             element: (1, 1),
@@ -350,6 +374,7 @@ impl WindowMenu {
             on_top: true,
             maximized: false,
             fullscreen: false,
+            background_keep: None,
         };
         let parts: Vec<&str> = raw
             .split([',', '|'])
@@ -367,6 +392,8 @@ impl WindowMenu {
                 "off_top" | "off-top" | "normal" => wm.on_top = false,
                 "maximized" | "restore" => wm.maximized = true,
                 "fullscreen" => wm.fullscreen = true,
+                "app" => wm.background_keep = Some(false),
+                "full_speed" => wm.background_keep = Some(true),
                 _ => {}
             }
         }
@@ -398,6 +425,18 @@ pub fn parse_window_menu_event(line: &str) -> Option<WindowMenu> {
         on_top: bool_of("on_top"),
         maximized: bool_of("maximized"),
         fullscreen: bool_of("fullscreen"),
+        // true or false; null (no app id) or missing (an older compositor): no item
+        background_keep: compact
+            .split_once("\"background_keep\":")
+            .and_then(|(_, r)| {
+                if r.starts_with("true") {
+                    Some(true)
+                } else if r.starts_with("false") {
+                    Some(false)
+                } else {
+                    None
+                }
+            }),
     })
 }
 
@@ -921,7 +960,11 @@ impl Shell {
     pub fn window_menu_rect(&self, w: f64, h: f64) -> Option<Rect> {
         let wm = self.window_menu?;
         let (mw, mh) = (
-            180.0,
+            if wm.background_keep.is_some() {
+                WINDOW_MENU_W_KEEP
+            } else {
+                WINDOW_MENU_W
+            },
             PAD_TOP + wm.items().len() as f64 * crate::ui::LIST_ROW_H + PAD_BOTTOM,
         );
         Some((
@@ -1869,6 +1912,57 @@ mod tests {
             .map(|s| s.parse().unwrap())
             .collect();
         (nums[0], nums[1], nums[2], nums[3])
+    }
+
+    /// The full speed item shows for a window with an app id, checked as the compositor says,
+    /// and asks for the opposite; without an app id (or from a compositor that does not say) it
+    /// is not there.
+    #[test]
+    fn window_menu_full_speed_item() {
+        let ev = |keep: &str| {
+            parse_window_menu_event(&format!(
+                r#"{{"event":"window_menu","element":[42,7],"position":[10,10],"on_top":false,"maximized":false,"fullscreen":false{keep},"generation":3}}"#
+            ))
+            .unwrap()
+        };
+        let item = (
+            WindowMenuAction::BackgroundKeep,
+            "Keep at full speed in the background",
+        );
+        for (keep, want) in [
+            (r#","background_keep":null"#, None),
+            ("", None),
+            (r#","background_keep":false"#, Some(false)),
+            (r#","background_keep":true"#, Some(true)),
+        ] {
+            let wm = ev(keep);
+            assert_eq!(wm.background_keep, want, "{keep}");
+            let found = wm.items().iter().find(|i| i.0 == item.0).copied();
+            assert_eq!(found, want.map(|on| (item.0, item.1, on)), "{keep}");
+            assert_eq!(wm.items().len(), if want.is_some() { 6 } else { 5 });
+        }
+        assert_eq!(
+            ev(r#","background_keep":false"#).command_line(item.0),
+            "{\"id\":1,\"cmd\":\"background_keep\",\"element\":[42,7],\"on\":true}\n"
+        );
+        assert_eq!(
+            ev(r#","background_keep":true"#).command_line(item.0),
+            "{\"id\":1,\"cmd\":\"background_keep\",\"element\":[42,7],\"on\":false}\n"
+        );
+
+        // second in the menu, a click on it sends the command
+        let mut sh = Shell::new(Config::from_text(""), Vec::new());
+        assert!(sh.open_window_menu(ev(r#","background_keep":false"#)));
+        frame(&sh);
+        let dump = crate::boxes::text(&sh, 1920.0, 1080.0);
+        let (x, y) = parse_box_center(&dump, "hit window/menu 1 ");
+        assert!(sh.click(1920.0, 1080.0, x, y, Button::Left));
+        assert_eq!(
+            std::mem::take(&mut sh.actions)[0].0,
+            Action::ShellCommand(
+                "{\"id\":1,\"cmd\":\"background_keep\",\"element\":[42,7],\"on\":true}\n".into()
+            )
+        );
     }
 
     #[test]

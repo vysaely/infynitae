@@ -305,6 +305,7 @@ owner's call (section 8).
 | Game mode | Switch | `GAME_MODE` | | save |
 | Tearing in fullscreen | Pick | `TEARING` | Always, When the game asks `true`, Never `false` | save |
 | M Lower priority for apps out of sight | Switch | `BACKGROUND_PRIORITY` | | save |
+| M Apps kept at full speed | Text | `BACKGROUND_KEEP` | app ids, comma separated (the window menu adds and removes them) | save |
 
 Hidden: Game mode without `gamemoded` on PATH. Left to the file: `GAME_QUIET`, `GPU_RELIEF`,
 `LATENCY`, `LATENCY_STATS`. `DIRECT_SCANOUT`, `FIT_IS_FULLSCREEN`, `FRAME_GUARD`, `HARDWARE_CURSOR`

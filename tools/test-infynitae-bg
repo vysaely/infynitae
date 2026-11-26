@@ -1,0 +1,59 @@
+#!/bin/sh
+# tools/test-infynitae-bg: live/infynitae-bg with systemctl and systemd-run stubbed:
+# - the command runs in infynitae-background.slice as a scope, its arguments whole
+# - the job's exit status is the helper's
+# - without the slice installed, or without a command, nothing runs
+# and the shipped slice has the weights and memory line docs/STATUS.md names, and no MemoryMax.
+set -u
+
+REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
+TMP=$(mktemp -d "/tmp/infynitae-test-bg.XXXXXX")
+trap 'rm -rf "$TMP"' EXIT INT TERM
+
+BIN="$TMP/bin"
+mkdir -p "$BIN"
+cat << 'STUB' > "$BIN/systemctl"
+#!/bin/sh
+[ "$*" = "--user cat infynitae-background.slice" ] && [ -n "${SLICE_INSTALLED:-}" ]
+STUB
+cat << 'STUB' > "$BIN/systemd-run"
+#!/bin/sh
+for a; do printf '[%s]' "$a"; done >> "$LOG"
+echo >> "$LOG"
+exit 3
+STUB
+chmod +x "$BIN"/*
+
+fail=0
+check() {
+    if [ "$2" = "$3" ]; then
+        echo "ok   $1"
+    else
+        echo "FAIL $1: expected '$3', got '$2'"
+        fail=1
+    fi
+}
+
+LOG="$TMP/log"
+run() {
+    : > "$LOG"
+    env -i PATH="$BIN:/usr/bin:/bin" LOG="$LOG" "$@" sh "$REPO_DIR/live/infynitae-bg" "$ARGS1" "$ARGS2" 2>/dev/null
+}
+ARGS1="cargo" ARGS2="build --release"
+run SLICE_INSTALLED=1
+check "the job's exit status" "$?" 3
+check "runs in the slice, arguments whole" "$(cat "$LOG")" \
+    "[--user][--scope][--quiet][--collect][--slice=infynitae-background.slice][--][cargo][build --release]"
+run
+check "without the slice: refused" "$?" 1
+check "  and nothing runs" "$(cat "$LOG")" ""
+: > "$LOG"
+env -i PATH="$BIN:/usr/bin:/bin" LOG="$LOG" SLICE_INSTALLED=1 sh "$REPO_DIR/live/infynitae-bg" 2>/dev/null
+check "without a command: usage" "$?" 2
+
+SLICE="$REPO_DIR/live/infynitae-background.slice"
+check "slice: CPU weight" "$(grep -c '^CPUWeight=20$' "$SLICE")" 1
+check "slice: disk weight" "$(grep -c '^IOWeight=20$' "$SLICE")" 1
+check "slice: memory reclaimed above 60%" "$(grep -c '^MemoryHigh=60%$' "$SLICE")" 1
+check "slice: never a hard limit" "$(grep -c '^MemoryMax' "$SLICE")" 0
+exit $fail

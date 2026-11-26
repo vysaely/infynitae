@@ -625,10 +625,11 @@ GM_ARGS
         exec "$HOME/infynitae/live/config-check" --notify >/dev/null 2>&1
         ;;
     remember-window)
-        # a per-window toggle kept for the window's app (the compositor, Super+Shift+P / Super+Shift+K):
+        # a per-window toggle kept for the window's app (the compositor, Super+Shift+P / Super+Shift+K,
+        # the window menu's "Keep at full speed in the background"):
         # remember-window KEY APP on|off adds the app to the comma list KEY in the config, or takes it out
         key="${2:-}" app="${3:-}" state="${4:-}"
-        case "$key" in PRIVACY_APPS|KEEP_ON_TOP) ;; *) exit 1 ;; esac
+        case "$key" in PRIVACY_APPS|KEEP_ON_TOP|BACKGROUND_KEEP) ;; *) exit 1 ;; esac
         [ -n "$app" ] || exit 1
         cfg="$HOME/.config/infynitae/config"
         [ -f "$cfg" ] || exit 0

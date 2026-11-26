@@ -27,6 +27,7 @@ mod gestures;
 mod keyboard;
 mod outputs;
 mod pointer_input;
+pub(crate) mod priority;
 mod shell;
 mod touch;
 mod windows;
@@ -210,6 +211,14 @@ impl Core {
                         ))
                     .then(authority::Authorized::mint);
                     self.keyboard_press(key, modifiers, mods_changed, time_us, navigation, out);
+                    // a key the window got, not a modifier on its way to a shortcut
+                    if self.input.key_ownership.owner(key) == Some(Owner::Client)
+                        && !keys::is_modifier_key(key)
+                        && self.focus.layer().is_none()
+                        && let Some(w) = self.focus.target()
+                    {
+                        self.note_used(w);
+                    }
                 } else {
                     self.keyboard_release(key, mods_changed, time_us, out);
                 }

@@ -600,6 +600,7 @@ impl Core {
         let rest = self.cluster_left_by(id);
         self.remember_closed(id);
         self.maximize_on_map.retain(|&e| e != id);
+        self.last_used.remove(&id);
         self.scales.remove(id);
         // its own parent link, and its children's (they have no parent any more)
         self.toplevel_parents.retain(|(c, p)| *c != id && *p != id);

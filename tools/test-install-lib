@@ -445,6 +445,14 @@ check "idempotent run does not re-enable active timers" \
 check "install.sh --help lists --no-disk-guard" \
     "$("$REPO_DIR/install.sh" --help | grep -c -- '--no-disk-guard' || true)" "1"
 
+# 10i. The slice of infynitae-bg: installed as a user unit and the user manager reloaded; never
+# enabled or started (a slice needs neither)
+DG_CALL='install_background_slice "'"$REPO_DIR"'"' run_dg bg-slice env
+check "background slice: installed in the user units" \
+    "$(grep -c "^install -m 644 $REPO_DIR/live/infynitae-background.slice .*/.config/systemd/user/infynitae-background.slice$" "$TMP/dg-bg-slice.log" || true)" "1"
+check "background slice: user manager reloaded, nothing enabled" \
+    "$(grep '^systemctl' "$TMP/dg-bg-slice.log")" "systemctl --user daemon-reload"
+
 # 11. install_programs replaces the compositor only when its content changed, and says so in
 # COMPOSITOR_CHANGED (infynitae-update tells from it whether a restart brings anything). A source
 # with only the compositor and build scripts that do nothing; the other programs are missing.

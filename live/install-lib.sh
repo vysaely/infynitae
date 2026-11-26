@@ -288,6 +288,7 @@ live/infynitae-format-drive infynitae-format-drive
 live/infynitae-disk-guard infynitae-disk-guard
 live/windows-run infynitae-windows-run
 live/android-run infynitae-android-run
+live/infynitae-bg infynitae-bg
 LIST
     # xwayland-satellite with our patch; a failed build keeps the copy already installed
     sh "$src/live/build-satellite.sh" "$src" "$bin"
@@ -566,6 +567,20 @@ GUARD
     sh "$src/live/setup-autologin.sh" --autostart >/dev/null 2>&1 || true
     install_speed_settings "$src"
     install_disk_guard "$src"
+    install_background_slice "$src"
+}
+
+# The slice long jobs started with infynitae-bg run in, yielding to the desktop (a user unit; a
+# slice needs no enabling).
+install_background_slice() {
+    local src="$1" udir="$HOME/.config/systemd/user"
+    cmp -s "$src/live/infynitae-background.slice" "$udir/infynitae-background.slice" 2>/dev/null && return 0
+    mkdir -p "$udir"
+    if install -m 644 "$src/live/infynitae-background.slice" "$udir/infynitae-background.slice"; then
+        systemctl --user daemon-reload 2>/dev/null || true
+    else
+        warn "Could not install $udir/infynitae-background.slice; infynitae-bg refuses to run without it"
+    fi
 }
 
 # The parts' own apps open their files: folders in Thunar (not a terminal that also says it opens

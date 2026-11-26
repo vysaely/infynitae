@@ -267,6 +267,11 @@ pub fn window_menu_event(
         ("on_top", core.stage().is_above(id).into()),
         ("maximized", core.is_maximized(id).into()),
         ("fullscreen", core.fullscreen_of(id).is_some().into()),
+        // kept at full speed out of sight (`BACKGROUND_KEEP`); null: no app id to keep it by
+        (
+            "background_keep",
+            core.background_kept(id).map_or(Value::Null, Value::from),
+        ),
     ])
 }
 

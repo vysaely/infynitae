@@ -773,6 +773,7 @@ impl Core {
         if let Some(hit) = element {
             // the clicked window is under the pointer: raising it changes no pointer target
             self.raise_by_user(hit.element);
+            self.note_used(hit.element);
             out.extend(
                 self.focus
                     .set_focus_at(self.input.clock.now_us(), Some(hit.element)),
