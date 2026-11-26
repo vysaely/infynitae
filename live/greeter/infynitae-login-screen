@@ -15,7 +15,9 @@ CONF=/etc/greetd/config.toml
 BACKUP=/etc/greetd/config.toml.before-infynitae
 HERE=$(cd "$(dirname "$0")" && pwd)
 
-greeter_home() { getent passwd greeter | cut -d: -f6; }
+# The greeter's own folder: on Arch the greeter account's home is /, so it gets one here and the
+# greeter runs with HOME set to it (its last-user file, its look, its copies of the programs).
+H=/var/lib/infynitae-greeter
 
 case "${1:-status}" in
 on)
@@ -23,9 +25,10 @@ on)
         [ -x "$OWNER_BIN/$f" ] || { echo "$OWNER_BIN/$f is missing: install Infynitae first" >&2; exit 1; }
     done
     command -v greetd >/dev/null 2>&1 || pacman -S --needed --noconfirm greetd
-    H=$(greeter_home)
-    [ -n "$H" ] && [ -d "$H" ] || { echo "greetd's greeter account has no home folder" >&2; exit 1; }
-    # the programs, owned by root so the greeter account cannot replace them
+    getent passwd greeter >/dev/null || { echo "greetd's greeter account is missing" >&2; exit 1; }
+    # the folder is the greeter's (it writes last-user); the programs in it are root's, so the
+    # greeter account cannot replace them
+    install -d -o greeter -g greeter -m 755 "$H"
     install -d -o root -g root -m 755 "$H/.local" "$H/.local/bin"
     for f in infynitae infynitae-lock; do install -o root -g root -m 755 "$OWNER_BIN/$f" "$H/.local/bin/$f"; done
     for f in infynitae-greeter infynitae-greeter-screen; do install -o root -g root -m 755 "$HERE/$f" "$H/.local/bin/$f"; done
@@ -43,13 +46,18 @@ on)
 vt = 1
 
 [default_session]
-command = "$H/.local/bin/infynitae-greeter"
+command = "env HOME=$H $H/.local/bin/infynitae-greeter"
 user = "greeter"
 EOF
     # the keyring opens with the login password, as the lock screen's PAM file does
     if [ -f /etc/pam.d/greetd ] && ! grep -q pam_gnome_keyring /etc/pam.d/greetd && [ -e /usr/lib/security/pam_gnome_keyring.so ]; then
         cp -p /etc/pam.d/greetd /etc/pam.d/greetd.before-infynitae
-        printf 'auth       optional     pam_gnome_keyring.so\nsession    optional     pam_gnome_keyring.so auto_start\n' >> /etc/pam.d/greetd
+        # not for the greeter account itself (it has no keyring to open)
+        printf '%s\n' \
+            'auth       [success=1 default=ignore] pam_succeed_if.so quiet user = greeter' \
+            'auth       optional     pam_gnome_keyring.so' \
+            'session    [success=1 default=ignore] pam_succeed_if.so quiet user = greeter' \
+            'session    optional     pam_gnome_keyring.so auto_start' >> /etc/pam.d/greetd
     fi
     systemctl disable getty@tty1.service >/dev/null 2>&1 || true
     systemctl enable greetd.service

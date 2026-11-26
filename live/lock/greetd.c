@@ -169,6 +169,12 @@ static char *recv_msg(int fd) {
     return buf;
 }
 
+/* Ends the attempt and reads greetd's answer to it, so greetd does not find the socket closed under
+ * its reply. */
+static void cancel(int fd) {
+    if (send_msg(fd, "{\"type\":\"cancel_session\"}") == 0) free(recv_msg(fd));
+}
+
 static void say(char *detail, size_t detail_len, const char *what) {
     if (detail && detail_len) snprintf(detail, detail_len, "%s", what);
 }
@@ -222,7 +228,7 @@ GreetdResult greetd_login(const char *socket_path, const char *username, const c
             if (session_asked) { result = GREETD_OK; break; }
             /* signed in (no password was needed, or it was right): start the desktop */
             if (greetd_json_escape(session_cmd, esc, 6 * 256 + 512) != 0) { say(detail, detail_len, "The session command is too long"); break; }
-            snprintf(req, 6 * 256 + 1024, "{\"type\":\"start_session\",\"cmd\":[\"/bin/sh\",\"-c\",\"%s\"],\"env\":[]}", esc);
+            snprintf(req, 6 * 256 + 1024, "{\"type\":\"start_session\",\"cmd\":[\"/bin/sh\",\"-c\",\"%s\"],\"env\":[\"INFYNITAE_SIGNED_IN=1\"]}", esc);
             session_asked = true;
             if (send_msg(fd, req) != 0) { say(detail, detail_len, "greetd closed the connection"); break; }
             continue;
@@ -234,7 +240,7 @@ GreetdResult greetd_login(const char *socket_path, const char *username, const c
             free(msg);
             result = strcmp(sub, "auth_error") == 0 ? GREETD_DENIED : GREETD_FAILED;
             if (result == GREETD_FAILED) say(detail, detail_len, desc[0] ? desc : "greetd refused");
-            (void)send_msg(fd, "{\"type\":\"cancel_session\"}");
+            cancel(fd);
             break;
         }
         if (strcmp(type, "auth_message") == 0) {
@@ -243,12 +249,12 @@ GreetdResult greetd_login(const char *socket_path, const char *username, const c
             if (strcmp(sub, "secret") == 0) {
                 if (answered_secret) {
                     say(detail, detail_len, "This account asks for more than a password");
-                    (void)send_msg(fd, "{\"type\":\"cancel_session\"}");
+                    cancel(fd);
                     break;
                 }
                 answered_secret = true;
                 if (greetd_json_escape(password, esc, 6 * 256 + 512) != 0) {
-                    (void)send_msg(fd, "{\"type\":\"cancel_session\"}");
+                    cancel(fd);
                     say(detail, detail_len, "The password is too long");
                     break;
                 }
@@ -273,7 +279,7 @@ GreetdResult greetd_login(const char *socket_path, const char *username, const c
         }
         free(msg);
         say(detail, detail_len, "An answer from greetd this screen does not understand");
-        (void)send_msg(fd, "{\"type\":\"cancel_session\"}");
+        cancel(fd);
         break;
     }
 

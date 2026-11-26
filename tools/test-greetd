@@ -88,6 +88,8 @@ check "right: create_session names the user" "$(req right | python3 -I -c 'impor
 check "right: the session starts with the command through /bin/sh -c" \
     "$(req right | python3 -I -c 'import json,sys; r=json.load(sys.stdin)[-1]; print(r["type"], r["cmd"])')" \
     "start_session ['/bin/sh', '-c', 'exec \"\$HOME/.local/bin/infynitae-session\"']"
+check "right: the session is told it was signed in (no second password for START_LOCKED)" \
+    "$(req right | python3 -I -c 'import json,sys; print(json.load(sys.stdin)[-1]["env"])')" "['INFYNITAE_SIGNED_IN=1']"
 run wrong secret alice wrong "denied|"
 check "wrong: the session is cancelled" "$(req wrong | python3 -I -c 'import json,sys; print(json.load(sys.stdin)[-1]["type"])')" "cancel_session"
 check "wrong: no session is started" "$(req wrong | grep -c start_session || true)" "0"

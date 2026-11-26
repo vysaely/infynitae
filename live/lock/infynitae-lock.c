@@ -1040,7 +1040,7 @@ static void draw_scene(cairo_t *cr, LockApp *app, const LockOutput *output, int 
     } else if (app->greeter_mode) {
         cairo_set_source_rgb(cr, app->muted_rgb[0], app->muted_rgb[1], app->muted_rgb[2]);
         draw_text_centered(cr, layout, app->font, PANGO_WEIGHT_NORMAL, 11.0,
-                           app->editing_user ? "Enter: next   Escape: back" : "Tab: another user", ax, note_y, false);
+                           !app->editing_user ? "Tab: another user" : app->username[0] ? "Enter: next   Escape: back" : "Enter: next", ax, note_y, false);
     }
 
     if (app->osk_visible) osk_draw(cr, layout, app, output, w, h);
@@ -1258,7 +1258,8 @@ static void keyboard_key(void *data, struct wl_keyboard *keyboard,
                 app->editing_user = false;
             }
         } else if (sym == XKB_KEY_Escape || sym == XKB_KEY_Tab || sym == XKB_KEY_ISO_Left_Tab) {
-            app->editing_user = false;
+            /* back to the name shown before, when there was one */
+            if (app->username[0]) app->editing_user = false;
         } else if (sym == XKB_KEY_BackSpace) {
             if (app->user_len > 0) {
                 /* drop a whole UTF-8 character */
