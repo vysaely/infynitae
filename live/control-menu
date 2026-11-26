@@ -182,7 +182,7 @@ replay_toggle() {
     reload="$HOME/.local/bin/infynitae-reload"
     [ -x "$reload" ] || reload="$HOME/infynitae/live/infynitae-reload"
     "$reload" recorder >/dev/null 2>&1
-    if [ "$to" = true ]; then note "Replay buffer on" "Super+Alt+C saves a clip"; else note "Replay buffer off"; fi
+    if [ "$to" = true ]; then note "Replay on" "Super+Alt+C saves a clip"; else note "Replay off"; fi
 }
 
 # ---- Battery limit
@@ -377,7 +377,7 @@ fi
 have powerprofilesctl && add "Power mode"
 if dnd_on; then add "Do not disturb: on (turn off)"; else add "Do not disturb"; fi
 if have ffmpeg && { have infynitae-recorder || [ -x "$HOME/.local/bin/infynitae-recorder" ]; }; then
-    if replay_on; then add "Replay buffer: on (turn off)"; else add "Replay buffer: off (turn on)"; fi
+    if replay_on; then add "Replay: on (turn off)"; else add "Replay: off (turn on)"; fi
 fi
 case "$(battery_limit_now)" in
     "") ;;
@@ -400,7 +400,7 @@ case "$(printf '%s' "$entries" | $PICKER)" in
     "Tray & background apps"*) apps_menu ;;
     "Power mode") power_menu ;;
     "Do not disturb"|"Do not disturb: on (turn off)") dnd_toggle ;;
-    "Replay buffer: on (turn off)"|"Replay buffer: off (turn on)") replay_toggle ;;
+    "Replay: on (turn off)"|"Replay: off (turn on)") replay_toggle ;;
     "Battery limit: "*) battery_limit_toggle ;;
     "Session & power") session_menu ;;
 esac

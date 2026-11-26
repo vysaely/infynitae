@@ -374,7 +374,7 @@ archive_validate_and_unpack() {
     case "$av_nc" in
         [1-3]) ;;
         *)
-            echo "Archive holds unexpected files or is missing config." >&2
+            echo "The archive holds other files, or no config." >&2
             return 1
             ;;
     esac
@@ -391,7 +391,7 @@ archive_validate_and_unpack() {
         END { print (ok ? n : "BAD") }
     ')
     if [ "$av_mc" != "$av_nc" ]; then
-        echo "Archive holds unsupported or oversized files." >&2
+        echo "The archive holds a file of the wrong kind or too large." >&2
         return 1
     fi
     mkdir -p "$av_stage"
@@ -401,12 +401,12 @@ archive_validate_and_unpack() {
     fi
     for av_f in .config/infynitae/config .config/infynitae/panels.backup .face; do
         if [ -L "$av_stage/$av_f" ]; then
-            echo "Archive holds unsupported file type." >&2
+            echo "The archive holds a link in place of a file." >&2
             return 1
         fi
     done
     if [ ! -f "$av_stage/.config/infynitae/config" ]; then
-        echo "Archive is missing the config file." >&2
+        echo "The archive has no config file." >&2
         return 1
     fi
     av_bad=$(LC_ALL=C awk '
@@ -454,11 +454,11 @@ archive_validate_and_unpack() {
             }
         }
     ' "$av_stage/.config/infynitae/config") || {
-        echo "Failed to check config in archive." >&2
+        echo "Could not check the config in the archive." >&2
         return 1
     }
     if [ -n "$av_bad" ]; then
-        echo "Archive config has unsafe line $av_bad." >&2
+        echo "The config in the archive is not plain settings at line $av_bad." >&2
         return 1
     fi
     return 0
@@ -1298,7 +1298,7 @@ cmd_set() {
     # Security: restrict KEY strictly to alphanumeric and underscores
     case "$KEY" in
         *[!A-Za-z0-9_]*|"")
-            echo "Error: Invalid setting key '$KEY'. Keys may only contain letters, numbers, and underscores." >&2
+            echo "Not a setting name: '$KEY' (letters, digits and _ only)" >&2
             exit 1
             ;;
     esac
@@ -1354,7 +1354,7 @@ cmd_get() {
     # Security: restrict KEY strictly to alphanumeric and underscores
     case "$KEY" in
         *[!A-Za-z0-9_]*|"")
-            echo "Error: Invalid setting key '$KEY'" >&2
+            echo "Not a setting name: '$KEY' (letters, digits and _ only)" >&2
             exit 1
             ;;
     esac
