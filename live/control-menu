@@ -14,6 +14,23 @@ done
 
 have() { command -v "$1" >/dev/null 2>&1; }
 pick() { printf '%s\n' "$@" | $PICKER; }
+# Show column 1 of tab-separated rows (after any fixed header lines) in $PICKER; sets
+# PICKED to the raw choice and PICKED_ROW to the matched row (returns 1 if cancelled or extra).
+pick_row() {
+    _rows="$1"; shift
+    PICKED_ROW=""
+    PICKED=$( {
+        [ "$#" -gt 0 ] && printf '%s\n' "$@"
+        [ -n "$_rows" ] && printf '%s\n' "$_rows" | cut -f1
+    } | $PICKER)
+    [ -z "$PICKED" ] && return 1
+    for _extra in "$@"; do
+        [ "$PICKED" = "$_extra" ] && return 1
+    done
+    [ -n "$_rows" ] || return 1
+    PICKED_ROW=$(printf '%s\n' "$_rows" | CHOICE="$PICKED" awk -F'\t' '$1 == ENVIRON["CHOICE"] { print; exit }')
+    [ -n "$PICKED_ROW" ]
+}
 note() { have notify-send && notify-send -a Infynitae "$1" "${2:-}"; }
 in_terminal() { [ "$TERM_BIN" != "auto" ] && exec $TERM_BIN -e "$@"; note "No terminal found" "Set TERMINAL in the config"; }
 
@@ -25,19 +42,34 @@ wifi_menu() {
             [ "$(pick 'Turn Wi-Fi on')" = "Turn Wi-Fi on" ] && nmcli radio wifi on
             return
         fi
-        # IN-USE, SIGNAL, SECURITY, SSID; ':' inside an SSID is escaped by nmcli as '\:'
+        # "label<TAB>secured<TAB>ssid"; ':' inside an SSID is escaped by nmcli as '\:'
         list=$(nmcli -t -f IN-USE,SIGNAL,SECURITY,SSID dev wifi list --rescan auto 2>/dev/null \
-            | sed 's/\\:/\x1f/g' \
-            | awk -F: '$4 != "" { mark = ($1 == "*") ? "● " : "  "; lock = ($3 == "" || $3 == "--") ? "" : " [secured]";
-                         gsub("\x1f", ":", $4); printf "%s%s  %s%%%s\n", mark, $4, $2, lock }' | awk '!seen[$0]++')
-        choice=$(printf 'Turn Wi-Fi off\n%s\n' "$list" | $PICKER)
-        [ -z "$choice" ] && return
-        if [ "$choice" = "Turn Wi-Fi off" ]; then nmcli radio wifi off; return; fi
-        ssid=$(printf '%s' "$choice" | sed 's/^\(● \|  \)//; s/  [0-9]*%\( \[secured\]\)\{0,1\}$//')
+            | awk '{
+                n = 1; f[1] = ""; f[2] = ""; f[3] = ""; f[4] = ""
+                L = length($0)
+                for (i = 1; i <= L; i++) {
+                    c = substr($0, i, 1)
+                    if (c == "\\" && i < L) { i++; f[n] = f[n] substr($0, i, 1) }
+                    else if (c == ":" && n < 4) n++
+                    else f[n] = f[n] c
+                }
+                ssid = f[4]
+                if (ssid == "") next
+                sec = (f[3] == "" || f[3] == "--") ? 0 : 1
+                lbl = ssid; gsub(/\t/, " ", lbl)
+                lbl = lbl "  " f[2] "%" (sec ? " [secured]" : "") (f[1] == "*" ? "  Connected" : "")
+                if (!seen[lbl]++) printf "%s\t%d\t%s\n", lbl, sec, ssid
+            }')
+        if ! pick_row "$list" "Turn Wi-Fi off"; then
+            [ "$PICKED" = "Turn Wi-Fi off" ] && nmcli radio wifi off
+            return
+        fi
+        secured=$(printf '%s' "$PICKED_ROW" | cut -f2)
+        ssid=$(printf '%s' "$PICKED_ROW" | cut -f3-)
         # a known network connects as it is; a new secured one asks for its password
-        if nmcli -t -f NAME connection show | grep -qxF "$ssid"; then
+        if nmcli -t -f NAME connection show | grep -qxF -- "$ssid"; then
             nmcli connection up id "$ssid" >/dev/null 2>&1 && note "Connected" "$ssid" || note "Could not connect" "$ssid"
-        elif printf '%s' "$choice" | grep -q '\[secured\]$'; then
+        elif [ "$secured" = 1 ]; then
             case "$PICKER" in
                 fuzzel*) pass=$(printf '' | fuzzel --dmenu --password --prompt "Password for $ssid: ") ;;
                 *) in_terminal nmcli --ask dev wifi connect "$ssid" ;;
@@ -59,42 +91,50 @@ bt_menu() {
         [ "$(pick 'Turn Bluetooth on')" = "Turn Bluetooth on" ] && bluetoothctl power on >/dev/null
         return
     fi
+    # "label<TAB>connected<TAB>mac<TAB>name"
     devices=$(bluetoothctl devices Paired 2>/dev/null | while read -r _ mac name; do
+        [ -z "$mac" ] && continue
+        lbl=$(printf '%s' "$name" | tr '\t' ' ')
         if bluetoothctl info "$mac" 2>/dev/null | grep -q "Connected: yes"; then
-            printf '● %s\t%s\n' "$name" "$mac"
+            printf '%s  Connected\t1\t%s\t%s\n' "$lbl" "$mac" "$name"
         else
-            printf '  %s\t%s\n' "$name" "$mac"
+            printf '%s\t0\t%s\t%s\n' "$lbl" "$mac" "$name"
         fi
     done)
-    choice=$(printf 'Pair a new device…\nTurn Bluetooth off\n%s\n' "$devices" | $PICKER)
-    case "$choice" in
-        "") return ;;
-        "Turn Bluetooth off") bluetoothctl power off >/dev/null ;;
-        "Pair a new device…") in_terminal bluetoothctl ;;
-        *)
-            mac=$(printf '%s' "$choice" | awk -F'\t' '{print $2}')
-            name=$(printf '%s' "$choice" | awk -F'\t' '{print $1}' | sed 's/^\(● \|  \)//')
-            if printf '%s' "$choice" | grep -q '^●'; then
-                bluetoothctl disconnect "$mac" >/dev/null && note "Disconnected" "$name"
-            else
-                bluetoothctl connect "$mac" >/dev/null && note "Connected" "$name" || note "Could not connect" "$name"
-            fi
-            ;;
-    esac
+    if ! pick_row "$devices" "Pair a new device…" "Turn Bluetooth off"; then
+        case "$PICKED" in
+            "Turn Bluetooth off") bluetoothctl power off >/dev/null ;;
+            "Pair a new device…") in_terminal bluetoothctl ;;
+        esac
+        return
+    fi
+    connected=$(printf '%s' "$PICKED_ROW" | cut -f2)
+    mac=$(printf '%s' "$PICKED_ROW" | cut -f3)
+    name=$(printf '%s' "$PICKED_ROW" | cut -f4-)
+    if [ "$connected" = 1 ]; then
+        bluetoothctl disconnect "$mac" >/dev/null && note "Disconnected" "$name"
+    else
+        bluetoothctl connect "$mac" >/dev/null && note "Connected" "$name" || note "Could not connect" "$name"
+    fi
 }
 
 # ---- Sound output
 sound_menu() {
     default=$(pactl get-default-sink 2>/dev/null)
-    # "name<TAB>description" for every sink
-    sinks=$(pactl list sinks 2>/dev/null | awk -F': ' '/^\s*Name:/ {n=$2} /^\s*Description:/ {print n "\t" $2}')
-    choice=$(printf '%s\n' "$sinks" | while IFS="$(printf '\t')" read -r name desc; do
-        [ -z "$name" ] && continue
-        if [ "$name" = "$default" ]; then printf '● %s\n' "$desc"; else printf '  %s\n' "$desc"; fi
-    done | $PICKER)
-    [ -z "$choice" ] && return
-    desc=$(printf '%s' "$choice" | sed 's/^\(● \|  \)//')
-    name=$(printf '%s\n' "$sinks" | awk -F'\t' -v d="$desc" '$2 == d {print $1; exit}')
+    # "label<TAB>name<TAB>description" for every sink
+    sinks=$(pactl list sinks 2>/dev/null | DEF="$default" awk '
+        /^[ \t]*Name:[ \t]*/ { n = $0; sub(/^[ \t]*Name:[ \t]*/, "", n) }
+        /^[ \t]*Description:[ \t]*/ && n != "" {
+            d = $0; sub(/^[ \t]*Description:[ \t]*/, "", d)
+            lbl = d; gsub(/\t/, " ", lbl)
+            if (n == ENVIRON["DEF"]) lbl = lbl "  Active"
+            print lbl "\t" n "\t" d
+            n = ""
+        }
+    ')
+    pick_row "$sinks" || return
+    name=$(printf '%s' "$PICKED_ROW" | cut -f2)
+    desc=$(printf '%s' "$PICKED_ROW" | cut -f3-)
     [ -n "$name" ] && pactl set-default-sink "$name" && note "Sound output" "$desc"
 }
 
@@ -113,21 +153,20 @@ volumes() {
         /^\s*application\.name = / { sub(/^[^"]*"/, ""); sub(/"$/, ""); app = $0 }
         END { out() }'
 }
-volume_label() { awk -F'\t' '{ printf "%s · %s%s\n", $2, $3, ($4 == "yes") ? " (muted)" : "" }'; }
 volume_menu() {
     list=$(volumes)
     [ -z "$list" ] && { note "No sound output"; return; }
-    choice=$(printf '%s\n' "$list" | volume_label | $PICKER)
-    [ -z "$choice" ] && return
-    line=$(printf '%s\n' "$list" | while IFS= read -r l; do
-        [ "$(printf '%s\n' "$l" | volume_label)" = "$choice" ] && printf '%s\n' "$l" && break
-    done)
-    [ -z "$line" ] && return
-    target=$(printf '%s' "$line" | cut -f1)
-    name=$(printf '%s' "$line" | cut -f2)
-    current=$(printf '%s' "$line" | cut -f3 | tr -d '%')
+    rows=$(printf '%s\n' "$list" | awk -F'\t' '{
+        lbl = $2 " · " $3 ($4 == "yes" ? " (muted)" : "")
+        gsub(/\t/, " ", lbl)
+        print lbl "\t" $0
+    }')
+    pick_row "$rows" || return
+    target=$(printf '%s' "$PICKED_ROW" | cut -f2)
+    name=$(printf '%s' "$PICKED_ROW" | cut -f3)
+    current=$(printf '%s' "$PICKED_ROW" | cut -f4 | tr -d '%')
     if [ "$target" = @DEFAULT_SINK@ ]; then kind=sink; else kind=sink-input; fi
-    if [ "$(printf '%s' "$line" | cut -f4)" = yes ]; then mute_label="Unmute"; else mute_label="Mute"; fi
+    if [ "$(printf '%s' "$PICKED_ROW" | cut -f5)" = yes ]; then mute_label="Unmute"; else mute_label="Mute"; fi
     level=$(pick "100%" "75%" "50%" "25%" "+10%" "-10%" "$mute_label" | tr -d ' ')
     # +10% stops at 100%
     [ "$level" = "+10%" ] && [ "${current:-0}" -ge 90 ] && level="100%"
@@ -143,10 +182,15 @@ volume_menu() {
 # ---- Power mode
 power_menu() {
     current=$(powerprofilesctl get 2>/dev/null)
-    choice=$(powerprofilesctl list 2>/dev/null | sed -n 's/^[ *]*\([a-z-]*\):$/\1/p' | while read -r p; do
-        if [ "$p" = "$current" ]; then printf '● %s\n' "$p"; else printf '  %s\n' "$p"; fi
-    done | $PICKER)
-    [ -n "$choice" ] && powerprofilesctl set "$(printf '%s' "$choice" | sed 's/^\(● \|  \)//')"
+    profiles=$(powerprofilesctl list 2>/dev/null | CUR="$current" awk '
+        /^[ *]*[a-z-]+:$/ {
+            p = $0; sub(/^[ *]*/, "", p); sub(/:$/, "", p)
+            lbl = (p == ENVIRON["CUR"]) ? p "  Active" : p
+            print lbl "\t" p
+        }
+    ')
+    pick_row "$profiles" || return
+    powerprofilesctl set "$(printf '%s' "$PICKED_ROW" | cut -f2)"
 }
 
 # ---- Do not disturb
@@ -215,7 +259,9 @@ apps_list() {
         echo "===CLIENTS==="
         ss -xp 2>/dev/null | awk '
             /\/wayland-[0-9]+|@\/tmp\/\.X11-unix\/X/ { peer[$8] = 1 }
-            match($0, /users:\(\("([^"]+)",pid=([0-9]+)/, m) { pid[$6] = m[2] }
+            match($0, /users:\(\("[^"]+",pid=[0-9]+/) {
+                p = substr($0, RSTART, RLENGTH); sub(/.*,pid=/, "", p); pid[$6] = p
+            }
             END { for (i in peer) if (i in pid) print pid[i] }
         '
         busctl --user list --no-pager 2>/dev/null | awk '$3 ~ /^[0-9]+$/ && $4 == ENVIRON["USER"] { print $3 }'
@@ -284,13 +330,14 @@ apps_kill() {
 apps_menu() {
     list=$(apps_list)
     [ -z "$list" ] && { note "No background or tray apps running"; return; }
-    choice=$(printf '%s\n' "$list" | awk -F'\t' '{
-        mark = ($1 == "tray") ? "● " : "  "
-        printf "%s%s · %s · %s\n", mark, $2, $1, $3
-    }' | $PICKER)
-    [ -z "$choice" ] && return
-    app=$(printf '%s' "$choice" | sed 's/^\(● \|  \)//; s/ · .*$//')
-    state=$(printf '%s\n' "$list" | awk -F'\t' -v a="$app" '$2 == a { print $1; exit }')
+    rows=$(printf '%s\n' "$list" | awk -F'\t' '{
+        lbl = $2 " · " $1 " · " $3
+        gsub(/\t/, " ", lbl)
+        print lbl "\t" $1 "\t" $2
+    }')
+    pick_row "$rows" || return
+    state=$(printf '%s' "$PICKED_ROW" | cut -f2)
+    app=$(printf '%s' "$PICKED_ROW" | cut -f3-)
     if [ "$state" = "tray" ]; then
         action=$(pick "Quit $app" "Open $app" "Force kill $app")
     else
