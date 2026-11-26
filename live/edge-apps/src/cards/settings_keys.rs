@@ -194,7 +194,7 @@ const ACTIONS: &[BuiltinAction] = &[
     },
     BuiltinAction {
         action: "SAVE_REPLAY",
-        name: "Save instant replay",
+        name: "Save the replay",
         defaults: &["SUPER+ALT+C"],
         more: true,
     },
