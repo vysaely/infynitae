@@ -1,0 +1,187 @@
+#!/bin/sh
+# Check waiting Arch system packages and Infynitae git commits without root,
+# record counts for Settings > This PC, and notify once per count change.
+set -eu
+
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/infynitae"
+CONFIG_FILE="$CONFIG_DIR/config"
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/infynitae"
+STATUS_FILE="$STATE_DIR/update-status"
+NOTIFIED_FILE="$STATE_DIR/update-notified"
+
+read_update_check() {
+    if [ ! -r "$CONFIG_FILE" ]; then
+        printf 'true\n'
+        return
+    fi
+    (
+        set +u
+        UPDATE_CHECK=true
+        . "$CONFIG_FILE" >/dev/null 2>&1 || true
+        printf '%s\n' "${UPDATE_CHECK:-true}"
+    )
+}
+
+is_enabled() {
+    case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
+        0|false|no|off) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
+resolve_checkout() {
+    checkout_file="$CONFIG_DIR/checkout"
+    if [ -r "$checkout_file" ]; then
+        while IFS= read -r line || [ -n "$line" ]; do
+            trimmed=$(printf '%s' "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+            [ -z "$trimmed" ] && continue
+            case "$trimmed" in
+                \#*) continue ;;
+                '~/'*) trimmed="$HOME/${trimmed#\~/}" ;;
+                '$HOME/'*) trimmed="$HOME/${trimmed#\$HOME/}" ;;
+            esac
+            printf '%s\n' "$trimmed"
+            return
+        done < "$checkout_file"
+    fi
+    printf '%s/infynitae\n' "$HOME"
+}
+
+pluralize() {
+    n=$1
+    singular=$2
+    plural=$3
+    if [ "$n" -eq 1 ]; then
+        printf '%s %s' "$n" "$singular"
+    else
+        printf '%s %s' "$n" "$plural"
+    fi
+}
+
+format_waiting_message() {
+    sys=$1
+    infy=$2
+    if [ "$sys" -gt 0 ] && [ "$infy" -gt 0 ]; then
+        printf '%s and %s are waiting' \
+            "$(pluralize "$sys" "system update" "system updates")" \
+            "$(pluralize "$infy" "Infynitae change" "Infynitae changes")"
+    elif [ "$sys" -gt 0 ]; then
+        if [ "$sys" -eq 1 ]; then
+            printf '1 system update is waiting'
+        else
+            printf '%s system updates are waiting' "$sys"
+        fi
+    else
+        if [ "$infy" -eq 1 ]; then
+            printf '1 Infynitae change is waiting'
+        else
+            printf '%s Infynitae changes are waiting' "$infy"
+        fi
+    fi
+}
+
+update_check_val=$(read_update_check)
+if ! is_enabled "$update_check_val"; then
+    rm -f "$STATUS_FILE" "$NOTIFIED_FILE"
+    exit 0
+fi
+
+mkdir -p "$STATE_DIR"
+
+sys_count=""
+if command -v checkupdates >/dev/null 2>&1; then
+    checkupdates_state="present"
+    cu_tmp="$STATE_DIR/checkupdates.tmp.$$"
+    if checkupdates > "$cu_tmp" 2>/dev/null; then
+        sys_count=$(awk 'NF { n++ } END { print n + 0 }' "$cu_tmp")
+    else
+        rc=$?
+        if [ "$rc" -eq 2 ]; then
+            sys_count=0
+        fi
+    fi
+    rm -f "$cu_tmp"
+else
+    checkupdates_state="missing"
+fi
+
+infy_count=""
+repo=$(resolve_checkout)
+if [ -d "$repo" ] && command -v git >/dev/null 2>&1 \
+    && git -C "$repo" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    branch=$(git -C "$repo" branch --show-current 2>/dev/null || true)
+    fetch_ok=0
+    if [ -n "$branch" ]; then
+        if GIT_TERMINAL_PROMPT=0 git -C "$repo" fetch --quiet origin "$branch" >/dev/null 2>&1; then
+            fetch_ok=1
+        fi
+        if [ "$fetch_ok" -eq 1 ]; then
+            infy_count=$(git -C "$repo" rev-list --count HEAD..FETCH_HEAD 2>/dev/null || true)
+        elif git -C "$repo" rev-parse --verify "origin/$branch" >/dev/null 2>&1; then
+            infy_count=$(git -C "$repo" rev-list --count "HEAD..origin/$branch" 2>/dev/null || true)
+        fi
+    else
+        if GIT_TERMINAL_PROMPT=0 git -C "$repo" fetch --quiet origin >/dev/null 2>&1; then
+            fetch_ok=1
+        fi
+        if [ "$fetch_ok" -eq 1 ]; then
+            infy_count=$(git -C "$repo" rev-list --count HEAD..FETCH_HEAD 2>/dev/null || true)
+        fi
+    fi
+fi
+
+# Persist before waiting on notify-send so Settings > This PC sees counts at once.
+checked_at=$(date +%s 2>/dev/null || printf '0')
+status_tmp="$STATE_DIR/update-status.tmp.$$"
+{
+    printf 'system=%s\n' "$sys_count"
+    printf 'infynitae=%s\n' "$infy_count"
+    printf 'checkupdates=%s\n' "$checkupdates_state"
+    printf 'checked_at=%s\n' "$checked_at"
+} > "$status_tmp"
+mv -f "$status_tmp" "$STATUS_FILE"
+
+sys_n=$sys_count
+infy_n=$infy_count
+case "$sys_n" in ''|*[!0-9]*) sys_n=0 ;; esac
+case "$infy_n" in ''|*[!0-9]*) infy_n=0 ;; esac
+
+if [ "$sys_n" -eq 0 ] && [ "$infy_n" -eq 0 ]; then
+    rm -f "$NOTIFIED_FILE"
+    exit 0
+fi
+
+current_pair="$sys_n:$infy_n"
+prev_pair=""
+if [ -r "$NOTIFIED_FILE" ]; then
+    prev_pair=$(cat "$NOTIFIED_FILE" 2>/dev/null || true)
+fi
+if [ "$current_pair" = "$prev_pair" ]; then
+    exit 0
+fi
+
+command -v notify-send >/dev/null 2>&1 || exit 0
+
+notified_tmp="$STATE_DIR/update-notified.tmp.$$"
+printf '%s\n' "$current_pair" > "$notified_tmp"
+mv -f "$notified_tmp" "$NOTIFIED_FILE"
+
+body=$(format_waiting_message "$sys_n" "$infy_n")
+action=""
+notify_rc=0
+if command -v timeout >/dev/null 2>&1; then
+    action=$(timeout "${INFYNITAE_UPDATE_NOTIFY_WAIT:-600}" \
+        notify-send -a Infynitae -A update=Update "Updates waiting" "$body" 2>/dev/null) || notify_rc=$?
+else
+    action=$(notify-send -a Infynitae -A update=Update "Updates waiting" "$body" 2>/dev/null) || notify_rc=$?
+fi
+
+if [ "$notify_rc" -ne 0 ] && [ "$notify_rc" -ne 124 ]; then
+    # Retry next run when notification delivery itself fails (e.g. D-Bus unavailable).
+    rm -f "$NOTIFIED_FILE"
+    exit 0
+fi
+
+if [ "$action" = "update" ]; then
+    sh "$HOME/.local/bin/xdg-terminal-exec" infynitae-update || true
+fi

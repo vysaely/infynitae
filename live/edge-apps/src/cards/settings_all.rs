@@ -15,9 +15,9 @@
 
 use crate::card::{Action, Button, Card, Cx, Event, Hits, Rect, Status};
 use crate::cards::{
-    settings, settings_advanced, settings_apps, settings_display, settings_games, settings_input,
-    settings_keys, settings_lock, settings_look, settings_privacy, settings_recording,
-    settings_rows, settings_windows,
+    settings, settings_about, settings_advanced, settings_apps, settings_display, settings_games,
+    settings_input, settings_keys, settings_lock, settings_look, settings_privacy,
+    settings_recording, settings_rows, settings_windows,
 };
 use crate::draw::{self, Text};
 use crate::provider::{CardKind, Size};
@@ -1230,6 +1230,7 @@ pub(crate) fn on_any_card(key: &str) -> bool {
             settings_apps::KEYS,
             settings_privacy::KEYS,
             settings_recording::KEYS,
+            settings_about::KEYS,
         ]
         .into_iter()
         .any(|ks| ks.contains(&key))

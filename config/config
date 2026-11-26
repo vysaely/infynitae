@@ -563,6 +563,11 @@ DRIVE_NAMES="roman"
     # default: roman
     # options: roman  · label (mounted under /run/media by the drive's label)
 
+UPDATE_CHECK="true"
+    # Check for waiting Arch and Infynitae updates every 6 hours and show them in This PC [use]
+    # default: true
+    # options: true  · false
+
 ENABLE_EDGE="true"
     # The edge: panels that open from the screen's edges (below) [reload] (ENABLE_ISLAND, its old
     # name, still works)

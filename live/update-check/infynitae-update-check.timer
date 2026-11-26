@@ -1,0 +1,9 @@
+[Unit]
+Description=Check for waiting Infynitae and system updates after login and every 6 hours
+
+[Timer]
+OnStartupSec=3min
+OnUnitActiveSec=6h
+
+[Install]
+WantedBy=timers.target

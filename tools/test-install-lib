@@ -445,6 +445,41 @@ check "idempotent run does not re-enable active timers" \
 check "install.sh --help lists --no-disk-guard" \
     "$("$REPO_DIR/install.sh" --help | grep -c -- '--no-disk-guard' || true)" "1"
 
+# 10i. install_update_check: dry-run leaves home empty, normal run installs and enables timer,
+# identical rerun skips daemon-reload and does not re-enable active timer.
+DG_CALL='install_update_check "'"$REPO_DIR"'" --dry-run' run_dg uc-dry
+check "update-check dry-run: no systemd calls" "$(cat "$TMP/dg-uc-dry.log")" ""
+check "update-check dry-run: timer not written" \
+    "$([ -f "$TMP/dg-home-uc-dry/.config/systemd/user/infynitae-update-check.timer" ] && echo yes || echo no)" "no"
+
+DG_CALL='install_update_check "'"$REPO_DIR"'"' run_dg uc-on
+check "update-check: service installed" \
+    "$([ -f "$TMP/dg-home-uc-on/.config/systemd/user/infynitae-update-check.service" ] && echo yes || echo no)" "yes"
+check "update-check: timer installed" \
+    "$([ -f "$TMP/dg-home-uc-on/.config/systemd/user/infynitae-update-check.timer" ] && echo yes || echo no)" "yes"
+check "update-check: user daemon-reload run" \
+    "$(grep -c '^systemctl --user daemon-reload$' "$TMP/dg-uc-on.log" || true)" "1"
+check "update-check: user timer enabled" \
+    "$(grep -c '^systemctl --user enable --now infynitae-update-check\.timer$' "$TMP/dg-uc-on.log" || true)" "1"
+
+DG_CALL='install_update_check "'"$REPO_DIR"'"
+: > "'"$TMP"'/dg-uc-idem.log"
+DG_UNIT_ACTIVE_EXIT=0 install_update_check "'"$REPO_DIR"'"' run_dg uc-idem
+check "update-check idempotent: no reload when unchanged" \
+    "$(grep -c '^systemctl --user daemon-reload$' "$TMP/dg-uc-idem.log" || true)" "0"
+check "update-check idempotent: active timer not re-enabled" \
+    "$(grep -c '^systemctl --user enable ' "$TMP/dg-uc-idem.log" || true)" "0"
+
+# 10j. install_programs installs infynitae-update-check into ~/.local/bin
+mkdir -p "$TMP/prog-uc-src/target/release" "$TMP/prog-uc-src/live" "$TMP/prog-uc-home"
+printf '#!/bin/sh\nexit 0\n' > "$TMP/prog-uc-src/live/build-satellite.sh"
+cp "$TMP/prog-uc-src/live/build-satellite.sh" "$TMP/prog-uc-src/live/build-helpers.sh"
+cp "$REPO_DIR/live/infynitae-update-check" "$TMP/prog-uc-src/live/infynitae-update-check"
+HOME="$TMP/prog-uc-home" CARGO_TARGET_DIR=target bash -c \
+    '. "'"$REPO_DIR"'/live/install-lib.sh"; install_programs "'"$TMP"'/prog-uc-src" >/dev/null 2>&1'
+check "install_programs installs infynitae-update-check" \
+    "$([ -x "$TMP/prog-uc-home/.local/bin/infynitae-update-check" ] && echo yes || echo no)" "yes"
+
 # 11. install_programs replaces the compositor only when its content changed, and says so in
 # COMPOSITOR_CHANGED (infynitae-update tells from it whether a restart brings anything). A source
 # with only the compositor and build scripts that do nothing; the other programs are missing.

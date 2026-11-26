@@ -286,6 +286,7 @@ live/infynitae-sleep-lock infynitae-sleep-lock
 live/infynitae-automount infynitae-automount
 live/infynitae-format-drive infynitae-format-drive
 live/infynitae-disk-guard infynitae-disk-guard
+live/infynitae-update-check infynitae-update-check
 live/windows-run infynitae-windows-run
 live/android-run infynitae-android-run
 LIST
@@ -468,6 +469,32 @@ install_disk_guard() {
     install_btrfs_guard "$src" "$dry"
 }
 
+install_update_check() {
+    src="$1"
+    dry="${2:-}"
+    svc="$src/live/update-check/infynitae-update-check.service"
+    tmr="$src/live/update-check/infynitae-update-check.timer"
+    unit_dir="$HOME/.config/systemd/user"
+    [ -f "$svc" ] && [ -f "$tmr" ] || return 0
+    if [ "$dry" = "--dry-run" ]; then
+        return 0
+    fi
+    mkdir -p "$unit_dir"
+    reload_user=false
+    for unit_src in "$svc" "$tmr"; do
+        base=$(basename "$unit_src")
+        if [ ! -f "$unit_dir/$base" ] || ! cmp -s "$unit_src" "$unit_dir/$base"; then
+            cp "$unit_src" "$unit_dir/$base"
+            reload_user=true
+        fi
+    done
+    [ "$reload_user" = true ] && { systemctl --user daemon-reload 2>/dev/null || true; }
+    if ! systemctl --user is-enabled --quiet infynitae-update-check.timer 2>/dev/null \
+        || ! systemctl --user is-active --quiet infynitae-update-check.timer 2>/dev/null; then
+        systemctl --user enable --now infynitae-update-check.timer 2>/dev/null || true
+    fi
+}
+
 # What outside the home folder Infynitae needs, for this machine.
 install_system_files() {
     local src="$1" tmp
@@ -566,6 +593,7 @@ GUARD
     sh "$src/live/setup-autologin.sh" --autostart >/dev/null 2>&1 || true
     install_speed_settings "$src"
     install_disk_guard "$src"
+    install_update_check "$src"
 }
 
 # The parts' own apps open their files: folders in Thunar (not a terminal that also says it opens
