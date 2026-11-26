@@ -33,6 +33,13 @@ edges on other hardware.
 - **RustDesk as a host** (seen working on this machine): the picture through the portal, input
   through its own virtual devices. The session restarts RustDesk's service once the compositor
   runs, which needs the polkit rule in `live/remote/` (the installer adds it).
+- **Login screen** (`sudo infynitae-login-screen on`, 2026-11-26): greetd starts Infynitae as its
+  greeter account with the lock screen in greeter mode: the last user filled in (Tab: another
+  user), the password checked by greetd, which opens the session and starts the desktop as that
+  user; the keyring opens with the same password, and START_LOCKED does not ask again. A crashed
+  login screen starts again; `off` brings the text login back, and tty2 keeps one either way.
+  Tried in the test VM (boot, wrong and right password, log out and in, a killed login screen),
+  not yet on the owner's PC.
 - **Staying awake:** apps that play video or a game keep the screens on, both Wayland apps
   (idle-inhibit) and others over D-Bus (`org.freedesktop.ScreenSaver`). Locking still turns
   the screens off on time.
