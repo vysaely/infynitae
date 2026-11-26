@@ -56,6 +56,7 @@ jobs:
       - run: sh tools/test-sleep-lock
       - run: sh tools/test-recorder-backend
       - run: sh tools/test-edge-pick
+      - run: sh tools/test-control-menu
       - run: sh tools/test-screenshare-chooser
       - run: sh tools/test-mako-config
       - run: sh tools/test-config-renames

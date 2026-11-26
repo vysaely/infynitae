@@ -1,0 +1,308 @@
+#!/bin/sh
+# tools/test-control-menu: live/control-menu with stand-in nmcli, bluetoothctl, pactl,
+# powerprofilesctl, fuzzel, and notify-send in a throwaway HOME and PATH.
+set -eu
+
+REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
+CM="$REPO_DIR/live/control-menu"
+TMP=$(mktemp -d "/tmp/infynitae-test-control-menu.XXXXXX")
+trap 'rm -rf "$TMP"' EXIT INT TERM
+
+BIN="$TMP/bin"
+HOMEDIR="$TMP/home"
+RUN="$TMP/run"
+LOG="$TMP/calls"
+mkdir -p "$BIN" "$HOMEDIR/.config/infynitae" "$RUN"
+chmod 700 "$RUN"
+
+cat > "$BIN/fuzzel" << 'EOF'
+#!/bin/sh
+for a in "$@"; do
+    if [ "$a" = "--password" ]; then
+        cat >/dev/null
+        echo "pw:$*" >> "$CALL_LOG"
+        [ -n "${MOCK_PASS:-}" ] && printf '%s\n' "$MOCK_PASS"
+        exit 0
+    fi
+done
+idx=1
+[ -f "$PICK_IDX" ] && idx=$(($(cat "$PICK_IDX") + 1))
+echo "$idx" > "$PICK_IDX"
+cat > "$MENU_DIR/menu.$idx"
+want=$(sed -n "${idx}p" "$PICKS_FILE" 2>/dev/null || true)
+[ -n "$want" ] && grep -Fx -- "$want" "$MENU_DIR/menu.$idx" | head -n 1 || true
+EOF
+
+cat > "$BIN/notify-send" << 'EOF'
+#!/bin/sh
+echo "notify:$*" >> "$CALL_LOG"
+EOF
+
+cat > "$BIN/nmcli" << 'EOF'
+#!/bin/sh
+echo "nmcli:$*" >> "$CALL_LOG"
+case "$*" in
+    "radio wifi")
+        printf '%s\n' "${WIFI_RADIO:-enabled}"
+        ;;
+    "-t -f IN-USE,SIGNAL,SECURITY,SSID dev wifi list --rescan auto")
+        cat "$WIFI_LIST_FILE"
+        ;;
+    "-t -f NAME connection show")
+        [ -f "$WIFI_SAVED_FILE" ] && cat "$WIFI_SAVED_FILE"
+        ;;
+esac
+EOF
+
+cat > "$BIN/bluetoothctl" << 'EOF'
+#!/bin/sh
+echo "bt:$*" >> "$CALL_LOG"
+case "$*" in
+    show)
+        printf 'Controller 00:00:00:00:00:01\n\tPowered: %s\n' "${BT_POWERED:-yes}"
+        ;;
+    "devices Paired")
+        cat "$BT_PAIRED_FILE"
+        ;;
+    info\ *)
+        mac=$2
+        if grep -qxF "$mac" "$BT_CONN_FILE" 2>/dev/null; then
+            printf 'Device %s\n\tConnected: yes\n' "$mac"
+        else
+            printf 'Device %s\n\tConnected: no\n' "$mac"
+        fi
+        ;;
+esac
+EOF
+
+cat > "$BIN/pactl" << 'EOF'
+#!/bin/sh
+echo "pactl:$*" >> "$CALL_LOG"
+case "$*" in
+    get-default-sink)
+        printf '%s\n' "${DEFAULT_SINK:-}"
+        ;;
+    "list sinks")
+        cat "$SINKS_FILE"
+        ;;
+    "get-sink-volume @DEFAULT_SINK@")
+        printf 'Volume: front-left: 39321 /  60%% / -13.31 dB\n'
+        ;;
+    "get-sink-mute @DEFAULT_SINK@")
+        printf 'Mute: no\n'
+        ;;
+    "list sink-inputs")
+        ;;
+esac
+EOF
+
+cat > "$BIN/powerprofilesctl" << 'EOF'
+#!/bin/sh
+echo "power:$*" >> "$CALL_LOG"
+case "$1" in
+    get) printf '%s\n' "${POWER_CUR:-balanced}" ;;
+    list) cat "$POWER_LIST_FILE" ;;
+esac
+EOF
+
+cat > "$BIN/infynitae" << 'EOF'
+#!/bin/sh
+printf '{}\n'
+EOF
+
+cat > "$BIN/ss" << 'EOF'
+#!/bin/sh
+[ -f "$SS_FILE" ] && cat "$SS_FILE"
+EOF
+
+cat > "$BIN/busctl" << 'EOF'
+#!/bin/sh
+exit 0
+EOF
+
+cat > "$BIN/ps" << 'EOF'
+#!/bin/sh
+[ -f "$PS_FILE" ] && cat "$PS_FILE"
+EOF
+
+chmod +x "$BIN"/*
+
+fail=0
+check() {
+    if [ "$2" = "$3" ]; then
+        echo "ok   $1"
+    else
+        echo "FAIL $1: expected [$3], got [$2]"
+        fail=1
+    fi
+}
+
+has_line() {
+    grep -qxF -- "$2" "$1" 2>/dev/null && echo yes || echo no
+}
+
+run_menu() {
+    : > "$LOG"
+    rm -rf "$TMP/pick_idx" "$TMP/menus"
+    mkdir -p "$TMP/menus"
+    env -i HOME="$HOMEDIR" XDG_CONFIG_HOME="$HOMEDIR/.config" XDG_RUNTIME_DIR="$RUN" \
+        PATH="$BIN:/usr/bin:/bin" USER="testuser" \
+        CALL_LOG="$LOG" PICK_IDX="$TMP/pick_idx" MENU_DIR="$TMP/menus" PICKS_FILE="$TMP/picks" \
+        WIFI_LIST_FILE="$TMP/wifi.list" WIFI_SAVED_FILE="$TMP/wifi.saved" \
+        BT_PAIRED_FILE="$TMP/bt.paired" BT_CONN_FILE="$TMP/bt.conn" \
+        SINKS_FILE="$TMP/sinks" POWER_LIST_FILE="$TMP/power.list" \
+        SS_FILE="$TMP/ss" PS_FILE="$TMP/ps" \
+        MOCK_PASS="${MOCK_PASS:-}" DEFAULT_SINK="${DEFAULT_SINK:-}" \
+        POWER_CUR="${POWER_CUR:-balanced}" WIFI_RADIO="${WIFI_RADIO:-enabled}" \
+        BT_POWERED="${BT_POWERED:-yes}" \
+        sh "$CM" "$@" >/dev/null 2>&1 || true
+}
+
+# ---- 1. Wi-Fi: "Connected" after the name, no "●" prefix, SSIDs with "●", "Connected", "[secured]", ":"
+cat > "$TMP/wifi.list" << 'EOF'
+*:85:WPA2:Home
+ :60::● Cafe
+ :70:WPA2:Cafe  Connected
+ :50::Office [secured]
+ :40:WPA2:My\:Colon
+EOF
+cat > "$TMP/wifi.saved" << 'EOF'
+Home
+Cafe  Connected
+EOF
+
+printf '%s\n' "● Cafe  60%" > "$TMP/picks"
+run_menu wifi
+check "wifi: active network shows Connected after the name" \
+    "$(has_line "$TMP/menus/menu.1" "Home  85% [secured]  Connected")" yes
+check "wifi: no line starts with a bullet mark added by control-menu" \
+    "$(grep -c '^● Home' "$TMP/menus/menu.1" || true)" 0
+check "wifi: network named '● Cafe' keeps its name without extra mark" \
+    "$(has_line "$TMP/menus/menu.1" "● Cafe  60%")" yes
+check "wifi: network named 'Cafe  Connected' is not marked connected" \
+    "$(has_line "$TMP/menus/menu.1" "Cafe  Connected  70% [secured]")" yes
+check "wifi: picking '● Cafe' connects to exact SSID '● Cafe'" \
+    "$(grep '^nmcli:dev wifi connect ' "$LOG" || true)" "nmcli:dev wifi connect ● Cafe"
+
+printf '%s\n' "Cafe  Connected  70% [secured]" > "$TMP/picks"
+run_menu wifi
+check "wifi: picking 'Cafe  Connected' passes exact SSID to nmcli" \
+    "$(grep '^nmcli:connection up ' "$LOG" || true)" "nmcli:connection up id Cafe  Connected"
+
+printf '%s\n' "Office [secured]  50%" > "$TMP/picks"
+run_menu wifi
+check "wifi: open network named 'Office [secured]' does not ask for a password" \
+    "$(grep -c '^pw:' "$LOG" || true)" 0
+check "wifi: and connects to exact SSID 'Office [secured]'" \
+    "$(grep '^nmcli:dev wifi connect ' "$LOG" || true)" "nmcli:dev wifi connect Office [secured]"
+
+printf '%s\n' "My:Colon  40% [secured]" > "$TMP/picks"
+MOCK_PASS="secret123" run_menu wifi
+check "wifi: SSID with escaped colon asks password and connects with colon restored" \
+    "$(grep '^nmcli:dev wifi connect ' "$LOG" || true)" "nmcli:dev wifi connect My:Colon password secret123"
+MOCK_PASS=""
+
+cat > "$TMP/wifi.list" << 'EOF'
+*:60::● Cafe
+*:70:WPA2:Cafe Connected
+EOF
+: > "$TMP/picks"
+run_menu wifi
+check "wifi: active network named '● Cafe' says Connected, not '● ● Cafe'" \
+    "$(has_line "$TMP/menus/menu.1" "● Cafe  60%  Connected")" yes
+check "wifi: active network named 'Cafe Connected' says Connected" \
+    "$(has_line "$TMP/menus/menu.1" "Cafe Connected  70% [secured]  Connected")" yes
+
+printf '%s\n' "Turn Wi-Fi off" > "$TMP/picks"
+run_menu wifi
+check "wifi: Turn Wi-Fi off disables radio" \
+    "$(grep '^nmcli:radio wifi off' "$LOG" || true)" "nmcli:radio wifi off"
+
+# ---- 2. Bluetooth: "Connected" after the name, no "●", no MAC in menu, "Connected" in name stays disconnected
+cat > "$TMP/bt.paired" << 'EOF'
+Device AA:BB:CC:DD:EE:01 Sony WH-1000XM5
+Device AA:BB:CC:DD:EE:02 ● Buds
+Device AA:BB:CC:DD:EE:03 My Connected Speaker
+EOF
+echo "AA:BB:CC:DD:EE:01" > "$TMP/bt.conn"
+
+printf '%s\n' "My Connected Speaker" > "$TMP/picks"
+run_menu bluetooth
+check "bt: connected device shows Connected after name" \
+    "$(has_line "$TMP/menus/menu.1" "Sony WH-1000XM5  Connected")" yes
+check "bt: MAC addresses are not shown in the menu" \
+    "$(grep -c 'AA:BB:CC:DD:EE' "$TMP/menus/menu.1" || true)" 0
+check "bt: disconnected 'My Connected Speaker' connects instead of disconnecting" \
+    "$(grep '^bt:connect \|^bt:disconnect ' "$LOG" || true)" "bt:connect AA:BB:CC:DD:EE:03"
+check "bt: notify shows Connected with exact device name" \
+    "$(grep '^notify:' "$LOG" || true)" "notify:-a Infynitae Connected My Connected Speaker"
+
+printf '%s\n' "● Buds" > "$TMP/picks"
+run_menu bluetooth
+check "bt: disconnected '● Buds' keeps its name and connects" \
+    "$(grep '^bt:connect ' "$LOG" || true)" "bt:connect AA:BB:CC:DD:EE:02"
+
+printf '%s\n' "Sony WH-1000XM5  Connected" > "$TMP/picks"
+run_menu bluetooth
+check "bt: connected device disconnects by MAC" \
+    "$(grep '^bt:disconnect ' "$LOG" || true)" "bt:disconnect AA:BB:CC:DD:EE:01"
+check "bt: notify shows Disconnected with exact device name" \
+    "$(grep '^notify:' "$LOG" || true)" "notify:-a Infynitae Disconnected Sony WH-1000XM5"
+
+printf '%s\n' "Turn Bluetooth off" > "$TMP/picks"
+run_menu bluetooth
+check "bt: Turn Bluetooth off powers off" \
+    "$(grep '^bt:power off' "$LOG" || true)" "bt:power off"
+
+# ---- 3. Sound output: plain "Active" after the name, no "●"
+cat > "$TMP/sinks" << 'EOF'
+	Name: sink.usb
+	Description: USB: Headphones ●
+	Name: sink.hdmi
+	Description: HDMI Active
+EOF
+printf '%s\n' "HDMI Active" > "$TMP/picks"
+DEFAULT_SINK="sink.usb" run_menu sound
+check "sound: default sink shows Active after description without bullet" \
+    "$(has_line "$TMP/menus/menu.1" "USB: Headphones ●  Active")" yes
+check "sound: picking 'HDMI Active' sets sink.hdmi" \
+    "$(grep '^pactl:set-default-sink ' "$LOG" || true)" "pactl:set-default-sink sink.hdmi"
+DEFAULT_SINK=""
+
+# ---- 4. Power mode: plain "Active" after the profile, no "●"
+cat > "$TMP/power.list" << 'EOF'
+  performance:
+* balanced:
+  power-saver:
+EOF
+: > "$TMP/ss"
+: > "$TMP/ps"
+printf 'Power mode\nperformance\n' > "$TMP/picks"
+POWER_CUR="balanced" run_menu
+check "power: current profile shows Active after name without bullet" \
+    "$(has_line "$TMP/menus/menu.2" "balanced  Active")" yes
+check "power: picking performance runs powerprofilesctl set performance" \
+    "$(grep '^power:set ' "$LOG" || true)" "power:set performance"
+
+# ---- 5. Tray apps: no "●" prefix, parses app and state from non-visible fields
+cat > "$TMP/ss" << 'EOF'
+u_str ESTAB 0 0 /run/user/1000/wayland-0 12345 * 54321
+u_str ESTAB 0 0 * 54321 * 12345 users:(("my●app",pid=4242,fd=3))
+EOF
+cat > "$TMP/ps" << 'EOF'
+4242 1 10240 my●app
+EOF
+printf 'my●app · tray · 10 MB\n' > "$TMP/picks"
+run_menu apps
+check "apps: tray row has no bullet prefix" \
+    "$(has_line "$TMP/menus/menu.1" "my●app · tray · 10 MB")" yes
+check "apps: picking tray app offers Open without sed parsing" \
+    "$(has_line "$TMP/menus/menu.2" "Open my●app")" yes
+
+# ---- 6. Volume: pick_row selects target cleanly
+printf 'All sound · 60%%\n50%%\n' > "$TMP/picks"
+run_menu volume
+check "volume: sets default sink to 50%" \
+    "$(grep '^pactl:set-sink-volume ' "$LOG" || true)" "pactl:set-sink-volume @DEFAULT_SINK@ 50%"
+
+[ "$fail" -eq 0 ] && echo "test-control-menu: passed" || { echo "test-control-menu: FAILED"; exit 1; }
