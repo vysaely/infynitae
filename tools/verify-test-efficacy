@@ -1495,9 +1495,9 @@ CONTROLS = [
      "                if self.input.interaction.active() {\n                    self.input.interaction = Interaction::Idle;\n                    Vec::new()\n",
      "infynitae-backend-headless", ["--test", "t1_interaction_cancel"], "an_escape_cancel_runs_the_reconciliation_the_pan_deferred"),
     # --- 2026-10-18 audit Q-B3 / OB-54: a oneshot constraint Smithay ended stays ended in Core
-    ("Q-B3 OB-54 / INV-INPUT-5: Core re-activates a oneshot lock that Smithay ended and destroyed", f"{WAYLAND}/outputs.rs",
-     "        self.drop_constraints_smithay_destroyed();\n        self.sync_wlr_toplevels();\n    }",
-     "        self.sync_wlr_toplevels();\n    }",
+    ("Q-B3 OB-54 / INV-INPUT-5: Core holds a oneshot lock as persistent and re-activates it after Smithay ended it", f"{WAYLAND}/handlers.rs",
+     "                let lifetime = if c.lifetime() == WEnum::Value(Lifetime::Oneshot) {",
+     "                let lifetime = if false {",
      "infynitae-backend-headless", ["--test", "t1_constraint_lifetime"], "an_ended_oneshot_lock_is_never_activated_again"),
     # --- 2026-10-18 audit Q-P1: client button events allocate nothing (INV-ALLOC-1 input intake, OB-42)
     ("Q-P1 INV-ALLOC-1: a client button release builds its effects in a new Vec", f"{CORE}/entry/pointer_input.rs",

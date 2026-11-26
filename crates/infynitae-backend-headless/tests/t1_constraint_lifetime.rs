@@ -2,11 +2,11 @@
 //! (`zwp_pointer_constraints_v1`: the constraint is destroyed after a oneshot deactivation), and
 //! Core's constraint state must agree with Smithay's.
 //!
-//! Smithay 0.7.0 keeps a constraint's lifetime private (`PointerConstraint::lifetime` is not
-//! `pub`), so the adapter cannot report it and reports every constraint as persistent. A oneshot
-//! lock that Smithay ends through `leave()` (the delivered pointer focus changes in the batch that
-//! ends it, W-SM-4a) is destroyed by Smithay, while Core keeps it pending and later activates it
-//! again: Core then believes in a lock the client no longer has, and withholds absolute motion.
+//! The adapter reports the lifetime the client asked for (`PointerConstraint::lifetime`, Smithay
+//! patch P7). A oneshot lock that Smithay ends through `leave()` (the delivered pointer focus
+//! changes in the batch that ends it, W-SM-4a) is destroyed by Smithay; if Core held it as
+//! persistent it would keep it pending and later activate it again, believing in a lock the
+//! client no longer has, and withhold absolute motion.
 //!
 //! Path: x8, W focused, a oneshot lock at W-local (630, 520). A pan moves W 1300 px to the left;
 //! at the release the lock point is no longer observable, so the lock ends, and the pointer, which
@@ -18,6 +18,7 @@ mod common;
 use common::input::*;
 use infynitae_backend_headless::set_focus;
 use infynitae_core::input::bindings::BTN_MIDDLE;
+use infynitae_core::pointer::ConstraintLifetime;
 use smithay::wayland::pointer_constraints::with_pointer_constraint;
 
 fn smithay_has_constraint(r: &Rig) -> bool {
@@ -51,9 +52,10 @@ fn an_ended_oneshot_lock_is_never_activated_again() {
     r.ls.probe.lock_pointer(&qh, 0, true);
     r.ls.pump();
     r.frame();
-    assert!(
-        r.ls.state.core().constraint().is_some(),
-        "the lock is active"
+    assert_eq!(
+        r.ls.state.core().constraint().map(|c| c.lifetime),
+        Some(ConstraintLifetime::Oneshot),
+        "the lock is active, with the lifetime the client asked for"
     );
     assert!(smithay_has_constraint(&r));
 

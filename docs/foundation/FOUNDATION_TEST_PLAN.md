@@ -725,7 +725,7 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 - **Dependencies:** INC-5 (seam), INC-10 (fit as the trigger)
 - **Blocks:** none assigned (pre-existing since INC-5; proposed for change control in the C12.F17 package)
 - **Origin:** INC-10 independent exit review follow-up (2026-10-18)
-- **History:** C12.F17 (2026-10-20): owner decision 2026-10-19: keep the adapter workaround; W-SM-21 registered; no Smithay patch now. Stays OPEN (its pass criterion asks for the requested lifetime in Core).
+- **History:** C12.F17 (2026-10-20): owner decision 2026-10-19: keep the adapter workaround; W-SM-21 registered; no Smithay patch now. Stays OPEN (its pass criterion asks for the requested lifetime in Core). 2026-11-26: Smithay patch P7 exposes `PointerConstraint::lifetime`; `new_constraint` reports the requested lifetime, the workaround is removed, and the seeded control forces the lifetime to persistent (`an_ended_oneshot_lock_is_never_activated_again` asserts Core holds `Oneshot`). Stays OPEN: the oneshot confinement, the fit trigger and the true-position count of the pass criterion have no test yet.
 
 ### OB-55
 - **Status:** OPEN

@@ -375,7 +375,7 @@ Status vocabulary:
 
 ### W-SM-18
 - **Quirk:** a buffer committed on an xdg surface that has not acknowledged a configure is answered with `xdg_surface.error` **1** (`not_constructed`, "Surface has not been configured yet") by `ToplevelSurface::ensure_configured` / `PopupSurface::ensure_configured`; xdg-shell names **3** (`unconfigured_buffer`). Upstream defect of Smithay 0.7.0 (2025-06-24, the pinned version); fixed upstream by commit `641d2ad` ("wayland/shell/xdg: Track configured state through MultiCache last_acked", PR #1817, merged 2025-09-17), which removes `ensure_configured` and posts `UnconfiguredBuffer` from pre-commit hooks. No released Smithay contains the fix as of 2026-10-14
-- **Infynitae response:** none: the client is disconnected either way and nothing else differs. No downstream patch. The adapter cannot post the right code itself (Smithay 0.7.0 exposes no `xdg_surface` handle). Tests accept both codes (`t1_popup_policy::assert_unconfigured_error`). At the next pin update: drop the adapter's two `ensure_configured` calls (upstream enforces the rule), require code 3 in the tests, retire this record
+- **Infynitae response:** Smithay patch P6 (`patches/0006-xdg-unconfigured-buffer-error.patch`) backports `641d2ad`: the pre-commit hooks post code 3, and the tests require it (`t1_popup_policy::assert_unconfigured_error`). P6 keeps `ensure_configured` as a check that posts nothing, because the adapter's two calls use it to skip the offending commit. At the next pin update: drop those calls, retire this record
 - **Evidence:** vendored `wayland/shell/xdg/mod.rs` (1652, 2045); upstream commit `641d2ad`; T1 `t1_popup_policy`, `t1_inc7_misbehaving`
 - **Obligations:** — (pin update, D-B12-PIN)
 
@@ -394,7 +394,7 @@ Status vocabulary:
 
 ### W-SM-21
 - **Quirk:** Smithay 0.7.0's `PointerConstraint` keeps the constraint's lifetime private (`lifetime` field, `wayland/pointer_constraints.rs` 179; no accessor), so a compositor cannot read whether a lock or confinement is `oneshot` or `persistent`. Smithay itself ends a oneshot constraint on deactivation and destroys it, without telling the compositor through `PointerConstraintsHandler`
-- **Infynitae response:** (OB-54; owner decision 2026-10-19: keep the adapter workaround, no Smithay patch now) the adapter reports every constraint to Core as `ConstraintLifetime::Persistent` and, at the end of each effect batch, drops from Core a constraint whose Smithay object has been destroyed (`WaylandState::drop_constraints_smithay_destroyed`), so Core never re-activates a oneshot constraint Smithay ended. A Smithay patch exposing the lifetime would need the patch policy (INV-ARCH-3)
-- **Evidence:** vendored `wayland/pointer_constraints.rs` (179); T1 `an_ended_oneshot_lock_is_never_activated_again` (`t1_constraint_lifetime`) with its seeded control
+- **Infynitae response:** (OB-54) Smithay patch P7 (`patches/0007-pointer-constraints-expose-lifetime.patch`, `POLISH_PLAN.md` 6.2) adds `PointerConstraint::lifetime`; the adapter reports the requested lifetime to Core (`PointerConstraintsHandler::new_constraint`), and Core drops a oneshot constraint when it ends, so it is never activated again. The earlier workaround (every constraint reported as persistent, a batch-end drop of constraints Smithay destroyed) is removed
+- **Evidence:** vendored `wayland/pointer_constraints.rs` (180); T1 `an_ended_oneshot_lock_is_never_activated_again`, `smithay_exposes_constraint_lifetime` (`t1_constraint_lifetime`) with its seeded control
 - **Obligations:** OB-54
 <!-- /living -->
