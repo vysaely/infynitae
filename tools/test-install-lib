@@ -592,4 +592,32 @@ check "rollback with dirty checkout prints manual reset hint" \
 check "rollback with dirty checkout leaves local edit in place" \
     "$(tail -n1 "$rb_repo/live/session.sh")" "# dirty"
 
+# 13. snap-pac: off by default (even on btrfs and in legacy install-choices); installed only when opted in
+check "legacy install-choices defaults SNAP_PAC to false" "$(XDG_STATE_HOME="$TMP/dg-legacy-state" bash -c '
+    . "'"$REPO_DIR"'/live/install-lib.sh"
+    load_install_choices
+    echo "$SNAP_PAC"')" "false"
+check "SNAP_PAC=true saved and read back" "$(XDG_STATE_HOME="$TMP/sp-state" bash -c '
+    . "'"$REPO_DIR"'/live/install-lib.sh"
+    SNAP_PAC=true save_install_choices
+    SNAP_PAC=""
+    load_install_choices
+    echo "$SNAP_PAC"')" "true"
+cat > "$DG_BIN/pacman" <<'EOF'
+#!/bin/sh
+exit 1
+EOF
+chmod +x "$DG_BIN/pacman"
+snap_want_off=$(PATH="$DG_BIN:/usr/bin:/bin" HOME="$TMP/sp-home" DG_FSTYPE=btrfs SNAP_PAC=false \
+    bash -c '. "'"$REPO_DIR"'/live/install-lib.sh"; wanted_pkgs' 2>/dev/null | grep -cx snap-pac || true)
+snap_want_on=$(PATH="$DG_BIN:/usr/bin:/bin" HOME="$TMP/sp-home" DG_FSTYPE=btrfs SNAP_PAC=true \
+    bash -c '. "'"$REPO_DIR"'/live/install-lib.sh"; wanted_pkgs' 2>/dev/null | grep -cx snap-pac || true)
+snap_want_ext4=$(PATH="$DG_BIN:/usr/bin:/bin" HOME="$TMP/sp-home" DG_FSTYPE=ext4 SNAP_PAC=true \
+    bash -c '. "'"$REPO_DIR"'/live/install-lib.sh"; wanted_pkgs' 2>/dev/null | grep -cx snap-pac || true)
+check "wanted_pkgs omits snap-pac when SNAP_PAC=false" "$snap_want_off" "0"
+check "wanted_pkgs includes snap-pac on btrfs when SNAP_PAC=true" "$snap_want_on" "1"
+check "wanted_pkgs omits snap-pac on non-btrfs" "$snap_want_ext4" "0"
+check "install.sh --help lists --snap-pac" \
+    "$("$REPO_DIR/install.sh" --help | grep -c -- '--snap-pac' || true)" "1"
+
 exit $fail

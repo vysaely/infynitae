@@ -53,6 +53,8 @@ Turn on:
   --foreign-apps       Windows programs (.exe, .msi) and Android apps (.apk), each in a sandbox
                        (umu-launcher, bubblewrap, waydroid; turns on --gaming). Android needs
                        `sudo waydroid init` once afterwards: it downloads Android (~1 GB)
+  --snap-pac           pre/post btrfs snapshots around pacman transactions (snap-pac; needs
+                       snapper configured for /)
 
 Startup:
   --no-autologin       log in on tty1 instead of booting to the lock screen
@@ -73,6 +75,7 @@ TERMINAL_PKG=true
 BLUETOOTH=true
 POWER_PROFILES=true
 DISK_GUARD=true
+SNAP_PAC=false
 SKIP=""
 # menus: a person at a terminal, who gave no options
 MENU=false
@@ -94,6 +97,7 @@ for arg in "$@"; do
         --gaming) GAMING=true ;;
         # umu-launcher is in [multilib], which --gaming turns on; Wine needs the 32-bit drivers
         --foreign-apps) FOREIGN_APPS=true GAMING=true ;;
+        --snap-pac) SNAP_PAC=true ;;
         --timezone=*) TIMEZONE="${arg#--timezone=}" ;;
         --defaults) ;;
         -h | --help) usage; exit 0 ;;
@@ -249,6 +253,10 @@ install_system_files "$INSTALL_DIR"
 install_config "$INSTALL_DIR"
 install_default_apps
 [ "$FOREIGN_APPS" = true ] && install_foreign_apps "$INSTALL_DIR"
+if [ "$SNAP_PAC" = true ] && [ "$(findmnt -no FSTYPE / 2>/dev/null)" = btrfs ] \
+    && [ ! -f /etc/snapper/configs/root ]; then
+    echo "==> snap-pac needs a snapper config for /: sudo snapper -c root create-config /"
+fi
 if [ -n "$TIMEZONE" ]; then
     set_timezone "$TIMEZONE" || true
 elif timezone_unset; then

@@ -115,16 +115,16 @@ is_skipped() {
 }
 load_install_choices() {
     # an install from before these were saved: nothing added that it may have left out
-    SKIP="" BLUETOOTH=false POWER_PROFILES=false TERMINAL_PKG=false FOREIGN_APPS=false DISK_GUARD=true
+    SKIP="" BLUETOOTH=false POWER_PROFILES=false TERMINAL_PKG=false FOREIGN_APPS=false DISK_GUARD=true SNAP_PAC=false
     # shellcheck disable=SC1090
     [ -f "$INSTALL_CHOICES" ] && . "$INSTALL_CHOICES"
     return 0
 }
 save_install_choices() {
     mkdir -p "$INFY_STATE"
-    printf 'SKIP="%s"\nBLUETOOTH=%s\nPOWER_PROFILES=%s\nTERMINAL_PKG=%s\nFOREIGN_APPS=%s\nDISK_GUARD=%s\n' "${SKIP:-}" \
+    printf 'SKIP="%s"\nBLUETOOTH=%s\nPOWER_PROFILES=%s\nTERMINAL_PKG=%s\nFOREIGN_APPS=%s\nDISK_GUARD=%s\nSNAP_PAC=%s\n' "${SKIP:-}" \
         "${BLUETOOTH:-false}" "${POWER_PROFILES:-false}" "${TERMINAL_PKG:-false}" \
-        "${FOREIGN_APPS:-false}" "${DISK_GUARD:-true}" > "$INSTALL_CHOICES"
+        "${FOREIGN_APPS:-false}" "${DISK_GUARD:-true}" "${SNAP_PAC:-false}" > "$INSTALL_CHOICES"
 }
 
 # The hardware parts: chosen, and the hardware is there. Asked again at each update, so an
@@ -175,6 +175,9 @@ wanted_pkgs() {
     fi
     if [ "${DISK_GUARD:-true}" = true ] && [ "$(findmnt -no FSTYPE / 2>/dev/null)" = btrfs ]; then
         missing_pkgs btrfs-progs
+    fi
+    if [ "${SNAP_PAC:-false}" = true ] && [ "$(findmnt -no FSTYPE / 2>/dev/null)" = btrfs ]; then
+        missing_pkgs snap-pac
     fi
     # the compiler through rustup: the source pins its version (rust-toolchain.toml), which
     # Arch's own rust package ignores; rustup replaces it
