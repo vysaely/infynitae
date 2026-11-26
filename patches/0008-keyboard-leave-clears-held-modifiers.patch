@@ -4,8 +4,12 @@ What failed:
 Change:
 Before the old focus leaves (focus replaced or unset), when any modifier is depressed or latched, it gets one `modifiers` event with depressed and latched cleared; locked modifiers (Caps Lock, Num Lock) and the layout are kept. The new focus gets the real state on enter as before.
 
+Owner decision and date:
+Owner report 2026-11-15; applied the same day (commit 4ee7076).
+
 Upstream status:
-Not sent yet; candidate for upstream `Smithay/smithay`.
+Not sent; no reason recorded. Whether Smithay `master` does this was not verified (its
+`set_focus` was not read in full on 2026-11-26).
 
 --- a/src/input/keyboard/mod.rs
 +++ b/src/input/keyboard/mod.rs

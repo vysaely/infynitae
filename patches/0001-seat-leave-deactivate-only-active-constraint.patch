@@ -1,3 +1,16 @@
+What failed:
+`PointerHandle::leave` called `deactivate()` on the surface's constraint even when it was not
+active, so the client got a second `unlocked` or `unconfined`: after an explicit deactivate, on
+destruction, and for a persistent constraint that was never activated (W-SM-4c,
+`docs/foundation/FOUNDATION_TEST_PLAN.md` OB-11).
+
+Owner decision and date:
+OB-11 Option B, adopted by the owner on 2026-10-07 under D-B12-PIN.
+
+Upstream status:
+Not sent: the issue is an outward action left to the owner (OB-11). Smithay `master` has the same
+guard (`if constraint.is_active()` in `leave`, read 2026-11-26); no release has it.
+
 --- a/src/wayland/seat/pointer.rs
 +++ b/src/wayland/seat/pointer.rs
 @@ -250,7 +250,9 @@

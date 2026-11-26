@@ -1,3 +1,16 @@
+What failed:
+Smithay 0.7.0 cannot flip with `DRM_MODE_PAGE_FLIP_ASYNC`: every frame waits for vblank, so a
+fullscreen game cannot tear. Adds `DrmSurface::page_flip_async`, `DrmCompositor::set_async_flip`
+and the check that only the primary plane's framebuffer changes (async flips carry `FB_ID` only).
+
+Owner decision and date:
+Tearing for fullscreen games, 2026-10-26 (`docs/DECISIONS.md`, D-B12-PIN entry); the primary-FB
+rule 2026-11-21 (#126).
+
+Upstream status:
+Not sent; no reason recorded. Smithay `master` has no async page flip (`backend/drm/surface/mod.rs`
+and `atomic.rs`, read 2026-11-26).
+
 --- a/src/backend/drm/compositor/mod.rs
 +++ b/src/backend/drm/compositor/mod.rs
 @@ -748,12 +748,38 @@
