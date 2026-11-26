@@ -45,7 +45,7 @@ build infynitae-portal "gio-2.0 gio-unix-2.0 wayland-client xkbcommon" \
 build infynitae-bus-watch "gio-2.0 gio-unix-2.0" "$LIVE/bus-watch/infynitae-bus-watch.c"
 build infynitae-polkit "polkit-agent-1 gtk+-3.0" "$LIVE/polkit/infynitae-polkit.c"
 build infynitae-lock "wayland-client cairo pangocairo xkbcommon pam" \
-    "$LIVE/lock/infynitae-lock.c" "$LIVE/lock/ext-session-lock-v1-protocol.c" -- -lm -lpthread
+    "$LIVE/lock/infynitae-lock.c" "$LIVE/lock/greetd.c" "$LIVE/lock/ext-session-lock-v1-protocol.c" -- -lm -lpthread
 build infynitae-wallpaper "wayland-client cairo gdk-pixbuf-2.0" \
     "$LIVE/wallpaper/infynitae-wallpaper.c" "$LIVE/wallpaper/wlr-layer-shell-protocol.c" \
     "$LIVE/wallpaper/xdg-shell-protocol.c" "$LIVE/wallpaper/viewporter-protocol.c" -- -lm

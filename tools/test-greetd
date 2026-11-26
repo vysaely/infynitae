@@ -1,0 +1,112 @@
+#!/bin/sh
+# The login screen's greetd client (live/lock/greetd.c) against a fake greetd: what it sends, and what it
+# makes of each answer. No root, no real greetd, nothing outside a temporary folder.
+set -eu
+here=$(cd "$(dirname "$0")/.." && pwd)
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+fails=0
+
+cat > "$tmp/main.c" <<'EOF'
+#include <stdio.h>
+#include <string.h>
+#include "greetd.h"
+int main(int argc, char **argv) {
+    if (argc == 4 && strcmp(argv[1], "--json") == 0) {
+        char out[256];
+        int rc = greetd_json_string(argv[2], argv[3], out, sizeof(out));
+        printf("%d|%s\n", rc, rc == 0 ? out : "");
+        return 0;
+    }
+    char detail[200] = "";
+    GreetdResult r = greetd_login(argv[1], argv[2], argv[3], argv[4], detail, sizeof(detail));
+    printf("%s|%s\n", r == GREETD_OK ? "ok" : r == GREETD_DENIED ? "denied" : "failed", detail);
+    return 0;
+}
+EOF
+gcc -O1 -Wall -Wextra -Werror -I"$here/live/lock" -o "$tmp/client" "$tmp/main.c" "$here/live/lock/greetd.c"
+
+# fake greetd: answers per SCRIPT, records every request
+cat > "$tmp/fake.py" <<'EOF'
+import json, os, socket, struct, sys
+path, script, log = sys.argv[1], sys.argv[2], sys.argv[3]
+s = socket.socket(socket.AF_UNIX); s.bind(path); s.listen(1)
+open(path + ".ready", "w").close()
+c, _ = s.accept()
+def recv():
+    h = c.recv(4, socket.MSG_WAITALL)
+    if len(h) < 4: return None
+    n = struct.unpack("=I", h)[0]
+    return json.loads(c.recv(n, socket.MSG_WAITALL))
+def send(o):
+    b = json.dumps(o).encode()
+    try: c.sendall(struct.pack("=I", len(b)) + b)
+    except BrokenPipeError: pass  # the client hung up after its last request
+reqs = []
+msg = lambda t, text="": {"type": "auth_message", "auth_message_type": t, "auth_message": text}
+while True:
+    r = recv()
+    if r is None: break
+    reqs.append(r)
+    t = r["type"]
+    if t == "create_session":
+        if script == "nopass": send({"type": "success"})
+        elif script == "info": send(msg("info", 'Welcome "back"\n'))
+        else: send(msg("secret", "Password: "))
+    elif t == "post_auth_message_response":
+        if script == "info" and r.get("response") is None: send(msg("secret", "Password: "))
+        elif script == "twofactor" and len([x for x in reqs if x["type"] == "post_auth_message_response"]) == 1:
+            send(msg("secret", "Verification code: "))
+        elif r.get("response") == os.environ.get("RIGHT", "hunter2"): send({"type": "success"})
+        else: send({"type": "error", "error_type": "auth_error", "description": "pam_authenticate: AUTH_ERR"})
+    elif t == "start_session":
+        send({"type": "error", "error_type": "error", "description": "session refused"} if script == "nosession" else {"type": "success"})
+    elif t == "cancel_session":
+        send({"type": "success"})
+json.dump(reqs, open(log, "w"))
+EOF
+
+run() {  # NAME SCRIPT USER PASSWORD EXPECT [RIGHT]
+    name=$1 script=$2 user=$3 pass=$4 want=$5
+    sock="$tmp/$name.sock"
+    RIGHT=${6:-hunter2} python3 -I "$tmp/fake.py" "$sock" "$script" "$tmp/$name.log" &
+    i=0; while [ ! -e "$sock.ready" ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+    got=$("$tmp/client" "$sock" "$user" "$pass" 'exec "$HOME/.local/bin/infynitae-session"')
+    wait
+    case "$got" in
+        "$want"*) echo "ok   $name: $got" ;;
+        *) echo "FAIL $name: got '$got', want '$want'"; fails=$((fails + 1)) ;;
+    esac
+}
+req() { python3 -I -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1]))))' "$tmp/$1.log"; }
+check() {
+    if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1: got '$2', want '$3'"; fails=$((fails + 1)); fi
+}
+
+run right secret alice hunter2 "ok|"
+check "right: create_session names the user" "$(req right | python3 -I -c 'import json,sys; print(json.load(sys.stdin)[0])')" "{'type': 'create_session', 'username': 'alice'}"
+check "right: the session starts with the command through /bin/sh -c" \
+    "$(req right | python3 -I -c 'import json,sys; r=json.load(sys.stdin)[-1]; print(r["type"], r["cmd"])')" \
+    "start_session ['/bin/sh', '-c', 'exec \"\$HOME/.local/bin/infynitae-session\"']"
+check "right: the session is told it was signed in (no second password for START_LOCKED)" \
+    "$(req right | python3 -I -c 'import json,sys; print(json.load(sys.stdin)[-1]["env"])')" "['INFYNITAE_SIGNED_IN=1']"
+run wrong secret alice wrong "denied|"
+check "wrong: the session is cancelled" "$(req wrong | python3 -I -c 'import json,sys; print(json.load(sys.stdin)[-1]["type"])')" "cancel_session"
+check "wrong: no session is started" "$(req wrong | grep -c start_session || true)" "0"
+run quotes secret alice 'a"b\c' "ok|" 'a"b\c'
+run info info alice hunter2 "ok|"
+run nopass nopass alice "" "ok|"
+run twofactor twofactor alice hunter2 "failed|This account asks for more than a password"
+run nosession nosession alice hunter2 "failed|session refused"
+got=$("$tmp/client" "$tmp/nobody.sock" alice hunter2 x)
+check "no greetd: says it could not reach greetd" "$got" "failed|Could not reach greetd"
+got=$("$tmp/client" "" alice hunter2 x)
+check "no socket set: says so" "$got" "failed|Not started by greetd (no GREETD_SOCK)"
+
+check "json: escaped quote and newline" "$("$tmp/client" --json '{"type":"auth_message","auth_message":"say \"hi\"\nnow"}' auth_message)" "0|say \"hi\"
+now"
+check "json: the key \"type\" is not found inside another key or a value" \
+    "$("$tmp/client" --json '{"auth_message_type":"secret","auth_message":"\"type\":\"x\"","type":"auth_message"}' type)" "0|auth_message"
+check "json: null is not a string" "$("$tmp/client" --json '{"type":"x","response":null}' response)" "-1|"
+
+[ "$fails" -eq 0 ] && echo "test-greetd: passed" || { echo "test-greetd: $fails failed"; exit 1; }

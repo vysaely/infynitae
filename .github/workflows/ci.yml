@@ -70,6 +70,7 @@ jobs:
       - run: sh tools/test-launch-actions
       - run: sh tools/test-xkill
       - run: sh tools/test-lock-render
+      - run: sh tools/test-greetd
       - run: sh tools/test-xdg-autostart
       - run: sh tools/test-theme-from-wallpaper
       - run: sh tools/test-wallpaper-accents

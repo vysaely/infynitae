@@ -289,6 +289,9 @@ live/infynitae-disk-guard infynitae-disk-guard
 live/infynitae-update-check infynitae-update-check
 live/windows-run infynitae-windows-run
 live/android-run infynitae-android-run
+live/greeter/infynitae-login-screen infynitae-login-screen
+live/greeter/infynitae-greeter infynitae-greeter
+live/greeter/infynitae-greeter-screen infynitae-greeter-screen
 LIST
     # xwayland-satellite with our patch; a failed build keeps the copy already installed
     sh "$src/live/build-satellite.sh" "$src" "$bin"
@@ -495,6 +498,20 @@ install_update_check() {
     fi
 }
 
+# The login screen (infynitae-login-screen on) runs its own copies of the compositor and the lock
+# screen: after an update they get the new ones, so the login screen never runs an older compositor
+# than the desktop. Nothing when the login screen is off.
+refresh_login_screen() {
+    grep -q infynitae-greeter /etc/greetd/config.toml 2>/dev/null || return 0
+    [ -d /var/lib/infynitae-greeter/.local/bin ] || return 0
+    for f in infynitae infynitae-lock infynitae-greeter infynitae-greeter-screen; do
+        [ -x "$HOME/.local/bin/$f" ] || continue
+        cmp -s "$HOME/.local/bin/$f" "/var/lib/infynitae-greeter/.local/bin/$f" && continue
+        sudo install -o root -g root -m 755 "$HOME/.local/bin/$f" "/var/lib/infynitae-greeter/.local/bin/$f" \
+            || warn "Could not update the login screen's $f"
+    done
+}
+
 # What outside the home folder Infynitae needs, for this machine.
 install_system_files() {
     local src="$1" tmp
@@ -593,6 +610,7 @@ GUARD
     sh "$src/live/setup-autologin.sh" --autostart >/dev/null 2>&1 || true
     install_speed_settings "$src"
     install_disk_guard "$src"
+    refresh_login_screen
     install_update_check "$src"
 }
 
