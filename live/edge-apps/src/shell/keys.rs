@@ -182,6 +182,83 @@ impl Shell {
                 _ => false,
             };
         }
+        if self.shortcuts.open {
+            return match k {
+                Key::Escape => self.close_shortcuts(),
+                Key::Backspace => {
+                    if self.shortcuts.query.pop().is_some() {
+                        self.shortcuts.scroll = 0.0;
+                        true
+                    } else {
+                        false
+                    }
+                }
+                Key::Char(c) => {
+                    if c.is_control() {
+                        return false;
+                    }
+                    self.shortcuts.query.push(c);
+                    self.shortcuts.scroll = 0.0;
+                    true
+                }
+                Key::Tab | Key::BackTab => {
+                    self.keyboard = true;
+                    self.selected = if self.selected == Some((0, crate::shortcuts::HIT_CHANGE)) {
+                        None
+                    } else {
+                        Some((0, crate::shortcuts::HIT_CHANGE))
+                    };
+                    true
+                }
+                Key::Enter => {
+                    let selected_change =
+                        self.keyboard && self.selected == Some((0, crate::shortcuts::HIT_CHANGE));
+                    let hovered_change = self
+                        .last_output
+                        .and_then(|o| self.hovered.get(&o))
+                        .is_some_and(|&(c, h)| c == 0 && h == crate::shortcuts::HIT_CHANGE);
+                    if selected_change || hovered_change {
+                        self.open_settings_keys(self.shortcuts.output)
+                    } else {
+                        false
+                    }
+                }
+                Key::Up | Key::Down | Key::PageUp | Key::PageDown | Key::Home | Key::End => {
+                    let (w, h) = self.open_screen();
+                    let max =
+                        crate::shortcuts::max_scroll(w, h, &self.cfg.keys, &self.shortcuts.query);
+                    if max <= 0.0 {
+                        return false;
+                    }
+                    let view_h = crate::shortcuts::viewport(crate::shortcuts::rect(
+                        w,
+                        h,
+                        &self.cfg.keys,
+                        &self.shortcuts.query,
+                    ))
+                    .3;
+                    let page = (view_h - crate::ui::LIST_ROW_H).max(crate::ui::LIST_ROW_H);
+                    let next = match k {
+                        Key::Home => 0.0,
+                        Key::End => max,
+                        Key::PageUp => (self.shortcuts.scroll - page).clamp(0.0, max),
+                        Key::PageDown => (self.shortcuts.scroll + page).clamp(0.0, max),
+                        Key::Up => (self.shortcuts.scroll - crate::ui::LIST_ROW_H).clamp(0.0, max),
+                        Key::Down => {
+                            (self.shortcuts.scroll + crate::ui::LIST_ROW_H).clamp(0.0, max)
+                        }
+                        _ => self.shortcuts.scroll,
+                    };
+                    if (next - self.shortcuts.scroll).abs() > 0.01 {
+                        self.shortcuts.scroll = next;
+                        true
+                    } else {
+                        false
+                    }
+                }
+                Key::Super(_) | Key::Left | Key::Right | Key::Delete => false,
+            };
+        }
         let Some(idx) = self.open else {
             return false;
         };

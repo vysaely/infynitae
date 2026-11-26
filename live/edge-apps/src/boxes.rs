@@ -62,6 +62,26 @@ fn text_on(shell: &Shell, output: Option<crate::shell::OutputId>, w: f64, h: f64
         }
         return out;
     }
+    if shell.shortcuts.open {
+        let r = crate::shortcuts::rect(w, h, &shell.cfg.keys, &shell.shortcuts.query);
+        let mut out = format!("shortcuts {:.0} {:.0} {:.0} {:.0}\n", r.0, r.1, r.2, r.3);
+        for (_, _, hits) in shell.frame_hits(output) {
+            for (id, hr) in hits.list {
+                let tag = if id == crate::shortcuts::HIT_CHANGE {
+                    "change"
+                } else if id == crate::shortcuts::HIT_QUERY {
+                    "query"
+                } else {
+                    continue;
+                };
+                out += &format!(
+                    "hit shortcuts/{tag} {id} {:.0} {:.0} {:.0} {:.0}\n",
+                    hr.0, hr.1, hr.2, hr.3
+                );
+            }
+        }
+        return out;
+    }
     let Some(idx) = shell.open else {
         return "closed\n".into();
     };

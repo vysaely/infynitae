@@ -46,7 +46,7 @@ impl Shell {
             });
             return crate::ask::hover(&mut self.ask, w, h, x, y);
         }
-        if self.window_menu.is_some() {
+        if self.window_menu.is_some() || self.shortcuts.open {
             self.last_output = Some(output);
             self.last_screen = (w, h);
             self.touch = Some(TouchState {
@@ -150,6 +150,64 @@ impl Shell {
                 self.pointers.remove(&t.output);
                 self.pointer = None;
                 return self.hovered.remove(&t.output).is_some();
+            }
+            t.last = (x, y);
+            self.touch = Some(t);
+            return false;
+        }
+        if self.shortcuts.open {
+            if t.mode == TouchMode::Pending {
+                let dx = x - t.start.0;
+                let dy = y - t.start.1;
+                if dx * dx + dy * dy < TOUCH_DRAG_PX * TOUCH_DRAG_PX {
+                    t.last = (x, y);
+                    self.touch = Some(t);
+                    return false;
+                }
+                t.mode = if dy.abs() >= dx.abs() {
+                    TouchMode::Scroll
+                } else {
+                    TouchMode::Moved
+                };
+                let step = t.last.1 - y;
+                t.last = (x, y);
+                let mode = t.mode;
+                let (w, h) = (t.w, t.h);
+                let out = t.output;
+                self.touch = Some(t);
+                self.pointers.remove(&out);
+                self.pointer = None;
+                let lit = self.hovered.remove(&out).is_some();
+                if mode == TouchMode::Scroll {
+                    let r = crate::shortcuts::rect(w, h, &self.cfg.keys, &self.shortcuts.query);
+                    if crate::shortcuts::inside(r, x, y) {
+                        let max = crate::shortcuts::max_scroll(
+                            w,
+                            h,
+                            &self.cfg.keys,
+                            &self.shortcuts.query,
+                        );
+                        let next = (self.shortcuts.scroll + step).clamp(0.0, max);
+                        if (next - self.shortcuts.scroll).abs() > 0.01 {
+                            self.shortcuts.scroll = next;
+                            return true;
+                        }
+                    }
+                }
+                return lit;
+            }
+            if t.mode == TouchMode::Scroll {
+                let step = t.last.1 - y;
+                t.last = (x, y);
+                let (w, h) = (t.w, t.h);
+                self.touch = Some(t);
+                let max = crate::shortcuts::max_scroll(w, h, &self.cfg.keys, &self.shortcuts.query);
+                let next = (self.shortcuts.scroll + step).clamp(0.0, max);
+                if (next - self.shortcuts.scroll).abs() > 0.01 {
+                    self.shortcuts.scroll = next;
+                    return true;
+                }
+                return false;
             }
             t.last = (x, y);
             self.touch = Some(t);

@@ -52,6 +52,27 @@ impl Shell {
             };
             return changed || hid;
         }
+        if self.shortcuts.open {
+            if self.shortcuts.output.is_some_and(|id| id != output) {
+                return false;
+            }
+            let hid = std::mem::take(&mut self.keyboard);
+            self.pointers.insert(output, (x, y));
+            self.pointer = Some((x, y));
+            self.last_output = Some(output);
+            self.last_screen = (w, h);
+            let hit_now = self.hit_at_on(output, (x, y));
+            let changed = hit_now != self.hovered.get(&output).copied();
+            match hit_now {
+                Some(h) => {
+                    self.hovered.insert(output, h);
+                }
+                None => {
+                    self.hovered.remove(&output);
+                }
+            }
+            return changed || hid;
+        }
         let Some(idx) = self.open else {
             self.last_output = Some(output);
             self.last_screen = (w, h);
@@ -298,6 +319,20 @@ impl Shell {
             }
             return false;
         }
+        if self.shortcuts.open {
+            let r = crate::shortcuts::rect(w, h, &self.cfg.keys, &self.shortcuts.query);
+            if !crate::shortcuts::inside(r, x, y) {
+                return self.close_shortcuts();
+            }
+            if button == Button::Left {
+                if let Some((_, hit)) = self.hit_at_on(output, (x, y)) {
+                    if hit == crate::shortcuts::HIT_CHANGE {
+                        return self.open_settings_keys(Some(output));
+                    }
+                }
+            }
+            return false;
+        }
         let Some(idx) = self.open else {
             return false;
         };
@@ -484,6 +519,19 @@ impl Shell {
         notches: f64,
     ) -> bool {
         if self.visible_output().is_some_and(|id| id != output) {
+            return false;
+        }
+        if self.shortcuts.open {
+            let (w, h) = screen;
+            let r = crate::shortcuts::rect(w, h, &self.cfg.keys, &self.shortcuts.query);
+            if crate::shortcuts::inside(r, at.0, at.1) {
+                let max = crate::shortcuts::max_scroll(w, h, &self.cfg.keys, &self.shortcuts.query);
+                let next = (self.shortcuts.scroll + dy).clamp(0.0, max);
+                if (next - self.shortcuts.scroll).abs() > 0.01 {
+                    self.shortcuts.scroll = next;
+                    return true;
+                }
+            }
             return false;
         }
         let Some(idx) = self.open else {
