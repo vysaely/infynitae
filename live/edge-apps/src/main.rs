@@ -7,6 +7,7 @@ mod boxes;
 mod card;
 mod cards;
 mod config;
+mod dbus;
 mod draw;
 mod edit;
 mod icons;

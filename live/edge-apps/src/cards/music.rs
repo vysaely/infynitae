@@ -539,7 +539,7 @@ fn meta_i64(meta: &HashMap<String, zbus::zvariant::OwnedValue>, key: &str) -> i6
 }
 
 pub fn fetch_dbus() -> MusicData {
-    let Ok(conn) = zbus::blocking::Connection::session() else {
+    let Ok(conn) = crate::dbus::session() else {
         return MusicData::default();
     };
     let Ok(dbus_proxy) = zbus::blocking::fdo::DBusProxy::new(&conn) else {

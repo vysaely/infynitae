@@ -218,12 +218,7 @@ pub fn start(tx: Sender<Incoming>) -> Result<zbus::blocking::Connection, String>
         next: AtomicU32::new(1),
         sync_ids: Mutex::new(HashMap::new()),
     };
-    let conn = zbus::blocking::connection::Builder::session()
-        .map_err(e)?
-        .serve_at(PATH, server)
-        .map_err(e)?
-        .build()
-        .map_err(e)?;
+    let conn = crate::dbus::build_session(|b| b.serve_at(PATH, server)).map_err(e)?;
     let ask = || {
         matches!(
             conn.request_name_with_flags(NAME, zbus::fdo::RequestNameFlags::DoNotQueue.into()),

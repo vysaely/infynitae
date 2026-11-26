@@ -1312,11 +1312,6 @@ fn owned_tooltip_title(v: &OwnedValue) -> String {
         .unwrap_or_default()
 }
 
-/// The tray's apps now (the menu card's source reads their menus).
-pub fn tray_items() -> (Vec<TrayItem>, bool) {
-    fetch_dbus_tray()
-}
-
 /// The cards a right click on a tray app shows: its own menu, then its card (its
 /// provider's first kind; the simple card for an app nobody knows). The shell orders them by
 /// TRAY_CARD.
@@ -1350,13 +1345,13 @@ pub fn tray_words(item: &TrayItem, apps: &[App]) -> Vec<String> {
 }
 
 fn fetch_dbus_tray() -> (Vec<TrayItem>, bool) {
-    let Ok(conn) = zbus::blocking::Connection::session() else {
+    let Ok(conn) = crate::dbus::session() else {
         return (Vec::new(), false);
     };
     fetch_dbus_tray_on(&conn)
 }
 
-fn fetch_dbus_tray_on(conn: &zbus::blocking::Connection) -> (Vec<TrayItem>, bool) {
+pub(super) fn fetch_dbus_tray_on(conn: &zbus::blocking::Connection) -> (Vec<TrayItem>, bool) {
     let Ok(dbus) = zbus::blocking::fdo::DBusProxy::new(conn) else {
         return (Vec::new(), false);
     };
@@ -2402,8 +2397,9 @@ mod tests {
             })
         }
 
-        fn connect(&self) -> zbus::blocking::connection::Builder<'_> {
-            zbus::blocking::connection::Builder::address(self.address.as_str()).unwrap()
+        fn connect(&self) -> zbus::blocking::connection::Builder<'static> {
+            let addr = zbus::Address::try_from(self.address.as_str()).unwrap();
+            crate::dbus::builder_for(&addr).unwrap()
         }
     }
 
