@@ -174,7 +174,7 @@ reloads on save).
 | Row | Control | Key | Values | After |
 |---|---|---|---|---|
 | Picture | Found `wallpapers` | `WALLPAPER` | the file's name shown, its path written; first entry "The first in Pictures/Wallpapers" writes `""` | save (the compositor restarts the wallpaper, `infynitae-wayland/src/lib.rs:453`) |
-| Fit | Pick | `WALLPAPER_MODE` | Fill, Fit, Stretch, Center, Tile | save |
+| Placement | Pick | `WALLPAPER_MODE` | Fill, Fit, Stretch, Center, Tile | save |
 | M Depth | Pick | `WALLPAPER_PARALLAX` | Off, Subtle, Strong | save |
 
 Source `wallpapers`: the png, jpg, jpeg, webp files of `~/Pictures/Wallpapers` and
@@ -354,7 +354,7 @@ file has the explanation beside each).
 | Freeze the screen while picking a region | Switch | `FREEZE_SCREENSHOT` | | use |
 | Screenshots, Clips, Recordings | three buttons | `SCREENSHOT_DIR`, `CLIPS_DIR`, `RECORDINGS_DIR` | each opens its folder (`Action::OpenUri`); the folders are changed in the file | |
 | M Format | Pick | `RECORD_CODEC` | HEVC, AV1, H.264, Automatic | Reload(`recorder`) |
-| M Recorded by | Pick | `REPLAY_BACKEND` | Automatic, gpu-screen-recorder, Infynitae | Reload(`recorder`) |
+| M Recorder | Pick | `REPLAY_BACKEND` | Automatic, gpu-screen-recorder, Infynitae | Reload(`recorder`) |
 
 Replay on or off stays in `settings/quick`. The recorder is reloaded only while
 `ENABLE_REPLAY_BUFFER` is true (else the key is written and nothing runs). Hidden: the

@@ -496,11 +496,11 @@ fn network_error_message(res: &CommandResult) -> String {
         return "Wrong password".into();
     }
     let prefix = if res.command.contains("radio wifi") {
-        "Wi-Fi switch failed"
+        "Could not switch Wi-Fi"
     } else if res.command.contains("rescan") {
-        "Scan failed"
+        "Could not search"
     } else if res.command.contains("connection down") {
-        "Disconnect failed"
+        "Could not disconnect"
     } else {
         "Could not join"
     };
@@ -804,17 +804,17 @@ pub struct BluetoothCard {
 
 fn bluetooth_error_message(res: &CommandResult) -> String {
     let prefix = if res.command.contains("pair ") {
-        "Pairing failed"
+        "Could not pair"
     } else if res.command.contains("connect ") && !res.command.contains("disconnect ") {
-        "Connection failed"
+        "Could not connect"
     } else if res.command.contains("disconnect ") {
-        "Disconnect failed"
+        "Could not disconnect"
     } else if res.command.contains("scan on") {
-        "Scan failed"
+        "Could not search"
     } else if res.command.contains("power ") {
-        "Bluetooth switch failed"
+        "Could not switch Bluetooth"
     } else {
-        "Bluetooth failed"
+        "Could not change Bluetooth"
     };
     ui::command_error(prefix, &res.stderr_line)
 }
@@ -1224,7 +1224,7 @@ impl Card for PowerCard {
             self.error.clear()
         } else {
             self.error.set(
-                ui::command_error("Power mode failed", &res.stderr_line),
+                ui::command_error("Could not change the power mode", &res.stderr_line),
                 now,
             )
         }
@@ -1941,7 +1941,7 @@ pub(crate) mod tests {
         ));
         assert!(!c.scanning && c.searching);
 
-        // Pairing failure keeps "Pairing failed: <stderr line>" under the row in alert colour.
+        // Pairing failure keeps "Could not pair: <stderr line>" under the row in alert colour.
         let base_h = c.height(&cx, 300.0);
         assert!(c.command_done(
             &CommandResult {
@@ -1953,7 +1953,7 @@ pub(crate) mod tests {
         ));
         assert_eq!(
             c.error.message.as_deref(),
-            Some("Pairing failed: Failed to pair: org.bluez.Error.AuthenticationFailed")
+            Some("Could not pair: Failed to pair: org.bluez.Error.AuthenticationFailed")
         );
         assert_eq!(c.height(&cx, 300.0), base_h + ui::ERROR_H);
         assert!(
@@ -1990,7 +1990,7 @@ pub(crate) mod tests {
         ));
         assert_eq!(
             c.error.message.as_deref(),
-            Some("Connection failed: Failed to connect: br-connection-page-timeout")
+            Some("Could not connect: Failed to connect: br-connection-page-timeout")
         );
         assert_eq!(c.height(&cx, 300.0), base_h + ui::ERROR_H);
         assert!(c.expire(t1 + ui::ERROR_TTL));
@@ -2020,7 +2020,10 @@ pub(crate) mod tests {
             },
             t0,
         ));
-        assert_eq!(c.error.message.as_deref(), Some("Power mode failed"));
+        assert_eq!(
+            c.error.message.as_deref(),
+            Some("Could not change the power mode")
+        );
         assert_eq!(c.height(&cx, 300.0), base_h + ui::ERROR_H);
         assert!(
             count_alert_red_pixels(

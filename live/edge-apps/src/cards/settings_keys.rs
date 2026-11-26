@@ -104,7 +104,7 @@ const ACTIONS: &[BuiltinAction] = &[
     },
     BuiltinAction {
         action: "CONTROL",
-        name: "Open control menu",
+        name: "Open control panel",
         defaults: &["SUPER+A"],
         more: false,
     },
@@ -194,7 +194,7 @@ const ACTIONS: &[BuiltinAction] = &[
     },
     BuiltinAction {
         action: "SAVE_REPLAY",
-        name: "Save instant replay",
+        name: "Save the replay",
         defaults: &["SUPER+ALT+C"],
         more: true,
     },

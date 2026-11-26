@@ -93,7 +93,7 @@ pub const TABLE: &[Setting] = &[
     },
     Setting {
         key: "REPLAY_BACKEND",
-        name: "Recorded by",
+        name: "Recorder",
         says: "",
         control: Control::Pick(&[
             ("auto", "Automatic"),

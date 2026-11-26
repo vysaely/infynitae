@@ -46,7 +46,7 @@ part_label() {
         bluetooth) echo "Bluetooth" ;;
         power-profiles) echo "Power modes (power-profiles-daemon)" ;;
         gaming) echo "Gaming: 32-bit drivers for Steam, Wine (~400 MB)" ;;
-        replay-buffer) echo "Replay buffer: save the last minutes" ;;
+        replay-buffer) echo "Replay: save the last minutes" ;;
         foreign-apps) echo "Windows and Android programs, in a sandbox" ;;
         disk-guard)
             if [ "$(findmnt -no FSTYPE / 2>/dev/null)" = btrfs ]; then

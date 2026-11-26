@@ -348,7 +348,7 @@ if ! wait_for "$NOTIFY_LOG" "-A open=Open -A eject=Eject USB_STICK mounted at /r
 fi
 echo "PASS: notification sent for USB_STICK mount"
 
-if ! grep -q -- "Mount failed for BROKEN_DRIVE" "$NOTIFY_LOG" || ! grep -q "wrong fs type" "$NOTIFY_LOG"; then
+if ! grep -q -- "Could not open BROKEN_DRIVE" "$NOTIFY_LOG" || ! grep -q "wrong fs type" "$NOTIFY_LOG"; then
     echo "FAIL: missing failure notification for BROKEN_DRIVE" >&2
     cat "$NOTIFY_LOG" >&2
     exit 1

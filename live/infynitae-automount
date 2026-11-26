@@ -344,7 +344,7 @@ mount_device() {
     else
         log "mount failed for $dev: $mount_out"
         journal_write drive-mounted "" "$dev ($label): $mount_out" failed
-        notify "Mount failed for $label" "$mount_out"
+        notify "Could not open $label" "$mount_out"
     fi
 }
 

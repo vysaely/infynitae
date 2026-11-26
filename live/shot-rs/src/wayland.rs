@@ -399,7 +399,7 @@ impl App {
                 render_overlay(
                     &surface,
                     &OverlayDraw {
-                        look: self.look,
+                        look: &self.look,
                         frozen: frozen_ref,
                         selection_px: sel_px,
                         size_label,

@@ -577,7 +577,7 @@ Kept as in `live/edge-rs/src/wayland.rs`, which was measured and fixed over seve
    - Bluetooth, S: row, switch, More. The list: paired devices (connected first), "Find new devices"
      (`bluetoothctl --timeout 15 scan on` via `Action::RunBackground` outside the card's command
      queue so pair and connect clicks start immediately; found devices show Pair, and the row shows
-     command failures such as "Pairing failed: <stderr line>" in `theme.alert` until the next
+     command failures such as "Could not pair: <stderr line>" in `theme.alert` until the next
      success or 10 s). `bluetoothctl` commands redirect stdout to stderr because `bluetoothctl` prints
      failure messages on stdout.
    - Power mode: the choice of the modes `powerprofilesctl list` gives, showing non-zero failures

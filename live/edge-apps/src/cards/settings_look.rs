@@ -307,7 +307,7 @@ pub const TABLE_WALLPAPER: &[LookRow] = &[
     },
     LookRow {
         key: "WALLPAPER_MODE",
-        name: "Fit",
+        name: "Placement",
         says: "",
         control: LookControl::Pick(&[
             ("fill", "Fill"),

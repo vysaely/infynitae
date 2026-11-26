@@ -1891,9 +1891,9 @@ mod tests {
             .iter()
             .any(|(id, _)| (2 * CHILD_STRIDE..4 * CHILD_STRIDE).contains(id)));
 
-        card.event(&Event::Text("fit"), &cx, &mut out);
-        let (_, hits_fit) = draw_card(&card, &cx, 404.0);
-        assert!(hits_fit
+        card.event(&Event::Text("placement"), &cx, &mut out);
+        let (_, hits_placement) = draw_card(&card, &cx, 404.0);
+        assert!(hits_placement
             .list
             .iter()
             .any(|(id, _)| (2 * CHILD_STRIDE..3 * CHILD_STRIDE).contains(id)));
