@@ -342,9 +342,13 @@ GM_ARGS
             if ! infy_on "${FREEZE_SCREENSHOT:-true}"; then
                 LIVE_FLAG="--live"
             fi
-            if "$SHOT_BIN" region $LIVE_FLAG "$SHOT_FILE" >/dev/null && [ -f "$SHOT_FILE" ]; then
-                if command -v notify-send >/dev/null 2>&1; then
+            # Enter in the editor copies without writing the file (an older binary always writes it)
+            if "$SHOT_BIN" region $LIVE_FLAG "$SHOT_FILE" >/dev/null \
+                && command -v notify-send >/dev/null 2>&1; then
+                if [ -f "$SHOT_FILE" ]; then
                     notify-send -a Infynitae "Screenshot saved" "$SHOT_FILE"
+                else
+                    notify-send -a Infynitae "Screenshot copied"
                 fi
             fi
         elif command -v slurp >/dev/null 2>&1 && command -v grim >/dev/null 2>&1; then

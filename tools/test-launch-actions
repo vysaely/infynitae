@@ -289,4 +289,21 @@ run_action clipboard-history "" CLIPBOARD_PICKER="pick old" MENU_PICKER="pick me
 check "an old CLIPBOARD_PICKER line: Super+V uses MENU_PICKER" "$(cat "$LOG")" "picker: menu"
 rm -f "$BIN/cliphist" "$BIN/pick" "$HOMEDIR/.local/bin/infynitae-control-menu"
 
+# Super+S: Enter in the screenshot editor copies without writing the file, so it is told as copied;
+# a saved one as saved
+cat << 'EOF' > "$HOMEDIR/.local/bin/infynitae-shot"
+#!/bin/sh
+for f; do :; done
+[ "$SHOT_SAVES" = 1 ] && : > "$f"
+exit 0
+EOF
+chmod +x "$HOMEDIR/.local/bin/infynitae-shot"
+: > "$LOG"
+run_action region-screenshot "" SHOT_SAVES=0 SCREENSHOT_DIR="$TMP/shots"
+check "a copied region screenshot is told as copied" "$(cat "$LOG")" "notify: -a Infynitae Screenshot copied"
+: > "$LOG"
+run_action region-screenshot "" SHOT_SAVES=1 SCREENSHOT_DIR="$TMP/shots"
+check "a saved region screenshot is told as saved" "$(grep -c 'Screenshot saved' "$LOG")" 1
+rm -f "$HOMEDIR/.local/bin/infynitae-shot"
+
 exit $fail
