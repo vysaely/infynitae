@@ -80,7 +80,7 @@ right.
 | `Super + Shift + Wheel` | Zoom the canvas |
 | Finger on empty canvas | Drag the canvas (two fingers: pinch to zoom) |
 | `Super + Q` / `W` / `E` | Terminal / launcher / files |
-| `Super + S` | Region screenshot (`Super + Shift + R` too) |
+| `Super + S` | Region screenshot (`Super + Shift + R` too), then marks on it: Enter copies, `Ctrl + S` saves, Escape keeps it without marks; Shift held as you pick skips the marks, `Ctrl + A` takes the whole screen |
 | `Super + Shift + S` or `Print` | Screenshot of the whole screen |
 | `Super + V` | Clipboard history |
 | `Super + A` | Control menu: Wi-Fi, Bluetooth, volume (all sound or one app), sound output, power, battery limit, do not disturb |
