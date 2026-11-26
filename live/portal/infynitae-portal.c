@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/prctl.h>
 #include <sys/stat.h>
 
 #include "remote-desktop.h"
@@ -1024,6 +1025,7 @@ static void watch_config(void) {
 }
 
 int main(int argc, char *argv[]) {
+    prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
     /* --appearance CONFIG: what Settings would tell apps for that config (tools/test-portal-settings) */
     if (argc == 3 && strcmp(argv[1], "--appearance") == 0) {
         PortalAppearance a;

@@ -54,6 +54,16 @@ if ! command -v infy_on >/dev/null 2>&1; then
         case "${1:-}" in 1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Oo][Nn]) return 0 ;; *) return 1 ;; esac
     }
 fi
+if ! command -v infy_run_unpriv >/dev/null 2>&1; then
+    # Drop NO_NEW_PRIVS and inheritable caps for background helpers that never need privilege escalation.
+    infy_run_unpriv() {
+        if command -v setpriv >/dev/null 2>&1; then
+            setpriv --no-new-privs --inh-caps=-all "$@" &
+        else
+            "$@" &
+        fi
+    }
+fi
 
 # 1a. The password store for apps runs before the lock screen asks for the password, so that
 # password opens it (/etc/pam.d/infynitae), as a login does on other desktops; apps reach it
@@ -157,9 +167,9 @@ esac
 WP_BIN=$(infy_bin infynitae-wallpaper || true)
 if [ -n "$WP_BIN" ]; then
     if [ -n "$WALLPAPER" ]; then
-        "$WP_BIN" "$WALLPAPER" "${WALLPAPER_MODE:-fill}" &
+        infy_run_unpriv "$WP_BIN" "$WALLPAPER" "${WALLPAPER_MODE:-fill}"
     else
-        "$WP_BIN" &
+        infy_run_unpriv "$WP_BIN"
     fi
 fi
 
@@ -182,14 +192,14 @@ fi
 # 6b. Clipboard persistence and history
 if infy_on "${CLIPBOARD_PERSIST:-true}"; then
     if command -v wl-clip-persist >/dev/null 2>&1; then
-        wl-clip-persist --clipboard regular >/dev/null 2>&1 &
+        infy_run_unpriv wl-clip-persist --clipboard regular >/dev/null 2>&1
     fi
 fi
 
 if infy_on "${CLIPBOARD_HISTORY:-true}"; then
     if command -v cliphist >/dev/null 2>&1 && command -v wl-paste >/dev/null 2>&1; then
-        wl-paste --type text --watch cliphist store >/dev/null 2>&1 &
-        wl-paste --type image --watch cliphist store >/dev/null 2>&1 &
+        infy_run_unpriv wl-paste --type text --watch cliphist store >/dev/null 2>&1
+        infy_run_unpriv wl-paste --type image --watch cliphist store >/dev/null 2>&1
     fi
 fi
 
@@ -221,7 +231,7 @@ case "${NOTIFICATIONS:-auto}" in
     *) NOTIFY_CMD="$NOTIFICATIONS" ;;
 esac
 if [ -n "$NOTIFY_CMD" ]; then
-    sh -c "$NOTIFY_CMD" >/dev/null 2>&1 &
+    infy_run_unpriv sh -c "$NOTIFY_CMD" >/dev/null 2>&1
 fi
 
 # 6c2. Fallback to previous compositor, or the last crash: said once, in a notification
@@ -258,7 +268,7 @@ fi
 # 6d2. KDE apps' list of apps (Open With), from the menu file settings.sh provides
 for b in kbuildsycoca6 kbuildsycoca5; do
     if command -v "$b" >/dev/null 2>&1; then
-        "$b" >/dev/null 2>&1 &
+        infy_run_unpriv "$b" >/dev/null 2>&1
         break
     fi
 done
@@ -277,7 +287,7 @@ if command -v squeekboard >/dev/null 2>&1; then
     pkill -x squeekboard 2>/dev/null || true
     case "${OSK:-auto}" in
         off|false|no|never) ;;
-        *) squeekboard >/dev/null 2>&1 & ;;
+        *) infy_run_unpriv squeekboard >/dev/null 2>&1 ;;
     esac
 fi
 
@@ -328,7 +338,7 @@ case "${AUTO_ROTATE:-auto}" in
         if command -v monitor-sensor >/dev/null 2>&1; then
             for r in "$HOME/infynitae/live/autorotate" "$HOME/.local/bin/autorotate" "$(dirname "$0")/autorotate"; do
                 if [ -x "$r" ]; then
-                    "$r" >/dev/null 2>&1 &
+                    infy_run_unpriv "$r" >/dev/null 2>&1
                     break
                 fi
             done

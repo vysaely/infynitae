@@ -1,0 +1,1 @@
+export PANEL_X="SUPER+F1:sh -c 'true'" # trailing comment

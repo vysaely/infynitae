@@ -6,6 +6,7 @@ on:
   pull_request:
   schedule:
     - cron: "17 3 * * *"
+    - cron: "23 4 * * 0"
 
 permissions:
   contents: read
@@ -252,3 +253,17 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - run: test "${{ needs.verify-test-efficacy-shard.result }}" = success
+
+  # Weekly short fuzzing runs for config lines, IPC requests, and clipboard entries.
+  fuzz:
+    name: Fuzz (weekly)
+    if: github.event_name == 'schedule' && github.event.schedule == '23 4 * * 0'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends $NATIVE_DEPS libglib2.0-dev libcairo2-dev libpango1.0-dev
+      - run: rustup toolchain install nightly --profile minimal && cargo +nightly install cargo-fuzz --locked
+      - run: |
+          for target in config_line ipc_request clipboard_entry; do
+            cargo +nightly fuzz run --fuzz-dir fuzz "$target" -- -max_total_time=15 -rss_limit_mb=2048
+          done

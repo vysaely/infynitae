@@ -347,3 +347,67 @@ if [ "$starts8" != "new new previous previous previous " ]; then
     exit 1
 fi
 echo "ok fallback stops after 3 failures of .previous too"
+
+# ---- 8. Privilege dropping: unprivileged daemons run with NoNewPrivs=1; polkit/edge/automount keep 0
+HOME9="$TMP/home9"
+mkdir -p "$HOME9/.local/bin" "$HOME9/.local/state/infynitae" "$HOME9/infynitae/live" "$TMP/priv9" "$TMP/priv9_bin"
+cat > "$HOME9/infynitae/live/env.sh" <<'EOF'
+# test no-op env
+EOF
+cat > "$HOME9/infynitae/live/config.sh" <<'EOF'
+# test no-op config
+EOF
+cat > "$TMP/priv9_bin/setpriv" <<EOF
+#!/bin/sh
+echo "\$*" >> "$TMP/priv9/setpriv_calls"
+exec /usr/bin/setpriv "\$@"
+EOF
+chmod +x "$TMP/priv9_bin/setpriv"
+for h in infynitae-wallpaper infynitae-polkit infynitae-edge infynitae-automount autorotate; do
+    cat > "$HOME9/.local/bin/$h" <<EOF
+#!/bin/sh
+awk '/^NoNewPrivs:/ { print \$2 }' /proc/self/status > "$TMP/priv9/$h"
+EOF
+    chmod +x "$HOME9/.local/bin/$h"
+done
+ln -sf infynitae-edge "$HOME9/.local/bin/infynitae-edge-apps" 2>/dev/null || true
+cat > "$HOME9/infynitae/live/autorotate" <<EOF
+#!/bin/sh
+awk '/^NoNewPrivs:/ { print \$2 }' /proc/self/status > "$TMP/priv9/autorotate"
+EOF
+cat > "$TMP/bin9_monitor" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+chmod +x "$HOME9/infynitae/live/autorotate" "$TMP/bin9_monitor"
+cp "$TMP/bin9_monitor" "$HOME9/.local/bin/monitor-sensor"
+(
+    export HOME="$HOME9" WAYLAND_DISPLAY="wayland-priv" PATH="$TMP/priv9_bin:$HOME9/.local/bin:$PATH"
+    export START_LOCKED="0" START_TERMINAL="false" SESSION_RESTORE="false"
+    export ENABLE_EDGE="true" AUTOMOUNT="true" NOTIFICATIONS="none"
+    sh "$SESSION_SCRIPT" >/dev/null 2>&1
+) || true
+i=0
+while [ ! -s "$TMP/priv9/autorotate" ] && [ $i -lt 50 ]; do sleep 0.05; i=$((i + 1)); done
+for want_1 in infynitae-wallpaper autorotate; do
+    got_p=$(cat "$TMP/priv9/$want_1" 2>/dev/null || echo missing)
+    if [ "$got_p" != "1" ]; then
+        echo "FAIL $want_1 NoNewPrivs: expected 1, got '$got_p'"
+        exit 1
+    fi
+    if ! grep -q -- "--no-new-privs --inh-caps=-all .*$want_1" "$TMP/priv9/setpriv_calls" 2>/dev/null; then
+        echo "FAIL $want_1 was not launched through setpriv --no-new-privs --inh-caps=-all"
+        exit 1
+    fi
+done
+for want_0 in infynitae-polkit infynitae-automount; do
+    if [ ! -s "$TMP/priv9/$want_0" ]; then
+        echo "FAIL $want_0 did not run"
+        exit 1
+    fi
+    if grep -q "$want_0" "$TMP/priv9/setpriv_calls" 2>/dev/null; then
+        echo "FAIL $want_0 unexpectedly ran through setpriv"
+        exit 1
+    fi
+done
+echo "ok session helpers drop NoNewPrivs where safe while preserving polkit/automount"

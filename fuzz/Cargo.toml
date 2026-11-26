@@ -1,0 +1,38 @@
+[package]
+name = "infynitae-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+infynitae-core = { path = "../crates/infynitae-core" }
+infynitae-ipc = { path = "../crates/infynitae-ipc" }
+infynitae-wayland = { path = "../crates/infynitae-wayland" }
+infynitae-edge-apps = { path = "../live/edge-apps" }
+
+[[bin]]
+name = "config_line"
+path = "fuzz_targets/config_line.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ipc_request"
+path = "fuzz_targets/ipc_request.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "clipboard_entry"
+path = "fuzz_targets/clipboard_entry.rs"
+test = false
+doc = false
+bench = false

@@ -40,8 +40,17 @@ first() {
 }
 
 # Start a helper detached from this terminal, logging to helpers.log.
+# Non-escalating daemons drop NO_NEW_PRIVS and inheritable caps.
 spawn() {
     echo "[$(date '+%F %T')] start: $*" >> "$LOG"
+    case "${1##*/}" in
+        infynitae-wallpaper|infynitae-portal|wl-clip-persist|wl-paste|mako|swaync|dunst|fnott|squeekboard|autorotate)
+            if command -v setpriv >/dev/null 2>&1; then
+                setsid -f setpriv --no-new-privs --inh-caps=-all "$@" >> "$LOG" 2>&1 < /dev/null
+                return
+            fi
+            ;;
+    esac
     setsid -f "$@" >> "$LOG" 2>&1 < /dev/null
 }
 

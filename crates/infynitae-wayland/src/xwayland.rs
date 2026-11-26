@@ -23,7 +23,7 @@ use std::cell::Cell;
 use std::collections::VecDeque;
 
 use crate::log_line;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::ops::RangeInclusive;
@@ -534,7 +534,20 @@ impl XwaylandSupervisor {
             ));
         };
         let fds = self.display.inheritable()?;
-        let mut command = Command::new(program);
+        let use_setpriv = Path::new(program).file_name() != Some(OsStr::new("setpriv"))
+            && std::env::var_os("PATH").is_some_and(|paths| {
+                std::env::split_paths(&paths).any(|dir| {
+                    fs::metadata(dir.join("setpriv"))
+                        .is_ok_and(|m| m.is_file() && (m.permissions().mode() & 0o111) != 0)
+                })
+            });
+        let mut command = if use_setpriv {
+            let mut cmd = Command::new("setpriv");
+            cmd.args(["--no-new-privs", "--inh-caps=-all"]).arg(program);
+            cmd
+        } else {
+            Command::new(program)
+        };
         command
             .args(leading)
             .arg(self.display.name())
@@ -1039,6 +1052,33 @@ mod tests {
         );
         drop(s);
         assert!(!path.exists(), "removed with the display");
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn the_satellite_drops_new_privs_when_setpriv_is_available() {
+        let has_setpriv = std::env::var_os("PATH").is_some_and(|paths| {
+            std::env::split_paths(&paths).any(|dir| {
+                fs::metadata(dir.join("setpriv"))
+                    .is_ok_and(|m| m.is_file() && (m.permissions().mode() & 0o111) != 0)
+            })
+        });
+        if !has_setpriv {
+            return;
+        }
+        let root = root("nnp");
+        let d = XDisplay::reserve(&root, 0..=3).unwrap();
+        let status_out = root.join("status");
+        let script = format!(
+            "awk '/^NoNewPrivs:/ {{ print $2 }}' /proc/self/status > {}",
+            status_out.display()
+        );
+        let mut s = XwaylandSupervisor::new(d, sh(&script), "wl-test", FAST);
+        s.start().unwrap();
+        until_exited(&mut s, Instant::now());
+        assert_eq!(s.last_exit().and_then(|e| e.code()), Some(0));
+        assert_eq!(fs::read_to_string(&status_out).unwrap().trim(), "1");
+        drop(s);
         fs::remove_dir_all(&root).unwrap();
     }
 }

@@ -17,6 +17,7 @@
 #include <signal.h>
 #include <dirent.h>
 #include <sys/mman.h>
+#include <sys/prctl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <errno.h>
@@ -822,6 +823,7 @@ static int is_video_file(const char *path) {
 }
 
 int main(int argc, char *argv[]) {
+    prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
     char target[1024] = "";
     char mode[32] = "";
     int foreground = 0;
