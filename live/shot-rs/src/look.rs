@@ -31,13 +31,16 @@ impl Color {
 }
 
 /// Visual tokens loaded from `~/.cache/infynitae/look`, falling back to the edge's defaults.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Look {
     pub card: Color,
     pub edge: Color,
     pub text: Color,
     pub accent: Color,
-    pub corners: u32,
+    /// LOOK_SMALL_RADIUS: the corner of small parts (buttons, fields, this helper's size label)
+    pub small_corners: u32,
+    /// LOOK_FONT: the typeface family
+    pub font: String,
 }
 
 impl Default for Look {
@@ -47,7 +50,8 @@ impl Default for Look {
             edge: Color::rgb8(0x33, 0x3b, 0x54),
             text: Color::rgb8(0xee, 0xf2, 0xf8),
             accent: Color::rgb8(0x7a, 0xa2, 0xf7),
-            corners: 8,
+            small_corners: 4,
+            font: "sans-serif".to_string(),
         }
     }
 }
@@ -98,11 +102,12 @@ impl Look {
                         look.accent = c;
                     }
                 }
-                "LOOK_CORNERS" => {
+                "LOOK_SMALL_RADIUS" => {
                     if let Ok(n) = val.parse::<u32>() {
-                        look.corners = n;
+                        look.small_corners = n;
                     }
                 }
+                "LOOK_FONT" if !val.is_empty() => look.font = val.to_string(),
                 _ => {}
             }
         }
@@ -163,18 +168,20 @@ LOOK_CARD="#1e2030"
 LOOK_EDGE=not-a-color
 LOOK_TEXT="#c0caf580"
 LOOK_ACCENT='#ff9e64'
-LOOK_CORNERS="notanumber"
+LOOK_SMALL_RADIUS="notanumber"
 NO_EQUALS_HERE
 LOOK_UNRELATED="#000000"
 LOOK_EDGE="#292e42"
-LOOK_CORNERS="12"
+LOOK_SMALL_RADIUS="7"
+LOOK_FONT="Inter"
 "##;
         let parsed = Look::parse(input);
         assert_eq!(parsed.card, Color::rgb8(0x1e, 0x20, 0x30));
         assert_eq!(parsed.edge, Color::rgb8(0x29, 0x2e, 0x42));
         assert_eq!(parsed.text, Color::rgba8(0xc0, 0xca, 0xf5, 0x80));
         assert_eq!(parsed.accent, Color::rgb8(0xff, 0x9e, 0x64));
-        assert_eq!(parsed.corners, 12);
+        assert_eq!(parsed.small_corners, 7);
+        assert_eq!(parsed.font, "Inter");
     }
 
     #[test]
@@ -184,7 +191,8 @@ LOOK_CARD="#12345"
 LOOK_EDGE="#gggggg"
 LOOK_TEXT="ff0000"
 LOOK_ACCENT="#123456789"
-LOOK_CORNERS="-5"
+LOOK_SMALL_RADIUS="-5"
+LOOK_FONT=""
 "##;
         let parsed = Look::parse(input);
         assert_eq!(parsed, Look::default());

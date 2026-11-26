@@ -3,7 +3,7 @@ use crate::look::Look;
 
 /// Parameters for drawing one output's full-screen selection overlay.
 pub struct OverlayDraw<'a> {
-    pub look: Look,
+    pub look: &'a Look,
     pub frozen: Option<&'a cairo::ImageSurface>,
     /// Selection rectangle in this output's local pixel coordinates (may extend past output edges
     /// when spanning multiple outputs so seam borders are omitted naturally).
@@ -72,7 +72,7 @@ pub fn render_overlay(dst: &cairo::ImageSurface, params: &OverlayDraw<'_>) -> Re
 
 fn draw_size_label(
     cr: &cairo::Context,
-    look: Look,
+    look: &Look,
     sel: Rect,
     text: &str,
     vw: f64,
@@ -83,8 +83,9 @@ fn draw_size_label(
     cr.scale(scale, scale);
 
     let layout = pangocairo::functions::create_layout(cr);
-    let mut font = pango::FontDescription::from_string("sans-serif");
-    font.set_size(10 * pango::SCALE);
+    // 12 px, the edge's size for secondary text
+    let mut font = pango::FontDescription::from_string(&look.font);
+    font.set_absolute_size(12.0 * pango::SCALE as f64);
     layout.set_font_description(Some(&font));
     layout.set_text(text);
 
@@ -122,7 +123,7 @@ fn draw_size_label(
     };
 
     look.card.set_source_with_alpha(cr, 0.90);
-    rounded_rect(cr, bx, by, box_w, box_h, (look.corners as f64).min(4.0));
+    rounded_rect(cr, bx, by, box_w, box_h, look.small_corners as f64);
     cr.fill()
         .map_err(|e| format!("cairo label fill failed: {e}"))?;
 
@@ -134,7 +135,7 @@ fn draw_size_label(
         by + 0.5,
         box_w - 1.0,
         box_h - 1.0,
-        (look.corners as f64).min(4.0),
+        look.small_corners as f64,
     );
     cr.stroke()
         .map_err(|e| format!("cairo label border failed: {e}"))?;
@@ -187,7 +188,7 @@ mod tests {
         render_overlay(
             &dst,
             &OverlayDraw {
-                look,
+                look: &look,
                 frozen: Some(&frozen),
                 selection_px: Some(Rect::new(5, 5, 10, 10)),
                 size_label: None,
@@ -227,7 +228,7 @@ mod tests {
         render_overlay(
             &dst,
             &OverlayDraw {
-                look,
+                look: &look,
                 frozen: None,
                 selection_px: Some(Rect::new(4, 4, 10, 10)),
                 size_label: None,
