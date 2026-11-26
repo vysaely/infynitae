@@ -2,7 +2,7 @@
 //! to find what to click: `panel NAME x y w h locked SIDE`, `module WORD x y w h` for a card read from
 //! today's module word (so today's scripts pass unchanged), `card OWNER/KIND x y w h` for every card,
 //! and `hit OWNER/KIND ID x y w h` for each of its hits; `ask x y w h` while the question shows;
-//! `closed` while closed.
+//! `osd x y w h VALUE LABEL` while the OSD shows; `closed` while closed.
 
 use crate::shell::Shell;
 
@@ -45,10 +45,25 @@ pub fn text(shell: &Shell, w: f64, h: f64) -> String {
     text_on(shell, shell.visible_output(), w, h)
 }
 
+fn osd_line(shell: &Shell, w: f64, h: f64) -> Option<String> {
+    let osd = shell.notify.osd.as_ref()?;
+    let (x, y, ow, oh) = crate::notify::osd_rect(w, h);
+    let val = if osd.muted { 0 } else { osd.value };
+    Some(format!(
+        "osd {x:.0} {y:.0} {ow:.0} {oh:.0} {val} {}\n",
+        osd.label
+    ))
+}
+
 fn text_on(shell: &Shell, output: Option<crate::shell::OutputId>, w: f64, h: f64) -> String {
+    let osd = osd_line(shell, w, h);
     if shell.ask.ask.on {
         let (x, y, aw, ah) = shell.ask.ask.geometry(w, h);
-        return format!("ask {x:.0} {y:.0} {aw:.0} {ah:.0}\n");
+        let mut out = format!("ask {x:.0} {y:.0} {aw:.0} {ah:.0}\n");
+        if let Some(line) = osd {
+            out += &line;
+        }
+        return out;
     }
     if let Some((x, y, mw, mh)) = shell.window_menu_rect(w, h) {
         let mut out = format!("windowmenu {x:.0} {y:.0} {mw:.0} {mh:.0}\n");
@@ -60,10 +75,13 @@ fn text_on(shell: &Shell, output: Option<crate::shell::OutputId>, w: f64, h: f64
                 );
             }
         }
+        if let Some(line) = osd {
+            out += &line;
+        }
         return out;
     }
     let Some(idx) = shell.open else {
-        return "closed\n".into();
+        return osd.unwrap_or_else(|| "closed\n".into());
     };
     let ps = &shell.panels[idx];
     let editing = shell.editing();
@@ -166,6 +184,9 @@ fn text_on(shell: &Shell, output: Option<crate::shell::OutputId>, w: f64, h: f64
             }
         }
     }
+    if let Some(line) = osd {
+        out += &line;
+    }
     out
 }
 
@@ -188,5 +209,42 @@ mod tests {
         assert!(!write_boxes_to(&bad, "closed\n"));
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn text_reports_osd_when_closed_and_when_panel_is_open() {
+        let mut sh = Shell::new(
+            crate::config::Config::from_text(
+                "PANEL_CONTROL=\"SUPER+A top right 380 settings/session\"\n",
+            ),
+            Vec::new(),
+        );
+        assert_eq!(text(&sh, 1920.0, 1080.0), "closed\n");
+        let note = crate::notify::Note {
+            id: 1,
+            app: "Audio".into(),
+            summary: "Volume: 65%".into(),
+            body: String::new(),
+            actions: vec![],
+            urgency: 1,
+            value: Some(65),
+            sync: Some("volume".into()),
+            expire: Some(Some(std::time::Duration::from_millis(1200))),
+            transient: false,
+            resident: false,
+            time: "12:00".into(),
+        };
+        sh.notify
+            .receive(note, std::time::Instant::now(), crate::notify::Quiet::No);
+        let closed_osd = text(&sh, 1920.0, 1080.0);
+        assert_eq!(closed_osd, "osd 840 1000 240 56 65 Volume\n");
+
+        assert!(sh.toggle_named_on(None, "control"));
+        let open_osd = text(&sh, 1920.0, 1080.0);
+        assert!(open_osd.starts_with("panel control "), "{open_osd}");
+        assert!(
+            open_osd.ends_with("osd 840 1000 240 56 65 Volume\n"),
+            "{open_osd}"
+        );
     }
 }

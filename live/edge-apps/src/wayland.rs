@@ -72,7 +72,7 @@ mod handlers;
 mod surfaces;
 mod workers;
 
-use surfaces::{OutputSurface, PopupLayer};
+use surfaces::{OutputSurface, PopupLayer, SurfaceKind};
 use workers::{
     refresh_sources, run_queued_with, run_sh_result, spawn_apps_worker, spawn_worker, AppRefresh,
     CommandQueue, FetchSchedule, Fetched, SourceId, SourceWorker,
@@ -173,6 +173,8 @@ struct App {
     popups: Option<PopupLayer>,
     /// the desktop widgets' surface on the first screen, there only while the WIDGETS line has one
     widget_layer: Option<PopupLayer>,
+    /// the volume/brightness OSD surface, made lazily with the first level notification
+    osd_layer: Option<PopupLayer>,
     /// the touch point that went down on a widget
     widget_touch: Option<i32>,
     /// active touch point on the notification pop-ups strip (id, start position)
@@ -210,20 +212,64 @@ impl App {
                 time: n.time.clone(),
             })
             .collect();
-        if !self.shell.notify.popups.is_empty() {
+        if !self.shell.notify.popups.is_empty() || self.shell.notify.osd.is_some() {
             self.reload_config();
         }
         if self.popups.is_none() && !self.shell.notify.popups.is_empty() {
             if let Some(output) = self.outputs.first().map(|o| o.output.clone()) {
-                self.popups = PopupLayer::new(self, output, false);
+                self.popups = PopupLayer::new(self, output, SurfaceKind::Popups);
             }
         }
         if let Some(pl) = self.popups.as_mut() {
             pl.render(&self.qh, &self.compositor, &self.shell);
         }
+        if self.shell.notify.osd.is_some() {
+            if let Some(output) = self.target_osd_output() {
+                if self
+                    .osd_layer
+                    .as_ref()
+                    .is_some_and(|ol| ol.output != output)
+                {
+                    self.osd_layer = None;
+                }
+                if self.osd_layer.is_none() {
+                    self.osd_layer = PopupLayer::new(self, output, SurfaceKind::Osd);
+                }
+            }
+        }
+        if let Some(ol) = self.osd_layer.as_mut() {
+            if ol.render(&self.qh, &self.compositor, &self.shell) {
+                self.dump_osd_boxes();
+            }
+        }
         if self.shell.open.is_some() {
             // the open panel's cards list them too
             self.sync_all();
+        }
+    }
+
+    fn target_osd_output(&self) -> Option<wl_output::WlOutput> {
+        self.key_target_output()
+            .and_then(|id| self.outputs.iter().find(|o| o.id == id))
+            .or_else(|| self.outputs.first())
+            .map(|o| o.output.clone())
+    }
+
+    pub(super) fn dump_osd_boxes(&self) {
+        let os = self
+            .shell
+            .visible_output()
+            .and_then(|id| self.outputs.iter().find(|o| o.id == id))
+            .or_else(|| {
+                self.osd_layer
+                    .as_ref()
+                    .and_then(|ol| self.outputs.iter().find(|o| o.output == ol.output))
+            })
+            .or_else(|| self.outputs.first());
+        if let Some(os) = os.filter(|o| o.width > 0 && o.height > 0) {
+            crate::boxes::dump(&self.shell, f64::from(os.width), f64::from(os.height));
+        } else if self.shell.notify.osd.is_none() && !self.shell.visible() {
+            crate::boxes::dump_closed();
         }
     }
 
@@ -236,7 +282,7 @@ impl App {
             self.widget_touch = None;
         } else if self.widget_layer.is_none() {
             if let Some(output) = self.outputs.first().map(|o| o.output.clone()) {
-                self.widget_layer = PopupLayer::new(self, output, true);
+                self.widget_layer = PopupLayer::new(self, output, SurfaceKind::Widgets);
             }
         }
     }
@@ -349,18 +395,26 @@ impl App {
                 }
             }
         }
+        let mut osd_changed = false;
         for pl in self
             .popups
             .iter_mut()
             .chain(self.widget_layer.iter_mut())
+            .chain(self.osd_layer.iter_mut())
             .filter(|p| &p.output == output)
         {
             if pl.integer_scale != scale {
                 pl.integer_scale = scale;
-                if pl.viewport.is_none() {
-                    pl.render(qh, &self.compositor, &self.shell);
+                if pl.viewport.is_none()
+                    && pl.render(qh, &self.compositor, &self.shell)
+                    && pl.kind == SurfaceKind::Osd
+                {
+                    osd_changed = true;
                 }
             }
+        }
+        if osd_changed {
+            self.dump_osd_boxes();
         }
         if need_sync {
             self.sync_all();
@@ -879,6 +933,7 @@ fn init_app(
         was_animating: false,
         popups: None,
         widget_layer: None,
+        osd_layer: None,
         widget_touch: None,
         popup_touch: None,
         notify_conn: None,
@@ -1419,6 +1474,10 @@ mod tests {
         pub(super) layer_kind: HashMap<u32, (u32, String)>,
         layer_to_surface: HashMap<u32, u32>,
         layer_to_output_global: HashMap<u32, u32>,
+        layer_requested_size: HashMap<u32, (u32, u32)>,
+        layer_configured: std::collections::HashSet<u32>,
+        layer_was_mapped: std::collections::HashSet<u32>,
+        layer_unmapped: std::collections::HashSet<u32>,
         buffers: HashMap<u32, (i32, i32)>,
         regions: HashMap<u32, Vec<(i32, i32, i32, i32)>>,
         viewports: HashMap<u32, u32>,
@@ -1822,13 +1881,25 @@ mod tests {
                                 }
                             }
                         }
-                        Some(Obj::LayerSurface) if opcode == 4 => {
-                            let kb = Self::read_u32(body, &mut off);
-                            let mut st = state.lock().unwrap();
-                            if let Some(&sid) = st.layer_to_surface.get(&obj_id) {
-                                st.surface_kb.insert(sid, kb);
+                        Some(Obj::LayerSurface) => match opcode {
+                            0 => {
+                                let w = Self::read_u32(body, &mut off);
+                                let h = Self::read_u32(body, &mut off);
+                                state
+                                    .lock()
+                                    .unwrap()
+                                    .layer_requested_size
+                                    .insert(obj_id, (w, h));
                             }
-                        }
+                            4 => {
+                                let kb = Self::read_u32(body, &mut off);
+                                let mut st = state.lock().unwrap();
+                                if let Some(&sid) = st.layer_to_surface.get(&obj_id) {
+                                    st.surface_kb.insert(sid, kb);
+                                }
+                            }
+                            _ => {}
+                        },
                         Some(Obj::Viewporter) if opcode == 1 => {
                             let vid = Self::read_u32(body, &mut off);
                             let sid = Self::read_u32(body, &mut off);
@@ -1910,24 +1981,44 @@ mod tests {
                             6 => {
                                 let mut st = state.lock().unwrap();
                                 let lid = st.layers_by_surface.get(&obj_id).copied();
-                                let prev_had_commit = st
-                                    .surface_commits
-                                    .get(&obj_id)
-                                    .is_some_and(|v| !v.is_empty());
-                                if let (Some(lid), false) = (lid, prev_had_commit) {
-                                    if let Some(&gidx) = st.layer_to_output_global.get(&lid) {
-                                        st.next_serial += 1;
-                                        let serial = st.next_serial;
-                                        let spec = &specs[gidx as usize];
-                                        let mut cb = Vec::new();
-                                        Self::push_u32(&mut cb, serial);
-                                        Self::push_u32(&mut cb, spec.width as u32);
-                                        Self::push_u32(&mut cb, spec.height as u32);
-                                        out_bytes.extend(Self::msg(lid, 0, &cb));
-                                    }
-                                }
                                 let buf_id = st.surface_buf.get(&obj_id).copied().flatten();
                                 let buf_sz = buf_id.and_then(|b| st.buffers.get(&b).copied());
+                                if let Some(lid) = lid {
+                                    let first = st.layer_configured.insert(lid);
+                                    let mapped = buf_sz.is_some();
+                                    let was_mapped = st.layer_was_mapped.contains(&lid);
+                                    let unmapped = st.layer_unmapped.contains(&lid);
+                                    let remap = !mapped && !was_mapped && unmapped;
+                                    if mapped {
+                                        st.layer_was_mapped.insert(lid);
+                                    } else {
+                                        st.layer_was_mapped.remove(&lid);
+                                    }
+                                    if !mapped && (was_mapped || remap) {
+                                        st.layer_unmapped.insert(lid);
+                                    } else {
+                                        st.layer_unmapped.remove(&lid);
+                                    }
+                                    if first || remap {
+                                        if let Some(&gidx) = st.layer_to_output_global.get(&lid) {
+                                            st.next_serial += 1;
+                                            let serial = st.next_serial;
+                                            let spec = &specs[gidx as usize];
+                                            let (rw, rh) = st
+                                                .layer_requested_size
+                                                .get(&lid)
+                                                .copied()
+                                                .unwrap_or((0, 0));
+                                            let cw = if rw == 0 { spec.width as u32 } else { rw };
+                                            let ch = if rh == 0 { spec.height as u32 } else { rh };
+                                            let mut cb = Vec::new();
+                                            Self::push_u32(&mut cb, serial);
+                                            Self::push_u32(&mut cb, cw);
+                                            Self::push_u32(&mut cb, ch);
+                                            out_bytes.extend(Self::msg(lid, 0, &cb));
+                                        }
+                                    }
+                                }
                                 if let Some(bid) = buf_id {
                                     out_bytes.extend(Self::msg(bid, 0, &[]));
                                 }
