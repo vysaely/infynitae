@@ -34,6 +34,7 @@
 #include <security/pam_appl.h>
 
 #include "ext-session-lock-v1-protocol.h"
+#include "greetd.h"
 #include "../journal.h"
 
 #define PASSWORD_MAX_LEN 256
@@ -93,6 +94,13 @@ typedef struct {
     bool greeter_mode;
     char session_cmd[256];
     char status_msg[128];
+    /* the login screen (greeter mode): Tab turns the field into a username field for another
+     * user; Enter there takes the name and asks for its password */
+    bool editing_user;
+    char user_buf[128];
+    size_t user_len;
+    /* why a sign-in failed other than a wrong password (greetd's own words), under the field */
+    char note_msg[160];
 
     /* what the screen shows of the user (owner, 2026-11-06: "the lock screen is mid, like the
      * wallpaper on it and the user pfp"): the full name from the account (GECOS), else the login;
@@ -145,6 +153,7 @@ typedef struct LockOutput {
 } LockOutput;
 
 static void render_output(LockOutput *output);
+static void resolve_display_name(LockApp *app);
 static void request_frame(LockOutput *output);
 static void damage_all_outputs(LockApp *app);
 
@@ -291,8 +300,66 @@ static void *pam_worker_thread(void *arg) {
     return NULL;
 }
 
+typedef struct {
+    char username[128];
+    char password[PASSWORD_MAX_LEN];
+    char session_cmd[256];
+    LockApp *app;
+} GreetdWorkerData;
+
+/* The login screen signs in through greetd: it checks the password, opens the session and starts
+ * the desktop as the user once this screen exits. */
+static void *greetd_worker_thread(void *arg) {
+    GreetdWorkerData *data = (GreetdWorkerData *)arg;
+    LockApp *app = data->app;
+    char detail[160] = "";
+    GreetdResult r = greetd_login(getenv("GREETD_SOCK"), data->username, data->password,
+                                  data->session_cmd, detail, sizeof(detail));
+    explicit_bzero(data->password, sizeof(data->password));
+    if (r == GREETD_OK) {
+        app->auth_state = AUTH_STATE_SUCCESS;
+    } else {
+        journal_write("login-failed", getpid(), r == GREETD_DENIED ? "wrong username or password" : detail, "denied");
+        if (r == GREETD_FAILED) snprintf(app->note_msg, sizeof(app->note_msg), "%s", detail);
+        app->auth_state = AUTH_STATE_FAILED;
+        app->shake_frame = SHAKE_DURATION_FRAMES;
+    }
+    explicit_bzero(data, sizeof(*data));
+    munlock(data, sizeof(*data));
+    free(data);
+    app->pam_thread_active = false;
+    return NULL;
+}
+
+static void trigger_greetd(LockApp *app) {
+    GreetdWorkerData *data = malloc(sizeof(GreetdWorkerData));
+    if (!data) return;
+    app->auth_state = AUTH_STATE_VERIFYING;
+    app->note_msg[0] = '\0';
+    (void)mlock(data, sizeof(*data));
+    snprintf(data->username, sizeof(data->username), "%s", app->username);
+    snprintf(data->password, sizeof(data->password), "%s", app->password);
+    snprintf(data->session_cmd, sizeof(data->session_cmd), "%s", app->session_cmd);
+    data->app = app;
+    explicit_bzero(app->password, sizeof(app->password));
+    app->password_len = 0;
+    app->pam_thread_active = true;
+    if (pthread_create(&app->pam_thread, NULL, greetd_worker_thread, data) != 0) {
+        app->auth_state = AUTH_STATE_FAILED;
+        app->pam_thread_active = false;
+        explicit_bzero(data, sizeof(*data));
+        free(data);
+        return;
+    }
+    pthread_detach(app->pam_thread);
+}
+
 static void trigger_auth(LockApp *app) {
     if (app->auth_state == AUTH_STATE_VERIFYING || app->pam_thread_active) return;
+    if (app->greeter_mode) {
+        trigger_greetd(app);
+        return;
+    }
     if (app->password_len == 0) return;
 
     PamWorkerData *data = malloc(sizeof(PamWorkerData));
@@ -926,12 +993,20 @@ static void draw_scene(cairo_t *cr, LockApp *app, const LockOutput *output, int 
     }
     cairo_stroke(cr);
 
-    if (app->status_msg[0] != '\0') {
+    if (app->editing_user) {
+        if (app->user_len > 0) {
+            cairo_set_source_rgba(cr, tx[0], tx[1], tx[2], 0.94);
+            draw_text_centered(cr, layout, app->font, PANGO_WEIGHT_NORMAL, 13.0, app->user_buf, ax, field_cy, false);
+        } else {
+            cairo_set_source_rgb(cr, app->muted_rgb[0], app->muted_rgb[1], app->muted_rgb[2]);
+            draw_text_centered(cr, layout, app->font, PANGO_WEIGHT_NORMAL, 13.0, "Username", ax, field_cy, false);
+        }
+    } else if (app->status_msg[0] != '\0') {
         cairo_set_source_rgba(cr, tx[0], tx[1], tx[2], 0.94);
         draw_text_centered(cr, layout, app->font, PANGO_WEIGHT_NORMAL, 13.0, app->status_msg, ax, field_cy, false);
     } else if (app->auth_state == AUTH_STATE_SUCCESS) {
         cairo_set_source_rgba(cr, tx[0], tx[1], tx[2], 0.94);
-        draw_text_centered(cr, layout, app->font, PANGO_WEIGHT_NORMAL, 13.0, "Unlocking", ax, field_cy, false);
+        draw_text_centered(cr, layout, app->font, PANGO_WEIGHT_NORMAL, 13.0, app->greeter_mode ? "Signing in" : "Unlocking", ax, field_cy, false);
     } else if (app->auth_state == AUTH_STATE_VERIFYING) {
         cairo_set_source_rgba(cr, tx[0], tx[1], tx[2], 0.80);
         draw_text_centered(cr, layout, app->font, PANGO_WEIGHT_NORMAL, 13.0, "Checking", ax, field_cy, false);
@@ -954,12 +1029,18 @@ static void draw_scene(cairo_t *cr, LockApp *app, const LockOutput *output, int 
 
     // One line under the field: the error, or caps lock
     double note_y = field_y + field_h + 22.0;
-    if (app->auth_state == AUTH_STATE_FAILED && app->password_len == 0) {
+    if (app->auth_state == AUTH_STATE_FAILED && app->password_len == 0 && !app->editing_user) {
         cairo_set_source_rgba(cr, app->alert_rgb[0], app->alert_rgb[1], app->alert_rgb[2], 0.95);
-        draw_text_centered(cr, layout, app->font, PANGO_WEIGHT_NORMAL, 11.0, "Wrong password, try again", ax, note_y, false);
+        const char *why = app->note_msg[0] ? app->note_msg
+                        : app->greeter_mode ? "Wrong username or password, try again" : "Wrong password, try again";
+        draw_text_centered(cr, layout, app->font, PANGO_WEIGHT_NORMAL, 11.0, why, ax, note_y, false);
     } else if (app->caps_lock) {
         cairo_set_source_rgba(cr, app->accent_text_rgb[0], app->accent_text_rgb[1], app->accent_text_rgb[2], 0.95);
         draw_text_centered(cr, layout, app->font, PANGO_WEIGHT_NORMAL, 11.0, "Caps Lock is on", ax, note_y, false);
+    } else if (app->greeter_mode) {
+        cairo_set_source_rgb(cr, app->muted_rgb[0], app->muted_rgb[1], app->muted_rgb[2]);
+        draw_text_centered(cr, layout, app->font, PANGO_WEIGHT_NORMAL, 11.0,
+                           app->editing_user ? "Enter: next   Escape: back" : "Tab: another user", ax, note_y, false);
     }
 
     if (app->osk_visible) osk_draw(cr, layout, app, output, w, h);
@@ -1157,6 +1238,48 @@ static void keyboard_key(void *data, struct wl_keyboard *keyboard,
     uint32_t keycode = key + 8; // evdev -> xkb translation offset
     xkb_keysym_t sym = xkb_state_key_get_one_sym(app->xkb_state, keycode);
 
+    /* the login screen: Tab asks for another user's name in the same field */
+    if (app->greeter_mode && !app->editing_user && (sym == XKB_KEY_Tab || sym == XKB_KEY_ISO_Left_Tab)) {
+        explicit_bzero(app->password, sizeof(app->password));
+        app->password_len = 0;
+        app->editing_user = true;
+        app->user_len = 0;
+        app->user_buf[0] = '\0';
+        app->auth_state = AUTH_STATE_IDLE;
+        app->note_msg[0] = '\0';
+        damage_all_outputs(app);
+        return;
+    }
+    if (app->editing_user) {
+        if (sym == XKB_KEY_Return || sym == XKB_KEY_KP_Enter) {
+            if (app->user_len > 0) {
+                snprintf(app->username, sizeof(app->username), "%s", app->user_buf);
+                resolve_display_name(app);
+                app->editing_user = false;
+            }
+        } else if (sym == XKB_KEY_Escape || sym == XKB_KEY_Tab || sym == XKB_KEY_ISO_Left_Tab) {
+            app->editing_user = false;
+        } else if (sym == XKB_KEY_BackSpace) {
+            if (app->user_len > 0) {
+                /* drop a whole UTF-8 character */
+                do app->user_len--; while (app->user_len > 0 && ((unsigned char)app->user_buf[app->user_len] & 0xC0) == 0x80);
+                app->user_buf[app->user_len] = '\0';
+            }
+        } else {
+            char ub[16] = {0};
+            int ul = xkb_state_key_get_utf8(app->xkb_state, keycode, ub, sizeof(ub));
+            /* login names: no spaces or control characters */
+            if (ul > 0 && (unsigned char)ub[0] > 32 && (unsigned char)ub[0] != 127
+                && app->user_len + (size_t)ul < sizeof(app->user_buf) - 1) {
+                memcpy(app->user_buf + app->user_len, ub, (size_t)ul);
+                app->user_len += (size_t)ul;
+                app->user_buf[app->user_len] = '\0';
+            }
+        }
+        damage_all_outputs(app);
+        return;
+    }
+
     if (sym == XKB_KEY_Return || sym == XKB_KEY_KP_Enter) {
         if (app->password_len > 0) {
             trigger_auth(app);
@@ -1323,6 +1446,47 @@ static const struct wl_registry_listener registry_listener = {
 
 /* The name the screen shows and up to two initials (UTF-8 aware): the account's full name (GECOS
  * up to the first comma), else the login. */
+/* The login screen remembers who signed in last, in its own home (the greeter account's), so the
+ * next start shows that name. */
+static void last_user_path(char *out, size_t len) {
+    const char *home = getenv("HOME");
+    snprintf(out, len, "%s/last-user", home && *home ? home : "/var/lib/greetd");
+}
+
+/* The name the login screen starts with: the last one signed in, else the only person's account
+ * on this PC (a uid from 1000 with a login shell); empty when there are several and none was. */
+static void greeter_default_user(char *out, size_t len) {
+    char path[512];
+    out[0] = '\0';
+    last_user_path(path, sizeof(path));
+    FILE *f = fopen(path, "re");
+    if (f) {
+        if (fgets(out, (int)len, f)) out[strcspn(out, "\r\n")] = '\0';
+        fclose(f);
+        if (out[0] && getpwnam(out)) return;
+        out[0] = '\0';
+    }
+    int people = 0;
+    setpwent();
+    for (struct passwd *pw; (pw = getpwent());) {
+        if (pw->pw_uid < 1000 || pw->pw_uid >= 60000 || !pw->pw_shell) continue;
+        if (strstr(pw->pw_shell, "nologin") || strstr(pw->pw_shell, "/false")) continue;
+        if (++people == 1) snprintf(out, len, "%s", pw->pw_name);
+    }
+    endpwent();
+    if (people != 1) out[0] = '\0';
+}
+
+static void save_last_user(const char *username) {
+    char path[512], tmp[520];
+    last_user_path(path, sizeof(path));
+    snprintf(tmp, sizeof(tmp), "%s.new", path);
+    FILE *f = fopen(tmp, "we");
+    if (!f) return;
+    fprintf(f, "%s\n", username);
+    if (fclose(f) == 0) rename(tmp, path);
+}
+
 static void resolve_display_name(LockApp *app) {
     struct passwd *pw = getpwnam(app->username);
     const char *full = NULL;
@@ -1472,8 +1636,8 @@ int main(int argc, char **argv) {
     // Resolve username. Locking, it is always the real account (getuid), never the environment
     // or an argument: only that account's password unlocks the session. `--user` picks the
     // account only for the greeter, which logs someone in.
-    // the greeter is not finished: it starts the session without dropping to the account (no
-    // setuid, no PAM session), so as root that session would be root's. Refused there.
+    // greetd runs the login screen as its own account and starts the session itself; as root this
+    // screen would hold the password with root's rights for nothing. Refused there.
     if (app.greeter_mode && geteuid() == 0) {
         fprintf(stderr, "[infynitae-lock] --greeter does not run as root (it would start the session as root)\n");
         return 1;
@@ -1489,14 +1653,12 @@ int main(int argc, char **argv) {
         memset(app.username, 0, sizeof(app.username));
         strncpy(app.username, pw->pw_name, sizeof(app.username) - 1);
     } else if (app.username[0] == '\0') {
-        const char *login_user = getenv("USER");
-        if (!login_user) login_user = getenv("LOGNAME");
-        if (!login_user) {
-            struct passwd *pw = getpwuid(getuid());
-            if (pw) login_user = pw->pw_name;
-        }
-        strncpy(app.username, login_user ? login_user : "user", sizeof(app.username) - 1);
+        /* the login screen: the last person, else the only one; nobody known: ask for the name */
+        greeter_default_user(app.username, sizeof(app.username));
+        if (app.username[0] == '\0') app.editing_user = true;
     }
+    if (app.greeter_mode && app.session_cmd[0] == '\0')
+        snprintf(app.session_cmd, sizeof(app.session_cmd), "%s", "exec \"$HOME/.local/bin/infynitae-session\"");
 
     resolve_display_name(&app);
     if (render_out) return render_to_png(&app, render_size, render_out);
@@ -1650,11 +1812,11 @@ int main(int argc, char **argv) {
 
     explicit_bzero(app.password, sizeof(app.password));
 
+    /* greetd starts the session once this screen has exited */
     if (app.greeter_mode && app.auth_state == AUTH_STATE_SUCCESS) {
-        printf("[infynitae-lock] Launching session: %s\n", app.session_cmd);
-        execlp(app.session_cmd, app.session_cmd, NULL);
-        perror("[infynitae-lock] execlp");
-        return 1;
+        save_last_user(app.username);
+        printf("[infynitae-lock] Signed in as %s\n", app.username);
+        return 0;
     }
 
     printf("[infynitae-lock] Unlocked.\n");

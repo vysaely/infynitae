@@ -13,7 +13,7 @@ OUT="${RENDER_OUT:-$TMP/out}"
 mkdir -p "$OUT" "$TMP/home/.config/infynitae"
 LIVE="$REPO_DIR/live"
 
-cc -O1 -Wall -Wextra -Werror -o "$TMP/infynitae-lock" "$LIVE/lock/infynitae-lock.c" "$LIVE/lock/ext-session-lock-v1-protocol.c" \
+cc -O1 -Wall -Wextra -Werror -o "$TMP/infynitae-lock" "$LIVE/lock/infynitae-lock.c" "$LIVE/lock/greetd.c" "$LIVE/lock/ext-session-lock-v1-protocol.c" \
     $(pkg-config --cflags --libs wayland-client cairo pangocairo xkbcommon) -lpam -lm -lpthread
 cat > "$TMP/cache.c" <<'C'
 #include "lock-cache.h"
