@@ -85,6 +85,7 @@ right.
 | `Super + V` | Clipboard history |
 | `Super + A` | Control menu: Wi-Fi, Bluetooth, volume (all sound or one app), sound output, power, battery limit, do not disturb |
 | `Super + L` | List of open windows |
+| `Super + /` | Shortcut help overlay (`Super + F1` too) |
 | `Super + Shift + L` | Lock |
 | `Super + Shift + C` | Close the window (an app that does not answer within 5 s: asked whether to end it) |
 | `Super + Shift + Delete` | Force close (ends the app, also an X11 app or game, and while an app holds the shortcuts) |

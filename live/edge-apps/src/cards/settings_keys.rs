@@ -36,12 +36,42 @@ const HIT_ROW_BASE: u32 = 10;
 
 const MOD_ORDER: [&str; 4] = ["SUPER", "CTRL", "ALT", "SHIFT"];
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShortcutGroup {
+    Windows,
+    Canvas,
+    Apps,
+    Screenshots,
+    System,
+}
+
+impl ShortcutGroup {
+    pub const ALL: [Self; 5] = [
+        Self::Windows,
+        Self::Canvas,
+        Self::Apps,
+        Self::Screenshots,
+        Self::System,
+    ];
+
+    pub const fn title(self) -> &'static str {
+        match self {
+            Self::Windows => "Windows",
+            Self::Canvas => "Canvas",
+            Self::Apps => "Apps",
+            Self::Screenshots => "Screenshots and recording",
+            Self::System => "System",
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 struct BuiltinAction {
     action: &'static str,
     name: &'static str,
     /// Built-in default chords in config spelling (`keys.rs`); `[0]` is displayed when unset.
     defaults: &'static [&'static str],
+    group: ShortcutGroup,
     more: bool,
 }
 
@@ -52,186 +82,224 @@ const ACTIONS: &[BuiltinAction] = &[
         action: "TERMINAL",
         name: "Open a terminal",
         defaults: &["SUPER+Q"],
+        group: ShortcutGroup::Apps,
         more: false,
     },
     BuiltinAction {
         action: "FILE_MANAGER",
         name: "Open file manager",
         defaults: &["SUPER+E"],
+        group: ShortcutGroup::Apps,
         more: false,
     },
     BuiltinAction {
         action: "LAUNCHER",
         name: "Open app launcher",
         defaults: &["SUPER+W"],
+        group: ShortcutGroup::Apps,
         more: false,
     },
     BuiltinAction {
         action: "WINDOWS",
         name: "List open windows",
         defaults: &["SUPER+L"],
+        group: ShortcutGroup::Windows,
         more: false,
     },
     BuiltinAction {
         action: "OVERVIEW",
         name: "Toggle canvas overview",
         defaults: &["SUPER+SHIFT+TAB"],
+        group: ShortcutGroup::Canvas,
         more: false,
     },
     BuiltinAction {
         action: "LOCK",
         name: "Lock the screen",
         defaults: &["SUPER+SHIFT+L"],
+        group: ShortcutGroup::System,
         more: false,
     },
     BuiltinAction {
         action: "SCREENSHOT",
         name: "Capture full screenshot",
         defaults: &["SUPER+SHIFT+S", "PRINT"],
+        group: ShortcutGroup::Screenshots,
         more: false,
     },
     BuiltinAction {
         action: "REGION_SCREENSHOT",
         name: "Capture region screenshot",
         defaults: &["SUPER+S", "SUPER+SHIFT+R"],
+        group: ShortcutGroup::Screenshots,
         more: false,
     },
     BuiltinAction {
         action: "CLIPBOARD",
         name: "Open clipboard history",
         defaults: &["SUPER+V"],
+        group: ShortcutGroup::Apps,
         more: false,
     },
     BuiltinAction {
         action: "CONTROL",
         name: "Open control panel",
         defaults: &["SUPER+A"],
+        group: ShortcutGroup::System,
         more: false,
     },
     BuiltinAction {
         action: "FIT",
         name: "Fit window to view",
         defaults: &["SUPER+RETURN"],
+        group: ShortcutGroup::Windows,
         more: false,
     },
     BuiltinAction {
         action: "FULLSCREEN",
         name: "Toggle window fullscreen",
         defaults: &["SUPER+SHIFT+RETURN"],
+        group: ShortcutGroup::Windows,
         more: false,
     },
     BuiltinAction {
         action: "CLOSE",
         name: "Close focused window",
         defaults: &["SUPER+SHIFT+C"],
+        group: ShortcutGroup::Windows,
         more: false,
     },
     BuiltinAction {
         action: "FORCE_CLOSE",
         name: "Force close window",
         defaults: &["SUPER+SHIFT+DELETE"],
+        group: ShortcutGroup::Windows,
         more: true,
     },
     BuiltinAction {
         action: "FOCUS_NEXT",
         name: "Focus next window",
         defaults: &["SUPER+TAB"],
+        group: ShortcutGroup::Windows,
         more: true,
     },
     BuiltinAction {
         action: "FOCUS_LEFT",
         name: "Focus window on the left",
         defaults: &["SUPER+LEFT"],
+        group: ShortcutGroup::Windows,
         more: true,
     },
     BuiltinAction {
         action: "FOCUS_RIGHT",
         name: "Focus window on the right",
         defaults: &["SUPER+RIGHT"],
+        group: ShortcutGroup::Windows,
         more: true,
     },
     BuiltinAction {
         action: "FOCUS_UP",
         name: "Focus window above",
         defaults: &["SUPER+UP"],
+        group: ShortcutGroup::Windows,
         more: true,
     },
     BuiltinAction {
         action: "FOCUS_DOWN",
         name: "Focus window below",
         defaults: &["SUPER+DOWN"],
+        group: ShortcutGroup::Windows,
         more: true,
     },
     BuiltinAction {
         action: "SYSTEM_MONITOR",
         name: "Open system monitor",
         defaults: &["SUPER+SHIFT+ESC"],
+        group: ShortcutGroup::Apps,
         more: true,
     },
     BuiltinAction {
         action: "RELOAD",
         name: "Reload shell UI",
         defaults: &["SUPER+SHIFT+BACKSPACE"],
+        group: ShortcutGroup::System,
         more: true,
     },
     BuiltinAction {
         action: "PRIVACY",
         name: "Toggle privacy mode",
         defaults: &["SUPER+SHIFT+P"],
+        group: ShortcutGroup::Screenshots,
         more: true,
     },
     BuiltinAction {
         action: "IDLE_INHIBIT",
         name: "Stay awake",
         defaults: &["SUPER+SHIFT+I"],
+        group: ShortcutGroup::System,
         more: true,
     },
     BuiltinAction {
         action: "TEARING",
         name: "Allow fullscreen tearing",
         defaults: &["SUPER+SHIFT+O", "SUPER+SHIFT+T"],
+        group: ShortcutGroup::Windows,
         more: true,
     },
     BuiltinAction {
         action: "SAVE_REPLAY",
         name: "Save the replay",
         defaults: &["SUPER+ALT+C"],
+        group: ShortcutGroup::Screenshots,
         more: true,
     },
     BuiltinAction {
         action: "RECORD",
         name: "Toggle screen recording",
         defaults: &["SUPER+ALT+P", "SUPER+ALT+R"],
+        group: ShortcutGroup::Screenshots,
         more: true,
     },
     BuiltinAction {
         action: "KEEP_ON_TOP",
         name: "Keep window on top",
         defaults: &["SUPER+SHIFT+K"],
+        group: ShortcutGroup::Windows,
         more: true,
     },
     BuiltinAction {
         action: "RECENTER",
         name: "Recenter and reset zoom",
         defaults: &["SUPER+SPACE"],
+        group: ShortcutGroup::Canvas,
         more: true,
     },
     BuiltinAction {
         action: "RECENTER_KEEP_ZOOM",
         name: "Recenter, keep zoom",
         defaults: &["SUPER+SHIFT+SPACE"],
+        group: ShortcutGroup::Canvas,
         more: true,
     },
     BuiltinAction {
         action: "BACK",
         name: "Go back in view history",
         defaults: &[],
+        group: ShortcutGroup::Canvas,
         more: true,
     },
     BuiltinAction {
         action: "WINDOW_MENU",
         name: "Open window menu",
         defaults: &[],
+        group: ShortcutGroup::Windows,
+        more: true,
+    },
+    BuiltinAction {
+        action: "SHORTCUTS",
+        name: "Show keyboard shortcuts",
+        defaults: &["SUPER+SLASH", "SUPER+F1"],
+        group: ShortcutGroup::System,
         more: true,
     },
 ];
@@ -316,12 +384,13 @@ pub fn capture_file_path() -> PathBuf {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct KeyRow {
-    key: String,
-    name: String,
-    chords: Vec<String>,
+pub(crate) struct KeyRow {
+    pub(crate) key: String,
+    pub(crate) name: String,
+    pub(crate) chords: Vec<String>,
     raw_config: Option<String>,
     exec_command: Option<String>,
+    pub(crate) group: ShortcutGroup,
     more: bool,
 }
 
@@ -333,6 +402,86 @@ impl KeyRow {
     fn is_exec(&self) -> bool {
         self.exec_command.is_some()
     }
+}
+
+pub(crate) fn shortcut_rows(
+    persisted: Option<&HashMap<String, String>>,
+    pending: Option<&HashMap<String, String>>,
+) -> Vec<KeyRow> {
+    let raw_value = |key: &str| -> Option<&str> {
+        if let Some(v) = pending.and_then(|p| p.get(key)) {
+            return Some(v.as_str());
+        }
+        persisted.and_then(|c| c.get(key)).map(String::as_str)
+    };
+    let persisted_raw =
+        |key: &str| -> Option<&str> { persisted.and_then(|c| c.get(key)).map(String::as_str) };
+
+    let mut out = Vec::with_capacity(ACTIONS.len());
+    for b in ACTIONS {
+        let key = format!("BIND_{}", b.action);
+        let raw = raw_value(&key).map(str::to_string);
+        let chords = match &raw {
+            Some(v) => parse_bind_chords(v),
+            None => b.defaults.iter().map(|s| (*s).to_string()).collect(),
+        };
+        out.push(KeyRow {
+            key,
+            name: b.name.to_string(),
+            chords,
+            raw_config: persisted_raw(&format!("BIND_{}", b.action)).map(str::to_string),
+            exec_command: None,
+            group: b.group,
+            more: b.more,
+        });
+    }
+
+    let mut exec_keys: Vec<String> = persisted
+        .map(|now| {
+            now.keys()
+                .filter(|k| is_safe_exec_key(k))
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    if let Some(pend) = pending {
+        for k in pend.keys() {
+            if is_safe_exec_key(k) && !exec_keys.contains(k) {
+                exec_keys.push(k.clone());
+            }
+        }
+    }
+    exec_keys.sort();
+
+    for key in exec_keys {
+        let Some(val) = raw_value(&key) else {
+            continue;
+        };
+        let (chord, command) = match val.split_once(':') {
+            Some((c, cmd)) => (normalize_chord(c), cmd.trim().to_string()),
+            None => (String::new(), val.trim().to_string()),
+        };
+        let name = if command.is_empty() {
+            fallback_exec_name(&key)
+        } else {
+            command.clone()
+        };
+        let chords = if chord.is_empty() {
+            Vec::new()
+        } else {
+            vec![chord]
+        };
+        out.push(KeyRow {
+            key: key.clone(),
+            name,
+            chords,
+            raw_config: persisted_raw(&key).map(str::to_string),
+            exec_command: Some(command),
+            group: ShortcutGroup::Apps,
+            more: false,
+        });
+    }
+    out
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -376,85 +525,8 @@ impl KeysCard {
         key.starts_with("BIND_") || key.starts_with("EXEC_")
     }
 
-    fn raw_value(&self, key: &str) -> Option<&str> {
-        if let Some(v) = self.pending.get(key) {
-            return Some(v.as_str());
-        }
-        self.config.as_ref()?.now.get(key).map(String::as_str)
-    }
-
-    fn persisted_raw<'a>(&'a self, key: &str) -> Option<&'a str> {
-        self.config.as_ref()?.now.get(key).map(String::as_str)
-    }
-
     fn rows(&self) -> Vec<KeyRow> {
-        let mut out = Vec::with_capacity(ACTIONS.len());
-        for b in ACTIONS {
-            let key = format!("BIND_{}", b.action);
-            let raw = self.raw_value(&key).map(str::to_string);
-            let chords = match &raw {
-                Some(v) => parse_bind_chords(v),
-                None => b.defaults.iter().map(|s| (*s).to_string()).collect(),
-            };
-            out.push(KeyRow {
-                key,
-                name: b.name.to_string(),
-                chords,
-                raw_config: self
-                    .persisted_raw(&format!("BIND_{}", b.action))
-                    .map(str::to_string),
-                exec_command: None,
-                more: b.more,
-            });
-        }
-
-        // Include custom EXEC_* shortcuts sorted by config key name.
-        let mut exec_keys: Vec<String> = self
-            .config
-            .as_ref()
-            .map(|d| {
-                d.now
-                    .keys()
-                    .filter(|k| is_safe_exec_key(k))
-                    .cloned()
-                    .collect()
-            })
-            .unwrap_or_default();
-        for k in self.pending.keys() {
-            if is_safe_exec_key(k) && !exec_keys.contains(k) {
-                exec_keys.push(k.clone());
-            }
-        }
-        exec_keys.sort();
-
-        for key in exec_keys {
-            let Some(val) = self.raw_value(&key) else {
-                continue;
-            };
-            let (chord, command) = match val.split_once(':') {
-                Some((c, cmd)) => (normalize_chord(c), cmd.trim().to_string()),
-                None => (String::new(), val.trim().to_string()),
-            };
-            let name = if command.is_empty() {
-                fallback_exec_name(&key)
-            } else {
-                command.clone()
-            };
-            let chords = if chord.is_empty() {
-                Vec::new()
-            } else {
-                vec![chord]
-            };
-            out.push(KeyRow {
-                key: key.clone(),
-                name,
-                chords,
-                raw_config: self.persisted_raw(&key).map(str::to_string),
-                exec_command: Some(command),
-                more: false,
-            });
-        }
-        out
+        shortcut_rows(self.config.as_ref().map(|d| &d.now), Some(&self.pending))
     }
 
     fn visible_rows(&self, cx: &Cx) -> (Vec<KeyRow>, bool) {
@@ -1036,7 +1108,7 @@ fn cap_label(token: &str) -> &str {
     }
 }
 
-fn chord_cap_labels(chord: &str) -> Vec<&str> {
+pub(crate) fn chord_cap_labels(chord: &str) -> Vec<&str> {
     chord
         .split('+')
         .map(str::trim)
@@ -1045,7 +1117,7 @@ fn chord_cap_labels(chord: &str) -> Vec<&str> {
         .collect()
 }
 
-fn row_matches(row: &KeyRow, words: &[String]) -> bool {
+pub(crate) fn row_matches(row: &KeyRow, words: &[String]) -> bool {
     if words.len() >= 2 {
         let joined_chord = normalize_chord(&words.join("+"));
         if joined_chord.contains('+') {
@@ -1172,9 +1244,9 @@ fn capture_command(row: &KeyRow, all_rows: &[KeyRow], token: &str) -> String {
     )
 }
 
-const CAP_H: f64 = 22.0;
+pub(crate) const CAP_H: f64 = 22.0;
 const CAP_PAD_X: f64 = 6.0;
-const CAP_GAP: f64 = 4.0;
+pub(crate) const CAP_GAP: f64 = 4.0;
 const CAP_MIN_W: f64 = 22.0;
 
 fn cap_widths(cr: &Context, cx: &Cx, caps: &[&str]) -> Vec<f64> {
@@ -1195,7 +1267,7 @@ fn cap_widths(cr: &Context, cx: &Cx, caps: &[&str]) -> Vec<f64> {
         .collect()
 }
 
-fn measure_caps_width(cr: &Context, cx: &Cx, caps: &[&str]) -> f64 {
+pub(crate) fn measure_caps_width(cr: &Context, cx: &Cx, caps: &[&str]) -> f64 {
     if caps.is_empty() {
         return 0.0;
     }
@@ -1216,7 +1288,7 @@ fn measure_button_width(cr: &Context, cx: &Cx, word: &str) -> f64 {
     .0 + 20.0
 }
 
-fn draw_key_caps(
+pub(crate) fn draw_key_caps(
     cr: &Context,
     cx: &Cx,
     row_rect: Rect,
@@ -1312,12 +1384,25 @@ mod tests {
         let rows = card.rows();
         assert_eq!(
             rows.len(),
-            31,
+            ACTIONS.len(),
             "every built-in ACTION_NAMES entry has a row"
         );
         assert!(rows
             .iter()
             .any(|r| r.key == "BIND_BACK" && r.chords.is_empty()));
+        assert_eq!(
+            rows.iter()
+                .find(|r| r.key == "BIND_SHORTCUTS")
+                .map(|r| r.chords.clone()),
+            Some(vec!["SUPER+SLASH".to_string(), "SUPER+F1".to_string()])
+        );
+        for g in ShortcutGroup::ALL {
+            assert!(
+                rows.iter().any(|r| r.group == g),
+                "group {:?} should have at least one built-in row",
+                g
+            );
+        }
 
         let by_key: HashMap<_, _> = rows.iter().map(|r| (r.key.as_str(), r)).collect();
         assert_eq!(by_key["BIND_TERMINAL"].name, "Open a terminal");
@@ -1748,7 +1833,7 @@ mod tests {
         };
 
         let idle_hits = draw_once(&card);
-        assert_eq!(idle_hits.list.len(), 31);
+        assert_eq!(idle_hits.list.len(), ACTIONS.len());
 
         card.state = UiState::Listening {
             key: "BIND_TERMINAL".into(),

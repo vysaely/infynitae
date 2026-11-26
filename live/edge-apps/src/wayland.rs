@@ -1244,7 +1244,7 @@ fn open_input_rect(shell: &Shell, idx: usize, w: f64, h: f64) -> (f64, f64, f64,
 fn keyboard_interactivity(shell: &Shell) -> KeyboardInteractivity {
     if !shell.active() {
         KeyboardInteractivity::None
-    } else if shell.ask.ask.on || shell.editing() {
+    } else if shell.ask.ask.on || shell.shortcuts.open || shell.editing() {
         KeyboardInteractivity::Exclusive
     } else if shell.opened_by_hover || shell.keyboard_held {
         // on demand: a click on the panel gives it the keyboard, a click on a window gives it
@@ -1441,6 +1441,16 @@ mod tests {
             pbox,
             "a key-opened panel takes the pointer only over itself"
         );
+        assert!(sh.close_at(t0));
+
+        assert!(sh.toggle_named_on(None, "shortcuts"));
+        assert_eq!(
+            keyboard_interactivity(&sh),
+            KeyboardInteractivity::Exclusive,
+            "shortcuts overlay takes Exclusive keyboard interactivity"
+        );
+        assert!(sh.close_shortcuts());
+        assert_eq!(keyboard_interactivity(&sh), KeyboardInteractivity::None);
     }
 
     #[derive(Clone, Debug)]

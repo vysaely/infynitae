@@ -230,6 +230,8 @@ pub enum Effect {
     MediaNext,
     /// Hardware media previous track.
     MediaPrev,
+    /// Toggle shortcut help overlay (`Super+/` or `Super+F1`).
+    ToggleShortcuts,
     /// A user command from the config, by its index in the adapter's command list.
     Exec(u16),
 }

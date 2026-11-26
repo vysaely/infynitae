@@ -262,6 +262,9 @@ impl WaylandState {
                 Effect::SpawnControlMenu => {
                     self.spawn_action("control-menu");
                 }
+                Effect::ToggleShortcuts => {
+                    self.spawn_action("shortcuts");
+                }
                 Effect::Exec(i) => {
                     if let Some(command) = self.exec_commands.get(usize::from(i)).cloned() {
                         self.spawn_action_with("exec", &command);

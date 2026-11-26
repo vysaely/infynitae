@@ -318,3 +318,25 @@ fn super_shift_tab_toggles_overview() {
         "Super+Shift+BackSpace resolves to ReloadShell"
     );
 }
+
+#[test]
+fn super_slash_and_f1_resolve_to_toggle_shortcuts() {
+    let logo = infynitae_core::input::bindings::Modifiers {
+        logo: true,
+        ..Default::default()
+    };
+    for key in [
+        infynitae_core::input::keys::KEY_SLASH,
+        infynitae_core::input::keys::KEY_F1,
+    ] {
+        assert_eq!(
+            infynitae_core::input::keys::resolve_key_binding(key, logo, false),
+            Some(infynitae_core::input::keys::KeyAction::ToggleShortcuts)
+        );
+        assert_eq!(
+            infynitae_core::input::keys::resolve_key_binding(key, logo, true),
+            None,
+            "not during interaction"
+        );
+    }
+}

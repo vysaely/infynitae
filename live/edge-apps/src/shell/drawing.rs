@@ -55,6 +55,30 @@ impl Shell {
             *self.frame.borrow_mut() = vec![(0, r, hits)];
             return Some(r);
         }
+        if self.shortcuts.open {
+            let cx = self.cx(Size::M, None, false);
+            let sel = self
+                .selected
+                .filter(|(c, _)| self.keyboard && *c == 0)
+                .map(|(_, h)| h);
+            let ptr = self.pointers.get(&output).copied().or(self.pointer);
+            let mut hits = Hits::new(ptr, sel);
+            let r =
+                crate::shortcuts::draw(cr, &cx, &self.shortcuts, &self.cfg.keys, w, h, &mut hits);
+            let frame = vec![(0, r, hits)];
+            self.frames.borrow_mut().insert(
+                output,
+                OutputFrame {
+                    hits: frame.clone(),
+                    scroll: 0.0,
+                    screen: (w, h),
+                },
+            );
+            *self.frame.borrow_mut() = frame;
+            self.frame_scroll.set(0.0);
+            self.frame_screen.set((w, h));
+            return Some(r);
+        }
         if let Some(idx) = self.open {
             return Some(self.draw_panel(
                 output,

@@ -1618,6 +1618,7 @@ impl Core {
             | E::SpawnLockScreen
             | E::SpawnClipboardHistory
             | E::SpawnControlMenu
+            | E::ToggleShortcuts
             | E::TogglePrivacy
             | E::ToggleIdleInhibit
             | E::KeptOnTop { .. }

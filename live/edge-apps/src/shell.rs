@@ -463,6 +463,8 @@ pub struct Shell {
     pub edit_menu: Option<(f64, f64)>,
     /// the compositor's window menu (`xdg_toplevel.show_window_menu` or `BIND_WINDOW_MENU`)
     pub window_menu: Option<WindowMenu>,
+    /// the keyboard shortcut help overlay (`Super+/` or `Super+F1`)
+    pub shortcuts: crate::shortcuts::ShortcutsOverlay,
     /// the config file's time when it was last read (None: not looked at yet)
     pub config_mtime: Option<std::time::SystemTime>,
     /// desktop-entry folders and their modification times when `apps` was last read
@@ -524,6 +526,7 @@ impl Shell {
             edit_menu: None,
             keyboard_held: false,
             window_menu: None,
+            shortcuts: Default::default(),
             query: String::new(),
             selected: None,
             keyboard: false,
@@ -1090,6 +1093,7 @@ impl Shell {
             self.refresh_apps_if_changed();
         }
         self.window_menu = None;
+        let _ = self.shortcuts.close();
         if self.editing() {
             self.cancel_edit();
         }
@@ -1115,10 +1119,78 @@ impl Shell {
     }
 
     pub fn toggle_named_on(&mut self, output: Option<OutputId>, name: &str) -> bool {
+        if name == "shortcuts" {
+            return self.toggle_shortcuts_on(output);
+        }
         match self.panels.iter().position(|p| p.panel.name == name) {
             Some(i) => self.open_panel_on(output, i, false, Instant::now()),
             None => false,
         }
+    }
+
+    pub fn open_shortcuts_on(&mut self, output: Option<OutputId>) -> bool {
+        self.reload_if_changed();
+        if self.ask.ask.on {
+            crate::ask::answer(&mut self.ask, None);
+            self.ask_output = None;
+        }
+        let _ = self.close_at(Instant::now());
+        self.closing = None;
+        if let Some(o) = output {
+            self.last_output = Some(o);
+        }
+        self.shortcuts.open_on(output);
+        true
+    }
+
+    pub fn close_shortcuts(&mut self) -> bool {
+        if !self.shortcuts.close() {
+            return false;
+        }
+        self.hovered.clear();
+        self.selected = None;
+        self.keyboard = false;
+        self.pointer = None;
+        self.pointers.clear();
+        self.touch = None;
+        self.frame.borrow_mut().clear();
+        self.frames.borrow_mut().clear();
+        true
+    }
+
+    pub fn toggle_shortcuts_on(&mut self, output: Option<OutputId>) -> bool {
+        if self.shortcuts.open {
+            self.close_shortcuts()
+        } else {
+            self.open_shortcuts_on(output)
+        }
+    }
+
+    pub fn open_settings_keys(&mut self, output: Option<OutputId>) -> bool {
+        let target = output.or(self.shortcuts.output).or(self.last_output);
+        let idx = self
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "settings")
+            .or_else(|| {
+                self.panels.iter().position(|p| {
+                    p.cards
+                        .iter()
+                        .any(|c| c.word.owner == "settings" && c.word.kind == "all")
+                })
+            });
+        let Some(idx) = idx else {
+            return false;
+        };
+        let _ = self.close_shortcuts();
+        if !self.open_panel_on(target, idx, false, Instant::now()) {
+            return false;
+        }
+        let key_kind = crate::cards::settings_keys::KIND.id;
+        for pc in &mut self.panels[idx].cards {
+            pc.card.apply("open_child", &key_kind);
+        }
+        true
     }
 
     pub fn close(&mut self) -> bool {
@@ -1144,6 +1216,7 @@ impl Shell {
             crate::cards::settings_about::clear_load_state();
         }
         let had_wm = self.window_menu.take().is_some();
+        let had_shortcuts = self.shortcuts.close();
         self.edit_menu = None;
         self.query.clear();
         self.selected = None;
@@ -1181,7 +1254,7 @@ impl Shell {
                 output,
             });
         }
-        was || had_wm
+        was || had_wm || had_shortcuts
     }
 
     /// `words` (a tray app's menu, then its card) in the open panel's place: the same edge, side
@@ -1268,9 +1341,14 @@ impl Shell {
 
     fn open_screen(&self) -> (f64, f64) {
         let frames = self.frames.borrow();
-        if let Some(f) = self.open_output.and_then(|id| frames.get(&id)) {
+        let target = if self.shortcuts.open {
+            self.shortcuts.output
+        } else {
+            self.open_output
+        };
+        if let Some(f) = target.and_then(|id| frames.get(&id)) {
             f.screen
-        } else if let Some(id) = self.open_output {
+        } else if let Some(id) = target {
             self.screen_for(id)
         } else {
             self.frame_screen.get()
@@ -1351,9 +1429,9 @@ impl Shell {
         changed
     }
 
-    /// Something shows: a panel, the window menu, or the question.
+    /// Something shows: a panel, the window menu, the question, or the shortcut help overlay.
     pub fn active(&self) -> bool {
-        self.open.is_some() || self.ask.ask.on || self.window_menu.is_some()
+        self.open.is_some() || self.ask.ask.on || self.window_menu.is_some() || self.shortcuts.open
     }
 
     pub fn is_closing(&self) -> bool {
@@ -1372,6 +1450,8 @@ impl Shell {
     pub fn visible_output(&self) -> Option<OutputId> {
         if self.ask.ask.on {
             self.ask_output
+        } else if self.shortcuts.open {
+            self.shortcuts.output
         } else if self.open.is_some() {
             self.open_output
         } else {
@@ -1393,14 +1473,22 @@ impl Shell {
     }
 
     /// What is drawn on a `w x h` screen: the question's card while it asks, the window menu,
-    /// else the open panel's box (plus the edit bar and Add list while editing), or a closing
-    /// panel's box.
+    /// the shortcut help overlay, else the open panel's box (plus the edit bar and Add list while
+    /// editing), or a closing panel's box.
     pub fn shown_box(&self, w: f64, h: f64) -> Option<Rect> {
         if self.ask.ask.on {
             return Some(self.ask.ask.geometry(w, h));
         }
         if let Some(r) = self.window_menu_rect(w, h) {
             return Some(r);
+        }
+        if self.shortcuts.open {
+            return Some(crate::shortcuts::rect(
+                w,
+                h,
+                &self.cfg.keys,
+                &self.shortcuts.query,
+            ));
         }
         if let Some(idx) = self.open {
             let pbox = self.layout_local(idx, w, h).0;
@@ -1430,6 +1518,14 @@ impl Shell {
         changed |= crate::ask::load_from_path(&mut self.ask, &req);
         changed |= crate::ask::check_asker_gone(&mut self.ask);
         if self.ask.ask.on {
+            if self.shortcuts.open {
+                let prev_out = self.shortcuts.output;
+                let _ = self.close_shortcuts();
+                if self.ask_output.is_none() {
+                    self.ask_output = prev_out;
+                }
+                changed = true;
+            }
             if self.open.is_some() {
                 let prev_out = self.open_output;
                 self.close();
@@ -2126,5 +2222,99 @@ mod tests {
             .scores()
             .contains_key("foot"));
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn shortcuts_overlay_opens_filters_escapes_toggles_and_closes_on_outside_click() {
+        let cfg = Config::from_text("BIND_TERMINAL=\"SUPER+T\"\nEXEC_WEB=\"SUPER+B:firefox\"\n");
+        let mut sh = Shell::new(cfg, Vec::new());
+
+        assert!(sh.toggle_named_on(None, "shortcuts"));
+        assert!(sh.shortcuts.open);
+        assert!(sh.active());
+        assert!(sh.shown_box(1920.0, 1080.0).is_some());
+
+        frame(&sh);
+        let dump = crate::boxes::text(&sh, 1920.0, 1080.0);
+        assert!(dump.contains("shortcuts "), "{dump}");
+        assert!(dump.contains("hit shortcuts/change 1 "), "{dump}");
+        assert!(dump.contains("hit shortcuts/query 2 "), "{dump}");
+
+        for c in "term".chars() {
+            assert!(sh.key(Key::Char(c)));
+        }
+        assert_eq!(sh.shortcuts.query, "term");
+        assert!(sh.key(Key::Backspace));
+        assert_eq!(sh.shortcuts.query, "ter");
+
+        assert!(sh.key(Key::Escape));
+        assert!(!sh.shortcuts.open);
+        assert!(!sh.active());
+
+        // Second call to toggle_named_on closes while open
+        assert!(sh.toggle_named_on(None, "shortcuts"));
+        assert!(sh.shortcuts.open);
+        assert!(sh.toggle_named_on(None, "shortcuts"));
+        assert!(!sh.shortcuts.open);
+
+        // Click outside card closes
+        assert!(sh.toggle_named_on(None, "shortcuts"));
+        frame(&sh);
+        assert!(sh.click(1920.0, 1080.0, 5.0, 5.0, Button::Left));
+        assert!(!sh.shortcuts.open);
+    }
+
+    #[test]
+    fn shortcuts_change_button_opens_settings_panel_with_keys_expanded() {
+        let mut sh = Shell::new(Config::from_text(""), Vec::new());
+        assert!(sh.toggle_named_on(None, "shortcuts"));
+        frame(&sh);
+        let btn_rect = sh
+            .frame
+            .borrow()
+            .iter()
+            .flat_map(|(_, _, h)| h.list.iter())
+            .find(|(id, _)| *id == crate::shortcuts::HIT_CHANGE)
+            .map(|(_, r)| *r)
+            .unwrap();
+        let (bx, by) = (btn_rect.0 + btn_rect.2 / 2.0, btn_rect.1 + btn_rect.3 / 2.0);
+        assert!(sh.click(1280.0, 800.0, bx, by, Button::Left));
+        assert!(!sh.shortcuts.open);
+        let idx = sh.open.expect("settings panel should open");
+        assert_eq!(sh.panels[idx].panel.name, "settings");
+
+        sh.open_ms = f64::INFINITY;
+        sh.apply(
+            "settings",
+            "config",
+            &crate::cards::settings_rows::ConfigData::default(),
+        );
+        frame(&sh);
+        let dump = crate::boxes::text(&sh, 1280.0, 800.0);
+        assert!(dump.contains("card settings/all "), "{dump}");
+        assert!(
+            dump.contains("hit settings/all 700010 "),
+            "Keys group (child 6 -> 700000 + 10) should be expanded:\n{dump}"
+        );
+    }
+
+    #[test]
+    fn shortcuts_overlay_scrolls_and_tab_enter_opens_settings_keys() {
+        let mut sh = Shell::new(Config::from_text(""), Vec::new());
+        assert!(sh.toggle_named_on(None, "shortcuts"));
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 1280, 720).unwrap();
+        let cr = cairo::Context::new(&surf).unwrap();
+        sh.draw(&cr, 1280.0, 720.0);
+        assert!(sh.key(Key::PageDown));
+        assert!(sh.shortcuts.scroll > 0.0);
+        assert!(sh.key(Key::Home));
+        assert_eq!(sh.shortcuts.scroll, 0.0);
+
+        assert!(sh.key(Key::Tab));
+        assert_eq!(sh.selected, Some((0, crate::shortcuts::HIT_CHANGE)));
+        assert!(sh.key(Key::Enter));
+        assert!(!sh.shortcuts.open);
+        let idx = sh.open.expect("settings panel should open on Enter");
+        assert_eq!(sh.panels[idx].panel.name, "settings");
     }
 }

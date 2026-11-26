@@ -53,10 +53,13 @@ ACTION_KEYWORDS = {
     "ArrangeCluster": ["arrange", "cluster"],
     "ArrangeClusterByApp": ["by app"],
     "WindowMenu": ["window menu"],
+    "ToggleShortcuts": ["shortcut", "shortcuts"],
 }
 
 def resolve_key_binding(key, logo, shift, alt, ctrl):
     """Pure resolver reflecting resolve_key_binding in keys.rs."""
+    if key in ("SLASH", "F1") and logo and not shift and not ctrl and not alt:
+        return "ToggleShortcuts"
     if key == "ESC" and logo and shift and not ctrl and not alt:
         return "SpawnSystemMonitor"
     if key == "ESC":
@@ -165,12 +168,13 @@ def check_readme_shortcuts(readme_path, keys_rs_path):
         # Extract chords from key_col
         chords = []
 
-        if "/" in key_col and "`" in key_col:
-            # Handles `Super + Q` / `W` / `E`
-            m = re.match(r'`(Super(?:\s*\+\s*Shift)?)\s*\+\s*([A-Za-z0-9]+)`\s*/\s*`([A-Za-z0-9]+)`\s*/\s*`([A-Za-z0-9]+)`', key_col)
-            if m:
-                mod, k1, k2, k3 = m.groups()
-                chords.extend([f"{mod} + {k1}", f"{mod} + {k2}", f"{mod} + {k3}"])
+        triple = re.match(
+            r'`(Super(?:\s*\+\s*Shift)?)\s*\+\s*([A-Za-z0-9]+)`\s*/\s*`([A-Za-z0-9]+)`\s*/\s*`([A-Za-z0-9]+)`',
+            key_col,
+        )
+        if triple:
+            mod, k1, k2, k3 = triple.groups()
+            chords.extend([f"{mod} + {k1}", f"{mod} + {k2}", f"{mod} + {k3}"])
         elif "1..9" in key_col:
             # Handles `Super + 1..9` and `Super + Shift + 1..9`
             m = re.match(r'`(Super(?:\s*\+\s*Shift)?)\s*\+\s*1\.\.9`', key_col)
@@ -210,6 +214,8 @@ def check_readme_shortcuts(readme_path, keys_rs_path):
                 k_token = "ESC"
             elif key_name == "BACKSPACE":
                 k_token = "BACKSPACE"
+            elif key_name == "/":
+                k_token = "SLASH"
 
             resolved = resolve_key_binding(k_token, logo, shift, alt, ctrl)
             if not resolved:

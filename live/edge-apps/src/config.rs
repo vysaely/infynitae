@@ -586,6 +586,8 @@ pub struct Config {
     pub switch_look: String,
     /// MONITOR_LOG_DIR: optional folder of lab*.log files for the System monitor GPU card
     pub monitor_log_dir: Option<PathBuf>,
+    /// BIND_* and EXEC_* overrides from config (for shortcut help and custom commands)
+    pub keys: std::collections::HashMap<String, String>,
 }
 
 pub fn config_path() -> Option<PathBuf> {
@@ -638,6 +640,7 @@ impl Config {
             opacity: 1.0, // solid since 2026-11-22: readable over any wallpaper
             switch_look: "rows".into(),
             monitor_log_dir: None,
+            keys: std::collections::HashMap::new(),
         };
         let mut ctrl = vec![
             Module::Clock,
@@ -743,6 +746,9 @@ impl Config {
                 "WIDGETS" => c.widgets = Panel::widgets(&value_text(v)),
                 _ if key.starts_with("PANEL_") && lines.len() < 24 => {
                     lines.push((key["PANEL_".len()..].to_string(), v.to_string()));
+                }
+                _ if key.starts_with("BIND_") || key.starts_with("EXEC_") => {
+                    c.keys.insert(key.to_string(), value_text(v));
                 }
                 _ => {}
             }
@@ -1061,5 +1067,21 @@ mod tests {
     #[ignore = "AUDIT_CONFIG: edge-apps clamps WINDOW_CORNERS to 28.0 vs compositor 24.0"]
     fn audit_config_edge_window_corners_clamp_matches_compositor_24() {
         assert_eq!(Config::from_text("WINDOW_CORNERS=\"28\"\n").corners, 24.0);
+    }
+
+    #[test]
+    fn bind_and_exec_keys_populate_config_keys() {
+        let cfg = Config::from_text(
+            "BIND_TERMINAL=\"SUPER+T\"\nEXEC_BROWSER=\"SUPER+B:firefox\"\nBIND_BACK=\"none\"\n",
+        );
+        assert_eq!(
+            cfg.keys.get("BIND_TERMINAL").map(String::as_str),
+            Some("SUPER+T")
+        );
+        assert_eq!(
+            cfg.keys.get("EXEC_BROWSER").map(String::as_str),
+            Some("SUPER+B:firefox")
+        );
+        assert_eq!(cfg.keys.get("BIND_BACK").map(String::as_str), Some("none"));
     }
 }

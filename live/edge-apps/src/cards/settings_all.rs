@@ -668,6 +668,20 @@ impl Card for SettingsAllCard {
                     self.shares = Some(d.clone());
                 }
             }
+            "open_child" => {
+                if let Some(&kind_id) = data.downcast_ref::<&str>() {
+                    if let Some(g) = GROUPS
+                        .iter()
+                        .position(|grp| grp.children.iter().any(|&i| CHILD_KINDS[i].id == kind_id))
+                    {
+                        if self.open != Some(g) || self.active_child.is_some() {
+                            self.open = Some(g);
+                            self.active_child = None;
+                            changed = true;
+                        }
+                    }
+                }
+            }
             _ => {}
         }
         for (i, child) in self.children.iter_mut().enumerate() {
@@ -2327,5 +2341,21 @@ mod tests {
             programs: Default::default(),
         };
         assert!(lock_when_away_on(&cfg));
+    }
+
+    #[test]
+    fn open_child_opens_keys_group() {
+        let dir = std::env::temp_dir().join("infynitae_test_settings_all_open_keys");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut card = SettingsAllCard::with_paths(dir.join("missing"), dir.join("missing_cfg"));
+        assert_eq!(card.open, None);
+        assert!(card.apply("open_child", &"keys"));
+        assert_eq!(card.open, Some(4));
+        assert!(GROUPS[4]
+            .children
+            .iter()
+            .any(|&i| CHILD_KINDS[i].id == "keys"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

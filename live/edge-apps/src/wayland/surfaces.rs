@@ -140,8 +140,8 @@ impl OutputSurface {
         let (w, h) = (self.width as f64, self.height as f64);
         let show_here = shell.visible_on(self.id);
         if w > 0.0 && h > 0.0 {
-            if show_here && shell.ask.ask.on {
-                // the question takes the whole screen: a click outside it cancels
+            if show_here && (shell.ask.ask.on || shell.shortcuts.open) {
+                // questions and overlays take the whole screen: a click outside closes
                 region.add(0, 0, w.ceil() as i32, h.ceil() as i32);
             } else if show_here && shell.open.is_some() {
                 let r = open_input_rect(shell, shell.open.unwrap(), w, h);

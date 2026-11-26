@@ -18,6 +18,7 @@ mod paths;
 mod provider;
 mod recent;
 mod shell;
+mod shortcuts;
 mod theme;
 mod tray_watcher;
 mod ui;
@@ -84,6 +85,11 @@ fn render_with(cfg: Config, name: &str, size: &str, out: &str) -> Result<(), Str
     {
         let raw = std::env::var("INFYNITAE_EDGE_RENDER_WINDOW_MENU").unwrap_or_default();
         sh.open_window_menu(shell::WindowMenu::from_render_env(&raw));
+        sh.pointer = render_pointer();
+        return paint(&sh, w, h, out);
+    }
+    if name == "shortcuts" {
+        sh.open_shortcuts_on(None);
         sh.pointer = render_pointer();
         return paint(&sh, w, h, out);
     }
@@ -348,6 +354,25 @@ mod tests {
 
         let meta = std::fs::metadata(&png).unwrap();
         assert!(meta.len() > 200);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn render_shortcuts_writes_png_with_override() {
+        let dir = std::env::temp_dir().join(format!(
+            "infynitae-edge-apps-render-shortcuts-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let png = dir.join("shortcuts.png");
+
+        let cfg = Config::from_text("BIND_TERMINAL=\"SUPER+T\"\n");
+        render_with(cfg, "shortcuts", "1280x800", png.to_str().unwrap()).unwrap();
+
+        let meta = std::fs::metadata(&png).unwrap();
+        assert!(meta.len() > 500);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

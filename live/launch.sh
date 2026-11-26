@@ -203,6 +203,10 @@ GM_ARGS
         # Super+L: the open windows in the edge; without the edge the key does nothing
         edge_on && exec "$EDGE_BIN" toggle
         ;;
+    shortcuts)
+        # Super+/ or Super+F1: shortcut help overlay in the edge
+        edge_on && exec "$EDGE_BIN" shortcuts
+        ;;
     apps|launcher|edge|island)
         # Super+W: the apps in the edge, else a launcher; LAUNCHER: any command, which is also
         # how another shell (Quickshell, eww, AGS…) takes the key. A compositor from before
