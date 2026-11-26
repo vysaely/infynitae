@@ -583,6 +583,32 @@ check "rollback: checkout reset to c1" "$(git -C "$rb_repo" rev-parse HEAD)" "$C
 check "rollback: installed infynitae-session reverted to v1" "$(tail -n1 "$rb_home/.local/bin/infynitae-session")" "echo v1"
 check "rollback: ~/infynitae/live/session.sh reverted to v1" "$(tail -n1 "$rb_home/infynitae/live/session.sh")" "echo v1-session"
 
+# Rollback while running fallback compositor (infynitae.previous) triggers helper reload
+mkdir -p "$rb_home/.local/state/infynitae" "$TMP/rb-prev"
+cat > "$TMP/rb-prev/infynitae.previous" <<'EOF'
+#!/bin/sh
+trap 'kill "$c" 2>/dev/null || true; exit 0' TERM
+sleep 30 &
+c=$!
+wait "$c"
+EOF
+cat > "$rb_home/.local/bin/infynitae-reload" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" > "$TMP/rb-reload-calls"
+EOF
+chmod +x "$TMP/rb-prev/infynitae.previous" "$rb_home/.local/bin/infynitae-reload"
+"$TMP/rb-prev/infynitae.previous" &
+rb_comp_pid=$!
+i=0
+while [ ! -d "/proc/$rb_comp_pid" ] && [ $i -lt 40 ]; do sleep 0.05; i=$((i + 1)); done
+printf '%s\n' "$rb_comp_pid" > "$rb_home/.local/state/infynitae/compositor.pid"
+printf 'PRE_HEAD=%s\nPOST_HEAD=%s\nSCRIPTS_CHANGED=false\n' "$C1" "$C2" > "$rb_state/infynitae/update-rollback"
+HOME="$rb_home" XDG_STATE_HOME="$rb_state" "$rb_repo/update.sh" --rollback >/dev/null 2>&1 || true
+kill "$rb_comp_pid" 2>/dev/null || true
+wait "$rb_comp_pid" 2>/dev/null || true
+check "rollback while on infynitae.previous reloads helpers" \
+    "$(cat "$TMP/rb-reload-calls" 2>/dev/null || true)" "settings wallpaper edge portal polkit"
+
 # Dirty checkout stops git reset and prints manual instructions instead of clobbering changes
 printf '# dirty\n' >> "$rb_repo/live/session.sh"
 printf 'PRE_HEAD=%s\nPOST_HEAD=%s\nSCRIPTS_CHANGED=true\n' "$C1" "$C2" > "$rb_state/infynitae/update-rollback"

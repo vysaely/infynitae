@@ -21,7 +21,21 @@ fi
 # the compositor starts later (every app opened by key, the satellite, its own threads) begins at
 # normal priority. Without it those inherited real-time priority 2 and competed with the
 # compositor (seen 2026-11-22: kitty, qemu, the edge and the satellite at RR 2).
-if [ "$(cat /proc/$PPID/comm 2>/dev/null)" = "infynitae" ]; then
+is_compositor_parent() {
+    pid_file="$HOME/.local/state/infynitae/compositor.pid"
+    if [ -r "$pid_file" ]; then
+        rec=""
+        IFS= read -r rec < "$pid_file" 2>/dev/null || rec=""
+        [ "$rec" = "$PPID" ] && return 0
+    fi
+    comm=""
+    IFS= read -r comm < "/proc/$PPID/comm" 2>/dev/null || return 1
+    case "$comm" in
+        infynitae|infynitae.*) return 0 ;;
+    esac
+    return 1
+}
+if is_compositor_parent; then
     renice -n -10 -p "$PPID" >/dev/null 2>&1 || true
     if command -v chrt >/dev/null 2>&1; then
         chrt -R -r -p 2 "$PPID" >/dev/null 2>&1 || chrt -R -o -p 0 "$PPID" >/dev/null 2>&1 || true

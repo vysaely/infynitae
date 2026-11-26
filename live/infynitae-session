@@ -9,15 +9,40 @@
 
 STATE_DIR="$HOME/.local/state/infynitae"
 STOP_FILE="$STATE_DIR/stop"
+PID_FILE="$STATE_DIR/compositor.pid"
 mkdir -p "$STATE_DIR"
+
+# Read a recorded compositor PID only if it is live, owned by this user, and still infynitae or
+# infynitae.previous (whose kernel comm is truncated to 15 chars: "infynitae.previ").
+recorded_compositor_pid() {
+    [ -r "$PID_FILE" ] || return 1
+    pid=""
+    IFS= read -r pid < "$PID_FILE" 2>/dev/null || return 1
+    case "$pid" in
+        ""|*[!0-9]*) return 1 ;;
+    esac
+    [ -d "/proc/$pid" ] || return 1
+    [ "$(stat -c '%u' "/proc/$pid" 2>/dev/null)" = "$(id -u)" ] || return 1
+    comm=""
+    IFS= read -r comm < "/proc/$pid/comm" 2>/dev/null || return 1
+    case "$comm" in
+        infynitae|infynitae.*) printf '%s\n' "$pid"; return 0 ;;
+    esac
+    return 1
+}
 
 if [ "$1" = "stop" ]; then
     : > "$STOP_FILE"
-    pkill -TERM -x infynitae 2>/dev/null || true
+    if pid=$(recorded_compositor_pid); then
+        kill -TERM "$pid" 2>/dev/null || true
+    else
+        pkill -TERM -u "$(id -u)" -x infynitae 2>/dev/null || true
+    fi
     exit 0
 fi
 
 cleanup() {
+    rm -f "$PID_FILE"
     stty sane 2>/dev/null || true
     tput cnorm 2>/dev/null || true
 }
@@ -97,7 +122,7 @@ crash_report() {
     ls -1t "$CRASH_DIR"/*.log 2>/dev/null | tail -n +11 | while IFS= read -r old; do rm -f "$old"; done
 }
 
-rm -f "$STOP_FILE"
+rm -f "$STOP_FILE" "$PID_FILE"
 FAILS=0
 ACTIVE_BIN="$BIN"
 USING_PREVIOUS=0
@@ -158,7 +183,8 @@ while true; do
             fi
             ;;
     esac
-    "$ACTIVE_BIN" $TTY_MODE $LOCKED_ARG $XWLS --exec "$SESSION_SCRIPT" "$@" >> "$SESSION_LOG" 2>&1
+    sh -c 'printf "%s\n" "$$" > "$1"; shift; exec "$@"' _ "$PID_FILE" \
+        "$ACTIVE_BIN" $TTY_MODE $LOCKED_ARG $XWLS --exec "$SESSION_SCRIPT" "$@" >> "$SESSION_LOG" 2>&1
     STATUS=$?
     # every later start is locked (session.sh): a compositor that crashed, or was quit, while
     # the screen was locked must not come back unlocked, whatever START_LOCKED says
@@ -168,7 +194,7 @@ while true; do
     echo "[infynitae-session] $(date '+%F %T') Compositor exited with status $STATUS after ${DURATION}s" >> "$SESSION_LOG"
 
     if [ -f "$STOP_FILE" ]; then
-        rm -f "$STOP_FILE"
+        rm -f "$STOP_FILE" "$PID_FILE"
         echo "[infynitae-session] Stop requested; ending session." >> "$SESSION_LOG"
         exit 0
     fi

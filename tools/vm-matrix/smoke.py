@@ -21,7 +21,7 @@ def check(name, ok, detail="", picture=""):
 
 def locked(): return snap().get("locked") is True
 
-def compositor(): return sh("pgrep -f -- 'infynitae --tty' | head -1")
+def compositor(): return sh("P=''; F=\"$HOME/.local/state/infynitae/compositor.pid\"; [ -r \"$F\" ] && read -r P < \"$F\"; case \"$P\" in \"\"|*[!0-9]*) P='' ;; *) { [ -d \"/proc/$P\" ] && read -r C < \"/proc/$P/comm\" 2>/dev/null && case \"$C\" in infynitae|infynitae.*) true ;; *) false ;; esac; } || P='' ;; esac; [ -n \"$P\" ] && echo \"$P\" || pgrep -f -- 'infynitae --tty' | head -1")
 
 def png_size(path):
     try:

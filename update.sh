@@ -41,6 +41,26 @@ done
 
 ROLLBACK_STATE="$INFY_STATE/update-rollback"
 
+# Recorded PID first (catches infynitae.previous, whose kernel comm is truncated to
+# infynitae.previ); fall back to -x infynitae for sessions started before PID tracking.
+compositor_running() {
+    local pid_file pid comm
+    for pid_file in "$INFY_STATE/compositor.pid" "$HOME/.local/state/infynitae/compositor.pid"; do
+        [ -r "$pid_file" ] || continue
+        IFS= read -r pid < "$pid_file" 2>/dev/null || continue
+        case "$pid" in
+            ""|*[!0-9]*) continue ;;
+        esac
+        [ -d "/proc/$pid" ] || continue
+        [ "$(stat -c '%u' "/proc/$pid" 2>/dev/null)" = "$(id -u)" ] || continue
+        IFS= read -r comm < "/proc/$pid/comm" 2>/dev/null || continue
+        case "$comm" in
+            infynitae|infynitae.*) return 0 ;;
+        esac
+    done
+    pgrep -u "$(id -u)" -x infynitae >/dev/null 2>&1
+}
+
 rollback_infynitae() {
     local pre_head="" post_head="" scripts_changed=false cur_head=""
     local scripts_reverted=false scripts_manual=false k v
@@ -85,7 +105,7 @@ rollback_infynitae() {
         return 1
     fi
 
-    if pgrep -x infynitae >/dev/null 2>&1; then
+    if compositor_running; then
         echo "==> Restarting the helpers (windows stay open)..."
         "$HOME/.local/bin/infynitae-reload" settings wallpaper edge portal polkit || true
     fi
@@ -247,7 +267,7 @@ if [ -f "$STATUS_FILE" ]; then
     esac
 fi
 
-if pgrep -x infynitae >/dev/null 2>&1; then
+if compositor_running; then
     echo "==> Restarting the helpers (windows stay open)..."
     "$HOME/.local/bin/infynitae-reload" settings wallpaper edge portal polkit || true
     echo "    The replay recorder keeps running; infynitae-reload recorder restarts it (clears its buffer)."

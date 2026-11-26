@@ -348,7 +348,7 @@ def session_restore_and_crash():
 def many_windows():
     close_all(); [run_bg("xterm") for _ in range(25)]; n = until(lambda: len(els()) >= 25, 25) ; wait(1.5); shot("many-windows"); rec("25 windows", bool(n), str(len(els())))
     chord("super+l"); wait(1.2); shot("many-window-list"); chord("esc"); chord("super+shift+tab"); wait(1.5); shot("many-overview"); chord("esc"); wait(.5)
-    cpu = sh("P=$(pgrep -x infynitae | head -1); a=$(awk '{print $14+$15}' /proc/$P/stat); sleep 5; b=$(awk '{print $14+$15}' /proc/$P/stat); echo $(( (b-a)/5 ))% CPU, $(awk '/VmRSS/{print $2/1024\" MB\"}' /proc/$P/status)"); rec("the compositor with 25 windows", "INFO", cpu); close_all()
+    cpu = sh("P=''; F=\"$HOME/.local/state/infynitae/compositor.pid\"; [ -r \"$F\" ] && read -r P < \"$F\"; case \"$P\" in \"\"|*[!0-9]*) P='' ;; *) { [ -d \"/proc/$P\" ] && read -r C < \"/proc/$P/comm\" 2>/dev/null && case \"$C\" in infynitae|infynitae.*) true ;; *) false ;; esac; } || P='' ;; esac; [ -n \"$P\" ] || P=$(pgrep -x infynitae | head -1); a=$(awk '{print $14+$15}' /proc/$P/stat); sleep 5; b=$(awk '{print $14+$15}' /proc/$P/stat); echo $(( (b-a)/5 ))% CPU, $(awk '/VmRSS/{print $2/1024\" MB\"}' /proc/$P/status)"); rec("the compositor with 25 windows", "INFO", cpu); close_all()
     rec("all closed", bool(until(lambda: not els(), 8)), str(len(els())))
 @test
 def config_changes():
