@@ -148,7 +148,7 @@ fn draw_size_label(
     Ok(())
 }
 
-fn rounded_rect(cr: &cairo::Context, x: f64, y: f64, w: f64, h: f64, radius: f64) {
+pub fn rounded_rect(cr: &cairo::Context, x: f64, y: f64, w: f64, h: f64, radius: f64) {
     let r = radius.min(w * 0.5).min(h * 0.5).max(0.0);
     if r <= 0.0 {
         cr.rectangle(x, y, w, h);

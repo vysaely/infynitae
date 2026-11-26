@@ -1,6 +1,8 @@
 use std::env;
+use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::process::Command;
+use std::time::Instant;
 
 use smithay_client_toolkit::compositor::{CompositorHandler, CompositorState};
 use smithay_client_toolkit::output::{OutputHandler, OutputState};
@@ -39,6 +41,7 @@ use wayland_protocols_wlr::screencopy::v1::client::{
 
 use crate::cli::Mode;
 use crate::draw::{render_overlay, OverlayDraw};
+use crate::edit::{Editor, Finish, Step};
 use crate::geom::{
     crop_upright_surface, encode_png_bytes, join_selection_across_outputs, parse_snapshot_json,
     pick_window_at, upright_surface_from_panel, windows_on_output_with_size, CapturedOutputSlice,
@@ -120,6 +123,20 @@ impl OutputEntry {
 enum FinalSelection {
     OutputWindow(usize, Rect),
     Logical(RectF),
+    /// Control+A: the whole output
+    Output(usize),
+}
+
+/// What the run produced.
+pub enum Outcome {
+    /// Escape or a right click while picking
+    Cancelled,
+    /// The capture without marks: to the file and the clipboard
+    Plain(Vec<u8>),
+    /// Marked up, to the clipboard only
+    Copy(Vec<u8>),
+    /// Marked up, to the file and the clipboard
+    Save(Vec<u8>),
 }
 
 struct App {
@@ -152,6 +169,19 @@ struct App {
 
     accepted: Option<FinalSelection>,
     cancelled: bool,
+
+    modifiers: Modifiers,
+    /// Shift was held when the pick ended: no editor
+    skip_editor: bool,
+    picked_at: Option<Instant>,
+    /// ms from `picked_at` to the editor's first frame
+    ready_ms: Option<f64>,
+    editor: Option<Editor>,
+    editor_output: usize,
+    finish: Option<Finish>,
+    editor_failed: Option<String>,
+    /// INFYNITAE_SHOT_BOXES: a file the VM tests read, rewritten after each editor frame
+    boxes: Option<PathBuf>,
 }
 
 impl App {
@@ -218,11 +248,18 @@ impl App {
         }
     }
 
+    fn accept(&mut self, selection: FinalSelection) {
+        self.accepted = Some(selection);
+        self.skip_editor = self.modifiers.shift;
+        self.picked_at = Some(Instant::now());
+    }
+
     fn update_cursor_shape(&mut self, serial: u32) {
         let Some(dev) = &self.cursor_device else {
             return;
         };
         let shape = match self.mode {
+            _ if self.editor.is_some() => wp_cursor_shape_device_v1::Shape::Crosshair,
             Mode::Region => wp_cursor_shape_device_v1::Shape::Crosshair,
             Mode::Window => {
                 if self.hovered_window.is_some() {
@@ -295,11 +332,6 @@ impl App {
             if buf_w == 0 || buf_h == 0 {
                 continue;
             }
-            let stride = buf_w as i32 * 4;
-            let len = buf_h as usize * stride as usize;
-            if ov.pool.len() < len * 2 {
-                let _ = ov.pool.resize(len * 2);
-            }
 
             let (sx, sy) = (
                 buf_w as f64 / ov.logical_w.max(1) as f64,
@@ -367,57 +399,102 @@ impl App {
                 None
             };
 
-            let mut buffer_slot = None;
-            for pos in 0..ov.buffers.len() {
-                if ov.buffers[pos].canvas(&mut ov.pool).is_some() {
-                    buffer_slot = Some(ov.buffers.remove(pos));
-                    break;
-                }
-            }
-            let buffer = match buffer_slot {
-                Some(b) => b,
-                None => {
-                    ov.pool
-                        .create_buffer(buf_w as i32, buf_h as i32, stride, wl_shm::Format::Argb8888)
-                        .map_err(|e| format!("shm buffer allocation failed: {e}"))?
-                        .0
-                }
-            };
-
-            let slice = buffer
-                .canvas(&mut ov.pool)
-                .ok_or_else(|| "shm buffer still busy".to_string())?;
-            unsafe {
-                let surface = cairo::ImageSurface::create_for_data_unsafe(
-                    slice.as_mut_ptr(),
-                    cairo::Format::ARgb32,
-                    buf_w as i32,
-                    buf_h as i32,
-                    stride,
-                )
-                .map_err(|e| format!("cairo image surface failed: {e}"))?;
+            let scale = if use_viewporter { out.scale } else { 1.0 };
+            let look = &self.look;
+            present(ov, buf_w, buf_h, |surface| {
                 render_overlay(
-                    &surface,
+                    surface,
                     &OverlayDraw {
-                        look: &self.look,
+                        look,
                         frozen: frozen_ref,
                         selection_px: sel_px,
                         size_label,
-                        scale: if use_viewporter { out.scale } else { 1.0 },
+                        scale,
                     },
-                )?;
-            }
-
-            if let Some(vp) = &ov.viewport {
-                vp.set_destination(ov.logical_w as i32, ov.logical_h as i32);
-            }
-            let surf = ov.layer.wl_surface();
-            surf.attach(Some(buffer.wl_buffer()), 0, 0);
-            surf.damage_buffer(0, 0, buf_w as i32, buf_h as i32);
-            surf.commit();
-            ov.buffers.push(buffer);
+                )
+            })?;
         }
         Ok(())
+    }
+
+    /// Buffer pixels per logical pixel of the editor's surface.
+    fn editor_ui(&self) -> f64 {
+        let out = &self.outputs[self.editor_output];
+        match (&self.viewporter, &out.overlay) {
+            (Some(_), Some(ov)) => out.view_w as f64 / ov.logical_w.max(1) as f64,
+            _ => 1.0,
+        }
+    }
+
+    fn redraw_editor(&mut self) -> Result<(), String> {
+        let ui = self.editor_ui();
+        let use_viewporter = self.viewporter.is_some();
+        let out = &mut self.outputs[self.editor_output];
+        let (Some(ov), Some(editor)) = (out.overlay.as_mut(), self.editor.as_mut()) else {
+            return Ok(());
+        };
+        if !ov.configured || !ov.dirty {
+            return Ok(());
+        }
+        ov.dirty = false;
+        let (buf_w, buf_h) = if use_viewporter {
+            (out.view_w, out.view_h)
+        } else {
+            (ov.logical_w, ov.logical_h)
+        };
+        if buf_w == 0 || buf_h == 0 {
+            return Ok(());
+        }
+        editor.set_view(buf_w, buf_h, ui);
+        let look = &self.look;
+        present(ov, buf_w, buf_h, |surface| editor.render(surface, look))?;
+
+        if let Some(path) = &self.boxes {
+            // from the end of the pick to the editor's first frame
+            let since_pick = *self.ready_ms.get_or_insert_with(|| {
+                self.picked_at
+                    .map_or(0.0, |t| t.elapsed().as_secs_f64() * 1000.0)
+            });
+            let (ox, oy) = (out.logical_x as f64, out.logical_y as f64);
+            let mut dump = format!("editor {since_pick:.1}\n");
+            let (img, _) = editor.frame();
+            let _ = writeln!(
+                dump,
+                "image {:.0} {:.0} {:.0} {:.0}",
+                ox + img.x / ui,
+                oy + img.y / ui,
+                img.w / ui,
+                img.h / ui
+            );
+            for (r, hit) in editor.hits() {
+                let _ = writeln!(
+                    dump,
+                    "hit {} {:.0} {:.0} {:.0} {:.0}",
+                    hit.name(),
+                    ox + r.x / ui,
+                    oy + r.y / ui,
+                    r.w / ui,
+                    r.h / ui
+                );
+            }
+            if let Err(e) = std::fs::write(path, dump) {
+                eprintln!("infynitae-shot: cannot write {}: {e}", path.display());
+            }
+        }
+        Ok(())
+    }
+
+    fn editor_step(&mut self, step: Result<Step, String>) {
+        match step {
+            Ok(Step::Nothing) => {}
+            Ok(Step::Redraw) => {
+                if let Some(ov) = &mut self.outputs[self.editor_output].overlay {
+                    ov.dirty = true;
+                }
+            }
+            Ok(Step::Done(finish)) => self.finish = Some(finish),
+            Err(e) => self.editor_failed = Some(e),
+        }
     }
 
     fn destroy_overlays(&mut self) {
@@ -430,6 +507,167 @@ impl App {
                 drop(ov.buffers);
                 drop(ov.pool);
             }
+        }
+    }
+}
+
+/// Draws one frame into a free buffer of `ov` (`buf_w` x `buf_h`) and commits it.
+fn present(
+    ov: &mut OverlaySurface,
+    buf_w: u32,
+    buf_h: u32,
+    draw: impl FnOnce(&cairo::ImageSurface) -> Result<(), String>,
+) -> Result<(), String> {
+    let stride = buf_w as i32 * 4;
+    let len = buf_h as usize * stride as usize;
+    if ov.pool.len() < len * 2 {
+        let _ = ov.pool.resize(len * 2);
+    }
+
+    let mut buffer_slot = None;
+    for pos in 0..ov.buffers.len() {
+        if ov.buffers[pos].canvas(&mut ov.pool).is_some() {
+            buffer_slot = Some(ov.buffers.remove(pos));
+            break;
+        }
+    }
+    let buffer = match buffer_slot {
+        Some(b) => b,
+        None => {
+            ov.pool
+                .create_buffer(buf_w as i32, buf_h as i32, stride, wl_shm::Format::Argb8888)
+                .map_err(|e| format!("shm buffer allocation failed: {e}"))?
+                .0
+        }
+    };
+
+    let slice = buffer
+        .canvas(&mut ov.pool)
+        .ok_or_else(|| "shm buffer still busy".to_string())?;
+    unsafe {
+        let surface = cairo::ImageSurface::create_for_data_unsafe(
+            slice.as_mut_ptr(),
+            cairo::Format::ARgb32,
+            buf_w as i32,
+            buf_h as i32,
+            stride,
+        )
+        .map_err(|e| format!("cairo image surface failed: {e}"))?;
+        draw(&surface)?;
+    }
+
+    if let Some(vp) = &ov.viewport {
+        vp.set_destination(ov.logical_w as i32, ov.logical_h as i32);
+    }
+    let surf = ov.layer.wl_surface();
+    surf.attach(Some(buffer.wl_buffer()), 0, 0);
+    surf.damage_buffer(0, 0, buf_w as i32, buf_h as i32);
+    surf.commit();
+    ov.buffers.push(buffer);
+    Ok(())
+}
+
+/// Puts a full-output layer surface that takes the keyboard on output `idx`.
+fn create_overlay(
+    app: &mut App,
+    qh: &QueueHandle<App>,
+    layer_shell: &LayerShell,
+    idx: usize,
+    namespace: &str,
+) -> Result<(), String> {
+    let wl_surface = app.compositor_state.create_surface(qh);
+    let layer = layer_shell.create_layer_surface(
+        qh,
+        wl_surface,
+        Layer::Overlay,
+        Some(namespace),
+        Some(&app.outputs[idx].wl_output),
+    );
+    layer.set_anchor(Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT);
+    layer.set_exclusive_zone(-1);
+    layer.set_keyboard_interactivity(KeyboardInteractivity::Exclusive);
+    layer.commit();
+
+    let viewport = app
+        .viewporter
+        .as_ref()
+        .map(|vp| vp.get_viewport(layer.wl_surface(), qh, ()));
+    let init_bytes =
+        (app.outputs[idx].view_w as usize * app.outputs[idx].view_h as usize * 4).max(4096) * 2;
+    let pool = SlotPool::new(init_bytes, &app.shm).map_err(|e| format!("shm pool failed: {e}"))?;
+
+    app.outputs[idx].overlay = Some(OverlaySurface {
+        layer,
+        viewport,
+        pool,
+        buffers: Vec::new(),
+        configured: false,
+        logical_w: app.outputs[idx].logical_w,
+        logical_h: app.outputs[idx].logical_h,
+        dirty: true,
+    });
+    Ok(())
+}
+
+fn wait_configured(
+    app: &mut App,
+    queue: &mut wayland_client::EventQueue<App>,
+) -> Result<(), String> {
+    while app
+        .outputs
+        .iter()
+        .any(|o| o.overlay.as_ref().is_some_and(|ov| !ov.configured))
+    {
+        queue
+            .blocking_dispatch(app)
+            .map_err(|e| format!("wayland dispatch failed waiting for configure: {e}"))?;
+    }
+    Ok(())
+}
+
+/// Shows `capture` in the editor on output `idx` until it is left; returns what to keep.
+fn run_editor(
+    app: &mut App,
+    queue: &mut wayland_client::EventQueue<App>,
+    layer_shell: &LayerShell,
+    idx: usize,
+    capture: cairo::ImageSurface,
+) -> Result<Outcome, String> {
+    let qh = queue.handle();
+    app.editor = Some(Editor::new(capture, &app.look)?);
+    app.editor_output = idx;
+    app.last_cursor = None;
+    create_overlay(app, &qh, layer_shell, idx, "infynitae-shot-edit")?;
+    wait_configured(app, queue)?;
+
+    while app.finish.is_none() && app.editor_failed.is_none() {
+        if let Err(e) = app.redraw_editor() {
+            app.editor_failed = Some(e);
+            break;
+        }
+        queue
+            .blocking_dispatch(app)
+            .map_err(|e| format!("wayland dispatch failed: {e}"))?;
+    }
+    app.destroy_overlays();
+    let _ = queue.roundtrip(app);
+
+    let editor = app
+        .editor
+        .take()
+        .ok_or_else(|| "the editor is gone".to_string())?;
+    let marked = match (app.editor_failed.take(), app.finish) {
+        (None, Some(Finish::Copy | Finish::Save)) => editor.result(),
+        (Some(e), _) => Err(e),
+        _ => return Ok(Outcome::Plain(encode_png_bytes(&editor.into_base())?)),
+    };
+    match (marked, app.finish) {
+        (Ok(img), Some(Finish::Save)) => Ok(Outcome::Save(encode_png_bytes(&img)?)),
+        (Ok(img), _) => Ok(Outcome::Copy(encode_png_bytes(&img)?)),
+        (Err(e), _) => {
+            // what was picked is not lost to a drawing error
+            eprintln!("infynitae-shot: markup failed ({e}); the capture is kept without marks");
+            Ok(Outcome::Plain(encode_png_bytes(&editor.into_base())?))
         }
     }
 }
@@ -494,9 +732,9 @@ fn capture_outputs(
     Ok(())
 }
 
-/// Runs `screen`, `region`, or `window` capture/selection against the compositor.
-/// Returns `Ok(None)` when the user cancels with Escape or right click (exit code 1).
-pub fn run_wayland(mode: Mode, live: bool, look: Look) -> Result<Option<Vec<u8>>, String> {
+/// Runs `screen`, `region`, or `window` capture/selection against the compositor, then the
+/// editor after a pick unless Shift was held.
+pub fn run_wayland(mode: Mode, live: bool, look: Look) -> Result<Outcome, String> {
     let snapshot = match mode {
         Mode::Screen => Snapshot::default(),
         Mode::Region | Mode::Window => fetch_snapshot(),
@@ -551,6 +789,17 @@ pub fn run_wayland(mode: Mode, live: bool, look: Look) -> Result<Option<Vec<u8>>
         last_cursor: None,
         accepted: None,
         cancelled: false,
+        modifiers: Modifiers::default(),
+        skip_editor: false,
+        picked_at: None,
+        ready_ms: None,
+        editor: None,
+        editor_output: 0,
+        finish: None,
+        editor_failed: None,
+        boxes: env::var_os("INFYNITAE_SHOT_BOXES")
+            .filter(|s| !s.is_empty())
+            .map(PathBuf::from),
     };
 
     // Two roundtrips collect all wl_output and xdg_output info events.
@@ -705,7 +954,7 @@ pub fn run_wayland(mode: Mode, live: bool, look: Look) -> Result<Option<Vec<u8>>
             .frozen
             .as_ref()
             .ok_or_else(|| "missing capture for chosen output".to_string())?;
-        return Ok(Some(encode_png_bytes(surface)?));
+        return Ok(Outcome::Plain(encode_png_bytes(surface)?));
     }
 
     // `region` or `window` mode:
@@ -719,49 +968,9 @@ pub fn run_wayland(mode: Mode, live: bool, look: Look) -> Result<Option<Vec<u8>>
         .ok_or_else(|| "compositor does not expose zwlr_layer_shell_v1".to_string())?;
 
     for idx in 0..app.outputs.len() {
-        let wl_surface = app.compositor_state.create_surface(&qh);
-        let layer = layer_shell.create_layer_surface(
-            &qh,
-            wl_surface,
-            Layer::Overlay,
-            Some("infynitae-shot"),
-            Some(&app.outputs[idx].wl_output),
-        );
-        layer.set_anchor(Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT);
-        layer.set_exclusive_zone(-1);
-        layer.set_keyboard_interactivity(KeyboardInteractivity::Exclusive);
-        layer.commit();
-
-        let viewport = app
-            .viewporter
-            .as_ref()
-            .map(|vp| vp.get_viewport(layer.wl_surface(), &qh, ()));
-        let init_bytes =
-            (app.outputs[idx].view_w as usize * app.outputs[idx].view_h as usize * 4).max(4096) * 2;
-        let pool =
-            SlotPool::new(init_bytes, &app.shm).map_err(|e| format!("shm pool failed: {e}"))?;
-
-        app.outputs[idx].overlay = Some(OverlaySurface {
-            layer,
-            viewport,
-            pool,
-            buffers: Vec::new(),
-            configured: false,
-            logical_w: app.outputs[idx].logical_w,
-            logical_h: app.outputs[idx].logical_h,
-            dirty: true,
-        });
+        create_overlay(&mut app, &qh, &layer_shell, idx, "infynitae-shot")?;
     }
-
-    while app
-        .outputs
-        .iter()
-        .any(|o| o.overlay.as_ref().is_some_and(|ov| !ov.configured))
-    {
-        queue
-            .blocking_dispatch(&mut app)
-            .map_err(|e| format!("wayland dispatch failed waiting for configure: {e}"))?;
-    }
+    wait_configured(&mut app, &mut queue)?;
 
     app.recompute_windows();
     app.mark_all_dirty();
@@ -777,7 +986,7 @@ pub fn run_wayland(mode: Mode, live: bool, look: Look) -> Result<Option<Vec<u8>>
     let _ = queue.roundtrip(&mut app);
 
     if app.cancelled {
-        return Ok(None);
+        return Ok(Outcome::Cancelled);
     }
 
     let selection = app
@@ -786,7 +995,7 @@ pub fn run_wayland(mode: Mode, live: bool, look: Look) -> Result<Option<Vec<u8>>
 
     if live {
         let capture_indices: Vec<usize> = match selection {
-            FinalSelection::OutputWindow(idx, _) => vec![idx],
+            FinalSelection::OutputWindow(idx, _) | FinalSelection::Output(idx) => vec![idx],
             FinalSelection::Logical(sel_logical) => (0..app.outputs.len())
                 .filter(|&i| {
                     sel_logical
@@ -804,6 +1013,10 @@ pub fn run_wayland(mode: Mode, live: bool, look: Look) -> Result<Option<Vec<u8>>
     }
 
     let result_surface = match selection {
+        FinalSelection::Output(out_idx) => app.outputs[out_idx]
+            .frozen
+            .take()
+            .ok_or_else(|| "missing capture for selected output".to_string())?,
         FinalSelection::OutputWindow(out_idx, rect_px) => {
             let src = app.outputs[out_idx]
                 .frozen
@@ -827,7 +1040,30 @@ pub fn run_wayland(mode: Mode, live: bool, look: Look) -> Result<Option<Vec<u8>>
         }
     };
 
-    Ok(Some(encode_png_bytes(&result_surface)?))
+    if app.skip_editor {
+        return Ok(Outcome::Plain(encode_png_bytes(&result_surface)?));
+    }
+    let editor_output = match selection {
+        FinalSelection::OutputWindow(idx, _) | FinalSelection::Output(idx) => idx,
+        FinalSelection::Logical(sel) => {
+            let (cx, cy) = (sel.x + sel.w / 2.0, sel.y + sel.h / 2.0);
+            app.outputs
+                .iter()
+                .position(|o| {
+                    let r = o.logical_rect();
+                    cx >= r.x && cx < r.right() && cy >= r.y && cy < r.bottom()
+                })
+                .or(app.pointer_output)
+                .unwrap_or(0)
+        }
+    };
+    run_editor(
+        &mut app,
+        &mut queue,
+        &layer_shell,
+        editor_output,
+        result_surface,
+    )
 }
 
 fn fetch_snapshot() -> Snapshot {
@@ -1121,7 +1357,11 @@ impl OutputHandler for App {
 
 impl LayerShellHandler for App {
     fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &LayerSurface) {
-        self.cancelled = true;
+        if self.editor.is_some() {
+            self.finish = Some(Finish::Original);
+        } else {
+            self.cancelled = true;
+        }
     }
 
     fn configure(
@@ -1241,7 +1481,16 @@ impl KeyboardHandler for App {
         _: u32,
         event: KeyEvent,
     ) {
+        if let Some(editor) = &mut self.editor {
+            let step = editor.key(event.keysym, event.utf8.as_deref(), self.modifiers.ctrl);
+            self.editor_step(step);
+            return;
+        }
         match event.keysym {
+            Keysym::a | Keysym::A if self.modifiers.ctrl => {
+                let idx = self.pointer_output.unwrap_or(0);
+                self.accept(FinalSelection::Output(idx));
+            }
             Keysym::Escape => {
                 self.cancelled = true;
             }
@@ -1251,13 +1500,13 @@ impl KeyboardHandler for App {
                         let rect = drag.rect();
                         let (pw, ph) = self.active_drag_size_px(rect);
                         if pw > 0 && ph > 0 {
-                            self.accepted = Some(FinalSelection::Logical(rect));
+                            self.accept(FinalSelection::Logical(rect));
                             return;
                         }
                     }
                 }
                 if let Some((out_idx, win_rect)) = self.hovered_window {
-                    self.accepted = Some(FinalSelection::OutputWindow(out_idx, win_rect));
+                    self.accept(FinalSelection::OutputWindow(out_idx, win_rect));
                 }
             }
             Keysym::space => {
@@ -1302,10 +1551,11 @@ impl KeyboardHandler for App {
         _: &QueueHandle<Self>,
         _: &wl_keyboard::WlKeyboard,
         _: u32,
-        _: Modifiers,
+        modifiers: Modifiers,
         _: RawModifiers,
         _: u32,
     ) {
+        self.modifiers = modifiers;
     }
 }
 
@@ -1321,6 +1571,10 @@ impl PointerHandler for App {
             let Some(out_idx) = self.find_output_by_surface(&ev.surface) else {
                 continue;
             };
+            if self.editor.is_some() {
+                self.editor_pointer(ev);
+                continue;
+            }
             let (gx, gy, ox, oy) = {
                 let out = &self.outputs[out_idx];
                 let (sx, sy) = out.scale_xy();
@@ -1385,14 +1639,13 @@ impl PointerHandler for App {
                                 let rect = drag.rect();
                                 let (pw, ph) = self.active_drag_size_px(rect);
                                 if pw > 0 && ph > 0 {
-                                    self.accepted = Some(FinalSelection::Logical(rect));
+                                    self.accept(FinalSelection::Logical(rect));
                                     return;
                                 }
                             } else {
                                 self.update_hover();
                                 if let Some((win_out, win_rect)) = self.hovered_window {
-                                    self.accepted =
-                                        Some(FinalSelection::OutputWindow(win_out, win_rect));
+                                    self.accept(FinalSelection::OutputWindow(win_out, win_rect));
                                     return;
                                 }
                             }
@@ -1401,8 +1654,7 @@ impl PointerHandler for App {
                         Mode::Window => {
                             self.update_hover();
                             if let Some((win_out, win_rect)) = self.hovered_window {
-                                self.accepted =
-                                    Some(FinalSelection::OutputWindow(win_out, win_rect));
+                                self.accept(FinalSelection::OutputWindow(win_out, win_rect));
                                 return;
                             }
                         }
@@ -1412,6 +1664,27 @@ impl PointerHandler for App {
                 PointerEventKind::Axis { .. } => {}
             }
         }
+    }
+}
+
+impl App {
+    fn editor_pointer(&mut self, ev: &PointerEvent) {
+        let ui = self.editor_ui();
+        let (x, y) = (ev.position.0 * ui, ev.position.1 * ui);
+        let Some(editor) = self.editor.as_mut() else {
+            return;
+        };
+        let step = match ev.kind {
+            PointerEventKind::Enter { serial } => {
+                self.update_cursor_shape(serial);
+                return;
+            }
+            PointerEventKind::Motion { .. } => Ok(editor.motion(x, y)),
+            PointerEventKind::Press { button, .. } if button == BTN_LEFT => editor.press(x, y),
+            PointerEventKind::Release { button, .. } if button == BTN_LEFT => editor.release(x, y),
+            _ => return,
+        };
+        self.editor_step(step);
     }
 }
 
