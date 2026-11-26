@@ -1,0 +1,11 @@
+# Long jobs started with infynitae-bg (a build, a render, training): while the desktop wants the
+# CPU or the disk they get a fifth of the share an app gets (weight 20 against the default
+# 100), and above 60% of the RAM their memory is reclaimed first. With nothing else running they
+# get the whole PC. Never a hard memory limit: a job is slowed, not killed.
+[Unit]
+Description=Infynitae: long jobs that yield to the desktop (infynitae-bg)
+
+[Slice]
+CPUWeight=20
+IOWeight=20
+MemoryHigh=60%

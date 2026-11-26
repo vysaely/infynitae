@@ -1,0 +1,17 @@
+#!/bin/sh
+# Runs a long job so the desktop goes first: in infynitae-background.slice (CPU and disk weight
+# 20, the apps' 100; memory reclaimed above 60% of the RAM). With nothing else running it gets
+# the whole PC. In the foreground, in this terminal; Ctrl+C stops it; its exit status is the job's.
+#
+#   infynitae-bg <command> [arguments]      e.g. infynitae-bg cargo build --release
+set -u
+if [ $# -eq 0 ]; then
+    echo "usage: infynitae-bg <command> [arguments]" >&2
+    exit 2
+fi
+# a slice without its file runs at the default weights: say so instead of yielding nothing
+if ! systemctl --user cat infynitae-background.slice >/dev/null 2>&1; then
+    echo "infynitae-bg: infynitae-background.slice is not installed; infynitae-update puts it in place" >&2
+    exit 1
+fi
+exec systemd-run --user --scope --quiet --collect --slice=infynitae-background.slice -- "$@"

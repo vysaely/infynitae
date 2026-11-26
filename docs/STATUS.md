@@ -190,6 +190,13 @@ These pass the test suite but have not run on a real screen or device yet:
   menu's "Keep at full speed in the background"; Settings, Games). It needs the
   installer's limit (`/etc/security/limits.d/90-infynitae-nice.conf`) and a new login; before
   that nothing is lowered.
+- **Long jobs yield to the desktop** (2026-11-26): `infynitae-bg <command>` runs a build, a
+  render or a training run in `infynitae-background.slice` (CPU and disk weight 20 against the
+  apps' 100, memory reclaimed first above 60% of the RAM, no hard limit): the desktop goes
+  first while it wants the CPU; with nothing else running the job gets all of it.
+  It runs in the foreground of the terminal: `infynitae-bg cargo build --release`. A job already
+  started as a systemd user service moves there with `Slice=infynitae-background.slice` in its
+  unit. The installer and `infynitae-update` put the slice in `~/.config/systemd/user`.
 - **Battery limit** (`BATTERY_LIMIT`, control menu): the battery stops charging at a level
   (80%) on laptops whose firmware supports it (ThinkPads and many others); a udev rule lets the
   user set it. Tested against a stand-in battery; read on a ThinkPad S1 Yoga 12.
