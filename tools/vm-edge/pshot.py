@@ -39,18 +39,18 @@ def pick(x, y, w, h):
 def drag(x0, y0, x1, y1):
     at(x0, y0); emit((1, BTN["left"], 1)); wait(0.1); move(int(x1 - x0), int(y1 - y0), 20); wait(0.1); emit((1, BTN["left"], 0)); wait(0.3)
 def pixels(path):
-    # RGBA rows of an 8-bit RGBA PNG, as cairo writes them
+    # pixels of an 8-bit RGB or RGBA PNG (the helper saves RGB, cairo writes RGBA)
     import zlib
     data = open(path, "rb").read(); pos = 8; idat = b""; w = h = 0
     while pos < len(data):
         n, kind = struct.unpack(">I4s", data[pos:pos + 8]); body = data[pos + 8:pos + 8 + n]; pos += 12 + n
-        if kind == b"IHDR": w, h = struct.unpack(">II", body[:8])
+        if kind == b"IHDR": w, h = struct.unpack(">II", body[:8]); bpp = 4 if body[9] == 6 else 3
         elif kind == b"IDAT": idat += body
-    raw = zlib.decompress(idat); rows = []; prev = bytearray(w * 4); i = 0
+    raw = zlib.decompress(idat); rows = []; prev = bytearray(w * bpp); i = 0
     for _ in range(h):
-        f = raw[i]; line = bytearray(raw[i + 1:i + 1 + w * 4]); i += 1 + w * 4
-        for x in range(w * 4):
-            a = line[x - 4] if x >= 4 else 0; b = prev[x]; c = prev[x - 4] if x >= 4 else 0
+        f = raw[i]; line = bytearray(raw[i + 1:i + 1 + w * bpp]); i += 1 + w * bpp
+        for x in range(w * bpp):
+            a = line[x - bpp] if x >= bpp else 0; b = prev[x]; c = prev[x - bpp] if x >= bpp else 0
             if f == 1: line[x] = (line[x] + a) & 255
             elif f == 2: line[x] = (line[x] + b) & 255
             elif f == 3: line[x] = (line[x] + (a + b) // 2) & 255
@@ -58,7 +58,7 @@ def pixels(path):
                 p = a + b - c; pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
                 line[x] = (line[x] + (a if pa <= pb and pa <= pc else b if pb <= pc else c)) & 255
         rows.append(line); prev = line
-    return lambda x, y: tuple(rows[y][x * 4:x * 4 + 3])
+    return lambda x, y: tuple(rows[y][x * bpp:x * bpp + 3])
 def accent():
     v = "7aa2f7"
     try:
