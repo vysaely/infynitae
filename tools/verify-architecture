@@ -403,8 +403,8 @@ def check_authorized_p1_patch(root, r):
     for rel in sorted(missing):
         mismatches.append(f"missing file: {rel}")
     if mismatches:
-        return r.check(False, "", f"vendor smithay has unauthorized local modifications beyond P1-P7: {mismatches[:5]}")
-    r.ok(f"vendor smithay source matches the authorized patches P1-P7 (zero unauthorized modifications)")
+        return r.check(False, "", f"vendor smithay has unauthorized local modifications beyond P1-P8: {mismatches[:5]}")
+    r.ok(f"vendor smithay source matches the authorized patches P1-P8 (zero unauthorized modifications)")
     return True
 
 

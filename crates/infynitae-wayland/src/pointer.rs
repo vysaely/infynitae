@@ -517,36 +517,6 @@ impl WaylandState {
         true
     }
 
-    /// OB-54: Smithay 0.7.0 keeps a constraint's lifetime private, so Core holds every
-    /// constraint as persistent. A oneshot constraint that Smithay ended through `leave()` (the
-    /// delivered focus changed in the batch that ended it, W-SM-4a) is destroyed by Smithay; at
-    /// the end of the batch Core drops it too, so it is never activated again and Core and
-    /// Smithay keep the same constraint state (INV-INPUT-5). Nothing reaches the client: the
-    /// constraint no longer exists, and Core's deactivate effect for it is discarded.
-    pub(crate) fn drop_constraints_smithay_destroyed(&mut self) {
-        let mut surfaces = Vec::new();
-        if let Some(c) = self.core.constraint() {
-            surfaces.push(c.surface);
-        }
-        for c in self.core.pending_constraints() {
-            if !surfaces.contains(&c.surface) {
-                surfaces.push(c.surface);
-            }
-        }
-        if surfaces.is_empty() {
-            return;
-        }
-        let ptr = self.pointer_handle();
-        for surface in surfaces {
-            let Some(s) = self.registry.surface(surface) else {
-                continue;
-            };
-            if !with_pointer_constraint(s, &ptr, |c| c.is_some()) {
-                let _ = self.core.destroy_pointer_constraint(surface);
-            }
-        }
-    }
-
     pub(crate) fn set_pan_dismissed_pointer_grab(&mut self, serial: smithay::utils::Serial) {
         self.popup_pointer_grab_serial = None;
         let ptr = self.pointer_handle();

@@ -317,7 +317,6 @@ impl WaylandState {
                 }
             }
         }
-        self.drop_constraints_smithay_destroyed();
         self.sync_wlr_toplevels();
     }
 

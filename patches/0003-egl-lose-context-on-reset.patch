@@ -1,3 +1,15 @@
+What failed:
+Out of GPU memory or on a GPU reset, Mesa aborted the compositor and every window closed. Adds
+`EGLContext::new_lose_context_on_reset` (`EGL_EXT_create_context_robustness`,
+`LOSE_CONTEXT_ON_RESET_EXT`), so the context is lost and the backend makes a new renderer.
+
+Owner decision and date:
+Apps must not die with the compositor, 2026-10-26 (`docs/DECISIONS.md`).
+
+Upstream status:
+Not sent; no reason recorded. Smithay `master` has no `LOSE_CONTEXT_ON_RESET` or robustness
+attribute in `backend/egl/context.rs` (read 2026-11-26).
+
 --- a/src/backend/egl/context.rs
 +++ b/src/backend/egl/context.rs
 @@ -117,7 +117,15 @@

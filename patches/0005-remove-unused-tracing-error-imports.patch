@@ -5,7 +5,8 @@ Owner decision and date:
 `docs/POLISH_PLAN.md` sections 6.2 (row 1), 6.3, 6.4, and 7 batch 5 (applied 2026-11-13).
 
 Upstream status:
-Not sent, because whether upstream `Smithay/smithay` already removed these five imports on `master` was not confirmed from this worktree (`docs/POLISH_PLAN.md` section 6.2 row 1); ready to send upstream if still present.
+Not needed: on Smithay `master` none of the five files imports `error` any more (read 2026-11-26);
+no release has it.
 
 diff --git a/src/backend/drm/surface/gbm.rs b/src/backend/drm/surface/gbm.rs
 index b367f00..bf5dee1 100644

@@ -10,8 +10,9 @@ use smithay::desktop::{
 };
 use smithay::input::Seat;
 use smithay::input::{SeatHandler, SeatState};
+use smithay::reexports::wayland_protocols::wp::pointer_constraints::zv1::server::zwp_pointer_constraints_v1::Lifetime;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
-use smithay::reexports::wayland_server::Client;
+use smithay::reexports::wayland_server::{Client, WEnum};
 use smithay::reexports::wayland_server::protocol::wl_output::WlOutput;
 use smithay::reexports::wayland_server::protocol::{wl_buffer, wl_seat, wl_surface::WlSurface};
 use smithay::utils::{SERIAL_COUNTER, Serial};
@@ -1743,7 +1744,13 @@ impl PointerConstraintsHandler for WaylandState {
         let key = self.registry.key_for(surface);
         let info = with_pointer_constraint(surface, pointer, |c| {
             c.map(|c| {
-                let lifetime = infynitae_core::pointer::ConstraintLifetime::Persistent;
+                // Smithay ends and destroys a constraint on deactivation only when it is
+                // `Oneshot`, so anything else (an unknown value too) is persistent for Core.
+                let lifetime = if c.lifetime() == WEnum::Value(Lifetime::Oneshot) {
+                    infynitae_core::pointer::ConstraintLifetime::Oneshot
+                } else {
+                    infynitae_core::pointer::ConstraintLifetime::Persistent
+                };
                 let region = c.region().and_then(convert::convert_region);
                 match &*c {
                     smithay::wayland::pointer_constraints::PointerConstraint::Locked(locked) => {

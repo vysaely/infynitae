@@ -1,16 +1,17 @@
-Track acknowledged configure state in RoleLastAcked<S> (MultiCache) across
-xdg_surface::ack_configure, commits, null-buffer unmaps, and destruction, and post
-xdg_surface::Error::UnconfiguredBuffer (3) from ToplevelSurface/PopupSurface
-pre_commit_hook when a buffer is attached before a configure acknowledgement.
+What failed:
+A buffer committed on an xdg surface before it acknowledged a configure was answered with
+`xdg_surface` error 1 (`not_constructed`) from `ensure_configured`; xdg-shell names error 3
+(`unconfigured_buffer`) (W-SM-18). The backport tracks the acknowledged configure in
+`RoleLastAcked<S>` (`MultiCache`) across `ack_configure`, commits, null-buffer unmaps and
+destruction, and posts `UnconfiguredBuffer` (3) from the toplevel and popup `pre_commit_hook`.
+Unlike upstream, `ensure_configured` stays, as a check that posts nothing: the adapter's two calls
+use it to skip the offending commit.
 
-W-SM-18 / P6: pre-patch Smithay checked attributes.configured in post-commit
-ensure_configured and posted xdg_surface::Error::NotConstructed (1) instead of
-xdg_surface::Error::UnconfiguredBuffer (3), and left last_acked outside MultiCache.
-Temporary ensure_configured methods remain as non-erroring compatibility helpers until
-crates/infynitae-wayland removes its calls in batch 4.
+Owner decision and date:
+`docs/POLISH_PLAN.md` sections 6.2 (row 2), 6.3, 6.4, and 7 batch 5 (applied 2026-11-13).
 
-Upstream status: fixed in Smithay/smithay PR #1817 (commit 641d2ad, 2025-09-17); not in
-pinned smithay 0.7.0.
+Upstream status:
+Upstream: Smithay/smithay PR #1817 (commit 641d2ad, merged 2025-09-17); in `master`, in no release.
 
 diff --git a/src/wayland/shell/xdg/handlers/surface.rs b/src/wayland/shell/xdg/handlers/surface.rs
 index 3ae3a79..19d00c8 100644

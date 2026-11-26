@@ -1,3 +1,16 @@
+What failed:
+The compositor's GPU context had the default priority, so a game loading the GPU delayed the
+desktop's frames. Adds `EGLContext::new_lose_context_on_reset_with_priority` and
+`EGLContext::priority` (`EGL_IMG_context_priority`): the context asks for high priority and the
+granted one is read back.
+
+Owner decision and date:
+Written 2026-10-30, approved by the owner 2026-10-31 (`docs/DECISIONS.md`, D-B12-PIN entry).
+
+Upstream status:
+Not sent. Smithay `master` supports `EGL_IMG_context_priority` (`CONTEXT_PRIORITY_LEVEL_IMG` in
+`backend/egl/context.rs`, read 2026-11-26); its API was not compared with this one.
+
 --- a/src/backend/egl/context.rs
 +++ b/src/backend/egl/context.rs
 @@ -128,6 +128,39 @@ impl EGLContext {

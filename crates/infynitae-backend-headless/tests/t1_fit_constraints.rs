@@ -20,8 +20,7 @@
 //! (p − 540) / 1.8 + 320); the restore brings back zoom 1 and (630, 520).
 //!
 //! Not covered here: a lock that ends because its point leaves the output. That path is unchanged
-//! by the M1 fix, and on it the adapter reports every constraint to Core as persistent, so Core
-//! re-activates a oneshot lock Smithay has ended (OB-54).
+//! by the M1 fix; a oneshot lock ended on it stays ended (OB-54, `t1_constraint_lifetime`).
 
 mod common;
 
