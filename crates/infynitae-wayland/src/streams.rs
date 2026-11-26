@@ -213,8 +213,8 @@ fn chains(out: &str) -> Vec<Vec<u32>> {
 mod tests {
     use super::*;
 
-    /// From `LC_ALL=C pactl list sink-inputs` on PipeWire 1.2 (two streams, trimmed): one playing,
-    /// one paused.
+    /// Two streams in the layout of `LC_ALL=C pactl list sink-inputs`, one playing and one
+    /// paused; written by hand (not captured from a sound server), fields trimmed.
     const SINK_INPUTS: &str = "Sink Input #63
 \tDriver: PipeWire
 \tOwner Module: n/a
