@@ -219,3 +219,48 @@ if [ "$(cat "$TMP/sleep_lock_oom")" != "$base" ]; then
     exit 1
 fi
 echo "ok   the lock screen started on sleep keeps the desktop's $base"
+
+# ---- 7. One bus watcher for drives and the sleep lock (2026-11-25): session.sh starts
+# infynitae-bus-watch with the two scripts, and it keeps the desktop's out-of-memory score for the
+# lock screen; without it (section 6: installed before) the sleep lock runs on its own
+HOME7="$TMP/home7"
+B7="$HOME7/.local/bin"
+mkdir -p "$B7"
+cat > "$B7/infynitae-bus-watch" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" > "$TMP/bus_watch_args"
+cat /proc/self/oom_score_adj > "$TMP/bus_watch_oom.new"
+mv "$TMP/bus_watch_oom.new" "$TMP/bus_watch_oom"
+EOF
+printf '#!/bin/sh\ntouch "%s/script_ran"\n' "$TMP" > "$B7/infynitae-automount"
+cp "$B7/infynitae-automount" "$B7/infynitae-sleep-lock"
+chmod +x "$B7/infynitae-bus-watch" "$B7/infynitae-automount" "$B7/infynitae-sleep-lock"
+# watch AUTOMOUNT LOCK_WHEN_AWAY: prints the bus watcher's arguments
+watch() {
+    rm -f "$TMP/bus_watch_oom" "$TMP/bus_watch_args"
+    (
+        export HOME="$HOME7" WAYLAND_DISPLAY="wayland-test" START_LOCKED="0" SESSION_RESTORE="false"
+        export START_TERMINAL="false" AUTOMOUNT="$1" LOCK_WHEN_AWAY="$2"
+        sh "$SESSION_SCRIPT" >/dev/null 2>&1
+    ) || true
+    i=0
+    while [ ! -s "$TMP/bus_watch_oom" ] && [ $i -lt 100 ]; do sleep 0.05; i=$((i + 1)); done
+    cat "$TMP/bus_watch_args" 2>/dev/null || true
+}
+got=$(watch true true)
+if [ "$got" != "--udisks $B7/infynitae-automount --sleep $B7/infynitae-sleep-lock" ]; then
+    echo "FAIL the bus watcher: started with \"$got\""
+    exit 1
+fi
+if [ "$(cat "$TMP/bus_watch_oom")" != "$base" ]; then
+    echo "FAIL the bus watcher: score $(cat "$TMP/bus_watch_oom"), expected $base"
+    exit 1
+fi
+echo "ok   one bus watcher for drives and the sleep lock, with the desktop's score $base"
+got=$(watch false true)
+[ "$got" = "--sleep $B7/infynitae-sleep-lock" ] || { echo "FAIL AUTOMOUNT=false: started with \"$got\""; exit 1; }
+got=$(watch true false)
+[ "$got" = "--udisks $B7/infynitae-automount" ] || { echo "FAIL LOCK_WHEN_AWAY=false: started with \"$got\""; exit 1; }
+sleep 0.3
+[ ! -e "$TMP/script_ran" ] || { echo "FAIL a script was started beside the bus watcher"; exit 1; }
+echo "ok   each switch off leaves its script out, and no script runs beside the watcher"

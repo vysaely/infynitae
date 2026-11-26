@@ -75,8 +75,9 @@ check "empty ACCENT falls back to BORDER_ACTIVE in settings.sh" "$got" "#cc70a9"
 # 8. LOCK_WHEN_AWAY drives sleep-lock with SLEEP_LOCK fallback in reload and session.sh
 reload_check() {
     TMP_RL=$(mktemp -d)
-    { sed -n '/^infy_on() {/,/^}/p' live/config.sh; sed -n '/^reload_sleep_lock() {/,/^}/p' live/infynitae-reload; } > "$TMP_RL/fn.sh"
-    got=$(sh -c "BIN_DIR=$TMP_RL; LIVE=$TMP_RL; stop_helper() { :; }; first() { echo dummy; }; spawn() { :; }; . $TMP_RL/fn.sh; $1; reload_sleep_lock" | tr '\n' ' ')
+    # the sleep lock is one of reload_bus_watch's two feeds (2026-11-25): its own lines
+    { sed -n '/^infy_on() {/,/^}/p' live/config.sh; sed -n '/^reload_bus_watch() {/,/^}/p' live/infynitae-reload; } > "$TMP_RL/fn.sh"
+    got=$(sh -c "BIN_DIR=$TMP_RL; LIVE=$TMP_RL; stop_helper() { :; }; first() { echo dummy; }; spawn() { :; }; . $TMP_RL/fn.sh; AUTOMOUNT=false; $1; reload_bus_watch" | grep '^sleep-lock' | tr '\n' ' ')
     rm -rf "$TMP_RL"
 }
 reload_check 'unset LOCK_WHEN_AWAY SLEEP_LOCK'

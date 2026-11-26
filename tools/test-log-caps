@@ -96,14 +96,14 @@ truncate -s 3M "$AUTO_STATE/automount.log"
 rm -f "$AUTO_STATE/automount.log.old"
 XDG_STATE_HOME="$TMP/auto_state" XDG_RUNTIME_DIR="$TMP/auto_run" \
 INFYNITAE_AUTOMOUNT_MONITOR="exit 0" \
-sh "$REPO_DIR/live/infynitae-automount" >/dev/null 2>&1 || true
+sh "$REPO_DIR/live/infynitae-automount" scan >/dev/null 2>&1 || true
 check "automount.log 3 MB rotated to .old" "$([ -f "$AUTO_STATE/automount.log.old" ] && echo yes || echo no)" "yes"
 
 truncate -s 1M "$AUTO_STATE/automount.log"
 rm -f "$AUTO_STATE/automount.log.old"
 XDG_STATE_HOME="$TMP/auto_state" XDG_RUNTIME_DIR="$TMP/auto_run" \
 INFYNITAE_AUTOMOUNT_MONITOR="exit 0" \
-sh "$REPO_DIR/live/infynitae-automount" >/dev/null 2>&1 || true
+sh "$REPO_DIR/live/infynitae-automount" scan >/dev/null 2>&1 || true
 check "automount.log 1 MB not rotated" "$([ ! -f "$AUTO_STATE/automount.log.old" ] && echo yes || echo no)" "yes"
 
 # ---- 4. infynitae-sleep-lock: sleep-lock.log rotates at 2 MB
@@ -121,14 +121,14 @@ truncate -s 3M "$SLEEP_STATE/sleep-lock.log"
 rm -f "$SLEEP_STATE/sleep-lock.log.old"
 XDG_STATE_HOME="$TMP/sleep_state" XDG_RUNTIME_DIR="$TMP/sleep_run" \
 INFYNITAE_SLEEP_MONITOR="exit 0" \
-sh "$REPO_DIR/live/infynitae-sleep-lock" >/dev/null 2>&1 || true
+sh "$REPO_DIR/live/infynitae-sleep-lock" start >/dev/null 2>&1 || true
 check "sleep-lock.log 3 MB rotated to .old" "$([ -f "$SLEEP_STATE/sleep-lock.log.old" ] && echo yes || echo no)" "yes"
 
 truncate -s 1M "$SLEEP_STATE/sleep-lock.log"
 rm -f "$SLEEP_STATE/sleep-lock.log.old"
 XDG_STATE_HOME="$TMP/sleep_state" XDG_RUNTIME_DIR="$TMP/sleep_run" \
 INFYNITAE_SLEEP_MONITOR="exit 0" \
-sh "$REPO_DIR/live/infynitae-sleep-lock" >/dev/null 2>&1 || true
+sh "$REPO_DIR/live/infynitae-sleep-lock" start >/dev/null 2>&1 || true
 check "sleep-lock.log 1 MB not rotated" "$([ ! -f "$SLEEP_STATE/sleep-lock.log.old" ] && echo yes || echo no)" "yes"
 
 # ---- 5. infynitae-reload: helpers.log rotates at 2 MB

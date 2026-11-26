@@ -1,9 +1,11 @@
 #!/bin/sh
-# infynitae-automount: USB drives and SD cards mount when plugged in, through udisks2. At start,
-# it mounts drives already plugged in and unmounted; it then watches udisks2 for added filesystem
-# interfaces on removable media, mounts them with udisksctl, and posts a notification with Open and
-# Eject. An encrypted drive asks for its passphrase (the edge's question card, else fuzzel) and
-# mounts once unlocked. Started by session.sh; ends with the session.
+# infynitae-automount: USB drives and SD cards mount when plugged in, through udisks2.
+# infynitae-bus-watch (live/bus-watch) watches udisks2 and runs it, one step at a time:
+#   infynitae-automount scan: at the session's start, mounts drives already plugged in and unmounted
+#   infynitae-automount signal LINE: one udisks2 signal, as `gdbus monitor` prints it. A filesystem
+#     added on removable media is mounted with udisksctl, and a notification offers Open and Eject.
+# An encrypted drive asks for its passphrase (the edge's question card, else fuzzel) and mounts
+# once unlocked.
 # Drives are named by Roman numeral, as Windows names them C:, D:, E: (DRIVE_NAMES="roman", the
 # default; docs/DRIVES.md): a new filesystem is first given a numeral by the root helper
 # infynitae-drive-name (through pkexec), which writes its line in /etc/fstab, so udisks mounts it at
@@ -13,7 +15,6 @@
 #   infynitae-automount eject [DEVICE]: unmounts DEVICE (else every drive mounted under
 #   /run/media or at a removable drive's /mnt/<numeral>), locks it if encrypted and powers the
 #   drive off, so it is safe to pull
-#   INFYNITAE_AUTOMOUNT_MONITOR: a command printing udisks2 signals instead of gdbus (tests)
 #   INFYNITAE_AUTOMOUNT_UDISKSCTL: a command used instead of udisksctl (tests)
 #   INFYNITAE_AUTOMOUNT_ASK: a command printing a passphrase instead of fuzzel (tests)
 #   INFYNITAE_AUTOMOUNT_MOUNTS: a mounts file instead of /proc/mounts (tests)
@@ -24,6 +25,11 @@ set -u
 if [ -f "$HOME/infynitae/live/config.sh" ]; then
     . "$HOME/infynitae/live/config.sh"
 fi
+# what a drive opens (the file manager) gets an app's out-of-memory score (session.sh, 1c): the
+# watcher that runs this keeps the desktop's, for the lock screen it starts before sleep
+oom=""
+read -r oom < /proc/self/oom_score_adj 2>/dev/null || true
+[ -n "$oom" ] && [ "$oom" -lt 300 ] && { echo 300 > /proc/self/oom_score_adj; } 2>/dev/null
 FSTAB="${INFYNITAE_AUTOMOUNT_FSTAB:-/etc/fstab}"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/infynitae"
 LOG="$STATE_DIR/automount.log"
@@ -58,8 +64,8 @@ notify() {
     fi
 }
 
-# a notification with actions waits for its answer: in the background, without the lock (fd 9),
-# and at most NOTIFY_WAIT seconds, so a server that never says it closed cannot keep it (and its
+# a notification with actions waits for its answer: in the background, and at most NOTIFY_WAIT
+# seconds, so a server that never says it closed cannot keep it (and its
 # shells) alive for hours (2026-11-24)
 NOTIFY_WAIT="${NOTIFY_WAIT:-600}"
 notify_actions() {
@@ -156,16 +162,12 @@ if [ "${1:-}" = "eject" ]; then
     exit "$rc"
 fi
 
-# one per session: two watchers would race to mount the same filesystem (fd 9 holds the lock;
-# helpers started below do not inherit it)
+# what one step learns for the next ones, since each is a process of its own: the drives udisks
+# calls removable, and that naming drives was refused this session (cleared by scan)
 RUN_DIR="${XDG_RUNTIME_DIR:-/tmp}/infynitae"
 mkdir -p "$RUN_DIR"
-exec 9> "$RUN_DIR/automount.lock"
-if command -v flock >/dev/null 2>&1 && ! flock -n 9; then
-    exit 0
-fi
-
-rotate_log "$LOG"
+DRIVES_FILE="$RUN_DIR/automount.drives"
+REFUSED_FILE="$RUN_DIR/automount.refused"
 
 removable_drives=""
 # fields of the parsed lines: not a tab, which `read` merges when a field (a label) is empty
@@ -298,6 +300,7 @@ INFO
             # pkexec: not allowed, or the password prompt dismissed; not asked again this session
             126 | 127)
                 names_refused=1
+                : > "$REFUSED_FILE"
                 log "naming $1 $2 was refused (pkexec $nd_rc): $nd_out"
                 return 1
                 ;;
@@ -340,7 +343,7 @@ mount_device() {
                 open) xdg-open "$mount_path" >/dev/null 2>&1 ;;
                 eject) eject_device "$dev" "$name" ;;
             esac
-        ) 9>&- &
+        ) &
     else
         log "mount failed for $dev: $mount_out"
         journal_write drive-mounted "" "$dev ($label): $mount_out" failed
@@ -418,7 +421,7 @@ unlock_device() {
             esac
             notify "Wrong passphrase for $label"
         done
-    ) 9>&- &
+    ) &
 }
 
 handle_block() {
@@ -730,47 +733,22 @@ $parsed
 EOF
 }
 
-end() {
-    trap - INT TERM HUP
-    [ -n "${MON:-}" ] && kill "$MON" 2>/dev/null
-    exit 0
-}
-trap end INT TERM HUP
-
-# require udisksctl and gdbus (or test overrides)
 command -v "${INFYNITAE_AUTOMOUNT_UDISKSCTL:-udisksctl}" >/dev/null 2>&1 || exit 0
-if [ -z "${INFYNITAE_AUTOMOUNT_MONITOR:-}" ] && ! command -v gdbus >/dev/null 2>&1; then
-    exit 0
-fi
-
-log "started"
-scan_existing
-
-# UDisks2's signals, one per line, through a FIFO (a signal then ends the script at once). The
-# background job is gdbus itself, started from this shell: the watcher is two processes, not a
-# second shell around gdbus as well. gdbus monitor ends when the system bus or UDisks2 restarts
-# (an update): it starts again after 2 s instead of the watcher ending for the rest of the
-# session. A test's monitor runs once.
-FIFO="$STATE_DIR/automount.$$"
-while :; do
-    rm -f "$FIFO"
-    mkfifo "$FIFO" || exit 1
-    if [ -n "${INFYNITAE_AUTOMOUNT_MONITOR:-}" ]; then
-        sh -c "$INFYNITAE_AUTOMOUNT_MONITOR" > "$FIFO" 2>/dev/null 9>&- &
-    else
-        gdbus monitor --system --dest org.freedesktop.UDisks2 > "$FIFO" 2>/dev/null 9>&- &
-    fi
-    MON=$!
-    exec 3< "$FIFO"
-    rm -f "$FIFO"
-    while IFS= read -r line <&3; do
-        process_line "$line"
-    done
-    exec 3<&-
-    wait "$MON" 2>/dev/null
-    MON=""
-    [ -n "${INFYNITAE_AUTOMOUNT_MONITOR:-}" ] && break
-    sleep 2
-    log "monitor restarted"
-done
-end
+case "${1:-}" in
+    scan)
+        rotate_log "$LOG"
+        rm -f "$REFUSED_FILE"
+        log "started"
+        scan_existing
+        ;;
+    signal)
+        removable_drives=$(cat "$DRIVES_FILE" 2>/dev/null || true)
+        [ -f "$REFUSED_FILE" ] && names_refused=1
+        process_line "${2:-}"
+        ;;
+    *)
+        echo "usage: infynitae-automount scan | signal LINE (run by infynitae-bus-watch) | eject [DEVICE]" >&2
+        exit 2
+        ;;
+esac
+printf '%s\n' "$removable_drives" > "$DRIVES_FILE"

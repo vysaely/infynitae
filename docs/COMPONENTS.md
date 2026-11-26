@@ -30,7 +30,7 @@ this repository already.
 | Lock screen | `infynitae-lock` (ours) | swaylock, gtklock, hyprlock | `SCREEN_LOCKER` | Ours |
 | Admin password prompts | `infynitae-polkit` (ours) | polkit-gnome, lxqt-policykit, hyprpolkitagent | `POLKIT_AGENT` | Ours |
 | Keyring (saved passwords) | gnome-keyring | KeePassXC (Secret Service), kwallet | whichever is installed answers D-Bus | No: security code, leave it to the experts |
-| USB automount | infynitae-automount (ours: a shell watcher on udisks2) | udiskie | `AUTOMOUNT` | No |
+| USB automount | infynitae-automount (ours: a shell script on udisks2, run by infynitae-bus-watch) | udiskie | `AUTOMOUNT` | No |
 | Formatting a drive | infynitae-format-drive (ours: udisks2; asks like the panels; "Format drive..." in PCManFM-Qt's menu) | GNOME Disks | none | No |
 | Questions from scripts | `infynitae-edge ask` (ours: a list or a field drawn like the panels; prints the answer) | fuzzel, zenity | none | No |
 | Session restore | `infynitae-restore` (ours) | none comparable | `SESSION_RESTORE` | Ours |
