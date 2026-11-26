@@ -54,6 +54,8 @@ pub const KEY_BACKSPACE: u32 = 14;
 pub const KEY_SYSRQ: u32 = 99;
 pub const KEY_L: u32 = 38;
 pub const KEY_V: u32 = 47;
+pub const KEY_SLASH: u32 = 53;
+pub const KEY_F1: u32 = 59;
 pub const KEY_MUTE: u32 = 113;
 pub const KEY_VOLUMEDOWN: u32 = 114;
 pub const KEY_VOLUMEUP: u32 = 115;
@@ -176,6 +178,8 @@ pub enum KeyAction {
     /// Super+Shift+G (2026-11-22): the focused window's cluster by app, every window at its own
     /// size, one row per app, as wide as it needs (`arrange`, `ClusterLayout::ByApp`)
     ArrangeClusterByApp,
+    /// Super+/ or Super+F1: toggle shortcut help overlay
+    ToggleShortcuts,
     /// A user command from the config (`EXEC_<NAME>="CHORD:command"`), by its index in the
     /// adapter's command list.
     Exec(u16),
@@ -403,6 +407,7 @@ pub const ACTION_NAMES: &[(&str, KeyAction)] = &[
     ("WINDOW_MENU", KeyAction::WindowMenu),
     ("CLUSTER_LAYOUT", KeyAction::ArrangeCluster),
     ("CLUSTER_BY_APP", KeyAction::ArrangeClusterByApp),
+    ("SHORTCUTS", KeyAction::ToggleShortcuts),
 ];
 
 /// [`resolve_key_binding`] with the user's bindings first: a chord of theirs wins (also over a
@@ -650,6 +655,16 @@ pub fn resolve_key_binding(
         && !interaction_active
     {
         return Some(KeyAction::ToggleRecording);
+    }
+    // Super+/ or Super+F1: shortcut help overlay; Logo only, never during interaction
+    if (key == KEY_SLASH || key == KEY_F1)
+        && mods.logo
+        && !mods.shift
+        && !mods.ctrl
+        && !mods.alt
+        && !interaction_active
+    {
+        return Some(KeyAction::ToggleShortcuts);
     }
     // Hardware media and volume keys: triggered directly on keypress, never during interaction
     if !interaction_active {
@@ -1480,5 +1495,49 @@ mod tests {
             resolve_key_binding_with(&user, chord.key, chord.mods, false),
             Some(KeyAction::ViewportRestore)
         );
+    }
+
+    #[test]
+    fn super_slash_and_f1_open_shortcuts() {
+        let logo = mods(true, false, false, false);
+        assert_eq!(
+            resolve_key_binding(KEY_SLASH, logo, false),
+            Some(KeyAction::ToggleShortcuts)
+        );
+        assert_eq!(
+            resolve_key_binding(KEY_F1, logo, false),
+            Some(KeyAction::ToggleShortcuts)
+        );
+        for extra in [
+            mods(true, true, false, false),
+            mods(true, false, true, false),
+            mods(true, false, false, true),
+            mods(false, false, false, false),
+        ] {
+            assert_eq!(resolve_key_binding(KEY_SLASH, extra, false), None);
+            assert_eq!(resolve_key_binding(KEY_F1, extra, false), None);
+        }
+        assert_eq!(resolve_key_binding(KEY_SLASH, logo, true), None);
+        assert_eq!(resolve_key_binding(KEY_F1, logo, true), None);
+    }
+
+    #[test]
+    fn shortcuts_action_name_rebinds_and_frees_defaults() {
+        assert!(ACTION_NAMES.contains(&("SHORTCUTS", KeyAction::ToggleShortcuts)));
+        let chord = parse_chord("SUPER+F2").unwrap();
+        let user = UserBindings {
+            chords: vec![(chord, Some(KeyAction::ToggleShortcuts))],
+            moved: vec![KeyAction::ToggleShortcuts],
+        };
+        assert_eq!(
+            resolve_key_binding_with(&user, chord.key, chord.mods, false),
+            Some(KeyAction::ToggleShortcuts)
+        );
+        let logo = mods(true, false, false, false);
+        assert_eq!(
+            resolve_key_binding_with(&user, KEY_SLASH, logo, false),
+            None
+        );
+        assert_eq!(resolve_key_binding_with(&user, KEY_F1, logo, false), None);
     }
 }

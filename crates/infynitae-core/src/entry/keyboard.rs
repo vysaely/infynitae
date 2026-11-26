@@ -269,6 +269,7 @@ impl Core {
             KeyAction::SpawnLockScreen => vec![Effect::SpawnLockScreen],
             KeyAction::ClipboardHistory => vec![Effect::SpawnClipboardHistory],
             KeyAction::ControlMenu => vec![Effect::SpawnControlMenu],
+            KeyAction::ToggleShortcuts => vec![Effect::ToggleShortcuts],
             KeyAction::TogglePrivacy => vec![Effect::TogglePrivacy],
             KeyAction::ToggleIdleInhibit => vec![Effect::ToggleIdleInhibit],
             KeyAction::ToggleTearing => vec![Effect::ToggleTearing],
@@ -628,5 +629,75 @@ mod tests {
             super_space(&mut c, &mut i);
             assert_eq!(c.focus().target(), Some(ws[1]));
         }
+    }
+
+    #[test]
+    fn super_slash_and_f1_emit_toggle_shortcuts_unless_inhibited() {
+        use crate::input::keys::{KEY_F1, KEY_LEFTMETA, KEY_SLASH};
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        let w = map_windows(&mut c, a, 1)[0];
+        c.set_focus(&mut i, Some(w)).unwrap();
+
+        let logo = Modifiers {
+            logo: true,
+            ..Default::default()
+        };
+        let mut time = 1000;
+        let mut press_key = |c: &mut Core, key, modifiers, mods_changed| {
+            time += 1000;
+            let fx = c
+                .physical_input_vec(
+                    &mut i,
+                    crate::PhysicalEvent::KeyboardKey {
+                        key,
+                        pressed: true,
+                        modifiers,
+                        mods_changed,
+                        time_us: time,
+                    },
+                )
+                .unwrap();
+            time += 1000;
+            let _ = c.physical_input_vec(
+                &mut i,
+                crate::PhysicalEvent::KeyboardKey {
+                    key,
+                    pressed: false,
+                    modifiers,
+                    mods_changed: false,
+                    time_us: time,
+                },
+            );
+            fx
+        };
+
+        let _ = press_key(&mut c, KEY_LEFTMETA, logo, true);
+        for key in [KEY_SLASH, KEY_F1] {
+            let fx = press_key(&mut c, key, logo, false);
+            assert!(
+                fx.contains(&Effect::ToggleShortcuts),
+                "key {key} emits ToggleShortcuts: {fx:?}"
+            );
+            assert!(
+                fx.contains(&Effect::KeyboardIntercept { key }),
+                "key {key} is intercepted: {fx:?}"
+            );
+        }
+
+        c.set_shortcuts_inhibited(true);
+        let fx = press_key(&mut c, KEY_SLASH, logo, false);
+        assert!(
+            !fx.contains(&Effect::ToggleShortcuts),
+            "inhibited app receives Super+/: {fx:?}"
+        );
+        assert!(fx.iter().any(|e| matches!(
+            e,
+            Effect::KeyboardForward {
+                key: KEY_SLASH,
+                pressed: true,
+                ..
+            }
+        )));
     }
 }

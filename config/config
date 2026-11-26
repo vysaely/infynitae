@@ -835,7 +835,7 @@ RECORD_AUDIO="desktop"
 #   Rare:   Super+Shift+Delete  force close    Super+L  open windows    Super+Shift+L  lock    Super+Shift+Escape  system monitor
 #           Super+Shift+O  tearing    Super+Shift+P  privacy
 #           Super+Shift+I  stay awake    Super+Alt+P  record    Super+Alt+C  replay clip
-#           Super+Shift+BackSpace  reload
+#           Super+Shift+BackSpace  reload    Super+/  shortcuts
 #   Windows: Super+Enter  maximize or fit    Super+Shift+Enter  fullscreen
 #           Super+Shift+Space  centre, keep the zoom    Super+Shift+K  keep on top
 #     Super+Shift+G  sort the cluster by app: a row per app, sizes kept    Super+M  window menu
@@ -845,7 +845,7 @@ RECORD_AUDIO="desktop"
 #   BIND_<ACTION>="CHORD[,CHORD]"       e.g. BIND_TERMINAL="SUPER+RETURN"
 #   FOCUS_NEXT FOCUS_LEFT FOCUS_RIGHT FOCUS_UP FOCUS_DOWN OVERVIEW WINDOWS LAUNCHER TERMINAL FILE_MANAGER SYSTEM_MONITOR SCREENSHOT REGION_SCREENSHOT RELOAD LOCK
 #   CLIPBOARD CONTROL PRIVACY IDLE_INHIBIT TEARING SAVE_REPLAY RECORD FIT FULLSCREEN KEEP_ON_TOP CLOSE
-#   FORCE_CLOSE RECENTER RECENTER_KEEP_ZOOM BACK WINDOW_MENU CLUSTER_LAYOUT
+#   FORCE_CLOSE RECENTER RECENTER_KEEP_ZOOM BACK WINDOW_MENU CLUSTER_LAYOUT SHORTCUTS
 # Run a command:
 #   EXEC_<NAME>="CHORD:command"         e.g. EXEC_BROWSER="SUPER+B:firefox"
 # Chord: SUPER CTRL ALT SHIFT (exactly those held) + one key: A-Z 0-9 F1-F12 RETURN SPACE TAB
