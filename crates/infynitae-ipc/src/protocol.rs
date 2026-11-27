@@ -348,3 +348,38 @@ pub fn event_line(mut event: Value, generation: u64) -> String {
     }
     event.to_json()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use infynitae_core::navigation::PersistedCameras;
+
+    #[test]
+    fn parse_request_crash_and_seed_corpus() {
+        let (core, _, _, _) = Core::new(PersistedCameras::default());
+        for line in [
+            "",
+            "\0",
+            "[]",
+            "123",
+            r#"{"id":1,"cmd":"snapshot"}"#,
+            r#"{"id":"x","cmd":"navigate","to":{"canvas":[0,0]},"zoom":NaN}"#,
+            r#"{"id":2,"cmd":"navigate","to":{"canvas":[1e999,0]}}"#,
+            r#"{"id":3,"cmd":"resize_element","element":[1,0],"size":[9e18,1]}"#,
+            r#"{"id":4,"cmd":"fullscreen","element":[1,0],"output":-1}"#,
+            r#"{"id":5,"cmd":"arrange","layout":"bad"}"#,
+            r#"{"id":"\ud800","cmd":"snapshot"}"#,
+            &format!(
+                "{{\"id\":1,\"cmd\":\"snapshot\",\"a\":{}0{}}}",
+                "[".repeat(40),
+                "]".repeat(40)
+            ),
+        ] {
+            let (id, res) = parse_request(line, &core);
+            let _ = match res {
+                Ok(_) => ok_reply(id, 0, None),
+                Err(e) => error_reply(id, e),
+            };
+        }
+    }
+}

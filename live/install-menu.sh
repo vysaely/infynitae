@@ -55,6 +55,9 @@ part_label() {
                 echo "Out-of-memory alerts (when systemd-oomd closes an app)"
             fi
             ;;
+        snap-pac)
+            echo "Pacman btrfs snapshots before updates (snap-pac, needs snapper)"
+            ;;
     esac
 }
 
@@ -69,7 +72,7 @@ app_name() {
 }
 
 # The menus; they set SKIP, TERMINAL_PKG, BLUETOOTH, POWER_PROFILES, GAMING, REPLAY_BUFFER,
-# FOREIGN_APPS, FOREIGN_DEFAULTS, DISK_GUARD and AUTOLOGIN as the options would. Cancel ends the install before anything changed.
+# FOREIGN_APPS, FOREIGN_DEFAULTS, DISK_GUARD, SNAP_PAC and AUTOLOGIN as the options would. Cancel ends the install before anything changed.
 install_menu() {
     local items=() group chosen status startup others android_line=""
     menu_size
@@ -100,6 +103,9 @@ Next: what to install. Nothing is changed before the last screen." "$MENU_H" "$M
     items+=(replay-buffer "$(part_label replay-buffer)" OFF)
     items+=(foreign-apps "$(part_label foreign-apps)" ON)
     items+=(disk-guard "$(part_label disk-guard)" ON)
+    if [ "$(findmnt -no FSTYPE / 2>/dev/null)" = btrfs ]; then
+        items+=(snap-pac "$(part_label snap-pac)" OFF)
+    fi
 
     chosen=$(whiptail --title "Parts to install" --separate-output --ok-button "Next" \
         --cancel-button "Cancel" --checklist "Space ticks a part, Enter goes on." \
@@ -118,6 +124,7 @@ Next: what to install. Nothing is changed before the last screen." "$MENU_H" "$M
     has gaming && GAMING=true
     has replay-buffer && REPLAY_BUFFER=true
     has disk-guard || DISK_GUARD=false
+    has snap-pac && SNAP_PAC=true
     if has foreign-apps; then
         # umu-launcher is in [multilib], which gaming turns on; Wine needs the 32-bit drivers
         FOREIGN_APPS=true GAMING=true

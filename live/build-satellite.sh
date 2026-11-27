@@ -35,6 +35,18 @@ git -C "$WORK/src" apply "$PATCH" || fail "the patch does not apply"
         CARGO_TARGET_DIR="$WORK/target" cargo build --release --locked -q
 ) || fail "the build failed"
 cp "$WORK/target/release/xwayland-satellite" "$BIN/.xwayland-satellite.new" || fail "could not copy it"
-mv -f "$BIN/.xwayland-satellite.new" "$BIN/xwayland-satellite" || fail "could not install it"
+chmod 755 "$BIN/.xwayland-satellite.new" || fail "could not mark it executable"
+if [ -e "$BIN/xwayland-satellite" ]; then
+    if cmp -s "$BIN/.xwayland-satellite.new" "$BIN/xwayland-satellite"; then
+        rm -f "$BIN/.xwayland-satellite.new"
+    else
+        cp -pf "$BIN/xwayland-satellite" "$BIN/xwayland-satellite.previous.tmp" \
+            && mv -f "$BIN/xwayland-satellite.previous.tmp" "$BIN/xwayland-satellite.previous" \
+            || { rm -f "$BIN/xwayland-satellite.previous.tmp" "$BIN/.xwayland-satellite.new"; fail "could not back up previous binary"; }
+        mv -f "$BIN/.xwayland-satellite.new" "$BIN/xwayland-satellite" || fail "could not install it"
+    fi
+else
+    mv -f "$BIN/.xwayland-satellite.new" "$BIN/xwayland-satellite" || fail "could not install it"
+fi
 echo "$want" > "$STAMP"
 echo "[build-satellite] xwayland-satellite $TAG with Infynitae's patch installed"

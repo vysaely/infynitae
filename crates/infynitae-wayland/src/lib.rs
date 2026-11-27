@@ -2255,6 +2255,10 @@ pub fn config_line(line: &str) -> Option<(String, String)> {
     }
     let line = line.strip_prefix("export ").unwrap_or(line);
     let (key, value) = line.split_once('=')?;
+    let key = key.trim();
+    if key.is_empty() {
+        return None;
+    }
     let mut out = String::new();
     let mut chars = value.trim_start().chars();
     while let Some(c) = chars.next() {
@@ -2281,7 +2285,7 @@ pub fn config_line(line: &str) -> Option<(String, String)> {
             c => out.push(c),
         }
     }
-    Some((key.trim().to_string(), out.trim().to_string()))
+    Some((key.to_string(), out.trim().to_string()))
 }
 
 /// Reads a yes/no config value (`1`/`true`/`yes`/`on` vs `0`/`false`/`off`/`no`).
@@ -2738,6 +2742,39 @@ mod key_binding_config_tests {
         );
         assert_eq!(config_line("# EXEC_X=\"SUPER+X:foo\""), None);
         assert_eq!(config_line("no equals"), None);
+        assert_eq!(config_line("=empty_key"), None);
+        assert_eq!(config_line("export   =empty"), None);
+    }
+
+    #[test]
+    fn config_line_crash_and_seed_corpus() {
+        use super::{
+            config_line, panel_key, parse_bool, parse_color_hex, parse_list, parse_titles,
+            place_key,
+        };
+        for sample in [
+            "",
+            "\0",
+            "=x",
+            "   \t\n",
+            "KEY=",
+            "KEY=\\",
+            "KEY=\"unclosed\\",
+            "KEY='unclosed",
+            "KEY=\"🦀\\\"\\\\\\$`\\n\" # trailer",
+            "export PANEL_X=\"SUPER+F1:sh -c 'true'\"",
+            "PLACE_BAD=nan,inf,0 SUPER+1",
+            "K=🦀🦀🦀🦀🦀🦀🦀🦀",
+        ] {
+            if let Some((k, v)) = config_line(sample) {
+                let _ = parse_bool(&v);
+                let _ = parse_titles(&v);
+                let _ = parse_list(&v);
+                let _ = parse_color_hex(&v);
+                let _ = panel_key(&k, &v);
+                let _ = place_key(&k, &v);
+            }
+        }
     }
 
     #[test]

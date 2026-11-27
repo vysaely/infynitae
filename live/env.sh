@@ -229,7 +229,11 @@ elif _infy_p=$(pgrep -u "$(id -u)" -f '(^|/)infynitae-portal( |$)' 2>/dev/null |
     _infy_portal_up=true
 fi
 if [ -x "$PORTAL_BIN" ] && [ "$_infy_portal_up" = false ]; then
-    "$PORTAL_BIN" >> "$PORTAL_LOG" 2>&1 &
+    if command -v setpriv >/dev/null 2>&1; then
+        setpriv --no-new-privs --inh-caps=-all "$PORTAL_BIN" >> "$PORTAL_LOG" 2>&1 &
+    else
+        "$PORTAL_BIN" >> "$PORTAL_LOG" 2>&1 &
+    fi
     echo $! > "$_infy_portal_pid" 2>/dev/null
 fi
 unset _infy_portal_pid _infy_portal_up _infy_p _infy_c

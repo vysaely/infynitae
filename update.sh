@@ -22,6 +22,106 @@ cd "$REPO_DIR"
 
 # the shared, unattended pacman, the parts left out at install, and one password for the run
 . "$REPO_DIR/live/install-lib.sh"
+
+MODE="update"
+for arg in "$@"; do
+    case "$arg" in
+        --rollback) MODE="rollback" ;;
+        -h|--help)
+            echo "Usage: infynitae-update [--rollback]"
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $arg" >&2
+            echo "Usage: infynitae-update [--rollback]" >&2
+            exit 2
+            ;;
+    esac
+done
+
+ROLLBACK_STATE="$INFY_STATE/update-rollback"
+
+# Recorded PID first (catches infynitae.previous, whose kernel comm is truncated to
+# infynitae.previ); fall back to -x infynitae for sessions started before PID tracking.
+compositor_running() {
+    local pid_file pid comm
+    for pid_file in "$INFY_STATE/compositor.pid" "$HOME/.local/state/infynitae/compositor.pid"; do
+        [ -r "$pid_file" ] || continue
+        IFS= read -r pid < "$pid_file" 2>/dev/null || continue
+        case "$pid" in
+            ""|*[!0-9]*) continue ;;
+        esac
+        [ -d "/proc/$pid" ] || continue
+        [ "$(stat -c '%u' "/proc/$pid" 2>/dev/null)" = "$(id -u)" ] || continue
+        IFS= read -r comm < "/proc/$pid/comm" 2>/dev/null || continue
+        case "$comm" in
+            infynitae|infynitae.*) return 0 ;;
+        esac
+    done
+    pgrep -u "$(id -u)" -x infynitae >/dev/null 2>&1
+}
+
+rollback_infynitae() {
+    local pre_head="" post_head="" scripts_changed=false cur_head=""
+    local scripts_reverted=false scripts_manual=false k v
+    mkdir -p "$INFY_STATE"
+    if [ -f "$ROLLBACK_STATE" ]; then
+        while IFS='=' read -r k v; do
+            case "$k" in
+                PRE_HEAD) pre_head="$v" ;;
+                POST_HEAD) post_head="$v" ;;
+                SCRIPTS_CHANGED) scripts_changed="$v" ;;
+            esac
+        done < "$ROLLBACK_STATE"
+    fi
+
+    rollback_binaries "$HOME/.local/bin" || return 1
+
+    if [ "$scripts_changed" = true ] && [ -n "$pre_head" ] && [ -n "$post_head" ] && [ "$pre_head" != "$post_head" ]; then
+        cur_head=$(git rev-parse HEAD 2>/dev/null || true)
+        if [ -d ".git" ] && [ "$cur_head" = "$post_head" ] \
+            && git diff --quiet HEAD -- 2>/dev/null \
+            && git diff --cached --quiet HEAD -- 2>/dev/null; then
+            echo "==> Scripts changed; resetting checkout in $REPO_DIR back to ${pre_head:0:12}..."
+            git reset --hard "$pre_head" >/dev/null
+            install_scripts "$REPO_DIR" "$HOME/.local/bin"
+            sync_live_dir "$REPO_DIR"
+            printf 'PRE_HEAD=%s\nPOST_HEAD=%s\nSCRIPTS_CHANGED=true\n' "$post_head" "$pre_head" > "$ROLLBACK_STATE.tmp" \
+                && mv -f "$ROLLBACK_STATE.tmp" "$ROLLBACK_STATE"
+            scripts_reverted=true
+        else
+            scripts_manual=true
+            echo "==> Scripts changed (${pre_head:0:12} -> ${post_head:0:12}), but $REPO_DIR moved or has local changes." >&2
+            echo "    To roll scripts back manually (discarding uncommitted changes, if safe):" >&2
+            echo "    git -C \"$REPO_DIR\" reset --hard \"$pre_head\"" >&2
+        fi
+    fi
+
+    if [ "$ROLLBACK_SWAPPED" -eq 0 ] && [ "$scripts_reverted" = false ]; then
+        if [ "$scripts_manual" = true ]; then
+            return 1
+        fi
+        echo "==> Nothing to roll back (no .previous binaries or recorded script update)." >&2
+        return 1
+    fi
+
+    if compositor_running; then
+        echo "==> Restarting the helpers (windows stay open)..."
+        "$HOME/.local/bin/infynitae-reload" settings wallpaper edge portal polkit || true
+    fi
+
+    if [ "$ROLLBACK_COMPOSITOR_SWAPPED" = true ]; then
+        echo "==> Rolled back Infynitae ($ROLLBACK_SWAPPED binaries swapped). Log out (Ctrl+Alt+Backspace) or reboot to run the previous compositor."
+    else
+        echo "==> Rolled back Infynitae ($ROLLBACK_SWAPPED binaries swapped)."
+    fi
+}
+
+if [ "$MODE" = "rollback" ]; then
+    rollback_infynitae
+    exit $?
+fi
+
 load_install_choices
 echo "==> Your password, once (new packages, system files)"
 sudo_once
@@ -33,8 +133,13 @@ LOG="$INFY_STATE/install.log"
 exec > >(tee -a "$LOG") 2>&1
 echo "==> $(date '+%F %T') Updating Infynitae in $REPO_DIR"
 
+PRE_HEAD=""
+POST_HEAD=""
+UPDATE_SCRIPTS_CHANGED=false
+
 # 1. the source; local changes are stashed and put back
 if [ -d ".git" ]; then
+    PRE_HEAD=$(git rev-parse HEAD 2>/dev/null || true)
     CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo "main")
     PUSHED_STASH=false
     if ! git diff-index --quiet HEAD -- 2>/dev/null; then
@@ -71,6 +176,14 @@ if [ -d ".git" ]; then
             echo "==> Your local changes conflict with the update; nothing was built or installed." >&2
             echo "    They are kept in git stash." >&2
             exit 1
+        fi
+    fi
+    POST_HEAD=$(git rev-parse HEAD 2>/dev/null || true)
+    if [ -n "$PRE_HEAD" ] && [ -n "$POST_HEAD" ] && [ "$PRE_HEAD" != "$POST_HEAD" ]; then
+        if ! git diff --quiet "$PRE_HEAD" "$POST_HEAD" -- \
+            update.sh install.sh live/ ':(exclude)live/*/*.rs' ':(exclude)live/*/*.c' \
+            ':(exclude)live/*/src/' ':(exclude)live/*/Cargo.*' 2>/dev/null; then
+            UPDATE_SCRIPTS_CHANGED=true
         fi
     fi
 fi
@@ -113,14 +226,20 @@ cargo build --release -p infynitae -j "$JOBS"
 
 # 5. the programs, into ~/.local/bin (a running compositor keeps its old file until it restarts;
 #    the compositor's file is replaced only when it changed: COMPOSITOR_CHANGED)
+export UPDATE_SCRIPTS_CHANGED
 install_programs "$REPO_DIR"
 
 # 6. the session scripts, when this source is not ~/infynitae itself
-mkdir -p "$HOME/infynitae/live"
-SRC_LIVE="$(cd live 2>/dev/null && pwd -P || echo "")"
-DST_LIVE="$(cd "$HOME/infynitae/live" 2>/dev/null && pwd -P || echo "")"
-if [ -n "$SRC_LIVE" ] && [ "$SRC_LIVE" != "$DST_LIVE" ]; then
-    cp -rf live/* "$HOME/infynitae/live/"
+sync_live_dir "$REPO_DIR"
+
+if [ -n "$PRE_HEAD" ] && [ -n "$POST_HEAD" ] && [ "$PRE_HEAD" != "$POST_HEAD" ]; then
+    printf 'PRE_HEAD=%s\nPOST_HEAD=%s\nSCRIPTS_CHANGED=%s\n' \
+        "$PRE_HEAD" "$POST_HEAD" "$UPDATE_SCRIPTS_CHANGED" > "$ROLLBACK_STATE.tmp" \
+        && mv -f "$ROLLBACK_STATE.tmp" "$ROLLBACK_STATE"
+elif [ "${BINARIES_CHANGED:-false}" = true ]; then
+    printf 'PRE_HEAD=%s\nPOST_HEAD=%s\nSCRIPTS_CHANGED=false\n' \
+        "${PRE_HEAD:-}" "${POST_HEAD:-}" > "$ROLLBACK_STATE.tmp" \
+        && mv -f "$ROLLBACK_STATE.tmp" "$ROLLBACK_STATE"
 fi
 
 # 7. the config (yours is never overwritten)
@@ -148,7 +267,7 @@ if [ -f "$STATUS_FILE" ]; then
     esac
 fi
 
-if pgrep -x infynitae >/dev/null 2>&1; then
+if compositor_running; then
     echo "==> Restarting the helpers (windows stay open)..."
     "$HOME/.local/bin/infynitae-reload" settings wallpaper edge portal polkit || true
     echo "    The replay recorder keeps running; infynitae-reload recorder restarts it (clears its buffer)."

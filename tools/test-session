@@ -264,3 +264,283 @@ got=$(watch true false)
 sleep 0.3
 [ ! -e "$TMP/script_ran" ] || { echo "FAIL a script was started beside the bus watcher"; exit 1; }
 echo "ok   each switch off leaves its script out, and no script runs beside the watcher"
+
+# ---- 8. infynitae-session fallback: 2 fast crashes on new binary fall back to ~/.local/bin/infynitae.previous and notify owner
+HOME7="$TMP/home7"
+mkdir -p "$HOME7/.local/bin" "$HOME7/.local/state/infynitae" "$HOME7/infynitae/live" "$TMP/bin7"
+cp "$REPO_DIR/live/session.sh" "$HOME7/infynitae/live/session.sh"
+cp "$REPO_DIR/live/log-rotate.sh" "$HOME7/infynitae/live/log-rotate.sh" 2>/dev/null || true
+cat > "$HOME7/infynitae/live/env.sh" <<'EOF'
+# test no-op env
+EOF
+cat > "$HOME7/.local/bin/notify-send" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" > "$TMP/fb_notify"
+touch "$HOME7/.local/state/infynitae/stop"
+EOF
+cat > "$HOME7/.local/bin/infynitae-lock" <<'EOF'
+#!/bin/sh
+echo "Screen locked"
+sleep 10
+EOF
+cat > "$HOME7/.local/bin/infynitae" <<EOF
+#!/bin/sh
+echo "new" >> "$TMP/fb_starts"
+exit 42
+EOF
+cat > "$HOME7/.local/bin/infynitae.previous" <<EOF
+#!/bin/sh
+echo "previous" >> "$TMP/fb_starts"
+export WAYLAND_DISPLAY="wayland-fb" START_TERMINAL="false" START_LOCKED="0" SESSION_RESTORE="false" NOTIFICATIONS="none"
+sh "$HOME7/infynitae/live/session.sh" >/dev/null 2>&1
+i=0
+while [ ! -s "$TMP/fb_notify" ] && [ \$i -lt 100 ]; do sleep 0.05; i=\$((i + 1)); done
+exit 0
+EOF
+chmod +x "$HOME7/.local/bin/notify-send" "$HOME7/.local/bin/infynitae-lock" "$HOME7/.local/bin/infynitae" "$HOME7/.local/bin/infynitae.previous"
+
+(
+    export HOME="$HOME7" PATH="$HOME7/.local/bin:$PATH" XDG_RUNTIME_DIR="$TMP/rt7"
+    mkdir -p "$XDG_RUNTIME_DIR"
+    sh "$REPO_DIR/live/infynitae-session" </dev/null >/dev/null 2>&1
+)
+starts=$(tr '\n' ' ' < "$TMP/fb_starts")
+if [ "$starts" != "new new previous " ]; then
+    echo "FAIL compositor fallback start sequence: expected 'new new previous ', got '$starts'"
+    exit 1
+fi
+echo "ok compositor fallback starts: new, new, then .previous"
+if ! grep -q "Started previous Infynitae" "$TMP/fb_notify" 2>/dev/null; then
+    echo "FAIL compositor fallback did not notify owner: $(cat "$TMP/fb_notify" 2>/dev/null || true)"
+    exit 1
+fi
+echo "ok compositor fallback notified owner via notify-send"
+
+# When .previous also crashes 3 times, infynitae-session stops cleanly (exit 1)
+HOME8="$TMP/home8"
+mkdir -p "$HOME8/.local/bin" "$HOME8/.local/state/infynitae" "$HOME8/infynitae/live"
+cat > "$HOME8/infynitae/live/env.sh" <<'EOF'
+# test no-op env
+EOF
+cat > "$HOME8/.local/bin/infynitae" <<EOF
+#!/bin/sh
+echo "new" >> "$TMP/fb8_starts"
+exit 42
+EOF
+cat > "$HOME8/.local/bin/infynitae.previous" <<EOF
+#!/bin/sh
+echo "previous" >> "$TMP/fb8_starts"
+exit 43
+EOF
+chmod +x "$HOME8/.local/bin/infynitae" "$HOME8/.local/bin/infynitae.previous"
+if (
+    export HOME="$HOME8" PATH="$HOME8/.local/bin:$PATH" XDG_RUNTIME_DIR="$TMP/rt8"
+    mkdir -p "$XDG_RUNTIME_DIR"
+    sh "$REPO_DIR/live/infynitae-session" </dev/null >/dev/null 2>&1
+); then
+    echo "FAIL fallback crash loop did not exit non-zero"
+    exit 1
+fi
+starts8=$(tr '\n' ' ' < "$TMP/fb8_starts")
+if [ "$starts8" != "new new previous previous previous " ]; then
+    echo "FAIL fallback crash loop sequence: expected 'new new previous previous previous ', got '$starts8'"
+    exit 1
+fi
+echo "ok fallback stops after 3 failures of .previous too"
+
+# ---- 8. Privilege dropping: unprivileged daemons run with NoNewPrivs=1; polkit/edge/automount keep 0
+HOME9="$TMP/home9"
+mkdir -p "$HOME9/.local/bin" "$HOME9/.local/state/infynitae" "$HOME9/infynitae/live" "$TMP/priv9" "$TMP/priv9_bin"
+cat > "$HOME9/infynitae/live/env.sh" <<'EOF'
+# test no-op env
+EOF
+cat > "$HOME9/infynitae/live/config.sh" <<'EOF'
+# test no-op config
+EOF
+cat > "$TMP/priv9_bin/setpriv" <<EOF
+#!/bin/sh
+echo "\$*" >> "$TMP/priv9/setpriv_calls"
+exec /usr/bin/setpriv "\$@"
+EOF
+chmod +x "$TMP/priv9_bin/setpriv"
+for h in infynitae-wallpaper infynitae-polkit infynitae-edge infynitae-automount autorotate; do
+    cat > "$HOME9/.local/bin/$h" <<EOF
+#!/bin/sh
+awk '/^NoNewPrivs:/ { print \$2 }' /proc/self/status > "$TMP/priv9/$h"
+EOF
+    chmod +x "$HOME9/.local/bin/$h"
+done
+ln -sf infynitae-edge "$HOME9/.local/bin/infynitae-edge-apps" 2>/dev/null || true
+cat > "$HOME9/infynitae/live/autorotate" <<EOF
+#!/bin/sh
+awk '/^NoNewPrivs:/ { print \$2 }' /proc/self/status > "$TMP/priv9/autorotate"
+EOF
+cat > "$TMP/bin9_monitor" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+chmod +x "$HOME9/infynitae/live/autorotate" "$TMP/bin9_monitor"
+cp "$TMP/bin9_monitor" "$HOME9/.local/bin/monitor-sensor"
+(
+    export HOME="$HOME9" WAYLAND_DISPLAY="wayland-priv" PATH="$TMP/priv9_bin:$HOME9/.local/bin:$PATH"
+    export START_LOCKED="0" START_TERMINAL="false" SESSION_RESTORE="false"
+    export ENABLE_EDGE="true" AUTOMOUNT="true" NOTIFICATIONS="none"
+    sh "$SESSION_SCRIPT" >/dev/null 2>&1
+) || true
+i=0
+while [ ! -s "$TMP/priv9/autorotate" ] && [ $i -lt 50 ]; do sleep 0.05; i=$((i + 1)); done
+for want_1 in infynitae-wallpaper autorotate; do
+    got_p=$(cat "$TMP/priv9/$want_1" 2>/dev/null || echo missing)
+    if [ "$got_p" != "1" ]; then
+        echo "FAIL $want_1 NoNewPrivs: expected 1, got '$got_p'"
+        exit 1
+    fi
+    if ! grep -q -- "--no-new-privs --inh-caps=-all .*$want_1" "$TMP/priv9/setpriv_calls" 2>/dev/null; then
+        echo "FAIL $want_1 was not launched through setpriv --no-new-privs --inh-caps=-all"
+        exit 1
+    fi
+done
+for want_0 in infynitae-polkit infynitae-automount; do
+    if [ ! -s "$TMP/priv9/$want_0" ]; then
+        echo "FAIL $want_0 did not run"
+        exit 1
+    fi
+    if grep -q "$want_0" "$TMP/priv9/setpriv_calls" 2>/dev/null; then
+        echo "FAIL $want_0 unexpectedly ran through setpriv"
+        exit 1
+    fi
+done
+echo "ok session helpers drop NoNewPrivs where safe while preserving polkit/automount"
+
+# ---- 9. Fallback compositor (infynitae.previous) tracking, priority, wallpaper, and stop
+# 9a. infynitae-session records compositor.pid and `infynitae-session stop` terminates infynitae.previous
+SESSION_LAUNCHER="$REPO_DIR/live/infynitae-session"
+HOME10="$TMP/home10"
+mkdir -p "$HOME10/.local/bin" "$HOME10/.local/state/infynitae" "$HOME10/infynitae/live" "$TMP/bin10" "$TMP/run10"
+chmod 700 "$TMP/run10"
+cat > "$HOME10/infynitae/live/session.sh" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+cat > "$TMP/bin10/systemctl" <<'EOF'
+#!/bin/sh
+exit 1
+EOF
+cat > "$HOME10/.local/bin/infynitae" <<'EOF'
+#!/bin/sh
+exit 1
+EOF
+cat > "$HOME10/.local/bin/infynitae.previous" <<EOF
+#!/bin/sh
+trap 'kill "\$c" 2>/dev/null || true; exit 0' TERM
+read -r c < "/proc/\$\$/comm"
+echo "\$\$ \$c" > "$TMP/prev10.info"
+sleep 30 &
+c=\$!
+wait "\$c"
+EOF
+chmod +x "$HOME10/infynitae/live/session.sh" "$TMP/bin10/systemctl" \
+    "$HOME10/.local/bin/infynitae" "$HOME10/.local/bin/infynitae.previous"
+
+(
+    export HOME="$HOME10" WAYLAND_DISPLAY="wayland-test" XDG_SESSION_TYPE="wayland"
+    export XDG_RUNTIME_DIR="$TMP/run10" PATH="$TMP/bin10:$PATH"
+    exec sh "$SESSION_LAUNCHER" >/dev/null 2>&1
+) &
+sess10_pid=$!
+
+i=0
+while [ ! -s "$TMP/prev10.info" ] && [ $i -lt 160 ]; do sleep 0.05; i=$((i + 1)); done
+if [ ! -s "$TMP/prev10.info" ]; then
+    kill "$sess10_pid" 2>/dev/null || true
+    echo "FAIL infynitae-session did not fall back to infynitae.previous"
+    exit 1
+fi
+read -r prev10_pid prev10_comm < "$TMP/prev10.info"
+recorded10_pid=$(cat "$HOME10/.local/state/infynitae/compositor.pid" 2>/dev/null || true)
+
+HOME="$HOME10" PATH="$TMP/bin10:$PATH" sh "$SESSION_LAUNCHER" stop >/dev/null 2>&1 || true
+
+i=0
+while kill -0 "$prev10_pid" 2>/dev/null && [ $i -lt 60 ]; do sleep 0.05; i=$((i + 1)); done
+if kill -0 "$prev10_pid" 2>/dev/null; then
+    kill -KILL "$prev10_pid" "$sess10_pid" 2>/dev/null || true
+    echo "FAIL infynitae-session stop left fallback compositor running (pid=$prev10_pid, comm=$prev10_comm, recorded='$recorded10_pid')"
+    exit 1
+fi
+i=0
+while kill -0 "$sess10_pid" 2>/dev/null && [ $i -lt 40 ]; do sleep 0.05; i=$((i + 1)); done
+kill "$sess10_pid" 2>/dev/null || true
+wait "$sess10_pid" 2>/dev/null || true
+
+if [ "$recorded10_pid" != "$prev10_pid" ]; then
+    echo "FAIL compositor.pid recorded '$recorded10_pid', expected '$prev10_pid'"
+    exit 1
+fi
+if [ -e "$HOME10/.local/state/infynitae/compositor.pid" ]; then
+    echo "FAIL compositor.pid was left behind after infynitae-session stopped"
+    exit 1
+fi
+echo "ok infynitae-session records compositor.pid and stops infynitae.previous (comm=$prev10_comm)"
+
+# 9b. Pre-change fallback: stop still terminates infynitae when no compositor.pid file exists
+HOME10B="$TMP/home10b"
+mkdir -p "$HOME10B/.local/state/infynitae" "$TMP/bin10b"
+cat > "$TMP/bin10b/infynitae" <<'EOF'
+#!/bin/sh
+trap 'kill "$c" 2>/dev/null || true; exit 0' TERM
+sleep 30 &
+c=$!
+wait "$c"
+EOF
+chmod +x "$TMP/bin10b/infynitae"
+"$TMP/bin10b/infynitae" &
+old10_pid=$!
+i=0
+while [ ! -d "/proc/$old10_pid" ] && [ $i -lt 40 ]; do sleep 0.05; i=$((i + 1)); done
+HOME="$HOME10B" sh "$SESSION_LAUNCHER" stop >/dev/null 2>&1 || true
+i=0
+while kill -0 "$old10_pid" 2>/dev/null && [ $i -lt 40 ]; do sleep 0.05; i=$((i + 1)); done
+if kill -0 "$old10_pid" 2>/dev/null; then
+    kill -KILL "$old10_pid" 2>/dev/null || true
+    echo "FAIL infynitae-session stop missed pre-change infynitae without compositor.pid"
+    exit 1
+fi
+wait "$old10_pid" 2>/dev/null || true
+echo "ok infynitae-session stop falls back to process name when compositor.pid is absent"
+
+# 9c. session.sh raises priority when launched by infynitae.previous (comm truncated to infynitae.previ)
+cp "$(command -v sh)" "$TMP/bin5/infynitae.previous"
+: > "$PRIO_LOG"
+(
+    export HOME="$HOME5" WAYLAND_DISPLAY="wayland-test" START_TERMINAL="false" START_LOCKED="0"
+    export PATH="$TMP/bin5:$PATH"
+    "$TMP/bin5/infynitae.previous" -c 'echo $$ > "$1"; sh "$2" >/dev/null 2>&1; :' sh "$TMP/root5p" \
+        "$SESSION_SCRIPT"
+) || true
+rootp=$(cat "$TMP/root5p")
+expect_log "fallback compositor (infynitae.previous): nice -10, real-time 2, reset on fork" \
+    "$(printf 'renice -n -10 -p %s\nchrt -R -r -p 2 %s' "$rootp" "$rootp")"
+
+# 9d. Explicit WALLPAPER still launches infynitae-wallpaper with NoNewPrivs=1 via setpriv
+rm -f "$TMP/priv9/infynitae-wallpaper" "$TMP/priv9/setpriv_calls"
+: > "$TMP/priv9/wall.png"
+(
+    export HOME="$HOME9" WAYLAND_DISPLAY="wayland-priv" PATH="$TMP/priv9_bin:$HOME9/.local/bin:$PATH"
+    export START_LOCKED="0" START_TERMINAL="false" SESSION_RESTORE="false"
+    export ENABLE_EDGE="false" AUTOMOUNT="false" NOTIFICATIONS="none"
+    export WALLPAPER="$TMP/priv9/wall.png" WALLPAPER_MODE="fill"
+    sh "$SESSION_SCRIPT" >/dev/null 2>&1
+) || true
+i=0
+while [ ! -s "$TMP/priv9/infynitae-wallpaper" ] && [ $i -lt 50 ]; do sleep 0.05; i=$((i + 1)); done
+got_wp_p=$(cat "$TMP/priv9/infynitae-wallpaper" 2>/dev/null || echo missing)
+if [ "$got_wp_p" != "1" ]; then
+    echo "FAIL explicit WALLPAPER infynitae-wallpaper NoNewPrivs: expected 1, got '$got_wp_p'"
+    exit 1
+fi
+if ! grep -q -- "--no-new-privs --inh-caps=-all .*infynitae-wallpaper" "$TMP/priv9/setpriv_calls" 2>/dev/null; then
+    echo "FAIL explicit WALLPAPER did not launch infynitae-wallpaper through setpriv"
+    exit 1
+fi
+echo "ok explicit WALLPAPER launches infynitae-wallpaper with NoNewPrivs=1"

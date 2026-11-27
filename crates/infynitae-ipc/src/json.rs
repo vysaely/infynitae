@@ -245,6 +245,7 @@ impl Parser<'_> {
             Some(b'{') => {
                 self.i += 1;
                 let mut m: Vec<(String, Value)> = Vec::new();
+                let mut seen: Option<std::collections::HashSet<String>> = None;
                 self.ws();
                 if self.s.get(self.i) == Some(&b'}') {
                     self.i += 1;
@@ -257,7 +258,23 @@ impl Parser<'_> {
                     }
                     let at = self.i;
                     let k = self.string()?;
-                    if m.iter().any(|(e, _)| *e == k) {
+                    let dup = match seen.as_mut() {
+                        Some(set) => !set.insert(k.clone()),
+                        None => {
+                            if m.iter().any(|(e, _)| *e == k) {
+                                true
+                            } else {
+                                if m.len() == 16 {
+                                    let mut set: std::collections::HashSet<String> =
+                                        m.iter().map(|(e, _)| e.clone()).collect();
+                                    set.insert(k.clone());
+                                    seen = Some(set);
+                                }
+                                false
+                            }
+                        }
+                    };
+                    if dup {
                         return Err(ParseError { at });
                     }
                     self.ws();
@@ -444,5 +461,19 @@ mod tests {
         assert!(parse(&deep).is_err(), "nesting beyond the limit");
         let ok = format!("{}{}", "[".repeat(MAX_DEPTH), "]".repeat(MAX_DEPTH));
         assert!(parse(&ok).is_ok());
+
+        // Large object stays O(n) while preserving duplicate-key rejection past 16 entries.
+        let mut many = String::from("{");
+        for i in 0..200 {
+            if i > 0 {
+                many.push(',');
+            }
+            many.push_str(&format!("\"k{i}\":{i}"));
+        }
+        many.push('}');
+        assert!(parse(&many).is_ok());
+        many.pop();
+        many.push_str(",\"k0\":1}");
+        assert!(parse(&many).is_err());
     }
 }

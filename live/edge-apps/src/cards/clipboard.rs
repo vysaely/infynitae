@@ -9,13 +9,16 @@ use std::os::unix::fs::PermissionsExt;
 use crate::card::{
     parse_render_data, run_sh, Action, Button, Card, Cx, Data, Event, Hits, Rect, Source, Status,
 };
-use crate::cards::settings::sq;
 use crate::draw::{self, Text};
 use crate::provider::{CardKind, Claim, Listed, Provider, Size};
 use crate::theme::Rgba;
 use crate::ui;
+use infynitae_edge_apps::clipboard_entry::{
+    copy_command, delete_command, kind_of, parse_cliphist_with_home, ClipItem, ClipKind,
+};
+#[cfg(test)]
+use infynitae_edge_apps::clipboard_entry::{sq, MAX_ITEMS};
 
-const MAX_ITEMS: usize = 24;
 const MEDIUM_ROWS: usize = 8;
 const LARGE_ROWS: usize = 16;
 const ROW_H: f64 = ui::LIST_ROW_H;
@@ -61,29 +64,6 @@ impl Provider for Clipboard {
 
     fn source(&self, key: &str) -> Option<Box<dyn Source>> {
         (key == "clipboard").then(|| Box::new(ClipboardSource::default()) as Box<dyn Source>)
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ClipKind {
-    Text,
-    Image,
-    Link,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ClipItem {
-    raw_line: String,
-    pub(crate) preview: String,
-    pub(crate) time: String,
-    is_image: bool,
-    pinned: bool,
-}
-
-impl ClipItem {
-    /// The command that puts it back on the clipboard.
-    pub(crate) fn copy(&self) -> String {
-        copy_command(&self.raw_line)
     }
 }
 
@@ -155,188 +135,9 @@ fn has_executable(bin: &str, path: &OsStr) -> bool {
     })
 }
 
-fn is_url_alone(s: &str) -> bool {
-    let t = s.trim();
-    if t.is_empty() || t.chars().any(char::is_whitespace) {
-        return false;
-    }
-    let rest = if t.len() >= 8 && t[..8].eq_ignore_ascii_case("https://") {
-        &t[8..]
-    } else if t.len() >= 7 && t[..7].eq_ignore_ascii_case("http://") {
-        &t[7..]
-    } else if t.len() >= 6 && t[..6].eq_ignore_ascii_case("ftp://") {
-        &t[6..]
-    } else {
-        return false;
-    };
-    !rest.is_empty()
-}
-
-fn kind_of(item: &ClipItem) -> ClipKind {
-    if item.is_image {
-        ClipKind::Image
-    } else if is_url_alone(&item.preview) {
-        ClipKind::Link
-    } else {
-        ClipKind::Text
-    }
-}
-
-fn sanitize_inline_text_with_home(src: &str, home: Option<&str>) -> String {
-    let mut collapsed = String::with_capacity(src.len().min(255));
-    let mut prev_space = true;
-    for ch in src.chars() {
-        if matches!(ch, ' ' | '\t' | '\n' | '\r') || ch.is_whitespace() {
-            if !prev_space {
-                if collapsed.len() >= 255 {
-                    break;
-                }
-                collapsed.push(' ');
-                prev_space = true;
-            }
-        } else if !ch.is_control() {
-            let mut buf = [0u8; 4];
-            let s = ch.encode_utf8(&mut buf);
-            if collapsed.len() + s.len() > 255 {
-                break;
-            }
-            collapsed.push(ch);
-            prev_space = false;
-        }
-    }
-    if collapsed.ends_with(' ') {
-        collapsed.pop();
-    }
-
-    let Some(h) = home
-        .map(|h| h.trim_end_matches('/'))
-        .filter(|h| h.len() > 1)
-    else {
-        return collapsed;
-    };
-    let mut out = String::with_capacity(collapsed.len());
-    let bytes = collapsed.as_bytes();
-    let mut i = 0;
-    while i < collapsed.len() {
-        let at_start = i == 0 || bytes[i - 1] == b' ';
-        if at_start && collapsed[i..].starts_with(h) {
-            let after = i + h.len();
-            let valid_end = after == collapsed.len() || matches!(bytes[after], b'/' | b' ');
-            if valid_end {
-                out.push('~');
-                i = after;
-                continue;
-            }
-        }
-        let ch = collapsed[i..].chars().next().unwrap_or(' ');
-        out.push(ch);
-        i += ch.len_utf8();
-    }
-    out
-}
-
-fn is_dims(tok: &str) -> bool {
-    tok.split_once('x').is_some_and(|(w, h)| {
-        !w.is_empty()
-            && !h.is_empty()
-            && w.bytes().all(|b| b.is_ascii_digit())
-            && h.bytes().all(|b| b.is_ascii_digit())
-    })
-}
-
-fn parse_binary_image(body: &str) -> Option<String> {
-    let t = body.trim();
-    if let Some(inner) = t
-        .strip_prefix("[[ binary data")
-        .and_then(|s| s.strip_suffix("]]"))
-    {
-        for tok in inner.split_whitespace() {
-            if is_dims(tok) {
-                return Some(format!("Image {tok}"));
-            }
-        }
-        return Some("Image".to_string());
-    }
-    if let Some(dims) = t.strip_prefix("Image ") {
-        let d = dims.trim();
-        if is_dims(d) {
-            return Some(format!("Image {d}"));
-        }
-    }
-    None
-}
-
 fn parse_cliphist(out: &str) -> Vec<ClipItem> {
     let home = crate::paths::home();
     parse_cliphist_with_home(out, home.as_deref().and_then(|p| p.to_str()))
-}
-
-fn parse_cliphist_with_home(out: &str, home: Option<&str>) -> Vec<ClipItem> {
-    let mut items = Vec::new();
-    for raw in out.lines() {
-        let line = raw.trim_end_matches('\r');
-        if line.trim().is_empty() {
-            continue;
-        }
-        if items.len() >= MAX_ITEMS {
-            break;
-        }
-        let (pinned, line_rest) = if let Some(r) = line.strip_prefix("pinned:") {
-            (true, r)
-        } else if let Some(r) = line.strip_prefix("pin:") {
-            (true, r)
-        } else if let Some(r) = line.strip_prefix('*') {
-            (true, r.trim_start())
-        } else {
-            (false, line)
-        };
-        let Some((id, rest)) = line_rest.split_once('\t') else {
-            continue;
-        };
-        if id.trim().is_empty() {
-            continue;
-        }
-        let (raw_line, body, time) = match rest.rsplit_once('\t') {
-            Some((b, t)) => (format!("{id}\t{b}"), b, t.trim().to_string()),
-            None => (line_rest.to_string(), rest, String::new()),
-        };
-        let img = parse_binary_image(body);
-        let is_image = img.is_some();
-        let preview = match img {
-            Some(label) => label,
-            None => {
-                let s = sanitize_inline_text_with_home(body, home);
-                if s.is_empty() {
-                    "(Clipboard item)".to_string()
-                } else {
-                    s
-                }
-            }
-        };
-        items.push(ClipItem {
-            raw_line,
-            preview,
-            time,
-            is_image,
-            pinned,
-        });
-    }
-    items.sort_by_key(|it| !it.pinned);
-    items
-}
-
-fn copy_command(raw_line: &str) -> String {
-    format!(
-        "printf '%s\\n' {} | cliphist decode 2>/dev/null | wl-copy",
-        sq(raw_line)
-    )
-}
-
-fn delete_command(raw_line: &str) -> String {
-    format!(
-        "printf '%s\\n' {} | cliphist delete 2>/dev/null",
-        sq(raw_line)
-    )
 }
 
 #[derive(Default)]
@@ -717,6 +518,48 @@ pinned:101\tmulti\rline\x07 bell\t1h
             many.push_str(&format!("{i}\tentry {i}\n"));
         }
         assert_eq!(parse_cliphist_with_home(&many, None).len(), MAX_ITEMS);
+    }
+
+    #[test]
+    fn multibyte_utf8_preview_does_not_panic_url_check() {
+        let items = parse_cliphist_with_home("1\t🦀🦀\n2\t€€€\n3\tHTTPS://example.com/ok\n", None);
+        assert_eq!(items.len(), 3);
+        assert_eq!(kind_of(&items[0]), ClipKind::Text);
+        assert_eq!(kind_of(&items[1]), ClipKind::Text);
+        assert_eq!(kind_of(&items[2]), ClipKind::Link);
+    }
+
+    #[test]
+    fn clipboard_entry_crash_and_seed_corpus() {
+        let huge_ctrl = format!("1\t{}hello\n", "\0".repeat(16_384));
+        let huge_line = format!("2\t{}\n", "a".repeat(70_000));
+        let bidi = "3\thello\u{202E}gpj.exe\u{202C}\n";
+        let utf8_home = "4\t/home/🦀/file.txt\n";
+        for raw in [
+            "",
+            "\0\r\n",
+            "no-tab",
+            "\tmissing-id",
+            "5\t[[ binary data ]]\n",
+            "6\t[[ binary data 0x10 🦀 ]]\n",
+            "7\tftp://\n",
+            &huge_ctrl,
+            &huge_line,
+            bidi,
+            utf8_home,
+        ] {
+            let parsed = parse_cliphist_with_home(raw, Some("/home/🦀"));
+            for it in &parsed {
+                let _ = kind_of(it);
+                let _ = copy_command(&it.raw_line);
+                let _ = delete_command(&it.raw_line);
+            }
+        }
+        assert!(parse_cliphist_with_home(&huge_line, None).is_empty());
+        let bidi_items = parse_cliphist_with_home(bidi, None);
+        assert_eq!(bidi_items[0].preview, "hellogpj.exe");
+        let home_items = parse_cliphist_with_home(utf8_home, Some("/home/🦀"));
+        assert_eq!(home_items[0].preview, "~/file.txt");
     }
 
     #[test]

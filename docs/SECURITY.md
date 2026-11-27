@@ -203,3 +203,42 @@ root (the lock screen's PAM file, the session entry) and builds it.
   use it.
 - `install.sh` can be run from a download (`curl | bash`); reading the script first, or cloning
   and checking the commit's signature, is the careful way.
+- `infynitae-update --rollback` swaps each `~/.local/bin/<name>` back with its saved
+  `<name>.previous` copy without `sudo` (see [RECOVERY.md](RECOVERY.md)).
+
+## Helper privilege dropping and input fuzzing
+
+Session helpers that never need privilege escalation drop `NO_NEW_PRIVS` and clear inheritable
+capabilities (`CapInh: 0`) where they start (`setpriv --no-new-privs --inh-caps=-all` in
+`live/session.sh`, `live/env.sh`, `live/infynitae-reload`, and `XwaylandSupervisor::spawn`; plus
+`prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0)` directly inside compiled C helpers). Once set, the kernel
+forbids gaining privileges through SUID/SGID binaries or file capabilities across any later `exec`.
+
+Note on `systemd-run`: `systemd-run --user --scope` rejects `NoNewPrivileges=yes`, and transient
+user services lose shell redirection logs (`helpers.log`, `portal.log`), `$!` PID tracking in
+`live/env.sh`, `oom_score_adj=300` from `live/session.sh`, and compatibility outside a live user
+systemd bus, so `setpriv` + `prctl` are used in place without adding extra supervisor processes.
+
+| Helper | Drops `NO_NEW_PRIVS` + `CapInh` | Why |
+|---|---|---|
+| `infynitae-portal` | Yes (`prctl` + `setpriv`) | Wayland/D-Bus portal; never escalates |
+| `infynitae-wallpaper` | Yes (`prctl` + `setpriv`) | Draws wallpaper and runs `mpvpaper`; never escalates |
+| `infynitae-record-stream` | Yes (`prctl`) | Reads screencopy frames to stdout for `ffmpeg` |
+| `infynitae-xres-pid` | Yes (`prctl`) | Reads `_NET_WM_PID` / X-Resource client PIDs |
+| `xwayland-satellite` | Yes (`setpriv` in `XwaylandSupervisor`) | X11 bridge; forks `Xwayland` unprivileged |
+| `wl-clip-persist`, `wl-paste` | Yes (`setpriv`) | Clipboard persistence and `cliphist store` watch |
+| `mako`, `swaync`, `dunst`, `fnott` | Yes (`setpriv`) | Fallback notification daemons |
+| `squeekboard` | Yes (`setpriv`) | On-screen keyboard |
+| `kbuildsycoca6`, `kbuildsycoca5` | Yes (`setpriv`) | Rebuilds KDE app cache at login |
+| `autorotate` | Yes (`setpriv`) | Reads `monitor-sensor` and calls `infynitae msg` |
+| `infynitae-polkit` | No | Invokes `polkit-agent-helper-1` / PAM authentication |
+| `infynitae-lock`, `infynitae-sleep-lock` | No (`PR_SET_DUMPABLE=0` only) | PAM invokes SGID/SUID `unix_chkpwd` for unlock |
+| `infynitae-automount`, `udiskie` | No | Invokes `pkexec` (`infynitae-drive-name`) and `udisksctl` |
+| `infynitae-disk-guard` | No | Invokes `pkexec /usr/local/lib/infynitae-disk-fix` |
+| `infynitae-recorder` | No | Invokes `gpu-screen-recorder` (`gsr-kms-server` `cap_sys_admin`) |
+| `infynitae-edge` (`infynitae-edge-apps`) | No | Spawns user desktop apps, terminals (`launch.sh`), `xdg-open` |
+| `infynitae-restore` | No | Re-launches saved user terminals and desktop apps |
+
+Input-reading paths (`config_line` in `infynitae-wayland`, `parse_request` / `json::parse` in
+`infynitae-ipc`, and `clipboard_entry` in `live/edge-apps`) have standalone `cargo-fuzz` targets
+in `fuzz/` (run weekly in CI) plus deterministic crash and seed corpus unit tests in each crate.

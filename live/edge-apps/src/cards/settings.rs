@@ -171,9 +171,7 @@ pub fn sections(out: &str) -> Vec<String> {
 }
 
 /// A string as one shell word.
-pub fn sq(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "'\\''"))
-}
+pub use infynitae_edge_apps::clipboard_entry::sq;
 
 // ---------------------------------------------------------------------------------------------
 // Network

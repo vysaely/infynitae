@@ -502,5 +502,148 @@ printf 'two' > "$src/target/release/infynitae"
 third=$(install_compositor)
 check "new content: changed" "${third%% *}" true
 check "new content: installed" "$(cat "$TMP/programs-home/.local/bin/infynitae")" two
+check "new content: previous generation kept" "$(cat "$TMP/programs-home/.local/bin/infynitae.previous")" one
+
+# 12. Generation coherence across partial updates + infynitae-update --rollback (bins + scripts)
+rb_home="$TMP/rb-home"
+rb_state="$TMP/rb-state"
+rb_repo="$TMP/rb-repo"
+mkdir -p "$rb_home/.local/bin" "$rb_state/infynitae" "$rb_repo/live/record" \
+    "$rb_repo/live/portal" "$rb_repo/target/release"
+: > "$rb_repo/Cargo.toml"
+cp "$REPO_DIR/update.sh" "$rb_repo/update.sh"
+cp "$REPO_DIR/live/install-lib.sh" "$rb_repo/live/install-lib.sh"
+for s in dev.sh settings.sh setup-drivers.sh infynitae-reload infynitae-restore \
+    infynitae-session xdg-open xdg-terminal-exec infynitae-open-with battery-limit \
+    infynitae-xkill infynitae-sleep-lock infynitae-automount infynitae-format-drive \
+    infynitae-disk-guard windows-run android-run; do
+    printf '#!/bin/sh\necho v1\n' > "$rb_repo/live/$s"
+done
+printf '#!/bin/sh\necho v1\n' > "$rb_repo/live/record/infynitae-recorder"
+printf '#!/bin/sh\necho v1-session\n' > "$rb_repo/live/session.sh"
+cat > "$rb_repo/live/build-satellite.sh" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+cat > "$rb_repo/live/build-helpers.sh" <<'EOF'
+#!/bin/sh
+cat "$1/mock-portal" > "$2/infynitae-portal.new"
+chmod 755 "$2/infynitae-portal.new"
+if [ -e "$2/infynitae-portal" ] && ! cmp -s "$2/infynitae-portal.new" "$2/infynitae-portal"; then
+    cp -pf "$2/infynitae-portal" "$2/infynitae-portal.previous"
+fi
+mv -f "$2/infynitae-portal.new" "$2/infynitae-portal"
+EOF
+git -C "$rb_repo" init -q -b main
+git -C "$rb_repo" -c user.name=t -c user.email=t@t add -A
+git -C "$rb_repo" -c user.name=t -c user.email=t@t commit -qm "c1"
+C1=$(git -C "$rb_repo" rev-parse HEAD)
+printf 'comp-v1' > "$rb_repo/target/release/infynitae"
+printf 'port-v1' > "$rb_repo/mock-portal"
+HOME="$rb_home" XDG_STATE_HOME="$rb_state" CARGO_TARGET_DIR="$rb_repo/target" \
+    bash -c '. "'"$rb_repo"'/live/install-lib.sh"; install_programs "'"$rb_repo"'"; sync_live_dir "'"$rb_repo"'"' >/dev/null 2>&1
+check "first install: no .previous compositor yet" "$([ -e "$rb_home/.local/bin/infynitae.previous" ] && echo yes || echo no)" no
+
+# Update 1: compositor v1->v2, portal unchanged (v1)
+printf 'comp-v2' > "$rb_repo/target/release/infynitae"
+HOME="$rb_home" XDG_STATE_HOME="$rb_state" CARGO_TARGET_DIR="$rb_repo/target" \
+    bash -c '. "'"$rb_repo"'/live/install-lib.sh"; install_programs "'"$rb_repo"'"' >/dev/null 2>&1
+check "update 1: compositor previous is v1" "$(cat "$rb_home/.local/bin/infynitae.previous")" comp-v1
+check "update 1: unchanged portal previous synced to v1" "$(cat "$rb_home/.local/bin/infynitae-portal.previous")" port-v1
+
+# No-op run keeps v1 previous
+HOME="$rb_home" XDG_STATE_HOME="$rb_state" CARGO_TARGET_DIR="$rb_repo/target" \
+    bash -c '. "'"$rb_repo"'/live/install-lib.sh"; install_programs "'"$rb_repo"'"' >/dev/null 2>&1
+check "no-op update: compositor previous still v1" "$(cat "$rb_home/.local/bin/infynitae.previous")" comp-v1
+
+# Update 2: portal v1->v2 AND script commit c1->c2 (compositor stays comp-v2)
+printf 'port-v2' > "$rb_repo/mock-portal"
+printf '#!/bin/sh\necho v2-session\n' > "$rb_repo/live/session.sh"
+printf '#!/bin/sh\necho v2\n' > "$rb_repo/live/infynitae-session"
+git -C "$rb_repo" -c user.name=t -c user.email=t@t add -A
+git -C "$rb_repo" -c user.name=t -c user.email=t@t commit -qm "c2"
+C2=$(git -C "$rb_repo" rev-parse HEAD)
+printf 'PRE_HEAD=%s\nPOST_HEAD=%s\nSCRIPTS_CHANGED=true\n' "$C1" "$C2" > "$rb_state/infynitae/update-rollback"
+HOME="$rb_home" XDG_STATE_HOME="$rb_state" CARGO_TARGET_DIR="$rb_repo/target" UPDATE_SCRIPTS_CHANGED=true \
+    bash -c '. "'"$rb_repo"'/live/install-lib.sh"; install_programs "'"$rb_repo"'"; sync_live_dir "'"$rb_repo"'"' >/dev/null 2>&1
+printf 'sat-v2' > "$rb_home/.local/bin/xwayland-satellite"
+printf 'sat-v1' > "$rb_home/.local/bin/xwayland-satellite.previous"
+printf '0.8.3\n' > "$rb_home/.local/bin/.xwayland-satellite.stamp"
+check "update 2: compositor previous synced to comp-v2" "$(cat "$rb_home/.local/bin/infynitae.previous")" comp-v2
+check "update 2: portal updated to v2 with v1 in previous" \
+    "$(cat "$rb_home/.local/bin/infynitae-portal"):$(cat "$rb_home/.local/bin/infynitae-portal.previous")" "port-v2:port-v1"
+
+# Rollback swaps binaries cleanly and resets clean script checkout to c1
+rb_out=$(HOME="$rb_home" XDG_STATE_HOME="$rb_state" "$rb_repo/update.sh" --rollback 2>&1)
+check "rollback: portal reverted to port-v1" "$(cat "$rb_home/.local/bin/infynitae-portal")" port-v1
+check "rollback: compositor stayed comp-v2" "$(cat "$rb_home/.local/bin/infynitae")" comp-v2
+check "rollback: xwayland-satellite reverted to sat-v1" "$(cat "$rb_home/.local/bin/xwayland-satellite")" sat-v1
+check "rollback: satellite stamp cleared" "$([ -e "$rb_home/.local/bin/.xwayland-satellite.stamp" ] && echo yes || echo no)" no
+check "rollback: checkout reset to c1" "$(git -C "$rb_repo" rev-parse HEAD)" "$C1"
+check "rollback: installed infynitae-session reverted to v1" "$(tail -n1 "$rb_home/.local/bin/infynitae-session")" "echo v1"
+check "rollback: ~/infynitae/live/session.sh reverted to v1" "$(tail -n1 "$rb_home/infynitae/live/session.sh")" "echo v1-session"
+
+# Rollback while running fallback compositor (infynitae.previous) triggers helper reload
+mkdir -p "$rb_home/.local/state/infynitae" "$TMP/rb-prev"
+cat > "$TMP/rb-prev/infynitae.previous" <<'EOF'
+#!/bin/sh
+trap 'kill "$c" 2>/dev/null || true; exit 0' TERM
+sleep 30 &
+c=$!
+wait "$c"
+EOF
+cat > "$rb_home/.local/bin/infynitae-reload" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" > "$TMP/rb-reload-calls"
+EOF
+chmod +x "$TMP/rb-prev/infynitae.previous" "$rb_home/.local/bin/infynitae-reload"
+"$TMP/rb-prev/infynitae.previous" &
+rb_comp_pid=$!
+i=0
+while [ ! -d "/proc/$rb_comp_pid" ] && [ $i -lt 40 ]; do sleep 0.05; i=$((i + 1)); done
+printf '%s\n' "$rb_comp_pid" > "$rb_home/.local/state/infynitae/compositor.pid"
+printf 'PRE_HEAD=%s\nPOST_HEAD=%s\nSCRIPTS_CHANGED=false\n' "$C1" "$C2" > "$rb_state/infynitae/update-rollback"
+HOME="$rb_home" XDG_STATE_HOME="$rb_state" "$rb_repo/update.sh" --rollback >/dev/null 2>&1 || true
+kill "$rb_comp_pid" 2>/dev/null || true
+wait "$rb_comp_pid" 2>/dev/null || true
+check "rollback while on infynitae.previous reloads helpers" \
+    "$(cat "$TMP/rb-reload-calls" 2>/dev/null || true)" "settings wallpaper edge portal polkit"
+
+# Dirty checkout stops git reset and prints manual instructions instead of clobbering changes
+printf '# dirty\n' >> "$rb_repo/live/session.sh"
+printf 'PRE_HEAD=%s\nPOST_HEAD=%s\nSCRIPTS_CHANGED=true\n' "$C1" "$C2" > "$rb_state/infynitae/update-rollback"
+rb_dirty_out=$(HOME="$rb_home" XDG_STATE_HOME="$rb_state" "$rb_repo/update.sh" --rollback 2>&1 || true)
+check "rollback with dirty checkout prints manual reset hint" \
+    "$(printf '%s\n' "$rb_dirty_out" | grep -c 'reset --hard' || true)" "1"
+check "rollback with dirty checkout leaves local edit in place" \
+    "$(tail -n1 "$rb_repo/live/session.sh")" "# dirty"
+
+# 13. snap-pac: off by default (even on btrfs and in legacy install-choices); installed only when opted in
+check "legacy install-choices defaults SNAP_PAC to false" "$(XDG_STATE_HOME="$TMP/dg-legacy-state" bash -c '
+    . "'"$REPO_DIR"'/live/install-lib.sh"
+    load_install_choices
+    echo "$SNAP_PAC"')" "false"
+check "SNAP_PAC=true saved and read back" "$(XDG_STATE_HOME="$TMP/sp-state" bash -c '
+    . "'"$REPO_DIR"'/live/install-lib.sh"
+    SNAP_PAC=true save_install_choices
+    SNAP_PAC=""
+    load_install_choices
+    echo "$SNAP_PAC"')" "true"
+cat > "$DG_BIN/pacman" <<'EOF'
+#!/bin/sh
+exit 1
+EOF
+chmod +x "$DG_BIN/pacman"
+snap_want_off=$(PATH="$DG_BIN:/usr/bin:/bin" HOME="$TMP/sp-home" DG_FSTYPE=btrfs SNAP_PAC=false \
+    bash -c '. "'"$REPO_DIR"'/live/install-lib.sh"; wanted_pkgs' 2>/dev/null | grep -cx snap-pac || true)
+snap_want_on=$(PATH="$DG_BIN:/usr/bin:/bin" HOME="$TMP/sp-home" DG_FSTYPE=btrfs SNAP_PAC=true \
+    bash -c '. "'"$REPO_DIR"'/live/install-lib.sh"; wanted_pkgs' 2>/dev/null | grep -cx snap-pac || true)
+snap_want_ext4=$(PATH="$DG_BIN:/usr/bin:/bin" HOME="$TMP/sp-home" DG_FSTYPE=ext4 SNAP_PAC=true \
+    bash -c '. "'"$REPO_DIR"'/live/install-lib.sh"; wanted_pkgs' 2>/dev/null | grep -cx snap-pac || true)
+check "wanted_pkgs omits snap-pac when SNAP_PAC=false" "$snap_want_off" "0"
+check "wanted_pkgs includes snap-pac on btrfs when SNAP_PAC=true" "$snap_want_on" "1"
+check "wanted_pkgs omits snap-pac on non-btrfs" "$snap_want_ext4" "0"
+check "install.sh --help lists --snap-pac" \
+    "$("$REPO_DIR/install.sh" --help | grep -c -- '--snap-pac' || true)" "1"
 
 exit $fail

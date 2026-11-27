@@ -306,4 +306,44 @@ run_action region-screenshot "" SHOT_SAVES=1 SCREENSHOT_DIR="$TMP/shots"
 check "a saved region screenshot is told as saved" "$(grep -c 'Screenshot saved' "$LOG")" 1
 rm -f "$HOMEDIR/.local/bin/infynitae-shot"
 
+# region-screenshot freeze overlay: runs infynitae-wallpaper with NoNewPrivs dropped via setpriv
+RS_HOME="$TMP/rs_home"
+RS_BIN="$TMP/rs_bin"
+RS_RUN="$TMP/rs_run"
+RS_LOG="$TMP/rs_nnp"
+RS_SETPRIV="$TMP/rs_setpriv"
+mkdir -p "$RS_HOME/.config/infynitae" "$RS_HOME/.local/bin" "$RS_HOME/infynitae" "$RS_BIN" "$RS_RUN"
+ln -s "$REPO_DIR/live" "$RS_HOME/infynitae/live"
+chmod 700 "$RS_RUN"
+: > "$RS_LOG"
+: > "$RS_SETPRIV"
+printf '#!/bin/sh\necho '\''{"outputs":[{"name":"eDP-1"}]}'\''\n' > "$RS_BIN/infynitae"
+printf '#!/bin/sh\nout=""; while [ $# -gt 0 ]; do out="$1"; shift; done; : > "$out"\n' > "$RS_BIN/grim"
+cat > "$RS_BIN/slurp" <<EOF
+#!/bin/sh
+i=0
+while [ ! -s "$RS_LOG" ] && [ \$i -lt 200 ]; do
+    sleep 0.01
+    i=\$((i + 1))
+done
+exit 1
+EOF
+cat > "$RS_BIN/setpriv" <<EOF
+#!/bin/sh
+echo "\$*" >> "$RS_SETPRIV"
+exec /usr/bin/setpriv "\$@"
+EOF
+cat > "$RS_HOME/.local/bin/infynitae-wallpaper" <<EOF
+#!/bin/sh
+awk '/^NoNewPrivs:/ { print \$2 }' /proc/self/status > "$RS_LOG"
+exec sleep 5
+EOF
+chmod +x "$RS_BIN/infynitae" "$RS_BIN/grim" "$RS_BIN/slurp" "$RS_BIN/setpriv" "$RS_HOME/.local/bin/infynitae-wallpaper"
+env -i HOME="$RS_HOME" PATH="$RS_BIN:/usr/bin:/bin" XDG_RUNTIME_DIR="$RS_RUN" \
+    FREEZE_SCREENSHOT=true INFYNITAE_SETTINGS_APPLIED=1 \
+    sh "$REPO_DIR/live/launch.sh" region-screenshot >/dev/null 2>&1 || true
+check "region-screenshot freeze overlay drops NoNewPrivs" "$(cat "$RS_LOG")" 1
+check "  via setpriv --no-new-privs --inh-caps=-all" \
+    "$(grep -c -- '--no-new-privs --inh-caps=-all .*infynitae-wallpaper --overlay' "$RS_SETPRIV" || true)" 1
+
 exit $fail

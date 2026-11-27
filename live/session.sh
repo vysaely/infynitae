@@ -21,7 +21,21 @@ fi
 # the compositor starts later (every app opened by key, the satellite, its own threads) begins at
 # normal priority. Without it those inherited real-time priority 2 and competed with the
 # compositor (seen 2026-11-22: kitty, qemu, the edge and the satellite at RR 2).
-if [ "$(cat /proc/$PPID/comm 2>/dev/null)" = "infynitae" ]; then
+is_compositor_parent() {
+    pid_file="$HOME/.local/state/infynitae/compositor.pid"
+    if [ -r "$pid_file" ]; then
+        rec=""
+        IFS= read -r rec < "$pid_file" 2>/dev/null || rec=""
+        [ "$rec" = "$PPID" ] && return 0
+    fi
+    comm=""
+    IFS= read -r comm < "/proc/$PPID/comm" 2>/dev/null || return 1
+    case "$comm" in
+        infynitae|infynitae.*) return 0 ;;
+    esac
+    return 1
+}
+if is_compositor_parent; then
     renice -n -10 -p "$PPID" >/dev/null 2>&1 || true
     if command -v chrt >/dev/null 2>&1; then
         chrt -R -r -p 2 "$PPID" >/dev/null 2>&1 || chrt -R -o -p 0 "$PPID" >/dev/null 2>&1 || true
@@ -52,6 +66,16 @@ fi
 if ! command -v infy_on >/dev/null 2>&1; then
     infy_on() {
         case "${1:-}" in 1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Oo][Nn]) return 0 ;; *) return 1 ;; esac
+    }
+fi
+if ! command -v infy_run_unpriv >/dev/null 2>&1; then
+    # Drop NO_NEW_PRIVS and inheritable caps for background helpers that never need privilege escalation.
+    infy_run_unpriv() {
+        if command -v setpriv >/dev/null 2>&1; then
+            setpriv --no-new-privs --inh-caps=-all "$@" &
+        else
+            "$@" &
+        fi
     }
 fi
 
@@ -157,9 +181,9 @@ esac
 WP_BIN=$(infy_bin infynitae-wallpaper || true)
 if [ -n "$WP_BIN" ]; then
     if [ -n "$WALLPAPER" ]; then
-        "$WP_BIN" "$WALLPAPER" "${WALLPAPER_MODE:-fill}" &
+        infy_run_unpriv "$WP_BIN" "$WALLPAPER" "${WALLPAPER_MODE:-fill}"
     else
-        "$WP_BIN" &
+        infy_run_unpriv "$WP_BIN"
     fi
 fi
 
@@ -182,14 +206,14 @@ fi
 # 6b. Clipboard persistence and history
 if infy_on "${CLIPBOARD_PERSIST:-true}"; then
     if command -v wl-clip-persist >/dev/null 2>&1; then
-        wl-clip-persist --clipboard regular >/dev/null 2>&1 &
+        infy_run_unpriv wl-clip-persist --clipboard regular >/dev/null 2>&1
     fi
 fi
 
 if infy_on "${CLIPBOARD_HISTORY:-true}"; then
     if command -v cliphist >/dev/null 2>&1 && command -v wl-paste >/dev/null 2>&1; then
-        wl-paste --type text --watch cliphist store >/dev/null 2>&1 &
-        wl-paste --type image --watch cliphist store >/dev/null 2>&1 &
+        infy_run_unpriv wl-paste --type text --watch cliphist store >/dev/null 2>&1
+        infy_run_unpriv wl-paste --type image --watch cliphist store >/dev/null 2>&1
     fi
 fi
 
@@ -221,12 +245,22 @@ case "${NOTIFICATIONS:-auto}" in
     *) NOTIFY_CMD="$NOTIFICATIONS" ;;
 esac
 if [ -n "$NOTIFY_CMD" ]; then
-    sh -c "$NOTIFY_CMD" >/dev/null 2>&1 &
+    infy_run_unpriv sh -c "$NOTIFY_CMD" >/dev/null 2>&1
 fi
 
-# 6c2. The last crash (infynitae-session wrote a report): said once, in a notification
+# 6c2. Fallback to previous compositor, or the last crash: said once, in a notification
+FALLBACK_NOTE="$HOME/.local/state/infynitae/fallback-previous"
 CRASH_NOTE="$HOME/.local/state/infynitae/crashed"
-if [ -f "$CRASH_NOTE" ]; then
+if [ -f "$FALLBACK_NOTE" ]; then
+    IFS="$(printf '\t')" read -r FB_REPORT FB_WHAT < "$FALLBACK_NOTE"
+    rm -f "$FALLBACK_NOTE" "$CRASH_NOTE"
+    if command -v notify-send >/dev/null 2>&1; then
+        FB_REPORT=$(printf '%s' "$FB_REPORT" | sed "s|^$HOME|~|")
+        (sleep 2; notify-send -a Infynitae -u critical "Started previous Infynitae" \
+            "$FB_WHAT. Run infynitae-update --rollback to keep it.
+Report: $FB_REPORT") &
+    fi
+elif [ -f "$CRASH_NOTE" ]; then
     IFS="$(printf '\t')" read -r CRASH_REPORT CRASH_WHAT < "$CRASH_NOTE"
     rm -f "$CRASH_NOTE"
     if command -v notify-send >/dev/null 2>&1; then
@@ -248,7 +282,7 @@ fi
 # 6d2. KDE apps' list of apps (Open With), from the menu file settings.sh provides
 for b in kbuildsycoca6 kbuildsycoca5; do
     if command -v "$b" >/dev/null 2>&1; then
-        "$b" >/dev/null 2>&1 &
+        infy_run_unpriv "$b" >/dev/null 2>&1
         break
     fi
 done
@@ -267,7 +301,7 @@ if command -v squeekboard >/dev/null 2>&1; then
     pkill -x squeekboard 2>/dev/null || true
     case "${OSK:-auto}" in
         off|false|no|never) ;;
-        *) squeekboard >/dev/null 2>&1 & ;;
+        *) infy_run_unpriv squeekboard >/dev/null 2>&1 ;;
     esac
 fi
 
@@ -318,7 +352,7 @@ case "${AUTO_ROTATE:-auto}" in
         if command -v monitor-sensor >/dev/null 2>&1; then
             for r in "$HOME/infynitae/live/autorotate" "$HOME/.local/bin/autorotate" "$(dirname "$0")/autorotate"; do
                 if [ -x "$r" ]; then
-                    "$r" >/dev/null 2>&1 &
+                    infy_run_unpriv "$r" >/dev/null 2>&1
                     break
                 fi
             done

@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <sys/prctl.h>
 
 #include <xcb/xcb.h>
 #include <xcb/res.h>
@@ -45,6 +46,7 @@ static uint32_t owner_pid(xcb_connection_t *c, uint32_t window)
 
 int main(int argc, char **argv)
 {
+    prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
     if (argc < 2) {
         fprintf(stderr, "usage: infynitae-xres-pid WINDOW...\n");
         return 1;

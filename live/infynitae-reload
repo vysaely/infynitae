@@ -25,7 +25,31 @@ if [ -z "$WAYLAND_DISPLAY" ] || [ ! -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ]; th
     sock=$(grep -o 'Listening on Wayland socket: [^ ]*' "$STATE_DIR/session.log" 2>/dev/null | tail -1 | cut -d' ' -f5)
     [ -n "$sock" ] && export WAYLAND_DISPLAY="$sock"
 fi
-if [ -z "$WAYLAND_DISPLAY" ] || ! pgrep -u "$(id -u)" -x infynitae >/dev/null 2>&1; then
+# Recorded PID first (catches infynitae.previous, whose kernel comm is truncated to
+# infynitae.previ); fall back to -x infynitae for sessions started before PID tracking.
+compositor_pids() {
+    pid_file="$STATE_DIR/compositor.pid"
+    if [ -r "$pid_file" ]; then
+        pid=""
+        IFS= read -r pid < "$pid_file" 2>/dev/null || pid=""
+        case "$pid" in
+            ""|*[!0-9]*) ;;
+            *)
+                if [ -d "/proc/$pid" ] \
+                    && [ "$(stat -c '%u' "/proc/$pid" 2>/dev/null)" = "$(id -u)" ]; then
+                    comm=""
+                    IFS= read -r comm < "/proc/$pid/comm" 2>/dev/null || comm=""
+                    case "$comm" in
+                        infynitae|infynitae.*) printf '%s\n' "$pid"; return 0 ;;
+                    esac
+                fi
+                ;;
+        esac
+    fi
+    pgrep -u "$(id -u)" -x infynitae 2>/dev/null
+}
+
+if [ -z "$WAYLAND_DISPLAY" ] || ! compositor_pids >/dev/null 2>&1; then
     echo "infynitae-reload: no running Infynitae session found" >&2
     exit 1
 fi
@@ -40,8 +64,17 @@ first() {
 }
 
 # Start a helper detached from this terminal, logging to helpers.log.
+# Non-escalating daemons drop NO_NEW_PRIVS and inheritable caps.
 spawn() {
     echo "[$(date '+%F %T')] start: $*" >> "$LOG"
+    case "${1##*/}" in
+        infynitae-wallpaper|infynitae-portal|wl-clip-persist|wl-paste|mako|swaync|dunst|fnott|squeekboard|autorotate)
+            if command -v setpriv >/dev/null 2>&1; then
+                setsid -f setpriv --no-new-privs --inh-caps=-all "$@" >> "$LOG" 2>&1 < /dev/null
+                return
+            fi
+            ;;
+    esac
     setsid -f "$@" >> "$LOG" 2>&1 < /dev/null
 }
 
@@ -131,18 +164,23 @@ reload_settings() {
 
 reload_wallpaper() {
     w=$(first "$BIN_DIR/infynitae-wallpaper" "$LIVE/wallpaper/infynitae-wallpaper")
-    if [ -z "$WALLPAPER" ] || [ -z "$w" ]; then
-        echo "wallpaper: not configured"
+    if [ -z "$w" ]; then
+        echo "wallpaper: binary not installed"
         return
     fi
-    case "$WALLPAPER" in
-        "~/"*) WALLPAPER="$HOME/${WALLPAPER#\~/}" ;;
-        '$HOME/'*) WALLPAPER="$HOME/${WALLPAPER#\$HOME/}" ;;
-        '${HOME}/'*) WALLPAPER="$HOME/${WALLPAPER#\$\{HOME\}/}" ;;
-    esac
-    # a new instance replaces the old one itself; the config's WALLPAPER may hold an unexpanded
-    # $HOME for the program, so pass the path this shell expanded
-    spawn "$w" "$WALLPAPER" "${WALLPAPER_MODE:-fill}"
+    if [ -z "$WALLPAPER" ]; then
+        # Autodetect mode (default WALLPAPER=""): still restart so updates and privilege hardening apply.
+        spawn "$w"
+    else
+        case "$WALLPAPER" in
+            "~/"*) WALLPAPER="$HOME/${WALLPAPER#\~/}" ;;
+            '$HOME/'*) WALLPAPER="$HOME/${WALLPAPER#\$HOME/}" ;;
+            '${HOME}/'*) WALLPAPER="$HOME/${WALLPAPER#\$\{HOME\}/}" ;;
+        esac
+        # a new instance replaces the old one itself; the config's WALLPAPER may hold an unexpanded
+        # $HOME for the program, so pass the path this shell expanded
+        spawn "$w" "$WALLPAPER" "${WALLPAPER_MODE:-fill}"
+    fi
     echo "wallpaper: restarted"
 }
 
@@ -473,15 +511,18 @@ reload_clipboard() {
 }
 
 status() {
-    printf '%-26s %s\n' infynitae "$(pgrep -u "$(id -u)" -x infynitae | tr '\n' ' ')"
+    cpids=$(compositor_pids)
+    printf '%-26s %s\n' infynitae "$(printf '%s\n' "$cpids" | tr '\n' ' ')"
     for n in infynitae-wallpaper infynitae-edge infynitae-recorder infynitae-record-stream infynitae-portal infynitae-polkit infynitae-lock; do
         pids=$(pids_of "$n" | tr '\n' ' ')
         printf '%-26s %s\n' "$n" "${pids:-not running}"
     done
     # the compositor's file on disk was replaced since it started: a restart picks up the update
-    exe=$(readlink "/proc/$(pgrep -u "$(id -u)" -x infynitae | head -1)/exe" 2>/dev/null)
+    first_pid=$(printf '%s\n' "$cpids" | head -1)
+    exe=$([ -n "$first_pid" ] && readlink "/proc/$first_pid/exe" 2>/dev/null || true)
     case "$exe" in
         *" (deleted)") echo "compositor: an updated binary is installed; it runs from the next login or reboot" ;;
+        */infynitae.previous) echo "compositor: running the previous fallback binary (restart to retry the installed binary)" ;;
         *) echo "compositor: running the installed binary" ;;
     esac
 }

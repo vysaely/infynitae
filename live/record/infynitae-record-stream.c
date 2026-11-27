@@ -15,6 +15,7 @@
 #include <signal.h>
 #include <time.h>
 #include <sys/mman.h>
+#include <sys/prctl.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <sys/time.h>
@@ -311,6 +312,7 @@ static void sigint_handler(int sig) {
 }
 
 int main(int argc, char **argv) {
+    prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
     signal(SIGINT, sigint_handler);
     signal(SIGTERM, sigint_handler);
     signal(SIGPIPE, SIG_IGN);

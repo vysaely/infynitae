@@ -238,7 +238,8 @@ to release the reserve, run the light balance, and shrink the reserve back when 
 remains unallocated, posting one notification. When `systemd-oomd` kills a cgroup since the last
 tick, it posts "Closed <app> - RAM was full". Tested against sample sysfs trees, fake journals,
 and stubbed installer/btrfs runs (`tools/test-disk-guard`, `tools/test-disk-fix`,
-`tools/test-install-lib`); not yet run in a real outage.
+`tools/test-install-lib`); not yet run in a real outage. See [RECOVERY.md](RECOVERY.md) for
+update rollback (`infynitae-update --rollback`, `snap-pac` compatibility, and Limine recovery).
 
 ## Settings that needed a restart (2026-11-21)
 

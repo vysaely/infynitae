@@ -9,15 +9,40 @@
 
 STATE_DIR="$HOME/.local/state/infynitae"
 STOP_FILE="$STATE_DIR/stop"
+PID_FILE="$STATE_DIR/compositor.pid"
 mkdir -p "$STATE_DIR"
+
+# Read a recorded compositor PID only if it is live, owned by this user, and still infynitae or
+# infynitae.previous (whose kernel comm is truncated to 15 chars: "infynitae.previ").
+recorded_compositor_pid() {
+    [ -r "$PID_FILE" ] || return 1
+    pid=""
+    IFS= read -r pid < "$PID_FILE" 2>/dev/null || return 1
+    case "$pid" in
+        ""|*[!0-9]*) return 1 ;;
+    esac
+    [ -d "/proc/$pid" ] || return 1
+    [ "$(stat -c '%u' "/proc/$pid" 2>/dev/null)" = "$(id -u)" ] || return 1
+    comm=""
+    IFS= read -r comm < "/proc/$pid/comm" 2>/dev/null || return 1
+    case "$comm" in
+        infynitae|infynitae.*) printf '%s\n' "$pid"; return 0 ;;
+    esac
+    return 1
+}
 
 if [ "$1" = "stop" ]; then
     : > "$STOP_FILE"
-    pkill -TERM -x infynitae 2>/dev/null || true
+    if pid=$(recorded_compositor_pid); then
+        kill -TERM "$pid" 2>/dev/null || true
+    else
+        pkill -TERM -u "$(id -u)" -x infynitae 2>/dev/null || true
+    fi
     exit 0
 fi
 
 cleanup() {
+    rm -f "$PID_FILE"
     stty sane 2>/dev/null || true
     tput cnorm 2>/dev/null || true
 }
@@ -65,12 +90,19 @@ SESSION_SCRIPT="$HOME/infynitae/live/session.sh"
 
 CRASH_DIR="$STATE_DIR/crashes"
 CRASH_NOTE="$STATE_DIR/crashed"
+FALLBACK_NOTE="$STATE_DIR/fallback-previous"
+LAST_CRASH_REPORT=""
+
+bin_stamp() {
+    stat -L -c '%d:%i:%s:%Y' "$1" 2>/dev/null || true
+}
 
 # The crash just seen, in a report: how it ended, the panic message if Rust left one, and the
 # end of this run's log. CRASH_NOTE tells the next start (session.sh) to say so.
 crash_report() {
     mkdir -p "$CRASH_DIR"
     report="$CRASH_DIR/$(date '+%F_%H-%M-%S').log"
+    LAST_CRASH_REPORT="$report"
     run_log() { tail -c +"$((START_BYTES + 1))" "$SESSION_LOG" 2>/dev/null; }
     how="exit status $STATUS"
     [ "$STATUS" -gt 128 ] && how="signal $(kill -l "$((STATUS - 128))" 2>/dev/null || echo "$((STATUS - 128))")"
@@ -90,10 +122,24 @@ crash_report() {
     ls -1t "$CRASH_DIR"/*.log 2>/dev/null | tail -n +11 | while IFS= read -r old; do rm -f "$old"; done
 }
 
-rm -f "$STOP_FILE"
+rm -f "$STOP_FILE" "$PID_FILE"
 FAILS=0
+ACTIVE_BIN="$BIN"
+USING_PREVIOUS=0
+FALLBACK_STAMP=""
 
 while true; do
+    if [ "$USING_PREVIOUS" -eq 1 ]; then
+        CUR_STAMP=$(bin_stamp "$BIN")
+        if [ -n "$CUR_STAMP" ] && [ "$CUR_STAMP" != "$FALLBACK_STAMP" ]; then
+            echo "[infynitae-session] $(date '+%F %T') Installed compositor changed; switching back to $BIN" >> "$SESSION_LOG"
+            ACTIVE_BIN="$BIN"
+            USING_PREVIOUS=0
+            FALLBACK_STAMP=""
+            FAILS=0
+        fi
+    fi
+
     # keep one old log; the current one restarts past LOG_MAX_BYTES
     rotate_log "$SESSION_LOG" "$LOG_MAX_BYTES"
 
@@ -137,7 +183,8 @@ while true; do
             fi
             ;;
     esac
-    "$BIN" $TTY_MODE $LOCKED_ARG $XWLS --exec "$SESSION_SCRIPT" "$@" >> "$SESSION_LOG" 2>&1
+    sh -c 'printf "%s\n" "$$" > "$1"; shift; exec "$@"' _ "$PID_FILE" \
+        "$ACTIVE_BIN" $TTY_MODE $LOCKED_ARG $XWLS --exec "$SESSION_SCRIPT" "$@" >> "$SESSION_LOG" 2>&1
     STATUS=$?
     # every later start is locked (session.sh): a compositor that crashed, or was quit, while
     # the screen was locked must not come back unlocked, whatever START_LOCKED says
@@ -147,7 +194,7 @@ while true; do
     echo "[infynitae-session] $(date '+%F %T') Compositor exited with status $STATUS after ${DURATION}s" >> "$SESSION_LOG"
 
     if [ -f "$STOP_FILE" ]; then
-        rm -f "$STOP_FILE"
+        rm -f "$STOP_FILE" "$PID_FILE"
         echo "[infynitae-session] Stop requested; ending session." >> "$SESSION_LOG"
         exit 0
     fi
@@ -182,6 +229,19 @@ while true; do
 
     if [ "$STATUS" -ne 0 ] && [ "$DURATION" -lt "$FAST_FAIL_SECS" ]; then
         FAILS=$((FAILS + 1))
+        if [ "$USING_PREVIOUS" -eq 0 ] && [ "$FAILS" -ge 2 ] \
+            && [ -x "$BIN.previous" ] && ! cmp -s "$BIN" "$BIN.previous"; then
+            echo "[infynitae-session] $(date '+%F %T') New compositor failed $FAILS times at start; falling back to $BIN.previous" >> "$SESSION_LOG"
+            printf '%s\t%s\n' "${LAST_CRASH_REPORT:-$SESSION_LOG}" \
+                "New compositor failed twice at start; running ~/.local/bin/infynitae.previous" > "$FALLBACK_NOTE"
+            rm -f "$CRASH_NOTE"
+            ACTIVE_BIN="$BIN.previous"
+            USING_PREVIOUS=1
+            FALLBACK_STAMP=$(bin_stamp "$BIN")
+            FAILS=0
+            sleep 1
+            continue
+        fi
         if [ "$FAILS" -ge "$MAX_FAST_FAILS" ]; then
             MSG="[infynitae-session] Crash loop: $FAILS failures in a row (last status $STATUS). Not restarting; see $SESSION_LOG"
             echo "$MSG" >> "$SESSION_LOG"
