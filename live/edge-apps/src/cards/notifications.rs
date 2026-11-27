@@ -122,9 +122,13 @@ fn two_lines(cr: &Context, x: f64, y: f64, max_w: f64, t: &Text) {
 }
 
 fn draw_x(cr: &Context, cx: &Cx, r: Rect, lit: bool) {
+    if lit {
+        ui::light(cr, cx, r);
+    }
     let (mx, my) = (r.0 + r.2 / 2.0, r.1 + r.3 / 2.0);
     draw::set(cr, if lit { cx.theme.text } else { cx.theme.muted });
     cr.set_line_width(1.5);
+    cr.set_line_cap(cairo::LineCap::Round);
     cr.move_to(mx - 4.0, my - 4.0);
     cr.line_to(mx + 4.0, my + 4.0);
     cr.move_to(mx + 4.0, my - 4.0);

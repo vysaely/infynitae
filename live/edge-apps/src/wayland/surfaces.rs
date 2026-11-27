@@ -373,9 +373,9 @@ impl OutputSurface {
         } else {
             0.0
         };
-        let x0 = ((bx - pad) * sx).floor().max(0.0) as i32;
-        let y0 = ((by - pad) * sy).floor().max(0.0) as i32;
-        let x1 = ((bx + bw + pad) * sx).ceil().min(f64::from(buf_w)) as i32;
+        let x0 = ((bx - pad - lift) * sx).floor().max(0.0) as i32;
+        let y0 = ((by - pad - lift) * sy).floor().max(0.0) as i32;
+        let x1 = ((bx + bw + pad + lift) * sx).ceil().min(f64::from(buf_w)) as i32;
         let y1 = ((by + bh + pad + lift) * sy).ceil().min(f64::from(buf_h)) as i32;
         let new_box = (x0, y0, (x1 - x0).max(0), (y1 - y0).max(0));
         self.apply_surface_scale();

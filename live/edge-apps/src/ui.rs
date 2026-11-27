@@ -19,14 +19,14 @@ pub const LIST_ROW_H: f64 = 32.0;
 pub const ERROR_H: f64 = 20.0;
 pub const ERROR_TTL: Duration = Duration::from_secs(10);
 /// How long a list takes to open or fold.
-pub const LIST_MS: f64 = 220.0;
+pub const LIST_MS: f64 = 175.0;
 const ICON: f64 = 16.0;
 const SWITCH_W: f64 = 30.0;
 const SWITCH_H: f64 = 16.0;
 pub const LIGHT_ALPHA: f64 = 0.08;
 pub const CHOSEN_ALPHA: f64 = 0.16;
 pub const CHOSEN_HOVER_ALPHA: f64 = 0.22;
-pub const BOX_ALPHA: f64 = 0.04;
+pub const BOX_ALPHA: f64 = 0.055;
 
 /// The soft light under something pointed at (or the keyboard's selection).
 pub fn light(cr: &Context, cx: &Cx, r: Rect) {
@@ -321,8 +321,8 @@ pub fn switch(cr: &Context, cx: &Cx, hits: &mut Hits, id: u32, row: Rect, x_righ
     let _ = cr.fill();
     let kx = if on { x + SWITCH_W - 8.0 } else { x + 8.0 };
     cr.new_sub_path();
-    cr.arc(kx, y + SWITCH_H / 2.0, 6.0, 0.0, 2.0 * PI);
-    draw::set(cr, if on { th.card.alpha(1.0) } else { th.text });
+    cr.arc(kx, y + SWITCH_H / 2.0, 5.5, 0.0, 2.0 * PI);
+    draw::set(cr, if on { th.on_accent } else { th.text });
     let _ = cr.fill();
 }
 
@@ -351,17 +351,14 @@ pub fn more(
     if lit {
         light(cr, cx, r);
     }
-    draw::text_center(
-        cr,
-        r.0 + r.2 / 2.0,
-        r.1 + 4.0,
-        &Text {
-            size: draw::SIZE_SMALL,
-            bold: false,
-            color: if lit || open { th.text } else { th.muted },
-            text: if open { "Less" } else { "More" },
-        },
-    );
+    let more_t = Text {
+        size: draw::SIZE_SMALL,
+        bold: false,
+        color: if lit || open { th.text } else { th.muted },
+        text: if open { "Less" } else { "More" },
+    };
+    let (_, th_px) = draw::measure(cr, &more_t);
+    draw::text_center(cr, r.0 + r.2 / 2.0, r.1 + (r.3 - th_px) / 2.0, &more_t);
 }
 
 /// Maximum width of a `button` so a long label fits inside a narrow (half) card.
@@ -376,7 +373,7 @@ pub fn button(cr: &Context, cx: &Cx, hits: &mut Hits, id: u32, x: f64, y: f64, w
         color: th.text,
         text: word,
     };
-    let tw = draw::measure(cr, &t).0;
+    let (tw, th_px) = draw::measure(cr, &t);
     let w = (tw + 18.0).min(BUTTON_MAX_W);
     let r = (x, y, w, 26.0);
     let lit = hits.add(id, r) || hits.selected(id);
@@ -386,11 +383,12 @@ pub fn button(cr: &Context, cx: &Cx, hits: &mut Hits, id: u32, x: f64, y: f64, w
         th.text.alpha(if lit { CHOSEN_ALPHA } else { LIGHT_ALPHA }),
     );
     let _ = cr.fill();
+    let ty = y + (26.0 - th_px) / 2.0;
     let max_tw = (w - 18.0).max(0.0);
     if tw <= max_tw {
-        draw::text_center(cr, x + w / 2.0, y + 5.0, &t);
+        draw::text_center(cr, x + w / 2.0, ty, &t);
     } else {
-        draw::text_max(cr, x + 9.0, y + 5.0, max_tw, &t);
+        draw::text_max(cr, x + 9.0, ty, max_tw, &t);
     }
     w
 }
@@ -415,7 +413,7 @@ pub fn value_box(
         color: if open { th.muted } else { th.accent_text },
         text: word,
     };
-    let tw = draw::measure(cr, &t).0;
+    let (tw, th_px) = draw::measure(cr, &t);
     let (h, pad, chev) = (26.0, 10.0, 9.0);
     let w = (tw + pad * 2.0 + chev + 4.0).min(row.2 * 0.6);
     let (x, y) = (x_right - w, row.1 + (row.3 - h) / 2.0);
@@ -434,18 +432,21 @@ pub fn value_box(
     draw::text_max(
         cr,
         x + pad,
-        y + (h - 15.0) / 2.0,
+        y + (h - th_px) / 2.0,
         w - pad * 2.0 - chev - 4.0,
         &t,
     );
     // the chevron: down while closed, up while open
     let (cxp, cyp) = (x + w - pad - chev / 2.0, y + h / 2.0);
     let d = if open { -1.0 } else { 1.0 };
+    cr.new_path();
+    cr.set_line_cap(cairo::LineCap::Round);
+    cr.set_line_join(cairo::LineJoin::Round);
     cr.move_to(cxp - 3.0, cyp - 1.5 * d);
     cr.line_to(cxp, cyp + 1.5 * d);
     cr.line_to(cxp + 3.0, cyp - 1.5 * d);
     draw::set(cr, if open { th.muted } else { th.accent_text });
-    cr.set_line_width(1.2);
+    cr.set_line_width(1.4);
     let _ = cr.stroke();
     w
 }
@@ -482,12 +483,13 @@ pub fn choice_button(
         color: if on { th.accent_text } else { th.text },
         text: word,
     };
-    let tw = draw::measure(cr, &t).0;
+    let (tw, th_px) = draw::measure(cr, &t);
+    let ty = r.1 + (r.3 - th_px) / 2.0;
     let max_tw = (r.2 - 12.0).max(0.0);
     if tw <= max_tw {
-        draw::text_center(cr, r.0 + r.2 / 2.0, r.1 + (r.3 - 15.0) / 2.0, &t);
+        draw::text_center(cr, r.0 + r.2 / 2.0, ty, &t);
     } else {
-        draw::text_max(cr, r.0 + 6.0, r.1 + (r.3 - 15.0) / 2.0, max_tw, &t);
+        draw::text_max(cr, r.0 + 6.0, ty, max_tw, &t);
     }
 }
 
@@ -518,7 +520,7 @@ pub fn slider(cr: &Context, cx: &Cx, hits: &mut Hits, id: u32, r: Rect, part: f6
     let th = cx.theme;
     let lit = hits.add(id, r) || hits.selected(id);
     hits.mark_draggable(id);
-    let (bar, knob) = if lit { (6.0, 7.0) } else { (3.0, 6.0) };
+    let (bar, knob) = if lit { (6.0, 7.0) } else { (4.0, 6.0) };
     let mid = r.1 + r.3 / 2.0;
     let p = part.clamp(0.0, 1.0);
     draw::round_rect(cr, r.0, mid - bar / 2.0, r.2, bar, bar / 2.0);
@@ -529,8 +531,14 @@ pub fn slider(cr: &Context, cx: &Cx, hits: &mut Hits, id: u32, r: Rect, part: f6
         draw::set(cr, th.accent);
         let _ = cr.fill();
     }
+    let kx = r.0 + r.2 * p;
+    // crisp card-coloured collar separates the knob from the filled accent track
     cr.new_sub_path();
-    cr.arc(r.0 + r.2 * p, mid, knob, 0.0, 2.0 * PI);
+    cr.arc(kx, mid, knob + 1.5, 0.0, 2.0 * PI);
+    draw::set(cr, th.card.alpha(1.0));
+    let _ = cr.fill();
+    cr.new_sub_path();
+    cr.arc(kx, mid, knob, 0.0, 2.0 * PI);
     draw::set(cr, th.text);
     let _ = cr.fill();
 }
@@ -543,10 +551,10 @@ pub fn slider_part(r: Rect, at: (f64, f64)) -> f64 {
     ((at.0 - r.0) / r.2).clamp(0.0, 1.0)
 }
 
-/// Cubic ease-out: rises steeply at first, settling smoothly.
+/// Quartic ease-out: quick start, crisp settle with no sluggish tail.
 pub fn ease(t: f64) -> f64 {
     let t = t.clamp(0.0, 1.0);
-    1.0 - (1.0 - t).powi(3)
+    1.0 - (1.0 - t).powi(4)
 }
 
 /// A list that opens in place under (or over) a row.
@@ -738,7 +746,14 @@ pub fn list_row(
     let lit = hits.add(id, r) || hits.selected(id);
     if active {
         draw::round_rect(cr, r.0, r.1, r.2, r.3, th.small_radius());
-        draw::set(cr, th.accent.alpha(CHOSEN_ALPHA));
+        draw::set(
+            cr,
+            th.accent.alpha(if lit {
+                CHOSEN_HOVER_ALPHA
+            } else {
+                CHOSEN_ALPHA
+            }),
+        );
         let _ = cr.fill();
     } else if lit {
         light(cr, cx, r);
@@ -758,8 +773,9 @@ pub fn list_row(
             text: note,
         };
         let max_nw = ((r.2 - 20.0 - icon_w) * 0.45).max(0.0);
-        let nw = draw::measure(cr, &nt).0.min(max_nw);
-        draw::text_max(cr, r.0 + r.2 - 10.0 - nw, r.1 + (r.3 - 15.0) / 2.0, nw, &nt) + 8.0
+        let (measured_nw, nh) = draw::measure(cr, &nt);
+        let nw = measured_nw.min(max_nw);
+        draw::text_max(cr, r.0 + r.2 - 10.0 - nw, r.1 + (r.3 - nh) / 2.0, nw, &nt) + 8.0
     };
     if let Some(ic) = icon_at_right {
         icon(
@@ -774,19 +790,21 @@ pub fn list_row(
             },
         );
     }
+    let label_t = Text {
+        size: draw::SIZE_BODY,
+        bold: active,
+        color: if active { th.accent_text } else { th.text },
+        text,
+    };
+    let (_, lh) = draw::measure(cr, &label_t);
     draw::text_max(
         cr,
         r.0 + 10.0,
-        r.1 + (r.3 - 17.0) / 2.0,
+        r.1 + (r.3 - lh) / 2.0,
         (r.2 - 20.0 - note_w - icon_w)
             .max(20.0)
             .min((r.2 - 20.0).max(0.0)),
-        &Text {
-            size: draw::SIZE_BODY,
-            bold: active,
-            color: if active { th.accent_text } else { th.text },
-            text,
-        },
+        &label_t,
     );
     lit
 }
@@ -1370,5 +1388,53 @@ mod tests {
             let mut hits = Hits::new(None, None);
             choice_button(cr, &cx, &mut hits, 1, btn_r, &long, true);
         });
+    }
+
+    #[test]
+    fn active_list_row_deepens_on_hover_and_switch_uses_on_accent_knob() {
+        let th = crate::theme::Theme::from_config(&crate::config::Config::from_text(
+            "SURFACE_COLOR=\"#111317\"\nTEXT_COLOR=\"#eef2f8\"\nACCENT=\"#22242a\"\n",
+        ));
+        let cx = test_cx(&th);
+        let row_r = (10.0, 10.0, 220.0, LIST_ROW_H);
+
+        let rest = render_pixel(
+            260,
+            60,
+            |cr| {
+                let mut hits = Hits::new(None, None);
+                list_row(cr, &cx, &mut hits, 1, row_r, "Headphones", "", true, None);
+            },
+            (200, 24),
+        );
+        let hovered = render_pixel(
+            260,
+            60,
+            |cr| {
+                let mut hits = Hits::new(None, Some(1));
+                list_row(cr, &cx, &mut hits, 1, row_r, "Headphones", "", true, None);
+            },
+            (200, 24),
+        );
+        assert!(
+            hovered[3] > rest[3],
+            "active list row should deepen on hover/selection"
+        );
+
+        // On a dark accent on a dark card, the ON switch knob must use light on_accent, not dark card.
+        let sw_row = (0.0, 0.0, 100.0, ROW_H);
+        let knob_px = render_pixel(
+            120,
+            40,
+            |cr| {
+                let mut hits = Hits::new(None, None);
+                switch(cr, &cx, &mut hits, 1, sw_row, 90.0, true);
+            },
+            (82, 20),
+        );
+        assert!(
+            knob_px[2] > 180 && knob_px[1] > 180 && knob_px[0] > 180,
+            "ON switch knob should use readable on_accent colour, got {knob_px:?}"
+        );
     }
 }
