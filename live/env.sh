@@ -138,7 +138,7 @@ fi
 
 # 6b. Isolated D-Bus/dconf database profile (prevents inheriting host desktop defaults)
 INFYNITAE_CFG_DIR="$HOME/.config/infynitae"
-mkdir -p "$INFYNITAE_CFG_DIR"
+[ -d "$INFYNITAE_CFG_DIR" ] || mkdir -p "$INFYNITAE_CFG_DIR"
 if [ ! -f "$INFYNITAE_CFG_DIR/dconf-profile" ]; then
     printf 'user-db:infynitae\n' > "$INFYNITAE_CFG_DIR/dconf-profile"
 fi
@@ -146,7 +146,7 @@ export DCONF_PROFILE="$INFYNITAE_CFG_DIR/dconf-profile"
 
 # 7. XDG Desktop Portal routing & Global Shortcuts backend
 PORTAL_DATA_DIR="$HOME/.local/share/xdg-desktop-portal/portals"
-mkdir -p "$PORTAL_DATA_DIR"
+[ -d "$PORTAL_DATA_DIR" ] || mkdir -p "$PORTAL_DATA_DIR"
 # ScreenCast goes through ours, which asks once per app before a share and passes the rest
 # through to xdg-desktop-portal-wlr (owner, 2026-10-31); REMOTE_DESKTOP adds RemoteDesktop. A
 # portal from before the consent has no screenshare-ask next to it: then wlr directly.
@@ -160,9 +160,18 @@ case "${REMOTE_DESKTOP:-false}" in
         SCREENCAST_BACKEND="infynitae" RD_BACKEND="infynitae" ;;
 esac
 # Settings (dark or light, the accent colour) from infynitae-portal once the installed one has it
-# (built before 2026-11-06 it does not: the GTK portal alone answers then)
+# (built before 2026-11-06 it does not: the GTK portal alone answers then). Cache the probe in
+# the session env so Super+key presses do not grep the binary every time.
 SETTINGS_IFACE="" SETTINGS_BACKEND="gtk"
-if grep -qF org.freedesktop.impl.portal.Settings "$HOME/.local/bin/infynitae-portal" 2>/dev/null; then
+if [ -z "${INFYNITAE_PORTAL_HAS_SETTINGS:-}" ]; then
+    if grep -qF org.freedesktop.impl.portal.Settings "$HOME/.local/bin/infynitae-portal" 2>/dev/null; then
+        INFYNITAE_PORTAL_HAS_SETTINGS="1"
+    else
+        INFYNITAE_PORTAL_HAS_SETTINGS="0"
+    fi
+    export INFYNITAE_PORTAL_HAS_SETTINGS
+fi
+if [ "$INFYNITAE_PORTAL_HAS_SETTINGS" = "1" ]; then
     SETTINGS_IFACE="org.freedesktop.impl.portal.Settings;" SETTINGS_BACKEND="infynitae;gtk"
 fi
 # Each file is written only when its content changes: infynitae-reload portal restarts
@@ -185,7 +194,7 @@ Interfaces=org.freedesktop.impl.portal.GlobalShortcuts;$SETTINGS_IFACE$REMOTE_IF
 UseIn=infynitae;wlroots;"
 
 PORTAL_CFG_DIR="$HOME/.config/xdg-desktop-portal"
-mkdir -p "$PORTAL_CFG_DIR"
+[ -d "$PORTAL_CFG_DIR" ] || mkdir -p "$PORTAL_CFG_DIR"
 _infy_put "$PORTAL_CFG_DIR/infynitae-portals.conf" "[preferred]
 default=gtk;wlr
 org.freedesktop.impl.portal.GlobalShortcuts=infynitae
@@ -201,7 +210,7 @@ unset _infy_old _infy_l
 
 # Ensure infynitae-portal is running
 PORTAL_LOG="$HOME/.local/state/infynitae/portal.log"
-mkdir -p "$HOME/.local/state/infynitae"
+[ -d "$HOME/.local/state/infynitae" ] || mkdir -p "$HOME/.local/state/infynitae"
 for PORTAL_BIN in "$HOME/.local/bin/infynitae-portal" "$HOME/infynitae/live/infynitae-portal"; do
     [ -x "$PORTAL_BIN" ] && break
 done

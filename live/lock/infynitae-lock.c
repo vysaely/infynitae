@@ -1743,8 +1743,14 @@ int main(int argc, char **argv) {
             .revents = 0
         };
 
-        /* 16 ms while animating shake/verifying/status, 250 ms idle so clock/auth ticks still wake promptly */
-        int poll_timeout = (app.shake_frame > 0 || app.auth_state == AUTH_STATE_VERIFYING || app.status_msg[0] != '\0') ? 16 : 250;
+        /* 16 ms while animating shake/verifying/status; while idle sleep until the next minute tick */
+        int poll_timeout;
+        if (app.shake_frame > 0 || app.auth_state == AUTH_STATE_VERIFYING || app.status_msg[0] != '\0') {
+            poll_timeout = 16;
+        } else {
+            int rem_s = 60 - (int)(time(NULL) % 60);
+            poll_timeout = (rem_s > 0 ? rem_s : 1) * 1000;
+        }
         int ret = poll(&pfd, 1, poll_timeout);
 
         if (ret > 0 && (pfd.revents & POLLIN)) {
