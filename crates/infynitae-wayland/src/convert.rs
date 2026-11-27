@@ -1280,17 +1280,14 @@ where
     R: Renderer + ImportAll + ImportMem,
     R::TextureId: Send + Clone + 'static,
 {
-    let (view, raw_entries) = {
+    let (view, mut entries) = {
         let frame = state
             .core
             .render_list(output)
             .map_err(|_| RenderOutputError::NoFrame)?;
         (frame.view, frame.entries.clone())
     };
-    let mut entries: Vec<FrameEntry> = raw_entries
-        .into_iter()
-        .filter(|e| !state.is_element_private(e.element))
-        .collect();
+    entries.retain(|e| !state.is_element_private(e.element));
     // a window filling the screen hides what is behind it: a capture need not draw that either
     // (a private window that fills it was left out above, and then what is behind it shows)
     if let Some(window) = state.fitted_window(output)
@@ -1299,17 +1296,21 @@ where
         entries.retain(|e| e.element == window);
     }
     let layers = state.core.layer_frame(output);
-    let mut elements = Vec::new();
+    let mut elements =
+        Vec::with_capacity(entries.len() + layers.above.len() + layers.below.len() + 2);
     if include_cursor {
         cursor_elements(state, renderer, output, view.k, &mut elements)
             .map_err(RenderOutputError::Renderer)?;
     }
-    elements.extend(
-        layer_render_elements(renderer, &state.registry, &layers.above, view.k, None)
-            .map_err(RenderOutputError::Renderer)?
-            .into_iter()
-            .map(OutputElement::Surface),
-    );
+    push_layer_render_elements(
+        renderer,
+        &state.registry,
+        &layers.above,
+        view.k,
+        None,
+        &mut elements,
+    )
+    .map_err(RenderOutputError::Renderer)?;
     state.rounding.clear();
     window_elements(
         state,
@@ -1322,12 +1323,15 @@ where
         None,
     )
     .map_err(RenderOutputError::Renderer)?;
-    elements.extend(
-        layer_render_elements(renderer, &state.registry, &layers.below, view.k, None)
-            .map_err(RenderOutputError::Renderer)?
-            .into_iter()
-            .map(OutputElement::Surface),
-    );
+    push_layer_render_elements(
+        renderer,
+        &state.registry,
+        &layers.below,
+        view.k,
+        None,
+        &mut elements,
+    )
+    .map_err(RenderOutputError::Renderer)?;
     drop_empty(&mut elements, view.k);
     Ok((elements, view.k))
 }
