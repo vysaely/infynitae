@@ -32,11 +32,10 @@ fi
 # commands redirected into them failed)
 mkdir -p "${XDG_STATE_HOME:-$HOME/.local/state}/infynitae"
 
-# 1. Environment & Config
+# 1. Environment & Config (env.sh already sources config.sh and runs settings.sh apply once)
 if [ -f "$HOME/infynitae/live/env.sh" ]; then
     . "$HOME/infynitae/live/env.sh"
-fi
-if [ -f "$HOME/infynitae/live/config.sh" ]; then
+elif [ -f "$HOME/infynitae/live/config.sh" ]; then
     . "$HOME/infynitae/live/config.sh"
 fi
 
@@ -195,7 +194,9 @@ if infy_on "${CLIPBOARD_HISTORY:-true}"; then
 fi
 
 # 6c. Theme sync: the config's colors and fonts to mako, fuzzel, GTK, Qt and terminals
-if [ -f "$HOME/infynitae/live/settings.sh" ]; then
+# (skip if env.sh already applied it in this session)
+if [ -z "${INFYNITAE_SETTINGS_APPLIED:-}" ] && [ -f "$HOME/infynitae/live/settings.sh" ]; then
+    export INFYNITAE_SETTINGS_APPLIED="1"
     sh "$HOME/infynitae/live/settings.sh" apply >/dev/null 2>&1 || true
 fi
 
