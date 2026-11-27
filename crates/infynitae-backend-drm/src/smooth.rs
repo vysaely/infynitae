@@ -1203,7 +1203,8 @@ pub fn prepare_elements(
         .into_iter()
         .map(|elem| {
             let round = rounding.get(Element::id(&elem)).copied();
-            let mut smoothed = Smoothed::new(elem, programs.cloned()).rounded(round);
+            let mut smoothed =
+                Smoothed::new(elem, round.and_then(|_| programs.cloned())).rounded(round);
             let Some(progs) = programs else {
                 return smoothed;
             };
@@ -1239,6 +1240,7 @@ pub fn prepare_elements(
                     && let Some(easu) =
                         prepare_fsr_texture(renderer, progs, cache, &elem, slice_local)
                 {
+                    smoothed.programs = Some(Arc::clone(progs));
                     smoothed.mode = ScaleMode::Fsr {
                         easu,
                         slice_local,
@@ -1250,11 +1252,15 @@ pub fn prepare_elements(
                     let ms = mip.size();
                     let mip_src = Rectangle::from_size((f64::from(ms.w), f64::from(ms.h)).into());
                     let use_avg_shader = shrinks(mip_src, dst);
+                    if use_avg_shader {
+                        smoothed.programs = Some(Arc::clone(progs));
+                    }
                     smoothed.mode = ScaleMode::Mip {
                         mip,
                         use_avg_shader,
                     };
                 } else {
+                    smoothed.programs = Some(Arc::clone(progs));
                     smoothed.mode = ScaleMode::Avg { src_tex_size };
                 }
             }

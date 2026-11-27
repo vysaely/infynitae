@@ -607,6 +607,41 @@ fn clipped_surface(
 /// Render elements for layer-surface entries (L2), front to back, each at its physical rect in the
 /// output (a layer surface is never zoomed: its rect is its logical rect at the output scale). `k`
 /// is the frame's, as for the Canvas entries: the damage tracker draws the whole frame at it.
+fn push_layer_render_elements<R>(
+    renderer: &mut R,
+    registry: &SurfaceRegistry,
+    entries: &[infynitae_core::layer::LayerEntry],
+    k: f64,
+    mut slowest: Option<&mut SlowestSurface>,
+    out: &mut Vec<OutputElement<R>>,
+) -> Result<(), R::Error>
+where
+    R: Renderer + ImportAll + ImportMem,
+    R::TextureId: Send + Clone + 'static,
+{
+    for e in entries {
+        let Some(surface) = registry.surface(e.surface) else {
+            continue;
+        };
+        let el = timed(&mut slowest, e.surface, || {
+            with_states(surface, |states| {
+                WaylandSurfaceRenderElement::from_surface(
+                    renderer,
+                    surface,
+                    states,
+                    projected_to_smithay_physical(e.location),
+                    1.0,
+                    Kind::Unspecified,
+                )
+            })
+        })?;
+        if let Some(el) = el {
+            out.push(OutputElement::Surface(CanonicalRect::new(el, e.rect, k)));
+        }
+    }
+    Ok(())
+}
+
 pub fn layer_render_elements<R>(
     renderer: &mut R,
     registry: &SurfaceRegistry,
@@ -867,7 +902,8 @@ where
         entries.retain(|e| e.element == window);
     }
     let layers = state.core.layer_frame(output);
-    let mut elements = Vec::new();
+    let mut elements =
+        Vec::with_capacity(entries.len() + layers.above.len() + layers.below.len() + 4);
     let timing = mark.is_some();
     let mut slowest: SlowestSurface = None;
     mark_phase(&mut mark, "frame list");
@@ -899,18 +935,15 @@ where
     mark_phase(&mut mark, "cursor");
     input_method_popups(state, renderer, &entries, view.k, &mut elements)
         .map_err(RenderOutputError::Renderer)?;
-    elements.extend(
-        layer_render_elements(
-            renderer,
-            &state.registry,
-            &layers.above,
-            view.k,
-            timing.then_some(&mut slowest),
-        )
-        .map_err(RenderOutputError::Renderer)?
-        .into_iter()
-        .map(OutputElement::Surface),
-    );
+    push_layer_render_elements(
+        renderer,
+        &state.registry,
+        &layers.above,
+        view.k,
+        timing.then_some(&mut slowest),
+        &mut elements,
+    )
+    .map_err(RenderOutputError::Renderer)?;
     mark_phase(&mut mark, "layers above");
     state.rounding.clear();
     window_elements(
@@ -925,18 +958,15 @@ where
     )
     .map_err(RenderOutputError::Renderer)?;
     mark_phase(&mut mark, "windows");
-    elements.extend(
-        layer_render_elements(
-            renderer,
-            &state.registry,
-            &layers.below,
-            view.k,
-            timing.then_some(&mut slowest),
-        )
-        .map_err(RenderOutputError::Renderer)?
-        .into_iter()
-        .map(OutputElement::Surface),
-    );
+    push_layer_render_elements(
+        renderer,
+        &state.registry,
+        &layers.below,
+        view.k,
+        timing.then_some(&mut slowest),
+        &mut elements,
+    )
+    .map_err(RenderOutputError::Renderer)?;
     drop_empty(&mut elements, view.k);
     mark_phase(&mut mark, "layers below");
     if timing {
@@ -956,7 +986,7 @@ fn window_elements<R>(
     scale: f64,
     view: (i64, i64),
     elements: &mut Vec<OutputElement<R>>,
-    slowest: Option<&mut SlowestSurface>,
+    mut slowest: Option<&mut SlowestSurface>,
 ) -> Result<(), R::Error>
 where
     R: Renderer + ImportAll + ImportMem,
@@ -964,40 +994,32 @@ where
 {
     let geometry = window_geometry_rects(state.core.stage(), entries);
     let radii = window_radii(state, entries, &geometry, view);
-    let fitted: Vec<_> = state.fitted_windows.values().copied().collect();
-    let windows = {
-        let stage = state.core.stage();
-        let clip_on = state.clip_to_geometry;
-        let force_transparent = |elem| state.is_element_transparent(elem);
-        let core = &state.core;
-        // a fullscreen window is shown whole: its surface is the screen, and a cut one could not
-        // be scanned out
-        let clip = |e: &FrameEntry| {
-            if !clip_on
-                || core.fullscreen_of(e.element).is_some()
-                || fitted.contains(&e.element)
-                || !clipped_surface(stage, e.element, e.surface)
-            {
-                return None;
-            }
-            geometry.get(&e.element).copied()
-        };
-        render_elements_opt(
-            renderer,
-            &state.registry,
-            entries,
-            k,
-            force_transparent,
-            clip,
-            slowest,
-        )?
-    };
     // a window's surfaces are consecutive, front to back (its popups first); its border goes right
     // behind the last of them: behind its own menus, which may open over its edge, and in front of
     // the windows behind it
     let mut current = None;
     let mut bordered = std::collections::HashSet::new();
-    for (entry, e) in windows {
+    for entry in entries {
+        let Some(el) = timed(&mut slowest, entry.surface, || {
+            surface_element(renderer, &state.registry, entry)
+        })?
+        else {
+            continue;
+        };
+        let is_clipped = clipped_surface(state.core.stage(), entry.element, entry.surface);
+        let ft = state.is_element_transparent(entry.element);
+        // a fullscreen window is shown whole: its surface is the screen, and a cut one could not
+        // be scanned out
+        let clip_rect = if !state.clip_to_geometry
+            || !is_clipped
+            || state.core.fullscreen_of(entry.element).is_some()
+            || state.fitted_windows.values().any(|&w| w == entry.element)
+        {
+            None
+        } else {
+            geometry.get(&entry.element).copied()
+        };
+        let e = CanonicalRect::new_clipped(el, entry.rect, k, clip_rect, ft);
         if let Some(prev) = current
             && prev != entry.element
             && bordered.insert(prev)
@@ -1006,8 +1028,8 @@ where
         }
         current = Some(entry.element);
         // the window's own surfaces are cut to its rounded corners; its popups and menus are not
-        if let (Some(r), Some(g)) = (radii.get(&entry.element), geometry.get(&entry.element))
-            && clipped_surface(state.core.stage(), entry.element, entry.surface)
+        if is_clipped
+            && let (Some(r), Some(g)) = (radii.get(&entry.element), geometry.get(&entry.element))
         {
             state.rounding.insert(
                 smithay::backend::renderer::element::Element::id(&e).clone(),
