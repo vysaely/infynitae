@@ -462,6 +462,12 @@ impl WaylandState {
                 self.clipboard.reading.push((mime, t));
             }
         }
+        self.clipboard_finish_reads();
+    }
+
+    /// Pumps active read pipes and, once every requested MIME type has finished, commits the copy
+    /// to history / `held` (and serves it immediately when the source already disappeared).
+    fn clipboard_finish_reads(&mut self) {
         self.clipboard.pump();
         let c = &mut self.clipboard;
         if c.reading.is_empty() || c.reading.iter().any(|(_, t)| !lock(t).finished()) {
@@ -496,6 +502,18 @@ impl WaylandState {
     /// The clipboard's app went: its copy is offered by the compositor when it is kept (or once
     /// it is read); otherwise the clipboard is cleared.
     pub(crate) fn clipboard_orphaned(&mut self) {
+        if self.clipboard.persist
+            && self.clipboard.held.is_none()
+            && !self.clipboard.reading.is_empty()
+        {
+            // Drain pipes whose writer just closed so the compositor takes over the selection
+            // synchronously before a pasting client sees the dead source.
+            self.clipboard.orphaned = true;
+            self.clipboard_finish_reads();
+            if self.clipboard.held.is_some() || self.clipboard.reading.is_empty() {
+                return;
+            }
+        }
         let c = &mut self.clipboard;
         if !c.persist {
             self.clipboard_clear();
