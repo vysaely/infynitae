@@ -41,7 +41,8 @@ resolve_terminal() {
     echo ""
 }
 
-TERM_CMD=$(resolve_terminal)
+# Resolve TERMINAL lazily only inside actions that spawn a terminal (avoid subshell + PATH scan on every shortcut).
+TERM_CMD=""
 
 INFYNITAE_BIN="${INFYNITAE_BIN:-}"
 if [ -z "$INFYNITAE_BIN" ]; then
@@ -68,6 +69,7 @@ case "$ACTION" in
     terminal)
         # Super+Q: Terminal emulator (auto-detects kitty, alacritty, foot, or uses $TERMINAL);
         # with a command and its arguments (xdg-terminal-exec): that command in it
+        TERM_CMD=$(resolve_terminal)
         if [ -n "$TERM_CMD" ] && [ $# -gt 1 ]; then
             shift
             exec $TERM_CMD -e "$@"
@@ -155,7 +157,10 @@ GM_ARGS
                     command -v "$m" >/dev/null 2>&1 && exec "$m"
                 done
                 for m in btop htop top; do
-                    command -v "$m" >/dev/null 2>&1 && exec $TERM_CMD -e "$m"
+                    if command -v "$m" >/dev/null 2>&1; then
+                        TERM_CMD=$(resolve_terminal)
+                        exec $TERM_CMD -e "$m"
+                    fi
                 done
                 ;;
             *)
@@ -165,6 +170,7 @@ GM_ARGS
         ;;
     file-manager|files)
         # Super+E: File explorer (configurable via ~/.config/infynitae/config)
+        TERM_CMD=$(resolve_terminal)
         FM="${FILE_MANAGER:-auto}"
         case "$FM" in
             auto|"")
