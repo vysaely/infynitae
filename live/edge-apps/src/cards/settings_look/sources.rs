@@ -454,7 +454,7 @@ pub fn face_command(src: &str) -> String {
          if \"$E\" --crop-face {q} \"$f.new\"; then \
          if [ -e \"$f\" ]; then cp -f \"$f\" \"$b\"; fi; \
          mv -f \"$f.new\" \"$f\" && \
-         sh \"$HOME/infynitae/live/settings.sh\" log FACE \"$old\" >/dev/null 2>&1; \
+         sh \"${{INFYNITAE_DIR:-$HOME/infynitae}}/live/settings.sh\" log FACE \"$old\" >/dev/null 2>&1; \
          else rm -f \"$f.new\"; false; fi"
     )
 }
@@ -558,7 +558,9 @@ pub(super) fn icon_roots(home: Option<&Path>) -> Vec<PathBuf> {
 pub(super) fn has_wallpaper_bin(home: Option<&Path>, path: &str) -> bool {
     if let Some(h) = home.filter(|p| !p.as_os_str().is_empty()) {
         if h.join(".local/bin/infynitae-wallpaper").is_file()
-            || h.join("infynitae/live/infynitae-wallpaper").is_file()
+            || crate::paths::checkout_dir(h)
+                .join("live/infynitae-wallpaper")
+                .is_file()
         {
             return true;
         }
@@ -1039,6 +1041,7 @@ mod tests {
             std::process::Command::new("sh")
                 .args(["-c", &cmd])
                 .env("HOME", home)
+                .env_remove("INFYNITAE_DIR")
                 .env("INFYNITAE_EDGE_APPS", &bin)
                 .status()
                 .unwrap()

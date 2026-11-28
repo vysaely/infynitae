@@ -32,6 +32,12 @@ tools/vm-edge/everyday.py                     # how people use the desktop, in a
 
 Never start a second compositor on the console of a running session.
 
+The desktop runs its scripts from the checkout `install.sh` (or `infynitae-update`) was run from,
+recorded in `~/.config/infynitae/checkout`; without that file (an install from before it), from
+`~/infynitae`. Every script resolves it with the same two lines at its top, the compositor with
+`checkout_dir` (`crates/infynitae-wayland/src/lib.rs`), the edge with `paths::checkout_dir`, the
+portal with `checkout_dir` in `live/portal/remote-desktop.c`. `tools/test-checkout` checks it.
+
 ## Tests and checks
 
 All of these run in CI on every push, and all must pass before a change lands on `main`:

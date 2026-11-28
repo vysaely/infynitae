@@ -3,7 +3,11 @@
 # --dmenu), from the apps that say they handle its type; the default is marked. "Set the
 # default" saves the pick in ~/.config/mimeapps.list, which GTK, KDE and xdg-open all read.
 # xdg-open shows this when a type has no app yet.
-[ -f "$HOME/infynitae/live/config.sh" ] && . "$HOME/infynitae/live/config.sh"
+
+# the checkout these scripts run from: the one install.sh recorded, else ~/infynitae
+INFYNITAE_DIR=; { IFS= read -r INFYNITAE_DIR < "$HOME/.config/infynitae/checkout"; } 2>/dev/null || :
+INFYNITAE_DIR="${INFYNITAE_DIR:-$HOME/infynitae}"
+[ -f "$INFYNITAE_DIR/live/config.sh" ] && . "$INFYNITAE_DIR/live/config.sh"
 PICKER="${MENU_PICKER:-fuzzel --dmenu}"
 target="$1"
 [ -n "$target" ] || { echo "usage: infynitae-open-with FILE|URL" >&2; exit 2; }

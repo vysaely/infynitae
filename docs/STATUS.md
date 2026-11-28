@@ -268,8 +268,7 @@ section, and what it needs now. `[save]` is the console backend's check of the f
 - HDR, accessibility and screen readers.
 - **Output management:** tools cannot yet turn a screen off through it (wlopm can).
 - **Hardware:** a second GPU, NVIDIA's explicit sync.
-- **Packaging** for anything other than Arch Linux. The install assumes one user and
-  `~/infynitae`.
+- **Packaging** for anything other than Arch Linux. The install assumes one user.
 
 ## Known limits
 

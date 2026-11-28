@@ -3,10 +3,14 @@
 # Dispatches shortcuts: terminal (Super+Q), file-manager (Super+E), apps (Super+W), windows (Super+L)
 # The keys follow the owner's rule (2026-10-31): often used on the left hand (Super+Tab, Q, W, E, D,
 # A, S, C, V), rare on the right (Super+Shift+L, Shift+O, Shift+P, Shift+I, Alt+P, Shift+BackSpace).
+
+# the checkout these scripts run from: the one install.sh recorded, else ~/infynitae
+INFYNITAE_DIR=; { IFS= read -r INFYNITAE_DIR < "$HOME/.config/infynitae/checkout"; } 2>/dev/null || :
+INFYNITAE_DIR="${INFYNITAE_DIR:-$HOME/infynitae}"
 ACTION="$1"
 
-if [ -f "$HOME/infynitae/live/env.sh" ]; then
-    . "$HOME/infynitae/live/env.sh"
+if [ -f "$INFYNITAE_DIR/live/env.sh" ]; then
+    . "$INFYNITAE_DIR/live/env.sh"
 fi
 
 # env.sh loaded the user's config (live/config.sh) and resolved WAYLAND_DISPLAY, DISPLAY and
@@ -261,7 +265,7 @@ GM_ARGS
         ;;
     reload|reload-shell|restart-shell)
         # Re-apply settings and reload all configured helpers (windows stay open)
-        "$HOME/infynitae/live/infynitae-reload" all >/dev/null 2>&1 || true
+        "$INFYNITAE_DIR/live/infynitae-reload" all >/dev/null 2>&1 || true
 
         if pidof waybar >/dev/null 2>&1; then
             killall -SIGUSR2 waybar 2>/dev/null || true
@@ -606,7 +610,7 @@ GM_ARGS
         if edge_on; then
             exec "$EDGE_BIN" control
         fi
-        for m in "$HOME/.local/bin/infynitae-control-menu" "$HOME/infynitae/live/control-menu"; do
+        for m in "$HOME/.local/bin/infynitae-control-menu" "$INFYNITAE_DIR/live/control-menu"; do
             if [ -x "$m" ]; then exec "$m"; fi
         done
         ;;
@@ -640,7 +644,7 @@ GM_ARGS
     config-check)
         # the config changed while running: what it has that was skipped (unknown, unreadable)
         # keeps its default, and a notification names it
-        exec "$HOME/infynitae/live/config-check" --notify >/dev/null 2>&1
+        exec "$INFYNITAE_DIR/live/config-check" --notify >/dev/null 2>&1
         ;;
     remember-window)
         # a per-window toggle kept for the window's app (the compositor, Super+Shift+P / Super+Shift+K):
@@ -720,44 +724,44 @@ GM_ARGS
         # Super+Alt+C: the replay saved as a clip (its length: REPLAY_BUFFER_MINUTES)
         if [ -x "$HOME/.local/bin/infynitae-recorder" ]; then
             exec "$HOME/.local/bin/infynitae-recorder" save-replay
-        elif [ -x "$HOME/infynitae/live/record/infynitae-recorder" ]; then
-            exec "$HOME/infynitae/live/record/infynitae-recorder" save-replay
+        elif [ -x "$INFYNITAE_DIR/live/record/infynitae-recorder" ]; then
+            exec "$INFYNITAE_DIR/live/record/infynitae-recorder" save-replay
         fi
         ;;
     record-toggle|toggle-record)
         # Super+Alt+P (Super+Alt+R too): a recording started or stopped
         if [ -x "$HOME/.local/bin/infynitae-recorder" ]; then
             exec "$HOME/.local/bin/infynitae-recorder" record-toggle
-        elif [ -x "$HOME/infynitae/live/record/infynitae-recorder" ]; then
-            exec "$HOME/infynitae/live/record/infynitae-recorder" record-toggle
+        elif [ -x "$INFYNITAE_DIR/live/record/infynitae-recorder" ]; then
+            exec "$INFYNITAE_DIR/live/record/infynitae-recorder" record-toggle
         fi
         ;;
     record-start)
         if [ -x "$HOME/.local/bin/infynitae-recorder" ]; then
             exec "$HOME/.local/bin/infynitae-recorder" record-start
-        elif [ -x "$HOME/infynitae/live/record/infynitae-recorder" ]; then
-            exec "$HOME/infynitae/live/record/infynitae-recorder" record-start
+        elif [ -x "$INFYNITAE_DIR/live/record/infynitae-recorder" ]; then
+            exec "$INFYNITAE_DIR/live/record/infynitae-recorder" record-start
         fi
         ;;
     record-stop)
         if [ -x "$HOME/.local/bin/infynitae-recorder" ]; then
             exec "$HOME/.local/bin/infynitae-recorder" record-stop
-        elif [ -x "$HOME/infynitae/live/record/infynitae-recorder" ]; then
-            exec "$HOME/infynitae/live/record/infynitae-recorder" record-stop
+        elif [ -x "$INFYNITAE_DIR/live/record/infynitae-recorder" ]; then
+            exec "$INFYNITAE_DIR/live/record/infynitae-recorder" record-stop
         fi
         ;;
     replay-start)
         if [ -x "$HOME/.local/bin/infynitae-recorder" ]; then
             exec "$HOME/.local/bin/infynitae-recorder" replay-start
-        elif [ -x "$HOME/infynitae/live/record/infynitae-recorder" ]; then
-            exec "$HOME/infynitae/live/record/infynitae-recorder" replay-start
+        elif [ -x "$INFYNITAE_DIR/live/record/infynitae-recorder" ]; then
+            exec "$INFYNITAE_DIR/live/record/infynitae-recorder" replay-start
         fi
         ;;
     replay-supervisor|record-supervisor)
         if [ -x "$HOME/.local/bin/infynitae-recorder" ]; then
             exec "$HOME/.local/bin/infynitae-recorder" supervisor
-        elif [ -x "$HOME/infynitae/live/record/infynitae-recorder" ]; then
-            exec "$HOME/infynitae/live/record/infynitae-recorder" supervisor
+        elif [ -x "$INFYNITAE_DIR/live/record/infynitae-recorder" ]; then
+            exec "$INFYNITAE_DIR/live/record/infynitae-recorder" supervisor
         fi
         ;;
     *)

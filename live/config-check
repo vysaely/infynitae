@@ -7,10 +7,14 @@
 #   config-check --notify   also show them in a notification, once per change (the session start
 #                           and the compositor's live reload run this)
 
+# the checkout these scripts run from: the one install.sh recorded, else ~/infynitae
+INFYNITAE_DIR=; { IFS= read -r INFYNITAE_DIR < "$HOME/.config/infynitae/checkout"; } 2>/dev/null || :
+INFYNITAE_DIR="${INFYNITAE_DIR:-$HOME/infynitae}"
+
 CONFIG="${CONFIG_FILE:-$HOME/.config/infynitae/config}"
 STATE_DIR="$HOME/.local/state/infynitae"
 # the settings there are: the shipped config, else the copy the installer left
-KNOWN_FROM="$HOME/infynitae/config/config"
+KNOWN_FROM="$INFYNITAE_DIR/config/config"
 [ -f "$KNOWN_FROM" ] || KNOWN_FROM="$HOME/.config/infynitae/config.template"
 
 [ -f "$CONFIG" ] || exit 0
@@ -20,7 +24,7 @@ if [ -f "$KNOWN_FROM" ]; then
     known=" $(grep -oE '[A-Z][A-Z0-9_]+=' "$KNOWN_FROM" | tr -d = | sort -u | tr '\n' ' ')"
     # old names of renamed settings, still read (live/config.sh)
     renames="$(dirname "$KNOWN_FROM")/../live/config-renames"
-    [ -f "$renames" ] || renames="$HOME/infynitae/live/config-renames"
+    [ -f "$renames" ] || renames="$INFYNITAE_DIR/live/config-renames"
     known="$known $(sed -n 's/^\([A-Z][A-Z0-9_]*\)[[:space:]].*/\1/p' "$renames" 2>/dev/null | tr '\n' ' ') "
 fi
 
@@ -98,7 +102,7 @@ if [ "$1" = "--notify" ]; then
             count=$(printf '%s\n' "$problems" | wc -l)
             body=$(printf '%s\n' "$problems" | head -n 5)
             [ "$count" -gt 5 ] && body="$body
-… and $((count - 5)) more (run ~/infynitae/live/config-check)"
+… and $((count - 5)) more (run $INFYNITAE_DIR/live/config-check)"
             notify-send -a Infynitae -u normal \
                 "Config: $count line(s) skipped, defaults used" \
                 "$(printf '%s' "$body" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')"

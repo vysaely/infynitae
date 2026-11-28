@@ -1,11 +1,15 @@
 #!/bin/sh
 # infynitae-settings: reads and changes ~/.config/infynitae/config and applies it
 # to the toolkits (GTK, Qt) and apps that keep their own files; no daemon runs for it.
+
+# the checkout these scripts run from: the one install.sh recorded, else ~/infynitae
+INFYNITAE_DIR=; { IFS= read -r INFYNITAE_DIR < "$HOME/.config/infynitae/checkout"; } 2>/dev/null || :
+INFYNITAE_DIR="${INFYNITAE_DIR:-$HOME/infynitae}"
 set -e
 umask 077
 
 CONFIG_FILE="${CONFIG_FILE:-$HOME/.config/infynitae/config}"
-SCRIPT_DIR=$(cd "$(dirname "$0")" 2>/dev/null && pwd || echo "$HOME/infynitae/live")
+SCRIPT_DIR=$(cd "$(dirname "$0")" 2>/dev/null && pwd || echo "$INFYNITAE_DIR/live")
 
 # Ensure config directory and file exist (a fresh install has none yet: `set KEY VAL` read it with
 # awk and sourced it, and stopped with an error before changing anything)
@@ -26,7 +30,7 @@ expand_path() {
 # Reads the config with config.sh's syntax guard and legacy renames when available, falling back
 # to sourcing the file directly if config.sh is missing.
 load_config() {
-    for _lc_sh in "${SCRIPT_DIR:-}/config.sh" "${SCRIPT_DIR:-}/live/config.sh" "${SCRIPT_DIR:-}/../live/config.sh" "$HOME/infynitae/live/config.sh"; do
+    for _lc_sh in "${SCRIPT_DIR:-}/config.sh" "${SCRIPT_DIR:-}/live/config.sh" "${SCRIPT_DIR:-}/../live/config.sh" "$INFYNITAE_DIR/live/config.sh"; do
         if [ -f "$_lc_sh" ]; then
             _infy_renames="${_lc_sh%/*}/config-renames"
             . "$_lc_sh"
@@ -739,7 +743,7 @@ apply_settings() {
     cfg_stamp=$(cksum < "$CONFIG_FILE" 2>/dev/null || echo 0)
     self_file="$0"
     [ -L "$self_file" ] && self_file=$(readlink -f "$self_file" 2>/dev/null || echo "$0")
-    [ -f "$self_file" ] || self_file="${SCRIPT_DIR:-$HOME/infynitae/live}/settings.sh"
+    [ -f "$self_file" ] || self_file="${SCRIPT_DIR:-$INFYNITAE_DIR/live}/settings.sh"
     self_stamp=$(cksum < "$self_file" 2>/dev/null || echo 0)
     stamp_now="$cfg_stamp $self_stamp"
 
@@ -1525,7 +1529,7 @@ case "$1" in
         ;;
     timezone)
         # infynitae-settings timezone [Area/City]: the zone, or menus to pick it in a terminal
-        . "$HOME/infynitae/live/install-lib.sh"
+        . "$INFYNITAE_DIR/live/install-lib.sh"
         if [ -n "${2:-}" ]; then
             set_timezone "$2"
         elif [ -t 0 ] && command -v whiptail >/dev/null 2>&1 && tz=$(pick_timezone); then
@@ -1536,7 +1540,7 @@ case "$1" in
         fi
         ;;
     reload)
-        exec "$HOME/infynitae/live/infynitae-reload" all
+        exec "$INFYNITAE_DIR/live/infynitae-reload" all
         ;;
     restore|reset-zoom)
         infynitae msg restore
@@ -1545,8 +1549,8 @@ case "$1" in
     update)
         if command -v infynitae-update >/dev/null 2>&1; then
             exec infynitae-update "$@"
-        elif [ -x "$HOME/infynitae/update.sh" ]; then
-            exec "$HOME/infynitae/update.sh" "$@"
+        elif [ -x "$INFYNITAE_DIR/update.sh" ]; then
+            exec "$INFYNITAE_DIR/update.sh" "$@"
         fi
         ;;
     *)

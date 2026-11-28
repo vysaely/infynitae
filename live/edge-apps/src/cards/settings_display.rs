@@ -832,7 +832,7 @@ impl JsonParser<'_> {
 
 fn settings_sh_cmd(sub: &str, args: &str) -> String {
     format!(
-        "if [ -f \"$HOME/infynitae/live/settings.sh\" ]; then sh \"$HOME/infynitae/live/settings.sh\" {sub} {args}; else infynitae-settings {sub} {args}; fi"
+        "if [ -f \"${{INFYNITAE_DIR:-$HOME/infynitae}}/live/settings.sh\" ]; then sh \"${{INFYNITAE_DIR:-$HOME/infynitae}}/live/settings.sh\" {sub} {args}; else infynitae-settings {sub} {args}; fi"
     )
 }
 
@@ -2440,6 +2440,7 @@ mod tests {
             .arg("-c")
             .arg(&res_cmd)
             .env("HOME", &dir)
+            .env_remove("INFYNITAE_DIR")
             .env("PATH", &path_env)
             .status()
             .unwrap();
@@ -2456,6 +2457,7 @@ mod tests {
             .arg("-c")
             .arg(&res_cmd)
             .env("HOME", &dir)
+            .env_remove("INFYNITAE_DIR")
             .env("PATH", &path_env)
             .status()
             .unwrap();
@@ -2614,6 +2616,7 @@ mod tests {
             .arg("-c")
             .arg(&text_cmd)
             .env("HOME", &dir)
+            .env_remove("INFYNITAE_DIR")
             .env("PATH", &path_env)
             .status()
             .unwrap();
@@ -2819,6 +2822,7 @@ mod tests {
         let st = Command::new("sh")
             .args(["-c", &cmd])
             .env("HOME", &dir)
+            .env_remove("INFYNITAE_DIR")
             .env("PATH", &path_env)
             .status()
             .unwrap();
@@ -2834,6 +2838,7 @@ mod tests {
         let st = Command::new("sh")
             .args(["-c", &cmd])
             .env("HOME", &dir)
+            .env_remove("INFYNITAE_DIR")
             .env("PATH", &path_env)
             .status()
             .unwrap();

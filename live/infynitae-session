@@ -7,6 +7,10 @@
 #   infynitae-session          run the session
 #   infynitae-session stop     end the session for real (no restart)
 
+# the checkout these scripts run from: the one install.sh recorded, else ~/infynitae
+INFYNITAE_DIR=; { IFS= read -r INFYNITAE_DIR < "$HOME/.config/infynitae/checkout"; } 2>/dev/null || :
+INFYNITAE_DIR="${INFYNITAE_DIR:-$HOME/infynitae}"
+
 STATE_DIR="$HOME/.local/state/infynitae"
 STOP_FILE="$STATE_DIR/stop"
 PID_FILE="$STATE_DIR/compositor.pid"
@@ -65,11 +69,11 @@ if [ "$XDG_SESSION_TYPE" = "tty" ] || { [ -z "$WAYLAND_DISPLAY" ] && [ -z "$DISP
     TTY_MODE="--tty"
 fi
 
-if [ -f "$HOME/infynitae/live/env.sh" ]; then
-    . "$HOME/infynitae/live/env.sh"
+if [ -f "$INFYNITAE_DIR/live/env.sh" ]; then
+    . "$INFYNITAE_DIR/live/env.sh"
 fi
 
-for _r in "$(dirname "$0")/log-rotate.sh" "$HOME/infynitae/live/log-rotate.sh"; do
+for _r in "$(dirname "$0")/log-rotate.sh" "$INFYNITAE_DIR/live/log-rotate.sh"; do
     [ -f "$_r" ] && { . "$_r"; break; }
 done
 unset _r
@@ -86,7 +90,7 @@ FAST_FAIL_SECS=5
 MAX_FAST_FAILS=3
 
 BIN="$HOME/.local/bin/infynitae"
-SESSION_SCRIPT="$HOME/infynitae/live/session.sh"
+SESSION_SCRIPT="$INFYNITAE_DIR/live/session.sh"
 
 CRASH_DIR="$STATE_DIR/crashes"
 CRASH_NOTE="$STATE_DIR/crashed"
@@ -111,7 +115,7 @@ crash_report() {
     {
         echo "Infynitae crashed ($how) after ${DURATION}s"
         echo "Date:    $(date '+%F %T')"
-        echo "Version: $(git -C "$HOME/infynitae" describe --always --dirty 2>/dev/null || echo unknown)"
+        echo "Version: $(git -C "$INFYNITAE_DIR" describe --always --dirty 2>/dev/null || echo unknown)"
         echo "Kernel:  $(uname -r)"
         [ -n "$panic" ] && echo "Panic:   $panic"
         echo ""
@@ -149,8 +153,8 @@ while true; do
     echo "[infynitae-session] $(date '+%F %T') Starting Infynitae compositor..." >> "$SESSION_LOG"
 
     # Refresh environment and drop stale auth before launch
-    if [ -f "$HOME/infynitae/live/env.sh" ]; then
-        . "$HOME/infynitae/live/env.sh"
+    if [ -f "$INFYNITAE_DIR/live/env.sh" ]; then
+        . "$INFYNITAE_DIR/live/env.sh"
     fi
     if [ -n "$TTY_MODE" ]; then
         unset WAYLAND_DISPLAY DISPLAY

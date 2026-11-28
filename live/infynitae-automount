@@ -21,9 +21,13 @@
 #   INFYNITAE_AUTOMOUNT_FSTAB: a file read instead of /etc/fstab (tests)
 #   INFYNITAE_AUTOMOUNT_BY_UUID: a folder read instead of /dev/disk/by-uuid (tests)
 #   INFYNITAE_AUTOMOUNT_DRIVE_NAME: a program run instead of pkexec infynitae-drive-name (tests)
+
+# the checkout these scripts run from: the one install.sh recorded, else ~/infynitae
+INFYNITAE_DIR=; { IFS= read -r INFYNITAE_DIR < "$HOME/.config/infynitae/checkout"; } 2>/dev/null || :
+INFYNITAE_DIR="${INFYNITAE_DIR:-$HOME/infynitae}"
 set -u
-if [ -f "$HOME/infynitae/live/config.sh" ]; then
-    . "$HOME/infynitae/live/config.sh"
+if [ -f "$INFYNITAE_DIR/live/config.sh" ]; then
+    . "$INFYNITAE_DIR/live/config.sh"
 fi
 # what a drive opens (the file manager) gets an app's out-of-memory score (session.sh, 1c): the
 # watcher that runs this keeps the desktop's, for the lock screen it starts before sleep
@@ -34,10 +38,10 @@ FSTAB="${INFYNITAE_AUTOMOUNT_FSTAB:-/etc/fstab}"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/infynitae"
 LOG="$STATE_DIR/automount.log"
 mkdir -p "$STATE_DIR"
-for _r in "$(dirname "$0")/log-rotate.sh" "$HOME/infynitae/live/log-rotate.sh"; do
+for _r in "$(dirname "$0")/log-rotate.sh" "$INFYNITAE_DIR/live/log-rotate.sh"; do
     [ -f "$_r" ] && { . "$_r"; break; }
 done
-for _r in "$(dirname "$0")/journal.sh" "$HOME/infynitae/live/journal.sh"; do
+for _r in "$(dirname "$0")/journal.sh" "$INFYNITAE_DIR/live/journal.sh"; do
     [ -f "$_r" ] && { . "$_r"; break; }
 done
 unset _r

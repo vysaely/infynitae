@@ -1,13 +1,17 @@
 #!/bin/sh
 # Infynitae session start script
 # Executed by the compositor's --exec argument.
+
+# the checkout these scripts run from: the one install.sh recorded, else ~/infynitae
+INFYNITAE_DIR=; { IFS= read -r INFYNITAE_DIR < "$HOME/.config/infynitae/checkout"; } 2>/dev/null || :
+INFYNITAE_DIR="${INFYNITAE_DIR:-$HOME/infynitae}"
 umask 077
 
 # Started outside a compositor (a console login that runs this file by mistake): start the session
 # itself, never the apps with no screen to show them on
-if [ -z "$WAYLAND_DISPLAY" ] && [ -x "$HOME/infynitae/live/infynitae-session" ]; then
+if [ -z "$WAYLAND_DISPLAY" ] && [ -x "$INFYNITAE_DIR/live/infynitae-session" ]; then
     echo "[infynitae] session.sh runs inside the compositor; starting infynitae-session instead" >&2
-    exec "$HOME/infynitae/live/infynitae-session" "$@"
+    exec "$INFYNITAE_DIR/live/infynitae-session" "$@"
 fi
 
 # 0. The compositor's own thread runs ahead of apps (nice -10, the most the gamemode group's limit
@@ -47,17 +51,17 @@ fi
 mkdir -p "${XDG_STATE_HOME:-$HOME/.local/state}/infynitae"
 
 # 1. Environment & Config (env.sh already sources config.sh and runs settings.sh apply once)
-if [ -f "$HOME/infynitae/live/env.sh" ]; then
-    . "$HOME/infynitae/live/env.sh"
-elif [ -f "$HOME/infynitae/live/config.sh" ]; then
-    . "$HOME/infynitae/live/config.sh"
+if [ -f "$INFYNITAE_DIR/live/env.sh" ]; then
+    . "$INFYNITAE_DIR/live/env.sh"
+elif [ -f "$INFYNITAE_DIR/live/config.sh" ]; then
+    . "$INFYNITAE_DIR/live/config.sh"
 fi
 
 if ! command -v infy_bin >/dev/null 2>&1; then
     infy_bin() {
         for _infy_b in "$@"; do
             if [ -x "$HOME/.local/bin/$_infy_b" ]; then echo "$HOME/.local/bin/$_infy_b"; return 0;
-            elif [ -x "$HOME/infynitae/live/$_infy_b" ]; then echo "$HOME/infynitae/live/$_infy_b"; return 0;
+            elif [ -x "$INFYNITAE_DIR/live/$_infy_b" ]; then echo "$INFYNITAE_DIR/live/$_infy_b"; return 0;
             elif command -v "$_infy_b" >/dev/null 2>&1; then command -v "$_infy_b"; return 0; fi
         done
         return 1
@@ -219,9 +223,9 @@ fi
 
 # 6c. Theme sync: the config's colors and fonts to mako, fuzzel, GTK, Qt and terminals
 # (skip if env.sh already applied it in this session)
-if [ -z "${INFYNITAE_SETTINGS_APPLIED:-}" ] && [ -f "$HOME/infynitae/live/settings.sh" ]; then
+if [ -z "${INFYNITAE_SETTINGS_APPLIED:-}" ] && [ -f "$INFYNITAE_DIR/live/settings.sh" ]; then
     export INFYNITAE_SETTINGS_APPLIED="1"
-    sh "$HOME/infynitae/live/settings.sh" apply >/dev/null 2>&1 || true
+    sh "$INFYNITAE_DIR/live/settings.sh" apply >/dev/null 2>&1 || true
 fi
 
 # Notifications: NOTIFICATIONS picks the daemon ("auto": the edge when it runs (started above, it
@@ -274,9 +278,9 @@ fi
 
 # 6c3. Settings the config has that Infynitae skipped (unknown, misspelled, unreadable): each keeps
 # its default, and a notification names them once the daemon is up
-if [ -x "$HOME/infynitae/live/config-check" ]; then
+if [ -x "$INFYNITAE_DIR/live/config-check" ]; then
     rm -f "$HOME/.local/state/infynitae/config-problems"
-    (sleep 2; "$HOME/infynitae/live/config-check" --notify >/dev/null) &
+    (sleep 2; "$INFYNITAE_DIR/live/config-check" --notify >/dev/null) &
 fi
 
 # 6d2. KDE apps' list of apps (Open With), from the menu file settings.sh provides
@@ -308,7 +312,7 @@ fi
 # 6e3. The battery's charge limit (BATTERY_LIMIT: a percentage, or off), where it is supported
 case "${BATTERY_LIMIT:-off}" in
     off|false|no|"") ;;
-    *) sh "$HOME/infynitae/live/battery-limit" "$BATTERY_LIMIT" >/dev/null 2>&1 || true ;;
+    *) sh "$INFYNITAE_DIR/live/battery-limit" "$BATTERY_LIMIT" >/dev/null 2>&1 || true ;;
 esac
 
 # 6e4. One watcher of the system bus, infynitae-bus-watch, for two things: USB drives and SD cards
@@ -350,7 +354,7 @@ case "${AUTO_ROTATE:-auto}" in
     false|0|off|no|FALSE|False|OFF|Off|NO|No) ;;
     *)
         if command -v monitor-sensor >/dev/null 2>&1; then
-            for r in "$HOME/infynitae/live/autorotate" "$HOME/.local/bin/autorotate" "$(dirname "$0")/autorotate"; do
+            for r in "$INFYNITAE_DIR/live/autorotate" "$HOME/.local/bin/autorotate" "$(dirname "$0")/autorotate"; do
                 if [ -x "$r" ]; then
                     infy_run_unpriv "$r" >/dev/null 2>&1
                     break
@@ -375,7 +379,7 @@ if [ -x "$HOME/.config/infynitae/autostart.sh" ]; then
     "$HOME/.config/infynitae/autostart.sh" &
 fi
 # 7a. Apps that asked to start with the session (~/.config/autostart, the XDG way)
-[ -f "$HOME/infynitae/live/xdg-autostart" ] && sh "$HOME/infynitae/live/xdg-autostart"
+[ -f "$INFYNITAE_DIR/live/xdg-autostart" ] && sh "$INFYNITAE_DIR/live/xdg-autostart"
 
 # 7b. Session restore & watcher
 RESTORE_BIN=$(infy_bin infynitae-restore || true)

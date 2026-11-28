@@ -911,6 +911,7 @@ mod tests {
                 .arg("-c")
                 .arg(&cmd)
                 .env("HOME", &home)
+                .env_remove("INFYNITAE_DIR")
                 .env("XDG_RUNTIME_DIR", &xdg)
                 .status()
                 .unwrap()
@@ -1042,8 +1043,8 @@ mod tests {
         assert_eq!(
             out[0],
             Action::Run(
-                "sh \"$HOME/infynitae/live/settings.sh\" log ACCENT '#7aa2f7' && \
-                 sh \"$HOME/infynitae/live/settings.sh\" set ACCENT '#000000' >/dev/null 2>&1"
+                "sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" log ACCENT '#7aa2f7' && \
+                 sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" set ACCENT '#000000' >/dev/null 2>&1"
                     .to_string()
             )
         );
@@ -1132,8 +1133,8 @@ mod tests {
         assert_eq!(
             out,
             vec![Action::Run(
-                "sh \"$HOME/infynitae/live/settings.sh\" log THEME_FROM_WALLPAPER - && \
-                 sh \"$HOME/infynitae/live/settings.sh\" set THEME_FROM_WALLPAPER 'shuffle' >/dev/null 2>&1"
+                "sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" log THEME_FROM_WALLPAPER - && \
+                 sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" set THEME_FROM_WALLPAPER 'shuffle' >/dev/null 2>&1"
                     .to_string()
             )]
         );
@@ -1149,8 +1150,8 @@ mod tests {
         assert_eq!(
             out,
             vec![Action::Run(
-                "sh \"$HOME/infynitae/live/settings.sh\" log ACCENT '#11111b' && \
-                 sh \"$HOME/infynitae/live/settings.sh\" set ACCENT '#44cc88' >/dev/null 2>&1"
+                "sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" log ACCENT '#11111b' && \
+                 sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" set ACCENT '#44cc88' >/dev/null 2>&1"
                     .to_string()
             )]
         );
@@ -1159,8 +1160,8 @@ mod tests {
         assert_eq!(
             out,
             vec![Action::Run(
-                "sh \"$HOME/infynitae/live/settings.sh\" log ACCENT '#11111b' && \
-                 sh \"$HOME/infynitae/live/settings.sh\" set ACCENT '#3b82f6' >/dev/null 2>&1"
+                "sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" log ACCENT '#11111b' && \
+                 sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" set ACCENT '#3b82f6' >/dev/null 2>&1"
                     .to_string()
             )]
         );
@@ -1171,8 +1172,8 @@ mod tests {
         assert_eq!(
             out,
             vec![Action::Run(
-                "sh \"$HOME/infynitae/live/settings.sh\" log THEME_SCHEME - && \
-                 sh \"$HOME/infynitae/live/settings.sh\" set THEME_SCHEME 'expressive' >/dev/null 2>&1"
+                "sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" log THEME_SCHEME - && \
+                 sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" set THEME_SCHEME 'expressive' >/dev/null 2>&1"
                     .to_string()
             )]
         );
@@ -1184,8 +1185,8 @@ mod tests {
         assert_eq!(
             out,
             vec![Action::Run(
-                "sh \"$HOME/infynitae/live/settings.sh\" log ACCENT '#11111b' && \
-                 sh \"$HOME/infynitae/live/settings.sh\" set ACCENT '#e05d44' >/dev/null 2>&1"
+                "sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" log ACCENT '#11111b' && \
+                 sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" set ACCENT '#e05d44' >/dev/null 2>&1"
                     .to_string()
             )]
         );

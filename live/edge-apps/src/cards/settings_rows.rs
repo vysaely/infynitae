@@ -117,7 +117,7 @@ impl ConfigSource {
         ConfigSource {
             config: crate::config::config_path().unwrap_or_default(),
             defaults: crate::paths::home()
-                .map(|h| h.join("infynitae/config/config"))
+                .map(|h| crate::paths::checkout_dir(&h).join("config/config"))
                 .unwrap_or_default(),
             path: std::env::var("PATH").unwrap_or_default(),
         }
@@ -152,14 +152,14 @@ impl Source for ConfigSource {
 /// The command a change runs: the old value logged (Undo reads it), the new one set, then the
 /// key's reload.
 pub fn change_command(key: &str, old: Option<&str>, new: &str, after: After) -> String {
-    let s = "sh \"$HOME/infynitae/live/settings.sh\"";
+    let s = "sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\"";
     let old = old.map_or("-".to_string(), sq);
     let mut cmd = format!(
         "{s} log {key} {old} && {s} set {key} {} >/dev/null 2>&1",
         sq(new)
     );
     if let After::Reload(part) = after {
-        cmd += &format!(" && sh \"$HOME/infynitae/live/infynitae-reload\" {part} >/dev/null 2>&1");
+        cmd += &format!(" && sh \"${{INFYNITAE_DIR:-$HOME/infynitae}}/live/infynitae-reload\" {part} >/dev/null 2>&1");
     }
     cmd
 }
@@ -820,13 +820,13 @@ pub(crate) mod tests {
     fn the_command_logs_sets_and_reloads_with_every_value_quoted() {
         assert_eq!(
             change_command("TEARING", Some("true"), "always", After::Save),
-            "sh \"$HOME/infynitae/live/settings.sh\" log TEARING 'true' && sh \"$HOME/infynitae/live/settings.sh\" set TEARING 'always' >/dev/null 2>&1"
+            "sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" log TEARING 'true' && sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" set TEARING 'always' >/dev/null 2>&1"
         );
         let c = change_command("FONT", None, "a'b; rm -rf /", After::Reload("fonts"));
         assert!(c.contains("log FONT - &&"));
         assert!(c.contains("set FONT 'a'\\''b; rm -rf /'"));
         assert!(
-            c.ends_with("&& sh \"$HOME/infynitae/live/infynitae-reload\" fonts >/dev/null 2>&1")
+            c.ends_with("&& sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/infynitae-reload\" fonts >/dev/null 2>&1")
         );
     }
 

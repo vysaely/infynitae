@@ -223,13 +223,13 @@ pub fn dnd_command(on: bool) -> String {
 
 pub fn replay_command(on: bool) -> String {
     format!(
-        "sh \"$HOME/infynitae/live/settings.sh\" set ENABLE_REPLAY_BUFFER {} >/dev/null 2>&1; sh \"$HOME/infynitae/live/infynitae-reload\" recorder >/dev/null 2>&1",
+        "sh \"${{INFYNITAE_DIR:-$HOME/infynitae}}/live/settings.sh\" set ENABLE_REPLAY_BUFFER {} >/dev/null 2>&1; sh \"${{INFYNITAE_DIR:-$HOME/infynitae}}/live/infynitae-reload\" recorder >/dev/null 2>&1",
         if on { "true" } else { "false" }
     )
 }
 
 pub const SAVE_CLIP_COMMAND: &str =
-    "sh \"$HOME/infynitae/live/launch.sh\" save-replay >/dev/null 2>&1";
+    "sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/launch.sh\" save-replay >/dev/null 2>&1";
 pub const CLIPS_COMMAND: &str =
     "d=\"${CLIPS_DIR:-$HOME/Videos/Clips}\"; mkdir -p \"$d\"; xdg-open \"$d\" >/dev/null 2>&1";
 

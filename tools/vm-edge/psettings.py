@@ -6,7 +6,12 @@ exec(open("/home/tester/vmlib.py").read())
 BIN = "/home/tester/.local/bin"
 EDGE = f"{BIN}/infynitae-edge-apps"
 P = f"^{BIN}/infynitae-edge"
-SET = "sh /home/tester/infynitae/live/settings.sh"
+# the checkout the session runs from (recorded at install), else ~/infynitae
+try:
+    _CHECKOUT = open("/home/tester/.config/infynitae/checkout").readline().strip() or "/home/tester/infynitae"
+except OSError:
+    _CHECKOUT = "/home/tester/infynitae"
+SET = f"sh {_CHECKOUT}/live/settings.sh"
 START = "SUPER+A top right 440 settings/games settings/windows settings/about"
 WATCH = ("GAME_MODE", "TEARING", "SUPER_ENTER_ACTION")
 def get(k): return sh(f"{SET} get {k}").strip().strip("'\"")

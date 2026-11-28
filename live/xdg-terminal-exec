@@ -2,6 +2,10 @@
 # xdg-terminal-exec: your terminal (TERMINAL in the Infynitae config), in the current folder or
 # --dir=PATH; with a command, that command in it. File managers' "Open Terminal Here" and GLib
 # (apps that run in a terminal) call this name. Other --option=value flags are ignored.
+
+# the checkout these scripts run from: the one install.sh recorded, else ~/infynitae
+INFYNITAE_DIR=; { IFS= read -r INFYNITAE_DIR < "$HOME/.config/infynitae/checkout"; } 2>/dev/null || :
+INFYNITAE_DIR="${INFYNITAE_DIR:-$HOME/infynitae}"
 while :; do
     case "$1" in
         --dir=*) cd "${1#--dir=}" || exit 1; shift ;;
@@ -10,4 +14,4 @@ while :; do
         *) break ;;
     esac
 done
-exec sh "$HOME/infynitae/live/launch.sh" terminal "$@"
+exec sh "$INFYNITAE_DIR/live/launch.sh" terminal "$@"

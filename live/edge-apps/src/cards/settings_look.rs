@@ -938,7 +938,7 @@ impl LookCard {
 }
 
 fn shuffle_command() -> &'static str {
-    "sh \"$HOME/infynitae/live/settings.sh\" wallpaper-colors shuffle >/dev/null 2>&1"
+    "sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" wallpaper-colors shuffle >/dev/null 2>&1"
 }
 
 impl Card for LookCard {
@@ -2012,8 +2012,8 @@ mod tests {
         assert_eq!(
             out,
             vec![Action::Run(
-                "sh \"$HOME/infynitae/live/settings.sh\" log COLOR_SCHEME - && \
-                 sh \"$HOME/infynitae/live/settings.sh\" set COLOR_SCHEME 'prefer-light' >/dev/null 2>&1"
+                "sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" log COLOR_SCHEME - && \
+                 sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" set COLOR_SCHEME 'prefer-light' >/dev/null 2>&1"
                     .to_string()
             )]
         );
@@ -2025,8 +2025,8 @@ mod tests {
         assert_eq!(
             out,
             vec![Action::Run(
-                "sh \"$HOME/infynitae/live/settings.sh\" log FOLDER_COLOR - && \
-                 sh \"$HOME/infynitae/live/settings.sh\" set FOLDER_COLOR 'theme' >/dev/null 2>&1"
+                "sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" log FOLDER_COLOR - && \
+                 sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" set FOLDER_COLOR 'theme' >/dev/null 2>&1"
                     .to_string()
             )]
         );
@@ -2040,8 +2040,8 @@ mod tests {
         assert_eq!(
             out,
             vec![Action::Run(
-                "sh \"$HOME/infynitae/live/settings.sh\" log THEME_SCHEME - && \
-                 sh \"$HOME/infynitae/live/settings.sh\" set THEME_SCHEME 'tonal' >/dev/null 2>&1"
+                "sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" log THEME_SCHEME - && \
+                 sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" set THEME_SCHEME 'tonal' >/dev/null 2>&1"
                     .to_string()
             )]
         );
@@ -2076,8 +2076,8 @@ mod tests {
         assert_eq!(
             out,
             vec![Action::Run(
-                "sh \"$HOME/infynitae/live/settings.sh\" log WINDOW_CORNERS - && \
-                 sh \"$HOME/infynitae/live/settings.sh\" set WINDOW_CORNERS '18' >/dev/null 2>&1"
+                "sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" log WINDOW_CORNERS - && \
+                 sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" set WINDOW_CORNERS '18' >/dev/null 2>&1"
                     .to_string()
             )]
         );
@@ -2088,8 +2088,8 @@ mod tests {
         assert_eq!(
             out,
             vec![Action::Run(
-                "sh \"$HOME/infynitae/live/settings.sh\" log BORDER_WIDTH - && \
-                 sh \"$HOME/infynitae/live/settings.sh\" set BORDER_WIDTH '2' >/dev/null 2>&1"
+                "sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" log BORDER_WIDTH - && \
+                 sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" set BORDER_WIDTH '2' >/dev/null 2>&1"
                     .to_string()
             )]
         );
@@ -2108,8 +2108,8 @@ mod tests {
                  bd=\"${XDG_RUNTIME_DIR:-$HOME/.cache}/infynitae/look-bad\"; \
                  case \"$v\" in \"#\"[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]) \
                  rm -f \"$bd\"/'ACCENT'; \
-                 sh \"$HOME/infynitae/live/settings.sh\" log ACCENT - && \
-                 sh \"$HOME/infynitae/live/settings.sh\" set ACCENT \"$v\" >/dev/null 2>&1 ;; \
+                 sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" log ACCENT - && \
+                 sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" set ACCENT \"$v\" >/dev/null 2>&1 ;; \
                  *) mkdir -p \"$bd\" && : > \"$bd\"/'ACCENT' ;; esac"
                     .to_string()
             )]
@@ -2167,8 +2167,8 @@ mod tests {
         assert_eq!(
             out,
             vec![Action::Run(format!(
-                "sh \"$HOME/infynitae/live/settings.sh\" log WALLPAPER '/home/u/Pictures/Wallpapers/sky.png' && \
-                 sh \"$HOME/infynitae/live/settings.sh\" set WALLPAPER {} >/dev/null 2>&1",
+                "sh \"${{INFYNITAE_DIR:-$HOME/infynitae}}/live/settings.sh\" log WALLPAPER '/home/u/Pictures/Wallpapers/sky.png' && \
+                 sh \"${{INFYNITAE_DIR:-$HOME/infynitae}}/live/settings.sh\" set WALLPAPER {} >/dev/null 2>&1",
                 sq("/home/u/Pictures/Wallpapers/dawn's light.jpg")
             ))]
         );
@@ -2246,8 +2246,8 @@ mod tests {
         assert_eq!(
             out,
             vec![Action::Run(
-                "sh \"$HOME/infynitae/live/settings.sh\" log WALLPAPER '/home/u/Pictures/Wallpapers/w01.png' && \
-                 sh \"$HOME/infynitae/live/settings.sh\" set WALLPAPER '/home/u/Pictures/Wallpapers/w25.png' >/dev/null 2>&1"
+                "sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" log WALLPAPER '/home/u/Pictures/Wallpapers/w01.png' && \
+                 sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" set WALLPAPER '/home/u/Pictures/Wallpapers/w25.png' >/dev/null 2>&1"
                     .to_string()
             )]
         );
@@ -2259,8 +2259,8 @@ mod tests {
             out,
             vec![Action::Run(
                 "v=$(\"$HOME/.local/bin/infynitae-edge\" ask --text --default '/home/u/Pictures/Wallpapers/w25.png' 'Picture') || exit 0; \
-                 sh \"$HOME/infynitae/live/settings.sh\" log WALLPAPER '/home/u/Pictures/Wallpapers/w01.png' && \
-                 sh \"$HOME/infynitae/live/settings.sh\" set WALLPAPER \"$v\" >/dev/null 2>&1"
+                 sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" log WALLPAPER '/home/u/Pictures/Wallpapers/w01.png' && \
+                 sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" set WALLPAPER \"$v\" >/dev/null 2>&1"
                     .to_string()
             )]
         );
@@ -2379,8 +2379,8 @@ mod tests {
         assert_eq!(
             out,
             vec![Action::Run(
-                "sh \"$HOME/infynitae/live/settings.sh\" log ACCENT - && \
-                 sh \"$HOME/infynitae/live/settings.sh\" set ACCENT '#44cc88' >/dev/null 2>&1"
+                "sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" log ACCENT - && \
+                 sh \"${INFYNITAE_DIR:-$HOME/infynitae}/live/settings.sh\" set ACCENT '#44cc88' >/dev/null 2>&1"
                     .to_string()
             )]
         );

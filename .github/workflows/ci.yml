@@ -83,6 +83,7 @@ jobs:
       - run: sh tools/test-env
       - run: sh tools/test-session
       - run: sh tools/test-install-lib
+      - run: sh tools/test-checkout
       - run: sh tools/test-log-caps
       # Ubuntu 24.04 lets AppArmor refuse unprivileged user namespaces, which bwrap needs: the
       # sandbox checks run bwrap for real, so they get them (Arch, the target, allows them)

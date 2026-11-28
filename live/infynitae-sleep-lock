@@ -9,12 +9,16 @@
 #     inhibitor is kept until logind's own limit.
 #   infynitae-sleep-lock wake: after the wake (PrepareForSleep false); the watcher then takes the
 #     inhibitor again
+
+# the checkout these scripts run from: the one install.sh recorded, else ~/infynitae
+INFYNITAE_DIR=; { IFS= read -r INFYNITAE_DIR < "$HOME/.config/infynitae/checkout"; } 2>/dev/null || :
+INFYNITAE_DIR="${INFYNITAE_DIR:-$HOME/infynitae}"
 set -u
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/infynitae"
 LOCK_LOG="$STATE_DIR/lock.log"
 LOG="$STATE_DIR/sleep-lock.log"
 mkdir -p "$STATE_DIR"
-for _r in "$(dirname "$0")/log-rotate.sh" "$HOME/infynitae/live/log-rotate.sh"; do
+for _r in "$(dirname "$0")/log-rotate.sh" "$INFYNITAE_DIR/live/log-rotate.sh"; do
     [ -f "$_r" ] && { . "$_r"; break; }
 done
 unset _r
@@ -25,7 +29,7 @@ log() {
 locker() {
     case "${SCREEN_LOCKER:-auto}" in
         auto | "")
-            for l in "$HOME/.local/bin/infynitae-lock" "$HOME/infynitae/live/lock/infynitae-lock"; do
+            for l in "$HOME/.local/bin/infynitae-lock" "$INFYNITAE_DIR/live/lock/infynitae-lock"; do
                 [ -x "$l" ] && { echo "$l"; return; }
             done
             command -v infynitae-lock 2>/dev/null

@@ -3,10 +3,14 @@
 # Watches orientation changes from iio-sensor-proxy via monitor-sensor and sets
 # the display transform using wlr-randr.
 
+# the checkout these scripts run from: the one install.sh recorded, else ~/infynitae
+INFYNITAE_DIR=; { IFS= read -r INFYNITAE_DIR < "$HOME/.config/infynitae/checkout"; } 2>/dev/null || :
+INFYNITAE_DIR="${INFYNITAE_DIR:-$HOME/infynitae}"
+
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/infynitae"
 LOG="$STATE_DIR/autorotate.log"
 mkdir -p "$STATE_DIR" 2>/dev/null || true
-for _r in "$(dirname "$0")/log-rotate.sh" "$HOME/infynitae/live/log-rotate.sh"; do
+for _r in "$(dirname "$0")/log-rotate.sh" "$INFYNITAE_DIR/live/log-rotate.sh"; do
     [ -f "$_r" ] && { . "$_r"; break; }
 done
 unset _r

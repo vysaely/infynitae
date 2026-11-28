@@ -335,7 +335,8 @@ fn search_dirs(home: Option<&Path>) -> Vec<PathBuf> {
     dirs
 }
 
-/// A helper as installed (`~/.local/bin`) and as built in the checkout (`~/infynitae/live`).
+/// A helper as installed (`~/.local/bin`) and as built in the [checkout](crate::checkout_dir)
+/// (`live`).
 fn helper_paths(home: Option<&Path>, name: &str) -> Vec<PathBuf> {
     let Some(home) = home else {
         return Vec::new();
@@ -346,7 +347,7 @@ fn helper_paths(home: Option<&Path>, name: &str) -> Vec<PathBuf> {
     };
     let mut paths = vec![
         home.join(".local/bin").join(name),
-        home.join("infynitae/live").join(dir).join(name),
+        crate::checkout_dir(home).join("live").join(dir).join(name),
     ];
     if name == "xwayland-satellite" {
         paths.push(PathBuf::from("/usr/bin/xwayland-satellite"));

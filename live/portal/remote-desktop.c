@@ -668,11 +668,27 @@ static void asked(GObject *source, GAsyncResult *res, gpointer data) {
     g_object_unref(source);
 }
 
+/* The checkout the session scripts run from, as they resolve it: the one install.sh recorded in
+ * ~/.config/infynitae/checkout (its first line), else ~/infynitae. */
+static char *checkout_dir(void) {
+    char *record = g_build_filename(g_get_home_dir(), ".config", "infynitae", "checkout", NULL);
+    char *dir = NULL;
+    if (g_file_get_contents(record, &dir, NULL, NULL)) {
+        dir[strcspn(dir, "\n")] = '\0';
+        if (!*dir)
+            g_clear_pointer(&dir, g_free);
+    }
+    g_free(record);
+    return dir ? dir : g_build_filename(g_get_home_dir(), "infynitae", NULL);
+}
+
 static void ask(Call *call) {
-    char *script = g_build_filename(g_get_home_dir(), "infynitae", "live", "remote",
+    char *checkout = checkout_dir();
+    char *script = g_build_filename(checkout, "live", "remote",
                                     call->consent == CONSENT_SCREEN ? "screenshare-ask"
                                                                     : "remote-desktop-ask",
                                     NULL);
+    g_free(checkout);
     GError *error = NULL;
     /* the app id as an argument after "--": never an option, never shell text */
     GSubprocess *p = g_subprocess_new(G_SUBPROCESS_FLAGS_STDOUT_PIPE, &error, script, "--",

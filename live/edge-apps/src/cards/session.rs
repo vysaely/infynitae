@@ -62,7 +62,7 @@ impl SessionAction {
     pub fn command(self) -> &'static str {
         match self {
             Self::Lock => {
-                "infynitae msg lock >/dev/null 2>&1 || setsid -f ~/.local/bin/infynitae-lock >/dev/null 2>&1 || setsid -f ~/infynitae/live/lock/infynitae-lock >/dev/null 2>&1"
+                "infynitae msg lock >/dev/null 2>&1 || setsid -f ~/.local/bin/infynitae-lock >/dev/null 2>&1 || setsid -f \"${INFYNITAE_DIR:-$HOME/infynitae}/live/lock/infynitae-lock\" >/dev/null 2>&1"
             }
             Self::Sleep => "systemctl suspend",
             Self::Logout => {

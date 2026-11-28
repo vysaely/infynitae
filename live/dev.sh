@@ -10,11 +10,10 @@ fi
 STATE_DIR="$HOME/.local/state/infynitae"
 mkdir -p "$STATE_DIR"
 
-if [ -f "$HOME/infynitae/infynitae-native/Cargo.toml" ]; then
-    REPO_DIR="$HOME/infynitae/infynitae-native"
-else
-    REPO_DIR="$HOME/infynitae"
-fi
+# the checkout these scripts run from: the one install.sh recorded, else ~/infynitae
+INFYNITAE_DIR=; { IFS= read -r INFYNITAE_DIR < "$HOME/.config/infynitae/checkout"; } 2>/dev/null || :
+INFYNITAE_DIR="${INFYNITAE_DIR:-$HOME/infynitae}"
+REPO_DIR="$INFYNITAE_DIR"
 
 case "$ACTION" in
     reload|r)

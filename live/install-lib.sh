@@ -5,7 +5,7 @@ INFY_STATE="${XDG_STATE_HOME:-$HOME/.local/state}/infynitae"
 # the optional parts left out at install (`SKIP="keyring fonts"`); infynitae-update keeps them out
 INSTALL_CHOICES="$INFY_STATE/install-choices"
 INFY_LIVE="$(cd "$(dirname "${BASH_SOURCE:-$0}")" 2>/dev/null && pwd -P)"
-[ -f "$INFY_LIVE/packages.txt" ] || INFY_LIVE="$HOME/infynitae/live"
+[ -f "$INFY_LIVE/packages.txt" ] || INFY_LIVE="${INFYNITAE_DIR:-$HOME/infynitae}/live"
 
 # pacman holds a lock while it runs: wait for another package manager (an update in a terminal,
 # pamac) instead of failing; a lock nothing holds is left by a crashed pacman, and removing it
@@ -300,13 +300,9 @@ LIST
 
 # Copy live/ scripts to ~/infynitae/live when updating from another checkout.
 sync_live_dir() {
-    local src="$1" src_live dst_live
-    mkdir -p "$HOME/infynitae/live"
-    src_live="$(cd "$src/live" 2>/dev/null && pwd -P || echo "")"
-    dst_live="$(cd "$HOME/infynitae/live" 2>/dev/null && pwd -P || echo "")"
-    if [ -n "$src_live" ] && [ "$src_live" != "$dst_live" ]; then
-        cp -rf "$src/live/"* "$HOME/infynitae/live/"
-    fi
+    # the scripts run from the checkout itself (recorded once, ~/.config/infynitae/checkout):
+    # nothing is copied into ~/infynitae any more
+    record_checkout "$1"
 }
 
 # Swap each installed binary with its .previous generation in place.
@@ -401,6 +397,16 @@ EOF
 $(infynitae_binary_names)
 EOF
     fi
+}
+
+# The checkout at $1 is the one Infynitae runs from: the session scripts, the programs in
+# ~/.local/bin, the compositor, the edge and the portal read this record (an install from before
+# it has none, and they take ~/infynitae). Replaced by rename: a script reading it meanwhile gets
+# the old or the new path, never half of one.
+record_checkout() {
+    mkdir -p "$HOME/.config/infynitae"
+    printf '%s\n' "$1" > "$HOME/.config/infynitae/checkout.new" \
+        && mv -f "$HOME/.config/infynitae/checkout.new" "$HOME/.config/infynitae/checkout"
 }
 
 # A file as root, only when it changed ($1 source, $2 destination, $3 mode).
