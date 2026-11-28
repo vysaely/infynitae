@@ -1,8 +1,9 @@
 //! Cluster grid (owner, 2026-11-28; `infynitae msg arrange grid`, `BIND_CLUSTER_LAYOUT`, no
-//! default key): the focused window's cluster in n x n slots, n = ceil(sqrt(k)), with real
-//! clients. Every window keeps its size (no configure asks for another), the focused window takes
-//! the first slot and the others follow in reading order; a column is as wide as its widest
-//! window, a row as high as its tallest, 12 px apart, each window centred in its slot.
+//! default key): the focused window's cluster n to a row, n = ceil(sqrt(k)), with real clients.
+//! Every window keeps its size (no configure asks for another), the focused window comes first
+//! and the others follow in reading order. Packed: in a row each window at its own width, 12 px
+//! after the one before; rows 12 px apart, as high as their tallest window, each window at its
+//! row's top.
 
 mod common;
 
@@ -55,15 +56,18 @@ fn shell(r: &mut Rig, cmd: ShellCommand) {
     r.frame();
 }
 
-/// `k` windows of mixed sizes, all opened centred in the view (the policy here), one over the
-/// other; the one at `k / 2` focused and the grid run.
-fn grid_of(k: usize) {
+/// `sizes` opened centred in the view (the policy here), one over the other; the one at `lead`
+/// focused and the grid run. Checks no window is resized or asked for another size, and that
+/// the windows, in the order the owner's rule gives (the focused one first, the others in
+/// reading order), are packed n to a row from the cluster's top-left corner. Returns the
+/// labels in that order.
+fn grid_of_sizes(sizes: &[(i32, i32)], lead: usize) -> Vec<&'static str> {
+    let k = sizes.len();
     let mut r = Rig::new(Lockstep::new(Some(a_1080())));
-    let wins: Vec<(ElementId, usize)> = (0..k).map(|i| open(&mut r, LABELS[i], SIZES[i])).collect();
-    let focused = wins[k / 2].0;
+    let wins: Vec<(ElementId, usize)> = (0..k).map(|i| open(&mut r, LABELS[i], sizes[i])).collect();
     let element = ElementRef {
         instance: r.ls.state.core().stage().instance(),
-        element: focused,
+        element: wins[lead].0,
     };
     shell(&mut r, ShellCommand::Focus { element });
     let before: Vec<_> = wins.iter().map(|&(e, _)| rect(&r, e)).collect();
@@ -104,42 +108,55 @@ fn grid_of(k: usize) {
         }
     }
 
-    // the slots by the owner's rule, from the windows' places before: the focused window in
-    // the first, the others in reading order
-    let lead = k / 2;
+    // the order by the owner's rule, from the windows' places before: all share a centre, so
+    // reading order is left to right, the widest first
     let mut order: Vec<usize> = (0..k).filter(|&i| i != lead).collect();
     order.sort_by_key(|&i| (before[i].0, before[i].1));
     order.insert(0, lead);
     let n = (1..).find(|n| n * n >= k).unwrap();
-    let (mut col_w, mut row_h) = (vec![0; n], vec![0; n]);
-    for (slot, &i) in order.iter().enumerate() {
-        col_w[slot % n] = col_w[slot % n].max(before[i].2);
-        row_h[slot / n] = row_h[slot / n].max(before[i].3);
-    }
     let x0 = before.iter().map(|b| b.0).min().unwrap();
     let y0 = before.iter().map(|b| b.1).min().unwrap();
-    for (slot, &i) in order.iter().enumerate() {
-        let (col, row) = (slot % n, slot / n);
-        let sx = x0 + col_w[..col].iter().map(|w| w + 12).sum::<i64>();
-        let sy = y0 + row_h[..row].iter().map(|h| h + 12).sum::<i64>();
-        let want = (
-            sx + (col_w[col] - before[i].2) / 2,
-            sy + (row_h[row] - before[i].3) / 2,
-        );
-        assert_eq!(
-            (after[i].0, after[i].1),
-            want,
-            "{k}: {} in slot {slot}",
-            LABELS[i]
-        );
-        // centred: the slot's row and column line up the windows' middles
-        let mid = (after[i].0 + after[i].2 / 2, after[i].1 + after[i].3 / 2);
-        assert_eq!(mid, (sx + col_w[col] / 2, sy + row_h[row] / 2));
+    let mut top = y0;
+    for (row, slots) in order.chunks(n).enumerate() {
+        // the row's first window at the left edge, each next one 12 px after the one before
+        let mut x = x0;
+        for &i in slots {
+            assert_eq!(
+                (after[i].0, after[i].1),
+                (x, top),
+                "{k}: {} in row {row}, at its top",
+                LABELS[i]
+            );
+            x += after[i].2 + 12;
+        }
+        top += slots.iter().map(|&i| after[i].3).max().unwrap() + 12;
     }
-    // the slots used: n columns in the first row, ceil(k / n) rows; the rest stay empty
-    let mut tops: Vec<i64> = order.iter().map(|&i| after[i].1 + after[i].3 / 2).collect();
-    tops.dedup();
-    assert_eq!(tops.len(), k.div_ceil(n), "{k}: rows used");
+    order.iter().map(|&i| LABELS[i]).collect()
+}
+
+/// `k` of the ten mixed sizes, the one at `k / 2` focused.
+fn grid_of(k: usize) {
+    grid_of_sizes(&SIZES[..k], k / 2);
+}
+
+/// The owner's case (2026-11-28): a small editor beside big terminals and medium windows sat in
+/// a slot sized by the big ones, far from its neighbours. Three big terminals, the small editor
+/// focused, two medium windows: three to a row, the editor first and 12 px left of the first
+/// terminal, at the row's top.
+#[test]
+fn grid_packs_a_small_window_beside_big_ones() {
+    let order = grid_of_sizes(
+        &[
+            (900, 600),
+            (880, 620),
+            (860, 580),
+            (400, 300),
+            (660, 500),
+            (640, 480),
+        ],
+        3,
+    );
+    assert_eq!(order, ["D", "A", "B", "C", "E", "F"]);
 }
 
 #[test]
@@ -152,9 +169,9 @@ fn grid_of_four_windows_is_two_by_two() {
     grid_of(4);
 }
 
-/// 3 x 3 with four slots empty: a row of three, a row of two, the third row unused.
+/// Three to a row: a row of three, a row of two.
 #[test]
-fn grid_of_five_windows_is_three_by_three_with_four_empty() {
+fn grid_of_five_windows_is_a_row_of_three_and_a_row_of_two() {
     grid_of(5);
 }
 

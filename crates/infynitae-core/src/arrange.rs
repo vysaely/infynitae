@@ -4,10 +4,12 @@
 //! (docs/DECISIONS.md, 2026-11-06 and 2026-11-21). Nothing arranges by itself: a window that
 //! closes or is minimized leaves its gap (owner, 2026-11-28).
 //!
-//! - grid (owner, 2026-11-28, in place of spiral, tiles and line): k windows in n x n slots,
+//! - grid (owner, 2026-11-28, in place of spiral, tiles and line): k windows n to a row,
 //!   n = ceil(sqrt(k)) (1, 2x2, 3x3, ...), filled row by row, the focused window first and the
-//!   others in reading order; the slots left over stay empty. A column is as wide as its widest
-//!   window, a row as high as its tallest, the gap between; each window is centred in its slot.
+//!   others in reading order. Packed (owner, 2026-11-28: a small
+//!   window sat far from its neighbours in a slot sized by the big ones): in a row each window
+//!   at its own width, the gap between; rows the gap apart, as high as their tallest window,
+//!   each window at its row's top.
 //! - by app (Super+Shift+G): one row per app.
 //!
 //! Both keep every window's size (no configure is sent) and start at the cluster's top-left
@@ -90,51 +92,31 @@ pub(crate) fn reading_order(rects: &[Cell]) -> Vec<usize> {
     order
 }
 
-/// Grid: the slots of `sizes` in order, n x n from `origin` with n = ceil(sqrt(len)), filled row
-/// by row; each column as wide as its widest window, each row as high as its tallest, `GAP`
-/// between. Slots in order (one per size; the empty ones are not returned).
+/// Grid: the places of `sizes` in order, n to a row from `origin` with n = ceil(sqrt(len)),
+/// packed as `rows` packs them.
 pub(crate) fn grid(sizes: &[(i64, i64)], origin: (i64, i64)) -> Vec<Cell> {
     let mut n = 1;
     while n * n < sizes.len() {
         n += 1;
     }
-    let (mut col_w, mut row_h) = (vec![0; n], vec![0; n]);
-    for (i, &(w, h)) in sizes.iter().enumerate() {
-        col_w[i % n] = col_w[i % n].max(w);
-        row_h[i / n] = row_h[i / n].max(h);
-    }
-    let starts = |from: i64, sides: &[i64]| -> Vec<i64> {
-        let mut at = from;
-        sides
-            .iter()
-            .map(|&s| {
-                let start = at;
-                at += s + GAP;
-                start
-            })
-            .collect()
-    };
-    let (xs, ys) = (starts(origin.0, &col_w), starts(origin.1, &row_h));
-    (0..sizes.len())
-        .map(|i| Cell {
-            x: xs[i % n],
-            y: ys[i / n],
-            w: col_w[i % n],
-            h: row_h[i / n],
-        })
-        .collect()
+    rows(sizes, origin, |i| i % n == 0)
 }
 
-/// By app: `sizes` in order at their own sizes, left to right from `origin`, a new row where
-/// `apps` changes; rows `GAP` apart, as high as their tallest window, as wide as they need.
+/// By app: `sizes` in order, a new row where `apps` changes; rows as wide as they need.
 pub(crate) fn by_app(sizes: &[(i64, i64)], apps: &[&str], origin: (i64, i64)) -> Vec<Cell> {
+    rows(sizes, origin, |i| apps[i - 1] != apps[i])
+}
+
+/// `sizes` in order at their own sizes, left to right from `origin` with `GAP` between, a new
+/// row at each index after the first for which `new_row` holds; rows `GAP` apart, as high as
+/// their tallest window, each window at its row's top.
+fn rows(sizes: &[(i64, i64)], origin: (i64, i64), new_row: impl Fn(usize) -> bool) -> Vec<Cell> {
     let (mut x, mut y, mut row_h) = (origin.0, origin.1, 0);
     sizes
         .iter()
-        .zip(apps)
         .enumerate()
-        .map(|(i, (&(w, h), app))| {
-            if i > 0 && apps[i - 1] != *app {
+        .map(|(i, &(w, h))| {
+            if i > 0 && new_row(i) {
                 (x, y, row_h) = (origin.0, y + row_h + GAP, 0);
             }
             let cell = Cell { x, y, w, h };
@@ -143,14 +125,6 @@ pub(crate) fn by_app(sizes: &[(i64, i64)], apps: &[&str], origin: (i64, i64)) ->
             cell
         })
         .collect()
-}
-
-/// The anchor of a window of `size` centred in `cell`.
-pub(crate) fn centred_in(cell: Cell, size: (i64, i64)) -> crate::geom::CanvasPoint {
-    crate::geom::CanvasPoint {
-        x: cell.x + (cell.w - size.0) / 2,
-        y: cell.y + (cell.h - size.1) / 2,
-    }
 }
 
 impl Core {
@@ -193,9 +167,9 @@ impl Core {
             .collect()
     }
 
-    /// Arranges `members` by `layout`, `first` in the grid's first slot. Each window keeps its
-    /// size and is centred in its slot; its children move with it. Returns the slots' bounding
-    /// box `(x, y, w, h)`, or `None` when no window is arranged.
+    /// Arranges `members` by `layout`, `first` first in the grid. Each window keeps its
+    /// size; its children move with it. Returns the windows' bounding box `(x, y, w, h)`, or
+    /// `None` when no window is arranged.
     pub(crate) fn arrange(
         &mut self,
         members: &[ElementId],
@@ -250,7 +224,10 @@ impl Core {
             .collect();
         for (&i, &cell) in order.iter().zip(&cells) {
             let (e, old) = (ids[i], rects[i]);
-            let at = centred_in(cell, (old.w, old.h));
+            let at = crate::geom::CanvasPoint {
+                x: cell.x,
+                y: cell.y,
+            };
             let (dx, dy) = (at.x - old.x, at.y - old.y);
             if self.place_by_shell(e, at, out).is_err() {
                 continue;
@@ -456,19 +433,20 @@ mod tests {
         assert_eq!(reading_order(&rects), vec![1, 3, 0, 2]);
     }
 
-    /// Five windows: 3 x 3 slots, two rows used and four slots left empty; a column as wide as
-    /// its widest window, a row as high as its tallest, the gap between. n x n for n = 1..=4.
+    /// Five windows: three to a row, two rows used; in a row each window at its own width with
+    /// the gap between, the next row the gap below the tallest, every window at its row's top.
+    /// n to a row for n = 1..=4.
     #[test]
-    fn grid_fills_square_slots_row_by_row() {
+    fn grid_packs_n_windows_to_a_row() {
         let sizes = [(400, 300), (200, 100), (300, 500), (100, 100), (250, 200)];
         assert_eq!(
             grid(&sizes, (10, 20)),
             vec![
-                cell(10, 20, 400, 500),
-                cell(10 + 412, 20, 250, 500),
-                cell(10 + 412 + 262, 20, 300, 500),
-                cell(10, 20 + 512, 400, 200),
-                cell(10 + 412, 20 + 512, 250, 200),
+                cell(10, 20, 400, 300),
+                cell(10 + 412, 20, 200, 100),
+                cell(10 + 412 + 212, 20, 300, 500),
+                cell(10, 20 + 512, 100, 100),
+                cell(10 + 112, 20 + 512, 250, 200),
             ]
         );
         for (k, n) in [(1, 1), (2, 2), (4, 2), (5, 3), (9, 3), (10, 4), (16, 4)] {
@@ -548,8 +526,8 @@ mod tests {
         let before: Vec<_> = [top, mini, full].map(|e| anchor(&d.c, e)).to_vec();
         let mut fx = Vec::new();
         assert!(d.c.arrange_cluster(q, ClusterLayout::Grid, None, &mut fx));
-        // Q and P in one row, the row as high as P: Q centred in its slot
-        assert_eq!(anchor(&d.c, q), (-500, 50));
+        // Q and P in one row, both at its top
+        assert_eq!(anchor(&d.c, q), (-500, 0));
         assert_eq!(anchor(&d.c, p), (-500 + 412, 0));
         assert_eq!(
             anchor(&d.c, dialog),
@@ -567,7 +545,7 @@ mod tests {
         // pressed on the dialog, its parent's cluster is arranged, the parent first
         assert!(d.c.arrange_cluster(dialog, ClusterLayout::Grid, None, &mut fx));
         assert_eq!(anchor(&d.c, p), (-500, 0));
-        assert_eq!(anchor(&d.c, q), (-500 + 612, 50));
+        assert_eq!(anchor(&d.c, q), (-500 + 612, 0));
         assert_eq!(anchor(&d.c, dialog), (200 - 500, 150));
         for e in [p, q, dialog] {
             assert_eq!(asked(&fx, e), None, "no window is asked for another size");
@@ -590,9 +568,9 @@ mod tests {
         assert_eq!(anchor(&d.c, b), (-700, -450));
         d.c.set_focus(&mut d.i, Some(b)).unwrap();
         d.c.shell_command(&mut d.s, cmd).unwrap();
-        // B, focused, in the first slot; A beside it, centred in a slot as high as B
+        // B, focused, first; A beside it, at the row's top
         assert_eq!(anchor(&d.c, b), (-900, -500));
-        assert_eq!(anchor(&d.c, a), (-900 + 512, -450));
+        assert_eq!(anchor(&d.c, a), (-900 + 512, -500));
     }
 
     /// Super+Shift+G (owner, 2026-11-22): sizes kept, nothing asked to resize, one row per app.

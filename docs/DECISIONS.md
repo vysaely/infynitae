@@ -253,7 +253,10 @@ these by date, e.g. "(owner, 2026-10-24)".
   changing the windows themselves", "dont make it auto fill out the lost window place"): one
   square grid in place of spiral, tiles and line, every window at its own size, empty slots left
   empty; `CLUSTER_SORT` "tidy" removed, nothing re-arranges by itself; "app" (off by default)
-  opens a new window beside its app's window in view. docs/WINDOWS.md "Cluster layouts".
+  opens a new window beside its app's window in view. Later the same day (owner: "make it
+  dynamic so windows go close to where the others are"): the grid is packed, each window at its
+  own width in its row and at the row's top, 12 px apart, no column or slot sizes.
+  docs/WINDOWS.md "Cluster layouts".
 - **Drag-and-drop is offered** (2026-11-23, owner: Discord's server list "doesnt hold the mouse";
   refused since 2026-10-16). An app drags only while you hold a press on it; the drag goes to the
   window under the pointer and drops there at the release, and the app's drag icon follows the
