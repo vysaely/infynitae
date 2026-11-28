@@ -70,6 +70,15 @@ problems=$(
                         esac
                     done
                     ;;
+                # "tidy" was removed (owner, 2026-11-28): nothing re-arranges by itself
+                CLUSTER_SORT)
+                    value=$(sh -c "$line"'; eval "printf %s \"\$'"$key"'\""' 2>/dev/null)
+                    for word in $(printf '%s' "$value" | tr ',' ' '); do
+                        case "$word" in
+                            [Tt][Ii][Dd][Yy]) echo "line $n: CLUSTER_SORT: \"tidy\" was removed (windows are sorted only by hand), ignored" ;;
+                        esac
+                    done
+                    ;;
                 OUTPUT_ORDER)
                     order_val=$(sh -c "$line"'; eval "printf %s \"\$'"$key"'\""' 2>/dev/null)
                     order_line=$n

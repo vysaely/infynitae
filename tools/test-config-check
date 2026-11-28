@@ -75,6 +75,17 @@ EOF
 got=$(HOME=$T sh "$T/infynitae/live/config-check" 2>&1 || true)
 check "OUTPUT_ORDER with left-to-right layout produces no warning" "$got" ""
 
+# Test 6: CLUSTER_SORT "tidy" (removed 2026-11-28) is named and ignored, alone or beside "app"
+cat << 'EOF' > "$cfg"
+CLUSTER_SORT="app"
+CLUSTER_SORT="tidy app"
+CLUSTER_SORT='Tidy,app'
+EOF
+
+got=$(HOME=$T sh "$T/infynitae/live/config-check" 2>&1 || true)
+check "config-check names a removed CLUSTER_SORT word" "$got" "line 2: CLUSTER_SORT: \"tidy\" was removed (windows are sorted only by hand), ignored
+line 3: CLUSTER_SORT: \"tidy\" was removed (windows are sorted only by hand), ignored"
+
 if [ "$fails" = 0 ]; then
     echo "test-config-check: passed"
 else

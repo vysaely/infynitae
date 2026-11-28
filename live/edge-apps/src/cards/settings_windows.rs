@@ -156,9 +156,7 @@ pub const TABLE: &[Setting] = &[
         says: "Super+Shift+G sorts them by hand",
         control: Control::Pick(&[
             ("off", "Stay where they are"),
-            ("tidy", "Close the gap a window leaves"),
             ("app", "Open beside their app"),
-            ("tidy app", "Both"),
         ]),
         after: After::Save,
         more: true,
