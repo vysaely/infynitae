@@ -2,10 +2,10 @@
 
 use crate::history::{self, CpuPrev};
 use crate::model::{
-    format_bytes, iso_utc, parse_timestamp_to_unix, round1, round2, BtrfsMetadataInfo,
-    CompositorCounters, CompositorInfo, CpuInfo, DiskInfo, GpuInfo, HealthItem, HealthSnapshot,
-    HistorySample, MemoryInfo, NvmeInfo, PressureInfo, PsiLine, PsiResource, State, SwapDeviceInfo,
-    SystemdInfo, UpdatesInfo, SCHEMA_VERSION,
+    format_bytes, iso_utc, local_display_time, parse_timestamp_to_unix, round1, round2,
+    BtrfsMetadataInfo, CompositorCounters, CompositorInfo, CpuInfo, DiskInfo, GpuInfo, HealthItem,
+    HealthSnapshot, HistorySample, MemoryInfo, NvmeInfo, PressureInfo, PsiLine, PsiResource, State,
+    SwapDeviceInfo, SystemdInfo, UpdatesInfo, SCHEMA_VERSION,
 };
 use crate::sys::{read_file_tail, run_cmd, statvfs_sizes, SysEnv};
 use std::collections::HashMap;
@@ -427,6 +427,10 @@ pub fn evaluate_disk_space(mount: &str, total_bytes: u64, available_bytes: u64) 
     let free_pct = (available_bytes as f64 / total_bytes as f64) * 100.0;
     let free_s = format_bytes(available_bytes);
     let total_s = format_bytes(total_bytes);
+    // A tiny partition (a USB stick's boot part, an EFI part) is full by design: never a warning.
+    if total_bytes < 256 * MIB {
+        return (State::Ok, format!("{mount} has {free_s} free of {total_s}"));
+    }
     let is_small = total_bytes < 20 * GIB;
     let problem_rule = if is_small {
         "problem below 5% free"
@@ -2486,7 +2490,10 @@ pub fn render_now_text(snap: &HealthSnapshot) -> String {
             if p == 1 { "" } else { "s" }
         ),
     };
-    out.push_str(&format!("{header} ({})\n", snap.time));
+    let shown = parse_timestamp_to_unix(&snap.time)
+        .map(|t| local_display_time(t, t))
+        .unwrap_or_else(|| snap.time.clone());
+    out.push_str(&format!("{header} ({shown})\n"));
     for item in &snap.items {
         let tag = match item.state {
             State::Problem => "PROBLEM",

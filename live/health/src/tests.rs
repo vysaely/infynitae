@@ -919,3 +919,16 @@ fn history_appends_rotates_at_7_days_and_notifies_once_per_problem_transition() 
     assert!(logged.contains("-u critical"), "{logged}");
     assert!(logged.contains("Btrfs metadata /"), "{logged}");
 }
+
+#[test]
+fn a_tiny_partition_is_never_a_warning() {
+    let (state, _) = crate::collect::evaluate_disk_space(
+        "/run/media/u/VTOYEFI",
+        32 * 1024 * 1024,
+        4 * 1024 * 1024,
+    );
+    assert_eq!(state, State::Ok);
+    let (state, _) =
+        crate::collect::evaluate_disk_space("/boot", 1024 * 1024 * 1024, 40 * 1024 * 1024);
+    assert_eq!(state, State::Problem);
+}
