@@ -226,7 +226,6 @@ pub struct PanelFrame<'a> {
     pub width: u32,
     pub height: u32,
     pub stride: usize,
-    pub force_opaque: bool,
     pub y_invert: bool,
     pub transform: OutputTransform,
 }
@@ -285,11 +284,10 @@ pub fn cut_transformed_capture(
                 dst_data[dst_off] = frame.data[src_off];
                 dst_data[dst_off + 1] = frame.data[src_off + 1];
                 dst_data[dst_off + 2] = frame.data[src_off + 2];
-                dst_data[dst_off + 3] = if frame.force_opaque {
-                    0xff
-                } else {
-                    frame.data[src_off + 3]
-                };
+                // the picture is what the screen shows, and the screen shows no alpha (the DRM
+                // backend scans out Xrgb8888 first); an Argb8888 capture keeps the renderer's
+                // alpha, below 255 where a window left it so
+                dst_data[dst_off + 3] = 0xff;
             }
         }
     }
@@ -786,7 +784,6 @@ mod tests {
                 width: phys_w,
                 height: phys_h,
                 stride,
-                force_opaque: false,
                 y_invert: false,
                 transform: OutputTransform::R90,
             },

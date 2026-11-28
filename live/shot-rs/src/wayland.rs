@@ -1343,13 +1343,11 @@ impl Dispatch<zwlr_screencopy_frame_v1::ZwlrScreencopyFrameV1, usize> for App {
                         .as_mut()
                         .ok_or_else(|| "missing screencopy shm pool".to_string())?;
                     let transform = state.outputs[job.output_idx].transform;
-                    let force_opaque = offered.format == wl_shm::Format::Xrgb8888;
                     upright_surface_from_panel(&PanelFrame {
                         data: pool.mmap(),
                         width: offered.width,
                         height: offered.height,
                         stride: offered.stride as usize,
-                        force_opaque,
                         y_invert: job.y_invert,
                         transform,
                     })
@@ -3393,6 +3391,39 @@ mod tests {
         let outcome = client.join().unwrap().unwrap();
         assert!(matches!(outcome, Outcome::Plain(_)));
         assert_eq!(mock.shared.0.lock().unwrap().redrawn_while_held, 0);
+    }
+
+    /// An Argb8888 capture carried the renderer's alpha, which the screen does not show: where
+    /// a window left it below 255, the frozen overlay let the live screen show through.
+    #[test]
+    fn the_frozen_overlay_is_opaque_when_the_capture_has_alpha() {
+        let (mock, conn) = MockWayland::start(vec![MockOutputSpec {
+            width: 800,
+            height: 600,
+            x: 0,
+            y: 0,
+            name: "DP-1",
+        }]);
+        // premultiplied, alpha 128
+        mock.shared.0.lock().unwrap().screen_bg = [100, 50, 25, 128];
+        let client = std::thread::spawn(move || {
+            run_wayland_with_conn(
+                &conn,
+                Mode::Region,
+                false,
+                test_look(),
+                Snapshot::default(),
+                None,
+            )
+        });
+        mock.wait_until(|st| st.focused_surface.is_some());
+        let alpha = mock.shared.0.lock().unwrap().last_overlay_center_alpha;
+        assert!(mock.send_key_if_focused(KEY_ESC, false));
+        assert!(matches!(
+            client.join().unwrap().unwrap(),
+            Outcome::Cancelled
+        ));
+        assert_eq!(alpha, Some(255));
     }
 
     #[test]
