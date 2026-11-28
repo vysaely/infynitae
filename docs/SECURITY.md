@@ -242,3 +242,34 @@ systemd bus, so `setpriv` + `prctl` are used in place without adding extra super
 Input-reading paths (`config_line` in `infynitae-wayland`, `parse_request` / `json::parse` in
 `infynitae-ipc`, and `clipboard_entry` in `live/edge-apps`) have standalone `cargo-fuzz` targets
 in `fuzz/` (run weekly in CI) plus deterministic crash and seed corpus unit tests in each crate.
+
+
+## What is ours, what is left to others, what needs upkeep
+
+Ours, and where a security bug would be ours to fix:
+
+- The powers and their lists (`ALLOW_*`, `crates/infynitae-wayland/src/trust.rs`) and the sandbox
+  socket (`live/sandbox-socket`).
+- The portal (`live/portal`): shortcuts, screen sharing and remote desktop, the screen saver.
+- The lock screen (`live/lock`): it asks PAM (`/etc/pam.d/infynitae`) and decides nothing itself.
+- The polkit agent (`live/polkit`): the password dialog only; polkitd decides.
+- The password store for apps: the session starts it (gnome-keyring, or infynitae-keyring, a
+  project of its own, once its switch is made) and the lock's PAM file opens it.
+- Clipboard history (above): the switch and the sensitive mark; the store is cliphist's.
+- The vendored Smithay with its patches and xwayland-satellite with its patch (`patches/`).
+
+Left on purpose to projects that keep them up to date, through Arch's packages: crypto libraries,
+PAM, polkitd, Xwayland, PipeWire, the kernel, bwrap (Windows and Android programs above),
+gnome-keyring, cliphist, umu and Waydroid.
+
+What needs upkeep:
+
+- System packages: `sudo pacman -Syu`. `infynitae-update-check` (a user timer: after login, then
+  every 6 hours; `UPDATE_CHECK`) counts waiting packages with `checkupdates` (pacman-contrib) and
+  Infynitae changes, says so once in a notification, and the This PC card shows the counts.
+- Rust dependencies: the "Advisories" CI job checks every shipped `Cargo.lock`, and
+  xwayland-satellite's at the commit we build, against the RustSec database on every push and
+  each night; Dependabot opens weekly update pull requests (`.github/dependabot.yml`).
+- The vendored Smithay and xwayland-satellite get no fix by themselves: `tools/upstream-check`
+  lists their newer releases and the security-relevant entries since ours, and
+  `patches/README.md` says how to take a fix in.
