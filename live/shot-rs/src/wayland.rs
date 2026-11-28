@@ -27,10 +27,7 @@ use smithay_client_toolkit::shell::WaylandSurface;
 use smithay_client_toolkit::shm::raw::RawPool;
 use smithay_client_toolkit::shm::slot::{Buffer, SlotPool};
 use smithay_client_toolkit::shm::{Shm, ShmHandler};
-use smithay_client_toolkit::{
-    delegate_compositor, delegate_keyboard, delegate_layer, delegate_output, delegate_pointer,
-    delegate_registry, delegate_seat, delegate_shm, registry_handlers,
-};
+use smithay_client_toolkit::{delegate_dispatch2, delegate_registry, registry_handlers};
 use wayland_protocols::wp::cursor_shape::v1::client::{
     wp_cursor_shape_device_v1, wp_cursor_shape_manager_v1,
 };
@@ -1883,13 +1880,7 @@ impl ProvidesRegistryState for App {
     registry_handlers![OutputState, SeatState];
 }
 
-delegate_compositor!(App);
-delegate_output!(App);
-delegate_shm!(App);
-delegate_layer!(App);
-delegate_seat!(App);
-delegate_keyboard!(App);
-delegate_pointer!(App);
+delegate_dispatch2!(App);
 delegate_registry!(App);
 
 #[cfg(test)]

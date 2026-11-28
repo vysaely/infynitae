@@ -494,7 +494,7 @@ struct RunningEdge {
     wayland: WaylandServer,
     edge: ChildGuard,
     dbus_addr: String,
-    probe: zbus::blocking::Connection,
+    probe: zbus::Connection,
 }
 
 fn spawn_test_edge(tag: &str, config: &str, boxes_file: Option<&Path>) -> Option<RunningEdge> {
@@ -550,11 +550,9 @@ fn spawn_test_edge(tag: &str, config: &str, boxes_file: Option<&Path>) -> Option
     }
     let mut edge = ChildGuard::new(cmd.spawn().unwrap());
 
-    let probe = zbus::blocking::connection::Builder::address(dbus_addr.as_str())
-        .unwrap()
-        .build()
-        .unwrap();
-    let dbus_proxy = zbus::blocking::fdo::DBusProxy::new(&probe).unwrap();
+    let probe =
+        zbus::block_on(zbus::connection::Builder::address(dbus_addr.as_str()).build()).unwrap();
+    let dbus_proxy = zbus::block_on(zbus::fdo::DBusProxy::new(&probe)).unwrap();
     let notify_name = zbus::names::BusName::try_from("org.freedesktop.Notifications").unwrap();
     let tray_name = zbus::names::BusName::try_from("org.kde.StatusNotifierWatcher").unwrap();
 
@@ -564,12 +562,8 @@ fn spawn_test_edge(tag: &str, config: &str, boxes_file: Option<&Path>) -> Option
             panic!("infynitae-edge-apps exited early with {status}");
         }
         let ready = wayland.commits.load(Ordering::Acquire) > 0
-            && dbus_proxy
-                .name_has_owner(notify_name.clone())
-                .unwrap_or(false)
-            && dbus_proxy
-                .name_has_owner(tray_name.clone())
-                .unwrap_or(false);
+            && zbus::block_on(dbus_proxy.name_has_owner(notify_name.clone())).unwrap_or(false)
+            && zbus::block_on(dbus_proxy.name_has_owner(tray_name.clone())).unwrap_or(false);
         if ready {
             break;
         }

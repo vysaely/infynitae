@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use cairo::Context;
-use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
+use zbus::{OwnedObjectPath, OwnedVariant, Variant};
 
 use crate::app::App;
 use crate::card::{run_sh, Action, Button, Card, Cx, Data, Event, Hits, Rect, Source, Status};
@@ -1291,29 +1291,29 @@ fn capture_item(runtime_dir: &Path) -> Option<TrayItem> {
     })
 }
 
-fn owned_str(v: &OwnedValue) -> String {
-    let val: &Value<'_> = v;
+fn owned_str(v: &OwnedVariant) -> String {
+    let val: &Variant<'_> = v;
     match val {
-        Value::Str(s) => s.as_str().to_string(),
-        Value::ObjectPath(p) => p.as_str().to_string(),
+        Variant::Str(s) => s.as_str().to_string(),
+        Variant::ObjectPath(p) => p.as_str().to_string(),
         _ => String::new(),
     }
 }
 
-fn owned_bool(v: &OwnedValue) -> bool {
-    let val: &Value<'_> = v;
-    matches!(val, Value::Bool(true))
+fn owned_bool(v: &OwnedVariant) -> bool {
+    let val: &Variant<'_> = v;
+    matches!(val, Variant::Bool(true))
 }
 
-fn owned_tooltip_title(v: &OwnedValue) -> String {
-    let val: &Value<'_> = v;
-    let Value::Structure(st) = val else {
+fn owned_tooltip_title(v: &OwnedVariant) -> String {
+    let val: &Variant<'_> = v;
+    let Variant::Structure(st) = val else {
         return String::new();
     };
     st.fields()
         .get(2)
         .and_then(|f| match f {
-            Value::Str(s) => Some(s.as_str().trim().to_string()),
+            Variant::Str(s) => Some(s.as_str().trim().to_string()),
             _ => None,
         })
         .unwrap_or_default()
@@ -1358,84 +1358,96 @@ fn fetch_dbus_tray() -> (Vec<TrayItem>, bool) {
     fetch_dbus_tray_on(&conn)
 }
 
-pub(super) fn fetch_dbus_tray_on(conn: &zbus::blocking::Connection) -> (Vec<TrayItem>, bool) {
-    let Ok(dbus) = zbus::blocking::fdo::DBusProxy::new(conn) else {
-        return (Vec::new(), false);
-    };
-    let Ok(watcher_name) = zbus::names::BusName::try_from("org.kde.StatusNotifierWatcher") else {
-        return (Vec::new(), false);
-    };
-    if !dbus.name_has_owner(watcher_name).unwrap_or(false) {
-        return (Vec::new(), false);
-    }
-
-    let Ok(watcher) = zbus::blocking::Proxy::new(
-        conn,
-        "org.kde.StatusNotifierWatcher",
-        "/StatusNotifierWatcher",
-        "org.kde.StatusNotifierWatcher",
-    ) else {
-        return (Vec::new(), false);
-    };
-    let Ok(entries) = watcher.get_property::<Vec<String>>("RegisteredStatusNotifierItems") else {
-        return (Vec::new(), false);
-    };
-
-    let mut items = Vec::new();
-    for entry in entries {
-        let (bus, path) = match entry.find('/') {
-            Some(pos) => (&entry[..pos], &entry[pos..]),
-            None => (entry.as_str(), "/StatusNotifierItem"),
+pub(super) fn fetch_dbus_tray_on(conn: &zbus::Connection) -> (Vec<TrayItem>, bool) {
+    zbus::block_on(async {
+        let Ok(dbus) = zbus::fdo::DBusProxy::new(conn).await else {
+            return (Vec::new(), false);
         };
-        if bus.is_empty() {
-            continue;
-        }
-        let Ok(props) =
-            zbus::blocking::Proxy::new(conn, bus, path, "org.freedesktop.DBus.Properties")
+        let Ok(watcher_name) = zbus::names::BusName::try_from("org.kde.StatusNotifierWatcher")
         else {
-            continue;
+            return (Vec::new(), false);
         };
-        let Ok(map) = props
-            .call::<_, _, HashMap<String, OwnedValue>>("GetAll", &("org.kde.StatusNotifierItem",))
+        if !dbus.name_has_owner(watcher_name).await.unwrap_or(false) {
+            return (Vec::new(), false);
+        }
+
+        let Ok(watcher) = zbus::Proxy::new(
+            conn,
+            "org.kde.StatusNotifierWatcher",
+            "/StatusNotifierWatcher",
+            "org.kde.StatusNotifierWatcher",
+        )
+        .await
         else {
-            continue;
+            return (Vec::new(), false);
         };
-        let id = map.get("Id").map(owned_str).unwrap_or_default();
-        let title = map.get("Title").map(owned_str).unwrap_or_default();
-        let status = map.get("Status").map(owned_str).unwrap_or_default();
-        if status.eq_ignore_ascii_case("Passive") {
-            continue;
+        let Ok(entries) = watcher
+            .get_property::<Vec<String>>("RegisteredStatusNotifierItems")
+            .await
+        else {
+            return (Vec::new(), false);
+        };
+
+        let mut items = Vec::new();
+        for entry in entries {
+            let (bus, path) = match entry.find('/') {
+                Some(pos) => (&entry[..pos], &entry[pos..]),
+                None => (entry.as_str(), "/StatusNotifierItem"),
+            };
+            if bus.is_empty() {
+                continue;
+            }
+            let Ok(props) =
+                zbus::Proxy::new(conn, bus, path, "org.freedesktop.DBus.Properties").await
+            else {
+                continue;
+            };
+            let Ok(map) = props
+                .call::<_, _, HashMap<String, OwnedVariant>>(
+                    "GetAll",
+                    &("org.kde.StatusNotifierItem",),
+                )
+                .await
+            else {
+                continue;
+            };
+            let id = map.get("Id").map(owned_str).unwrap_or_default();
+            let title = map.get("Title").map(owned_str).unwrap_or_default();
+            let status = map.get("Status").map(owned_str).unwrap_or_default();
+            if status.eq_ignore_ascii_case("Passive") {
+                continue;
+            }
+            let icon_name = map.get("IconName").map(owned_str).unwrap_or_default();
+            let tooltip = map
+                .get("ToolTip")
+                .map(owned_tooltip_title)
+                .unwrap_or_default();
+            let menu_path = map
+                .get("Menu")
+                .and_then(|v| {
+                    OwnedObjectPath::try_from(v.clone())
+                        .ok()
+                        .map(|p| p.to_string())
+                })
+                .unwrap_or_default();
+            let item_is_menu = map.get("ItemIsMenu").is_some_and(owned_bool);
+            if id.is_empty() && title.is_empty() {
+                continue;
+            }
+            items.push(TrayItem {
+                id,
+                title,
+                status,
+                tooltip,
+                icon_name,
+                bus_name: bus.to_string(),
+                obj_path: path.to_string(),
+                menu_path,
+                item_is_menu,
+            });
         }
-        let icon_name = map.get("IconName").map(owned_str).unwrap_or_default();
-        let tooltip = map
-            .get("ToolTip")
-            .map(owned_tooltip_title)
-            .unwrap_or_default();
-        let menu_path = map
-            .get("Menu")
-            .and_then(|v| {
-                OwnedObjectPath::try_from(v.clone())
-                    .ok()
-                    .map(|p| p.to_string())
-            })
-            .unwrap_or_default();
-        let item_is_menu = map.get("ItemIsMenu").is_some_and(owned_bool);
-        if id.is_empty() && title.is_empty() {
-            continue;
-        }
-        items.push(TrayItem {
-            id,
-            title,
-            status,
-            tooltip,
-            icon_name,
-            bus_name: bus.to_string(),
-            obj_path: path.to_string(),
-            menu_path,
-            item_is_menu,
-        });
-    }
-    (items, true)
+        (items, true)
+    })
 }
 
 pub struct BackgroundSource {
@@ -2416,7 +2428,7 @@ mod tests {
             })
         }
 
-        fn connect(&self) -> zbus::blocking::connection::Builder<'static> {
+        fn connect(&self) -> zbus::connection::Builder<'static> {
             let addr = zbus::Address::try_from(self.address.as_str()).unwrap();
             crate::dbus::builder_for(&addr).unwrap()
         }
@@ -2472,14 +2484,18 @@ mod tests {
         }
     }
 
-    fn host_registered(conn: &zbus::blocking::Connection) -> bool {
-        zbus::blocking::Proxy::new(
-            conn,
-            crate::tray_watcher::NAME,
-            crate::tray_watcher::PATH,
-            crate::tray_watcher::NAME,
-        )
-        .and_then(|p| p.get_property::<bool>("IsStatusNotifierHostRegistered"))
+    fn host_registered(conn: &zbus::Connection) -> bool {
+        zbus::block_on(async {
+            let p = zbus::Proxy::new(
+                conn,
+                crate::tray_watcher::NAME,
+                crate::tray_watcher::PATH,
+                crate::tray_watcher::NAME,
+            )
+            .await?;
+            p.get_property::<bool>("IsStatusNotifierHostRegistered")
+                .await
+        })
         .unwrap_or(false)
     }
 
@@ -2490,7 +2506,7 @@ mod tests {
             return;
         };
         let _watcher = crate::tray_watcher::start_on(bus.connect()).unwrap();
-        let reader = bus.connect().build().unwrap();
+        let reader = zbus::block_on(bus.connect().build()).unwrap();
         assert_eq!(fetch_dbus_tray_on(&reader), (Vec::new(), true));
         assert!(
             eventually(|| host_registered(&reader)),
@@ -2498,19 +2514,14 @@ mod tests {
         );
 
         let item_path = "/org/ayatana/NotificationItem/discord";
-        let item = bus
-            .connect()
-            .serve_at(item_path, FakeItem)
-            .unwrap()
-            .build()
-            .unwrap();
-        item.call_method(
+        let item = zbus::block_on(bus.connect().serve_at(item_path, FakeItem).build()).unwrap();
+        zbus::block_on(item.call_method(
             Some(NAME),
             PATH,
             Some(NAME),
             "RegisterStatusNotifierItem",
             &(item_path,),
-        )
+        ))
         .unwrap();
         let item_bus = item.unique_name().unwrap().to_string();
 
@@ -2555,21 +2566,20 @@ mod tests {
             return;
         };
         let host = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let other = bus
-            .connect()
-            .serve_at(PATH, OtherWatcher { host: host.clone() })
-            .unwrap()
-            .name(NAME)
-            .unwrap()
-            .build()
-            .unwrap();
+        let other = zbus::block_on(
+            bus.connect()
+                .serve_at(PATH, OtherWatcher { host: host.clone() })
+                .name(NAME)
+                .build(),
+        )
+        .unwrap();
         let other_bus = other.unique_name().unwrap().to_string();
         let edge = crate::tray_watcher::start_on(bus.connect()).unwrap();
         let edge_bus = edge.unique_name().unwrap().to_string();
-        let reader = bus.connect().build().unwrap();
-        let dbus = zbus::blocking::fdo::DBusProxy::new(&reader).unwrap();
+        let reader = zbus::block_on(bus.connect().build()).unwrap();
+        let dbus = zbus::block_on(zbus::fdo::DBusProxy::new(&reader)).unwrap();
         let owner = || {
-            dbus.get_name_owner(zbus::names::BusName::try_from(NAME).unwrap())
+            zbus::block_on(dbus.get_name_owner(zbus::names::BusName::try_from(NAME).unwrap()))
                 .map(|o| o.to_string())
                 .ok()
         };

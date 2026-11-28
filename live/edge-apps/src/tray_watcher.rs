@@ -7,13 +7,15 @@
 //! watcher (waybar, KDE) keeps it, and the edge gets it when that one quits. Items watch the
 //! watcher's name and register again with each new owner (by the spec), so nothing is moved over.
 
+use futures_core::Stream;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard};
 #[cfg(test)]
-use zbus::blocking::connection::Builder;
-use zbus::blocking::{fdo::DBusProxy, Connection};
-use zbus::fdo::{RequestNameFlags, RequestNameReply};
+use zbus::connection::Builder;
+use zbus::fdo::{DBusProxy, RequestNameFlags, RequestNameReply};
 use zbus::message::Header;
 use zbus::object_server::SignalEmitter;
+use zbus::Connection;
 
 pub const NAME: &str = "org.kde.StatusNotifierWatcher";
 pub const PATH: &str = "/StatusNotifierWatcher";
@@ -151,14 +153,16 @@ impl Watcher {
 }
 
 /// Registers the edge as a host with whoever serves the watcher now.
-fn register_host(conn: &Connection, host: &str) {
-    let res = conn.call_method(
-        Some(NAME),
-        PATH,
-        Some(NAME),
-        "RegisterStatusNotifierHost",
-        &(host,),
-    );
+async fn register_host(conn: &Connection, host: &str) {
+    let res = conn
+        .call_method(
+            Some(NAME),
+            PATH,
+            Some(NAME),
+            "RegisterStatusNotifierHost",
+            &(host,),
+        )
+        .await;
     if let Err(e) = res {
         eprintln!("infynitae-edge-apps: tray: registering as a host: {e}");
     }
@@ -184,31 +188,35 @@ pub fn start() -> Result<Connection, String> {
 #[cfg(test)]
 pub fn start_on(builder: Builder<'_>) -> Result<Connection, String> {
     let state = Arc::new(Mutex::new(State::default()));
-    let conn = builder
-        .serve_at(
-            PATH,
-            Watcher {
-                state: state.clone(),
-            },
-        )
-        .map_err(|e| e.to_string())?
-        .build()
-        .map_err(|e| e.to_string())?;
+    let conn = zbus::block_on(
+        builder
+            .serve_at(
+                PATH,
+                Watcher {
+                    state: state.clone(),
+                },
+            )
+            .build(),
+    )
+    .map_err(|e| e.to_string())?;
     start_connected(conn, state)
 }
 
 fn start_connected(conn: Connection, state: Arc<Mutex<State>>) -> Result<Connection, String> {
     let e = |e: zbus::Error| e.to_string();
-    // subscribed before the names are asked for, so no item that goes away is missed
-    let dbus = DBusProxy::new(&conn).map_err(e)?;
-    let changes = dbus.receive_name_owner_changed().map_err(e)?;
-
     let host = format!("org.kde.StatusNotifierHost-{}", std::process::id());
-    conn.request_name_with_flags(host.as_str(), RequestNameFlags::DoNotQueue.into())
-        .map_err(e)?;
-    let reply = conn
-        .request_name_with_flags(NAME, RequestNameFlags::AllowReplacement.into())
-        .map_err(e)?;
+    let (mut changes, reply) = zbus::block_on(async {
+        // subscribed before the names are asked for, so no item that goes away is missed
+        let dbus = DBusProxy::new(&conn).await?;
+        let changes = dbus.receive_name_owner_changed().await?;
+        conn.request_name_with_flags(host.as_str(), RequestNameFlags::DO_NOT_QUEUE)
+            .await?;
+        let reply = conn
+            .request_name_with_flags(NAME, RequestNameFlags::ALLOW_REPLACEMENT)
+            .await?;
+        Ok::<_, zbus::Error>((changes, reply))
+    })
+    .map_err(e)?;
     if matches!(reply, RequestNameReply::InQueue) {
         eprintln!("infynitae-edge-apps: tray: another watcher serves; the edge uses it");
     }
@@ -217,37 +225,43 @@ fn start_connected(conn: Connection, state: Arc<Mutex<State>>) -> Result<Connect
     std::thread::Builder::new()
         .name("tray-watcher".into())
         .spawn(move || {
-            // here, not before the edge starts: another watcher may be slow to answer
-            register_host(&thread_conn, &host);
-            for sig in changes {
-                let Ok(args) = sig.args() else {
-                    continue;
-                };
-                let name = args.name().as_str();
-                if name == NAME {
-                    // a new watcher (another one, or the edge itself once that one quit)
+            zbus::block_on(async move {
+                // here, not before the edge starts: another watcher may be slow to answer
+                register_host(&thread_conn, &host).await;
+                while let Some(sig) =
+                    std::future::poll_fn(|cx| Pin::new(&mut changes).poll_next(cx)).await
+                {
+                    let Ok(args) = sig.args() else {
+                        continue;
+                    };
+                    let name = args.name().as_str();
+                    if name == NAME {
+                        // a new watcher (another one, or the edge itself once that one quit)
+                        if args.new_owner().is_some() {
+                            register_host(&thread_conn, &host).await;
+                        }
+                        continue;
+                    }
                     if args.new_owner().is_some() {
-                        register_host(&thread_conn, &host);
+                        continue;
                     }
-                    continue;
-                }
-                if args.new_owner().is_some() {
-                    continue;
-                }
-                let gone = lock(&state).drop_name(name);
-                for entry in gone {
-                    let res = thread_conn.emit_signal(
-                        None::<zbus::names::BusName>,
-                        PATH,
-                        NAME,
-                        "StatusNotifierItemUnregistered",
-                        &(entry.as_str(),),
-                    );
-                    if let Err(e) = res {
-                        eprintln!("infynitae-edge-apps: tray: signal: {e}");
+                    let gone = lock(&state).drop_name(name);
+                    for entry in gone {
+                        let res = thread_conn
+                            .emit_signal(
+                                None::<zbus::names::BusName>,
+                                PATH,
+                                NAME,
+                                "StatusNotifierItemUnregistered",
+                                &(entry.as_str(),),
+                            )
+                            .await;
+                        if let Err(e) = res {
+                            eprintln!("infynitae-edge-apps: tray: signal: {e}");
+                        }
                     }
                 }
-            }
+            });
         })
         .map_err(|e| e.to_string())?;
     Ok(conn)

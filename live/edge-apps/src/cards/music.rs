@@ -487,50 +487,50 @@ impl Source for MusicSource {
     }
 }
 
-fn meta_str(meta: &HashMap<String, zbus::zvariant::OwnedValue>, key: &str) -> String {
+fn meta_str(meta: &HashMap<String, zbus::OwnedVariant>, key: &str) -> String {
     meta.get(key)
         .and_then(|v| {
-            let val: &zbus::zvariant::Value<'_> = v;
+            let val: &zbus::Variant<'_> = v;
             match val {
-                zbus::zvariant::Value::Str(s) => Some(s.as_str().to_string()),
-                zbus::zvariant::Value::ObjectPath(p) => Some(p.as_str().to_string()),
+                zbus::Variant::Str(s) => Some(s.as_str().to_string()),
+                zbus::Variant::ObjectPath(p) => Some(p.as_str().to_string()),
                 _ => None,
             }
         })
         .unwrap_or_default()
 }
 
-fn meta_artists(meta: &HashMap<String, zbus::zvariant::OwnedValue>) -> String {
+fn meta_artists(meta: &HashMap<String, zbus::OwnedVariant>) -> String {
     meta.get("xesam:artist")
         .and_then(|v| {
-            let val: &zbus::zvariant::Value<'_> = v;
+            let val: &zbus::Variant<'_> = v;
             match val {
-                zbus::zvariant::Value::Array(arr) => {
+                zbus::Variant::Array(arr) => {
                     let parts: Vec<&str> = arr
                         .iter()
                         .filter_map(|item| match item {
-                            zbus::zvariant::Value::Str(s) if !s.is_empty() => Some(s.as_str()),
+                            zbus::Variant::Str(s) if !s.is_empty() => Some(s.as_str()),
                             _ => None,
                         })
                         .collect();
                     (!parts.is_empty()).then(|| parts.join(", "))
                 }
-                zbus::zvariant::Value::Str(s) => Some(s.as_str().to_string()),
+                zbus::Variant::Str(s) => Some(s.as_str().to_string()),
                 _ => None,
             }
         })
         .unwrap_or_default()
 }
 
-fn meta_i64(meta: &HashMap<String, zbus::zvariant::OwnedValue>, key: &str) -> i64 {
+fn meta_i64(meta: &HashMap<String, zbus::OwnedVariant>, key: &str) -> i64 {
     meta.get(key)
         .and_then(|v| {
-            let val: &zbus::zvariant::Value<'_> = v;
+            let val: &zbus::Variant<'_> = v;
             match val {
-                zbus::zvariant::Value::I64(n) => Some(*n),
-                zbus::zvariant::Value::U64(n) => i64::try_from(*n).ok(),
-                zbus::zvariant::Value::I32(n) => Some(i64::from(*n)),
-                zbus::zvariant::Value::U32(n) => Some(i64::from(*n)),
+                zbus::Variant::I64(n) => Some(*n),
+                zbus::Variant::U64(n) => i64::try_from(*n).ok(),
+                zbus::Variant::I32(n) => Some(i64::from(*n)),
+                zbus::Variant::U32(n) => Some(i64::from(*n)),
                 _ => None,
             }
         })
@@ -542,151 +542,176 @@ pub fn fetch_dbus() -> MusicData {
     let Ok(conn) = crate::dbus::session() else {
         return MusicData::default();
     };
-    let Ok(dbus_proxy) = zbus::blocking::fdo::DBusProxy::new(&conn) else {
-        return MusicData::default();
-    };
-    let Ok(names) = dbus_proxy.list_names() else {
-        return MusicData::default();
-    };
-
-    let mut buses: Vec<String> = names
-        .into_iter()
-        .map(|n| n.to_string())
-        .filter(|n| n.starts_with("org.mpris.MediaPlayer2."))
-        .collect();
-    buses.sort();
-
-    let mut players = Vec::new();
-    for bus in buses {
-        let Ok(player) = zbus::blocking::Proxy::new(
-            &conn,
-            bus.as_str(),
-            "/org/mpris/MediaPlayer2",
-            "org.mpris.MediaPlayer2.Player",
-        ) else {
-            continue;
+    zbus::block_on(async {
+        let Ok(dbus_proxy) = zbus::fdo::DBusProxy::new(&conn).await else {
+            return MusicData::default();
+        };
+        let Ok(names) = dbus_proxy.list_names().await else {
+            return MusicData::default();
         };
 
-        let status: Result<String, _> = player.get_property("PlaybackStatus");
-        let meta: Result<HashMap<String, zbus::zvariant::OwnedValue>, _> =
-            player.get_property("Metadata");
-        if status.is_err() && meta.is_err() {
-            continue;
-        }
-        let status = status.unwrap_or_default();
-        let meta = meta.unwrap_or_default();
+        let mut buses: Vec<String> = names
+            .into_iter()
+            .map(|n| n.to_string())
+            .filter(|n| n.starts_with("org.mpris.MediaPlayer2."))
+            .collect();
+        buses.sort();
 
-        let (player_name, desktop_entry) = match zbus::blocking::Proxy::new(
-            &conn,
-            bus.as_str(),
-            "/org/mpris/MediaPlayer2",
-            "org.mpris.MediaPlayer2",
-        ) {
-            Ok(root) => (
-                root.get_property::<String>("Identity").unwrap_or_default(),
-                root.get_property::<String>("DesktopEntry")
-                    .unwrap_or_default(),
-            ),
-            Err(_) => (String::new(), String::new()),
-        };
-
-        let mut p = PlayerInfo {
-            bus_name: bus.clone(),
-            desktop_entry,
-            player_name,
-            title: meta_str(&meta, "xesam:title"),
-            artist: meta_artists(&meta),
-            album: meta_str(&meta, "xesam:album"),
-            art_url: meta_str(&meta, "mpris:artUrl"),
-            cover: None,
-            format: String::new(),
-            track_id: meta_str(&meta, "mpris:trackid"),
-            playing: status.eq_ignore_ascii_case("playing"),
-            paused: status.eq_ignore_ascii_case("paused"),
-            position_us: player.get_property::<i64>("Position").unwrap_or(0).max(0),
-            duration_us: meta_i64(&meta, "mpris:length"),
-            shuffle: player.get_property::<bool>("Shuffle").unwrap_or(false),
-            loop_status: player
-                .get_property::<String>("LoopStatus")
-                .unwrap_or_else(|_| "None".into()),
-            lyrics: Lyrics::default(),
-            queue: Vec::new(),
-        };
-
-        // Melodyae exports lyrics and queue on `app.melodyae.Extras`; fall back to standard
-        // `org.mpris.MediaPlayer2.TrackList` when absent.
-        let mut got_queue = false;
-        if let Ok(extras) = zbus::blocking::Proxy::new(
-            &conn,
-            bus.as_str(),
-            "/org/mpris/MediaPlayer2",
-            "app.melodyae.Extras",
-        ) {
-            if let Ok((curr, next, before)) =
-                extras.call::<&str, (), (String, String, String)>("CurrentLyrics", &())
-            {
-                p.lyrics = Lyrics {
-                    before,
-                    current: curr,
-                    next,
-                };
-            }
-            if let Ok(items) =
-                extras.call::<&str, (), Vec<(String, String, String, i64)>>("Queue", &())
-            {
-                got_queue = true;
-                for (title, artist, art_url, length_us) in items {
-                    p.queue.push(QueueSong {
-                        title,
-                        artist,
-                        art_url,
-                        cover: None,
-                        length_us: length_us.max(0),
-                        track_id: None,
-                    });
-                }
-            }
-        }
-
-        if !got_queue {
-            if let Ok(tl) = zbus::blocking::Proxy::new(
+        let mut players = Vec::new();
+        for bus in buses {
+            let Ok(player) = zbus::Proxy::new(
                 &conn,
                 bus.as_str(),
                 "/org/mpris/MediaPlayer2",
-                "org.mpris.MediaPlayer2.TrackList",
-            ) {
-                if let Ok(tracks) =
-                    tl.get_property::<Vec<zbus::zvariant::OwnedObjectPath>>("Tracks")
+                "org.mpris.MediaPlayer2.Player",
+            )
+            .await
+            else {
+                continue;
+            };
+
+            let status: Result<String, _> = player.get_property("PlaybackStatus").await;
+            let meta: Result<HashMap<String, zbus::OwnedVariant>, _> =
+                player.get_property("Metadata").await;
+            if status.is_err() && meta.is_err() {
+                continue;
+            }
+            let status = status.unwrap_or_default();
+            let meta = meta.unwrap_or_default();
+
+            let (player_name, desktop_entry) = match zbus::Proxy::new(
+                &conn,
+                bus.as_str(),
+                "/org/mpris/MediaPlayer2",
+                "org.mpris.MediaPlayer2",
+            )
+            .await
+            {
+                Ok(root) => (
+                    root.get_property::<String>("Identity")
+                        .await
+                        .unwrap_or_default(),
+                    root.get_property::<String>("DesktopEntry")
+                        .await
+                        .unwrap_or_default(),
+                ),
+                Err(_) => (String::new(), String::new()),
+            };
+
+            let mut p = PlayerInfo {
+                bus_name: bus.clone(),
+                desktop_entry,
+                player_name,
+                title: meta_str(&meta, "xesam:title"),
+                artist: meta_artists(&meta),
+                album: meta_str(&meta, "xesam:album"),
+                art_url: meta_str(&meta, "mpris:artUrl"),
+                cover: None,
+                format: String::new(),
+                track_id: meta_str(&meta, "mpris:trackid"),
+                playing: status.eq_ignore_ascii_case("playing"),
+                paused: status.eq_ignore_ascii_case("paused"),
+                position_us: player
+                    .get_property::<i64>("Position")
+                    .await
+                    .unwrap_or(0)
+                    .max(0),
+                duration_us: meta_i64(&meta, "mpris:length"),
+                shuffle: player
+                    .get_property::<bool>("Shuffle")
+                    .await
+                    .unwrap_or(false),
+                loop_status: player
+                    .get_property::<String>("LoopStatus")
+                    .await
+                    .unwrap_or_else(|_| "None".into()),
+                lyrics: Lyrics::default(),
+                queue: Vec::new(),
+            };
+
+            // Melodyae exports lyrics and queue on `app.melodyae.Extras`; fall back to standard
+            // `org.mpris.MediaPlayer2.TrackList` when absent.
+            let mut got_queue = false;
+            if let Ok(extras) = zbus::Proxy::new(
+                &conn,
+                bus.as_str(),
+                "/org/mpris/MediaPlayer2",
+                "app.melodyae.Extras",
+            )
+            .await
+            {
+                if let Ok((curr, next, before)) = extras
+                    .call::<&str, (), (String, String, String)>("CurrentLyrics", &())
+                    .await
                 {
-                    if !tracks.is_empty() {
-                        let refs: Vec<zbus::zvariant::ObjectPath<'_>> =
-                            tracks.iter().map(|t| t.as_ref()).collect();
-                        if let Ok(metas) = tl
-                            .call::<&str, _, Vec<HashMap<String, zbus::zvariant::OwnedValue>>>(
-                                "GetTracksMetadata",
-                                &(refs,),
-                            )
-                        {
-                            for (track_path, tm) in tracks.iter().zip(metas) {
-                                p.queue.push(QueueSong {
-                                    title: meta_str(&tm, "xesam:title"),
-                                    artist: meta_artists(&tm),
-                                    art_url: meta_str(&tm, "mpris:artUrl"),
-                                    cover: None,
-                                    length_us: meta_i64(&tm, "mpris:length"),
-                                    track_id: Some(track_path.as_str().to_string()),
-                                });
+                    p.lyrics = Lyrics {
+                        before,
+                        current: curr,
+                        next,
+                    };
+                }
+                if let Ok(items) = extras
+                    .call::<&str, (), Vec<(String, String, String, i64)>>("Queue", &())
+                    .await
+                {
+                    got_queue = true;
+                    for (title, artist, art_url, length_us) in items {
+                        p.queue.push(QueueSong {
+                            title,
+                            artist,
+                            art_url,
+                            cover: None,
+                            length_us: length_us.max(0),
+                            track_id: None,
+                        });
+                    }
+                }
+            }
+
+            if !got_queue {
+                if let Ok(tl) = zbus::Proxy::new(
+                    &conn,
+                    bus.as_str(),
+                    "/org/mpris/MediaPlayer2",
+                    "org.mpris.MediaPlayer2.TrackList",
+                )
+                .await
+                {
+                    if let Ok(tracks) = tl
+                        .get_property::<Vec<zbus::OwnedObjectPath>>("Tracks")
+                        .await
+                    {
+                        if !tracks.is_empty() {
+                            let refs: Vec<zbus::ObjectPath<'_>> =
+                                tracks.iter().map(|t| t.as_ref()).collect();
+                            if let Ok(metas) = tl
+                                .call::<&str, _, Vec<HashMap<String, zbus::OwnedVariant>>>(
+                                    "GetTracksMetadata",
+                                    &(refs,),
+                                )
+                                .await
+                            {
+                                for (track_path, tm) in tracks.iter().zip(metas) {
+                                    p.queue.push(QueueSong {
+                                        title: meta_str(&tm, "xesam:title"),
+                                        artist: meta_artists(&tm),
+                                        art_url: meta_str(&tm, "mpris:artUrl"),
+                                        cover: None,
+                                        length_us: meta_i64(&tm, "mpris:length"),
+                                        track_id: Some(track_path.as_str().to_string()),
+                                    });
+                                }
                             }
                         }
                     }
                 }
             }
+
+            players.push(p);
         }
 
-        players.push(p);
-    }
-
-    MusicData { players }
+        MusicData { players }
+    })
 }
 
 // ---------------------------------------------------------------------------------------------
