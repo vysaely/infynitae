@@ -12,7 +12,7 @@ name = "infynitae-edge-apps"
 path = "src/main.rs"
 
 [dependencies]
-cairo-rs = { version = "0.20", features = ["png"] }
+cairo-rs = { version = "0.22", features = ["png"] }
 pango = "0.20"
 pangocairo = "0.20"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
