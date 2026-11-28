@@ -616,7 +616,18 @@ GM_ARGS
         ;;
     clipboard-history)
         # Super+V: Clipboard history picker (the edge's clipboard panel, or MENU_PICKER / fuzzel)
-        if command -v cliphist >/dev/null 2>&1; then
+        # over the compositor's own history; with a compositor from before it, cliphist's
+        if LIST=$("$INFYNITAE_BIN" msg clipboard 2>/dev/null); then
+            if edge_on && [ -z "${MENU_PICKER:-}" ]; then
+                exec "$EDGE_BIN" clipboard
+            fi
+            PICKER="${MENU_PICKER:-fuzzel --dmenu}"
+            # a line is "[pinned:]id<TAB>text"; Escape selects nothing and leaves the clipboard
+            PICK=$(printf '%s\n' "$LIST" | $PICKER)
+            ID=${PICK%%"$(printf '\t')"*}
+            ID=${ID#pinned:}
+            [ -n "$PICK" ] && exec "$INFYNITAE_BIN" msg clipboard use "$ID"
+        elif command -v cliphist >/dev/null 2>&1; then
             if edge_on && [ -z "${MENU_PICKER:-}" ]; then
                 exec "$EDGE_BIN" clipboard
             fi

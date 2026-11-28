@@ -9,6 +9,7 @@
 //! keystroke. When the panel closes the card drops all of it.
 
 use crate::card::{Action, Button, Card, Cx, Data, Event, Hits, Rect, Source, Status};
+use crate::cards::clipboard::CopyOwn;
 use crate::cards::{
     apps, clipboard, settings_apps, settings_display, settings_games, settings_input,
     settings_lock, settings_look, settings_privacy, settings_recording, settings_windows,
@@ -80,8 +81,10 @@ enum Open {
     Window(u64),
     /// the Settings panel searching this row's name
     Setting(&'static str),
-    /// the command that copies it back
+    /// the command that copies it back (cliphist fallback)
     Copy(String),
+    /// shell-socket request that copies it back via the compositor's clipboard
+    CopyOwn(String),
     Path(String),
 }
 
@@ -169,18 +172,22 @@ impl SearchSource {
                 .map(|v| crate::paths::expand_home_with(v, home))
         };
         let in_folder = |key: &str| folder(key).map_or_else(Vec::new, |d| files_newest_first(&d));
+        let clip = self.clipboard.read();
         SearchData {
-            clipboard: self
-                .clipboard
-                .read()
+            clipboard: clip
                 .items
                 .into_iter()
-                .map(|c| {
-                    Entry::new(Item {
-                        open: Open::Copy(c.copy()),
+                .filter_map(|c| {
+                    let open = if clip.own {
+                        Open::CopyOwn(c.copy_own()?)
+                    } else {
+                        Open::Copy(c.copy())
+                    };
+                    Some(Entry::new(Item {
+                        open,
                         name: c.preview,
                         note: c.time,
-                    })
+                    }))
                 })
                 .collect(),
             clips: in_folder("CLIPS_DIR"),
@@ -463,6 +470,10 @@ impl ResultsCard {
             }
             Open::Copy(cmd) => {
                 out.push(Action::RunBackground(cmd.clone()));
+                out.push(Action::ClosePanel);
+            }
+            Open::CopyOwn(req) => {
+                out.push(Action::ShellCommand(req.clone()));
                 out.push(Action::ClosePanel);
             }
             Open::Path(p) => out.push(Action::OpenUri(p.clone())),

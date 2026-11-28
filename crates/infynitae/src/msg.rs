@@ -14,6 +14,8 @@
 //! infynitae msg layers [app]                    every window's surfaces and where they are drawn
 //! infynitae msg arrange <layout> [inst elem]    spiral, tiles, line, tidy or app: the focused window's
 //!                                               cluster, or that window's
+//! infynitae msg clipboard                       the clipboard history, one entry a line
+//! infynitae msg clipboard use|pin|unpin|delete <id>
 //! ```
 
 use std::io::{BufRead, BufReader, Write};
@@ -101,7 +103,7 @@ fn first_output() -> u64 {
 
 fn usage() -> ExitCode {
     eprintln!(
-        "Usage: infynitae msg snapshot | focus <inst> <elem> | navigate <x> <y> [zoom] | navigate element <inst> <elem> | place <name> | restore [output] | shortcut <name> | overview | lock | night-light [on|off] | keyboard-layout | osk [on|off] | capture-chord | layers [app] | journal [--since T] [--app X] | arrange spiral|tiles|line|tidy|app [<inst> <elem>]"
+        "Usage: infynitae msg snapshot | focus <inst> <elem> | navigate <x> <y> [zoom] | navigate element <inst> <elem> | place <name> | restore [output] | shortcut <name> | overview | lock | night-light [on|off] | keyboard-layout | osk [on|off] | capture-chord | layers [app] | journal [--since T] [--app X] | arrange spiral|tiles|line|tidy|app [<inst> <elem>] | clipboard [use|pin|unpin|delete <id>]"
     );
     ExitCode::from(2)
 }
@@ -539,6 +541,23 @@ pub fn run(args: &[String]) -> ExitCode {
             Some((since, app)) => journal(since, app),
             None => usage(),
         },
+        Some("clipboard") => match (args.get(1).map(String::as_str), num(2), args.len()) {
+            (None, _, 1) => clipboard(),
+            (Some(act @ ("use" | "pin" | "unpin" | "delete")), Some(entry), 3) => {
+                let cmd = match act {
+                    "use" => "clipboard_use",
+                    "delete" => "clipboard_delete",
+                    _ => "clipboard_pin",
+                };
+                print_reply(&request(&Value::obj([
+                    id,
+                    ("cmd", cmd.into()),
+                    ("entry", entry.into()),
+                    ("on", (act == "pin").into()),
+                ])))
+            }
+            _ => usage(),
+        },
         _ => usage(),
     }
 }
@@ -585,6 +604,67 @@ fn journal(since: Option<&str>, app: Option<&str>) -> ExitCode {
         eprintln!("No journal yet in {}", dir.display());
     }
     ExitCode::SUCCESS
+}
+
+/// `infynitae msg clipboard`: the compositor's clipboard history, newest first (pinned entries
+/// first), as cliphist lists its own: `id<TAB>text`, `pinned:` before a pinned one, an image as
+/// `[[ binary data 24 KiB png 1920x1080 ]]`. Fails when the compositor keeps no history of its
+/// own (one from before 2026-11-25): the session then uses cliphist.
+fn clipboard() -> ExitCode {
+    let reply = request(&Value::obj([
+        ("id", 1u64.into()),
+        ("cmd", "clipboard".into()),
+    ]));
+    match clipboard_lines(&reply) {
+        Some(lines) => {
+            for l in lines {
+                println!("{l}");
+            }
+            ExitCode::SUCCESS
+        }
+        None => {
+            eprintln!("infynitae msg: {}", reply.to_json());
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// The lines of [`clipboard`] from the compositor's reply.
+fn clipboard_lines(reply: &Value) -> Option<Vec<String>> {
+    let entries = reply
+        .get("snapshot")
+        .and_then(|s| s.get("clipboard"))
+        .and_then(Value::as_array)?;
+    Some(
+        entries
+            .iter()
+            .filter_map(|e| {
+                let id = e.get("id").and_then(Value::as_u64)?;
+                let pin = if e.get("pinned") == Some(&Value::Bool(true)) {
+                    "pinned:"
+                } else {
+                    ""
+                };
+                let body = if let Some(t) = e.get("text").and_then(Value::as_str) {
+                    // one entry a line
+                    t.replace(['\t', '\n', '\r'], " ")
+                } else {
+                    let mime = e.get("image").and_then(Value::as_str)?;
+                    let bytes = e.get("bytes").and_then(Value::as_u64)?;
+                    let size = match e.get("size").and_then(Value::as_array) {
+                        Some([w, h]) => format!(" {}x{}", w.as_u64()?, h.as_u64()?),
+                        _ => String::new(),
+                    };
+                    format!(
+                        "[[ binary data {} KiB {}{size} ]]",
+                        bytes.div_ceil(1024),
+                        mime.trim_start_matches("image/")
+                    )
+                };
+                Some(format!("{pin}{id}\t{body}"))
+            })
+            .collect(),
+    )
 }
 
 /// Sends a global shortcut's name to the shortcuts portal (`shortcuts.sock`), which passes it to
@@ -801,6 +881,31 @@ mod tests {
         );
         assert_eq!(journal_args(&a(&["--app", "a", "--app", "b"])), None);
         assert_eq!(journal_args(&a(&["grim"])), None);
+    }
+
+    #[test]
+    fn the_clipboard_history_prints_as_cliphist_lines() {
+        let reply = json::parse(
+            r#"{"id":1,"ok":true,"generation":3,"snapshot":{"clipboard":[
+                {"id":7,"pinned":true,"text":"git push\torigin\nmain"},
+                {"id":5,"pinned":false,"image":"image/png","bytes":24576,"size":[1920,1080]},
+                {"id":2,"pinned":false,"image":"image/jpeg","bytes":1000,"size":null}]}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            clipboard_lines(&reply).unwrap(),
+            [
+                "pinned:7\tgit push origin main",
+                "5\t[[ binary data 24 KiB png 1920x1080 ]]",
+                "2\t[[ binary data 1 KiB jpeg ]]",
+            ]
+        );
+        let older = json::parse(r#"{"id":1,"ok":false,"error":"unknown_command"}"#).unwrap();
+        assert_eq!(
+            clipboard_lines(&older),
+            None,
+            "an older compositor: no history"
+        );
     }
 
     #[test]

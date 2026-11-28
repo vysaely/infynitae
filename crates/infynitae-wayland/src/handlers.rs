@@ -1032,8 +1032,8 @@ impl SeatHandler for WaylandState {
 }
 
 impl SelectionHandler for WaylandState {
-    // the compositor offers no selection of its own
-    type SelectionUserData = ();
+    /// The compositor's own clipboard offer: its copy of what an app copied (`clipboard`).
+    type SelectionUserData = crate::clipboard::Contents;
 
     /// A client set (or cleared) a selection: Smithay accepted it only from the client with the
     /// keyboard focus, so that client owns it.
@@ -1048,6 +1048,8 @@ impl SelectionHandler for WaylandState {
             smithay::wayland::selection::SelectionTarget::Clipboard => 0,
             smithay::wayland::selection::SelectionTarget::Primary => 1,
         };
+        let from_data_control = self.data_control_owner.is_some();
+        let offered = source.as_ref().map(|s| s.mime_types());
         let (owner, source_obj) =
             if let Some((target, owner, source_obj)) = self.data_control_owner.take() {
                 if target == ty {
@@ -1066,14 +1068,41 @@ impl SelectionHandler for WaylandState {
             };
         self.selection_owners[slot] = owner;
         self.selection_sources[slot] = source_obj;
+        if slot == 0 {
+            // a window's copy is private when the window is; a clipboard tool's (wl-copy) has no
+            // window, and only the password hint keeps it out
+            let private = !from_data_control
+                && self
+                    .core
+                    .focus()
+                    .target()
+                    .is_some_and(|e| self.is_element_private(e));
+            self.clipboard_new_selection(offered, private);
+        }
+    }
+
+    /// An app pastes the compositor's own clipboard offer.
+    fn send_selection(
+        &mut self,
+        ty: smithay::wayland::selection::SelectionTarget,
+        mime_type: String,
+        fd: std::os::fd::OwnedFd,
+        _seat: Seat<Self>,
+        user_data: &Self::SelectionUserData,
+    ) {
+        if ty == smithay::wayland::selection::SelectionTarget::Clipboard {
+            self.clipboard_send(user_data, &mime_type, fd);
+        }
     }
 }
 
 impl WaylandState {
     /// Clears a selection whose owner disconnected, telling the focused client (`selection` with
-    /// no offer). Called after each client dispatch.
+    /// no offer); the clipboard's copy is offered instead when the compositor keeps it
+    /// (`clipboard`). Called after each client dispatch.
     pub fn clear_orphaned_selections(&mut self) {
         self.prune_disabled_outputs();
+        self.clipboard_turn();
         let gone = |state: &Self, slot: usize| {
             if let Some(ref source_id) = state.selection_sources[slot]
                 && state
@@ -1095,9 +1124,7 @@ impl WaylandState {
         if gone(self, 0) {
             self.selection_owners[0] = None;
             self.selection_sources[0] = None;
-            smithay::wayland::selection::data_device::clear_data_device_selection(
-                &self.dh, &self.seat,
-            );
+            self.clipboard_orphaned();
         }
         if gone(self, 1) {
             self.selection_owners[1] = None;

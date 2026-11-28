@@ -1368,6 +1368,9 @@ pub fn run_console_with(
         turn.mark("idle check");
         if let Some(ext) = extension.as_mut() {
             ext.set_locked(data.state.is_locked());
+            if let Some(entries) = data.state.clipboard_listing() {
+                ext.set_clipboard(&entries);
+            }
             let (fx, changed) = ext.service(data.state.core_mut());
             data.session.set_extension_wake(ext.wake_at());
             if ext.take_lock_request() {

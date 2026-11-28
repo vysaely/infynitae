@@ -19,6 +19,12 @@ cat > "$MOCK_BIN/renice" <<EOF
 exit 0
 EOF
 chmod +x "$MOCK_BIN/renice"
+# a compositor from before its own clipboard: session.sh must not ask the desktop the tests run on
+cat > "$MOCK_BIN/infynitae" <<EOF
+#!/bin/sh
+exit 1
+EOF
+chmod +x "$MOCK_BIN/infynitae"
 
 # ---- 1. Finding 13: State directory created at startup on fresh install
 HOME1="$TMP/home1"
@@ -285,6 +291,8 @@ sleep 10
 EOF
 cat > "$HOME7/.local/bin/infynitae" <<EOF
 #!/bin/sh
+# \`infynitae msg …\` asks the running compositor (session.sh: does it keep the clipboard): not a start
+[ "\$1" = msg ] && exit 1
 echo "new" >> "$TMP/fb_starts"
 exit 42
 EOF
@@ -577,3 +585,43 @@ if [ "$(wlr_started 'DEFAULT_BACKEND="gtk"')" != 0 ]; then
     exit 1
 fi
 echo "ok   and not when nothing is routed to it"
+
+# ---- 11. 2026-11-25: a compositor that keeps the clipboard itself (it answers `infynitae msg
+# clipboard`) needs no wl-clip-persist and no cliphist; with an older one both start as before
+HOME11="$TMP/home11"
+mkdir -p "$HOME11" "$TMP/bin10"
+CLIP_LOG="$TMP/clip.log"
+cat > "$TMP/bin10/infynitae" <<EOF
+#!/bin/sh
+[ "\$*" = "msg clipboard" ] && [ -n "\${OWN_CLIPBOARD:-}" ]
+EOF
+for tool in wl-clip-persist wl-paste cliphist; do
+    cat > "$TMP/bin10/$tool" <<EOF
+#!/bin/sh
+echo "$tool \$*" >> "$CLIP_LOG"
+EOF
+done
+chmod +x "$TMP/bin10/"*
+session_clipboard() {
+    : > "$CLIP_LOG"
+    # a clean environment: what earlier sections exported must not decide this one
+    env -i HOME="$HOME11" WAYLAND_DISPLAY="wayland-test" START_TERMINAL="false" START_LOCKED="0" \
+        XDG_RUNTIME_DIR="$TMP" PATH="$TMP/bin10:$MOCK_BIN:/usr/bin:/bin" "$@" \
+        sh "$SESSION_SCRIPT" >/dev/null 2>&1 || true
+}
+session_clipboard OWN_CLIPBOARD=1
+sleep 0.3
+if [ -s "$CLIP_LOG" ]; then
+    echo "FAIL the compositor keeps the clipboard, yet session.sh started: $(cat "$CLIP_LOG")"
+    exit 1
+fi
+echo "ok the compositor keeps the clipboard: no wl-clip-persist, no wl-paste watching for cliphist"
+session_clipboard
+i=0
+while [ "$(wc -l < "$CLIP_LOG")" -lt 3 ] && [ $i -lt 100 ]; do sleep 0.05; i=$((i + 1)); done
+expected=$(printf 'wl-clip-persist --clipboard regular\nwl-paste --type image --watch cliphist store\nwl-paste --type text --watch cliphist store')
+if [ "$(sort "$CLIP_LOG")" != "$expected" ]; then
+    echo "FAIL an older compositor: expected wl-clip-persist and two wl-paste, got '$(cat "$CLIP_LOG")'"
+    exit 1
+fi
+echo "ok   an older compositor: wl-clip-persist and cliphist's two watchers start as before"

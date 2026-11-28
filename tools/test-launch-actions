@@ -285,7 +285,8 @@ printf '#!/bin/sh\necho entry\n' > "$BIN/cliphist"
 printf '#!/bin/sh\ncat > /dev/null; echo "picker: $1" >> "$CALL_LOG"\n' > "$BIN/pick"
 chmod +x "$BIN/cliphist" "$BIN/pick"
 : > "$LOG"
-run_action clipboard-history "" CLIPBOARD_PICKER="pick old" MENU_PICKER="pick menu"
+# a compositor without its own clipboard history: cliphist's, through the picker
+run_action clipboard-history "" INFYNITAE_BIN=false CLIPBOARD_PICKER="pick old" MENU_PICKER="pick menu"
 check "an old CLIPBOARD_PICKER line: Super+V uses MENU_PICKER" "$(cat "$LOG")" "picker: menu"
 rm -f "$BIN/cliphist" "$BIN/pick" "$HOMEDIR/.local/bin/infynitae-control-menu"
 
@@ -345,5 +346,38 @@ env -i HOME="$RS_HOME" PATH="$RS_BIN:/usr/bin:/bin" XDG_RUNTIME_DIR="$RS_RUN" \
 check "region-screenshot freeze overlay drops NoNewPrivs" "$(cat "$RS_LOG")" 1
 check "  via setpriv --no-new-privs --inh-caps=-all" \
     "$(grep -c -- '--no-new-privs --inh-caps=-all .*infynitae-wallpaper --overlay' "$RS_SETPRIV" || true)" 1
+
+# Super+V (2026-11-25): the picker lists the compositor's clipboard history and the picked line's
+# entry is the clipboard again (`msg clipboard use`), a pinned one too; with a compositor from
+# before it, cliphist's history as before
+cat << 'EOF' > "$BIN/clip-infynitae"
+#!/bin/sh
+case "$*" in
+    "msg clipboard") [ -n "${OWN_CLIPBOARD:-}" ] && printf 'pinned:7\tkept note\n5\tgit push\n' ;;
+    *) echo "clip: $*" >> "$CALL_LOG" ;;
+esac
+EOF
+cat << 'EOF' > "$BIN/pick-line"
+#!/bin/sh
+sed -n "${PICK_LINE}p"
+EOF
+cat << 'EOF' > "$BIN/cliphist"
+#!/bin/sh
+case "$1" in list) printf '3\told entry\n' ;; decode) cat ;; esac
+EOF
+cat << 'EOF' > "$BIN/wl-copy"
+#!/bin/sh
+echo "wl-copy: $(cat)" >> "$CALL_LOG"
+EOF
+chmod +x "$BIN/clip-infynitae" "$BIN/pick-line" "$BIN/cliphist" "$BIN/wl-copy"
+pick() {
+    : > "$LOG"
+    run_action clipboard-history "" INFYNITAE_BIN="$BIN/clip-infynitae" MENU_PICKER=pick-line "$@"
+    cat "$LOG"
+}
+check "Super+V uses the picked entry of the compositor's history" "$(pick OWN_CLIPBOARD=1 PICK_LINE=2)" "clip: msg clipboard use 5"
+check "  a pinned one too" "$(pick OWN_CLIPBOARD=1 PICK_LINE=1)" "clip: msg clipboard use 7"
+check "  an older compositor: cliphist's entry, through wl-copy" "$(pick PICK_LINE=1)" "$(printf 'wl-copy: 3\told entry')"
+rm "$BIN/clip-infynitae" "$BIN/pick-line" "$BIN/cliphist" "$BIN/wl-copy"
 
 exit $fail

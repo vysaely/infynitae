@@ -2,8 +2,11 @@
 //!
 //! Policy under test: the clipboard is offered only to the client that holds the keyboard focus
 //! (which follows Core's ActiveElementFocus), and only that client may set it (Smithay refuses
-//! `set_selection` from any other client). The compositor stores no contents: bytes go from the
-//! source client to the receiving client through a pipe. A selection dies with its source.
+//! `set_selection` from any other client). Bytes go from the source client to the receiving client
+//! through a pipe. The compositor also reads a copy of the clipboard (2026-11-25): it offers that
+//! copy once the source is gone (`CLIPBOARD_PERSIST`) and keeps it in a history in memory
+//! (`CLIPBOARD_HISTORY`), except for a password manager's copy or one from a private window. With
+//! `CLIPBOARD_PERSIST="false"` a selection dies with its source.
 
 mod common;
 
@@ -145,6 +148,60 @@ impl S {
         reader.read_to_end(&mut out).expect("read");
         out
     }
+
+    /// A reads the current selection as `mime` (written by B or by the compositor).
+    fn a_pastes(&mut self, mime: &str) -> Vec<u8> {
+        let mut reader = self.ls.probe.paste(mime);
+        self.o.drive(&mut self.ls);
+        let mut out = Vec::new();
+        reader.read_to_end(&mut out).expect("read");
+        out
+    }
+
+    /// B, focused, copies `bytes` as `mimes`.
+    fn b_copies(&mut self, mimes: &[&str], bytes: &[u8]) {
+        self.focus(self.b);
+        let qh = self.o.qh.clone();
+        let serial = self.o.probe.last_serial;
+        self.o.probe.copy(&qh, mimes, bytes, serial);
+        self.o.drive(&mut self.ls);
+    }
+
+    /// B sets the clipboard to nothing, as the X11 bridge does when the X11 app that copied quits.
+    fn b_clears(&mut self) {
+        self.focus(self.b);
+        let serial = self.o.probe.last_serial;
+        self.o.probe.clear_selection(serial);
+        self.o.drive(&mut self.ls);
+    }
+
+    /// B's client quits (a new, idle second client takes its place in the harness).
+    fn b_quits(&mut self) {
+        let Other { conn, queue, .. } =
+            std::mem::replace(&mut self.o, Other::connect(&mut self.ls));
+        drop(queue);
+        drop(conn);
+        self.o.drive(&mut self.ls);
+    }
+
+    /// Whether the compositor (or anyone) asked B's source for its bytes.
+    fn b_was_read(&self) -> bool {
+        self.o
+            .probe
+            .clipboard
+            .log
+            .iter()
+            .any(|l| l.starts_with("send "))
+    }
+}
+
+/// The compositor reads `config` as its config (in the harness's own temporary folder).
+fn configure(ls: &mut Lockstep, config: &str) {
+    let dir = ls.live_dir.join(".config/infynitae");
+    std::fs::create_dir_all(&dir).expect("config folder");
+    std::fs::write(dir.join("config"), config).expect("config");
+    ls.state.set_config_home(ls.live_dir.clone());
+    ls.state.reload_config();
 }
 
 /// Copy in A, focus B, paste in B: B is offered A's MIME types and receives A's bytes.
@@ -216,13 +273,14 @@ fn a_new_copy_takes_the_selection_over() {
     assert_eq!(mimes, ["text/plain"]);
 }
 
-/// A selection dies with its owner: B copies, A is focused and offered it; B's client quits:
-/// A is told the selection is gone (`selection none`). (Known limitation: a source destroyed
-/// while its client keeps running stays offered until the next selection; a paste then reads
-/// nothing. Smithay 0.7 gives the adapter no way to see that source die.)
+/// Without `CLIPBOARD_PERSIST` a selection dies with its owner: B copies, A is focused and offered
+/// it; B's client quits: A is told the selection is gone (`selection none`). (Known limitation: a
+/// source destroyed while its client keeps running stays offered until the next selection; a paste
+/// then reads nothing. Smithay 0.7 gives the adapter no way to see that source die.)
 #[test]
 fn a_quitting_owner_clears_the_selection() {
     let mut s = scene();
+    configure(&mut s.ls, "CLIPBOARD_PERSIST=\"false\"\n");
     s.focus(s.b);
     let qh = s.o.qh.clone();
     let serial = s.o.probe.last_serial;
@@ -246,10 +304,12 @@ fn a_quitting_owner_clears_the_selection() {
 }
 
 /// The source client dies during a transfer: the receiver's pipe ends (EOF, no hang), the
-/// selection is gone, and the clipboard works again with a new source.
+/// selection is gone (without `CLIPBOARD_PERSIST`), and the clipboard works again with a new
+/// source.
 #[test]
 fn the_source_client_dying_during_a_transfer_ends_it_cleanly() {
     let mut s = scene();
+    configure(&mut s.ls, "CLIPBOARD_PERSIST=\"false\"\n");
     // B is the source this time, A the receiver
     s.focus(s.b);
     let qh = s.o.qh.clone();
@@ -274,6 +334,144 @@ fn the_source_client_dying_during_a_transfer_ends_it_cleanly() {
     );
     s.a_copies(b"again");
     assert!(s.ls.state.core().stage().z_order().contains(&s.a));
+}
+
+/// B copies and quits; A still pastes what B copied, in each of B's types, from the compositor's
+/// copy (`CLIPBOARD_PERSIST`, on by default, as wl-clip-persist did).
+#[test]
+fn a_copy_outlives_the_app_that_made_it() {
+    let mut s = scene();
+    s.b_copies(&MIMES, b"kept after B quits");
+    s.focus(s.a);
+    s.b_quits();
+    let (_, mimes) =
+        s.ls.probe
+            .clipboard
+            .selection
+            .clone()
+            .expect("A is offered the compositor's copy, not told the clipboard is gone");
+    assert_eq!(mimes, MIMES);
+    assert_eq!(s.a_pastes("text/plain"), b"kept after B quits");
+    assert_eq!(
+        s.a_pastes("text/plain;charset=utf-8"),
+        b"kept after B quits"
+    );
+    // and a new copy takes over from the compositor's
+    s.a_copies(b"A's now");
+    assert_eq!(s.a_pastes("text/plain"), b"A's now");
+}
+
+/// The X11 bridge clears the clipboard when the X11 app that copied quits (2026-11-28, VM: an xclip
+/// copy was gone the moment xclip ended; wl-clip-persist used to cover it). The compositor keeps the
+/// copy it already read and offers it: a cleared clipboard is treated like one whose app went.
+#[test]
+fn a_copy_outlives_its_app_clearing_the_clipboard() {
+    let mut s = scene();
+    s.b_copies(&MIMES, b"from an X11 app");
+    s.focus(s.a);
+    assert_eq!(s.a_pastes("text/plain"), b"from an X11 app");
+    s.b_clears();
+    s.focus(s.a);
+    assert!(
+        s.ls.probe.clipboard.selection.is_some(),
+        "A is offered the compositor's copy, not an empty clipboard: {:?}",
+        s.ls.probe.clipboard.log
+    );
+    assert_eq!(s.a_pastes("text/plain"), b"from an X11 app");
+}
+
+/// A password manager's copy (KeePassXC offers `x-kde-passwordManagerHint`) is never read by the
+/// compositor: it stays out of the history and is not kept after its app quits. It pastes as usual
+/// while its app runs. An ordinary copy after it (A's) enters the history.
+#[test]
+fn a_password_managers_copy_never_enters_the_history() {
+    let mut s = scene();
+    s.b_copies(&["text/plain", "x-kde-passwordManagerHint"], b"hunter2");
+    assert!(!s.b_was_read(), "{:?}", s.o.probe.clipboard.log);
+    assert!(s.ls.state.clipboard.history.is_empty());
+    s.focus(s.a);
+    assert_eq!(s.a_pastes("text/plain"), b"hunter2");
+    s.b_quits();
+    assert!(
+        s.ls.probe.clipboard.selection.is_none(),
+        "not kept: {:?}",
+        s.ls.probe.clipboard.log
+    );
+    s.a_copies(b"ordinary");
+    assert_eq!(s.ls.state.clipboard.history.len(), 1);
+}
+
+/// A copy made in a private window (Super+Shift+P, `PRIVACY_APPS`) is not read either.
+#[test]
+fn a_copy_in_a_private_window_never_enters_the_history() {
+    let mut s = scene();
+    s.focus(s.b);
+    s.ls.state.toggle_privacy_focused();
+    s.b_copies(&["text/plain"], b"private");
+    assert!(!s.b_was_read(), "{:?}", s.o.probe.clipboard.log);
+    assert!(s.ls.state.clipboard.history.is_empty());
+}
+
+/// The history lists copies newest first; an entry used from it (`infynitae msg clipboard use`)
+/// is the clipboard again and pastes in A; a deleted one is gone; pinned ones list first.
+#[test]
+fn an_entry_of_the_history_is_the_clipboard_again() {
+    use infynitae_wayland::clipboard::{ClipboardAsk, Preview};
+    use infynitae_wayland::desk::DeskAsk;
+    let mut s = scene();
+    s.b_copies(&["text/plain"], b"one");
+    s.b_copies(&["text/plain"], b"two");
+    s.b_copies(&["text/plain"], b"three");
+    let texts = |s: &mut S| -> Vec<(u64, bool, String)> {
+        s.ls.state
+            .clipboard
+            .history
+            .listing()
+            .into_iter()
+            .map(|e| match e.preview {
+                Preview::Text(t) => (e.id, e.pinned, t),
+                Preview::Image { .. } => panic!("no image was copied"),
+            })
+            .collect()
+    };
+    let l = texts(&mut s);
+    let names: Vec<&str> = l.iter().map(|(_, _, t)| t.as_str()).collect();
+    assert_eq!(names, ["three", "two", "one"]);
+    let (one, two) = (l[2].0, l[1].0);
+    s.focus(s.a);
+    s.ls.state
+        .desk_ask(DeskAsk::Clipboard(ClipboardAsk::Use(one)));
+    s.o.drive(&mut s.ls);
+    assert_eq!(s.a_pastes("text/plain"), b"one");
+    s.ls.state
+        .desk_ask(DeskAsk::Clipboard(ClipboardAsk::Delete(two)));
+    s.ls.state
+        .desk_ask(DeskAsk::Clipboard(ClipboardAsk::Pin(l[0].0, true)));
+    let l = texts(&mut s);
+    let names: Vec<(bool, &str)> = l.iter().map(|(_, p, t)| (*p, t.as_str())).collect();
+    assert_eq!(names, [(true, "three"), (false, "one")]);
+}
+
+/// The history holds at most `HISTORY_ENTRIES` copies: more copies than that leave it at the
+/// bound, the newest first.
+#[test]
+fn the_history_stays_within_its_bound() {
+    use infynitae_wayland::clipboard::{HISTORY_ENTRIES, Preview};
+    let mut s = scene();
+    s.focus(s.b);
+    for i in 0..HISTORY_ENTRIES + 5 {
+        let qh = s.o.qh.clone();
+        let serial = s.o.probe.last_serial;
+        s.o.probe
+            .copy(&qh, &["text/plain"], format!("copy {i}").as_bytes(), serial);
+        s.o.drive(&mut s.ls);
+    }
+    let h = &s.ls.state.clipboard.history;
+    assert_eq!(h.len(), HISTORY_ENTRIES);
+    assert_eq!(
+        h.listing()[0].preview,
+        Preview::Text(format!("copy {}", HISTORY_ENTRIES + 4))
+    );
 }
 
 /// Invalid and stale requests do not disturb the compositor: a receive on an offer whose

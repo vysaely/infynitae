@@ -23,7 +23,7 @@ this repository already.
 | Volume / brightness pop-ups | `notify-send` from `live/launch.sh` | swayosd, avizo, wob | none yet (the edge's sound card shows the level) | **Yes, small**: a native on-screen display |
 | Control menu (Wi-Fi, Bluetooth, volume, sound output, power) | `live/control-menu` (ours) on fuzzel | nm-applet, iwgtk, blueman, pwvucontrol, a bar's widgets | `BIND_CONTROL` and `EXEC_` (another command on Super+A) | Ours already; the edge's control panel (Super+A) is the graphical one |
 | Bar / panel | the edge (ours: `live/edge-apps`) | waybar, ironbar, eww, quickshell | `ENABLE_EDGE="false"`, then start yours in `autostart.sh`; `LAUNCHER` gives it Super+W, `BIND_CONTROL="none"` with an `EXEC_` line Super+A | Ours |
-| Clipboard history | cliphist + wl-clip-persist | clipman, copyq | `CLIPBOARD_HISTORY`, `MENU_PICKER` | Low value |
+| Clipboard history | the compositor (cliphist + wl-clip-persist with one from before 2026-11-25) | clipman, copyq | `CLIPBOARD_HISTORY`, `CLIPBOARD_PERSIST`, `MENU_PICKER` | Ours (in the compositor) |
 | Screenshots | `infynitae-shot` (ours, `live/shot-rs`), else `grim` + `slurp` | grimblast, flameshot, satty (annotate) | `SCREENSHOT_CMD` (whole screen) | Ours (`live/shot-rs`) |
 | Recording, replay buffer | `infynitae-recorder` (ours) + ffmpeg | wf-recorder, gpu-screen-recorder, OBS | `ENABLE_REPLAY_BUFFER` | Ours |
 | Wallpaper | `infynitae-wallpaper` (ours) | swaybg, swww, mpvpaper | `WALLPAPER` | Ours |

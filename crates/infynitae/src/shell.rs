@@ -13,6 +13,7 @@ use std::sync::Arc;
 use infynitae_core::protocol::Effect;
 use infynitae_core::{Core, ShellPort};
 use infynitae_ipc::ShellServer;
+use infynitae_ipc::json::Value;
 use infynitae_wayland::extension::{Extension, ExtensionFactory, LoopExtension, waker};
 use infynitae_wayland::log_line;
 
@@ -52,12 +53,18 @@ impl LoopExtension for ShellExtension {
     fn service(&mut self, core: &mut Core) -> (Vec<Effect>, bool) {
         let done = self.server.service(core);
         self.lock_requested |= done.lock;
-        use infynitae_ipc::protocol::Ask;
+        use infynitae_ipc::protocol::{Ask, ClipboardAsk};
+        use infynitae_wayland::clipboard::ClipboardAsk as Clip;
         use infynitae_wayland::desk::DeskAsk;
         self.asks.extend(done.asks.iter().map(|a| match *a {
             Ask::NightLight(on) => DeskAsk::NightLight(on),
             Ask::NextKeyboardLayout => DeskAsk::NextKeyboardLayout,
             Ask::Osk(on) => DeskAsk::Osk(on),
+            Ask::Clipboard(ask) => DeskAsk::Clipboard(match ask {
+                ClipboardAsk::Use(id) => Clip::Use(id),
+                ClipboardAsk::Pin(id, on) => Clip::Pin(id, on),
+                ClipboardAsk::Delete(id) => Clip::Delete(id),
+            }),
         }));
         (done.effects, done.changed)
     }
@@ -74,9 +81,42 @@ impl LoopExtension for ShellExtension {
         self.server.set_locked(locked);
     }
 
+    fn set_clipboard(&mut self, entries: &[infynitae_wayland::clipboard::Listed]) {
+        self.server.set_clipboard(clipboard_value(entries));
+    }
+
     fn wake_at(&self) -> Option<std::time::Instant> {
         self.server.wake_at()
     }
+}
+
+/// The clipboard history as `clipboard` answers it: `{"id", "pinned", "text"}` for a text,
+/// `{"id", "pinned", "image": type, "bytes", "size": [w, h] or null}` for an image.
+fn clipboard_value(entries: &[infynitae_wayland::clipboard::Listed]) -> Value {
+    use infynitae_wayland::clipboard::Preview;
+    Value::Arr(
+        entries
+            .iter()
+            .map(|e| {
+                let (id, pinned) = (("id", e.id.into()), ("pinned", e.pinned.into()));
+                match &e.preview {
+                    Preview::Text(t) => Value::obj([id, pinned, ("text", t.as_str().into())]),
+                    Preview::Image { mime, bytes, size } => Value::obj([
+                        id,
+                        pinned,
+                        ("image", mime.as_str().into()),
+                        ("bytes", (*bytes as u64).into()),
+                        (
+                            "size",
+                            size.map_or(Value::Null, |(w, h)| {
+                                Value::Arr(vec![u64::from(w).into(), u64::from(h).into()])
+                            }),
+                        ),
+                    ]),
+                }
+            })
+            .collect(),
+    )
 }
 
 /// The shell server as the backend starts it (after its signal handlers exist).

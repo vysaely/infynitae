@@ -340,8 +340,8 @@ now (read its head before building). `SCREEN_LOCKER` is on `settings/advanced`.
 | M Cursor in captures | Switch | `SCREENCOPY_CURSOR` | | save |
 | M Remote desktop | Switch | `REMOTE_DESKTOP` | | Reload(`portal`) |
 
-Source `shares`: that file's lines. Hidden: the two lists while empty; Clipboard history without
-`cliphist` and `wl-paste`; the other clipboard row without `wl-clip-persist`. Left to the file: every
+Source `shares`: that file's lines. Hidden: the two lists while empty (the compositor keeps the
+clipboard and its history, so the two clipboard rows need no program). Left to the file: every
 `ALLOW_*` list and `PRIVACY_TITLES` (a wrong word there breaks screenshots or clipboard managers; the
 file has the explanation beside each).
 

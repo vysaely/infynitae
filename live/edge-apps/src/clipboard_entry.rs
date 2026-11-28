@@ -1,6 +1,8 @@
 //! Clipboard history (`cliphist list`) entry parsing, sanitization, and command formatting.
 
-pub const MAX_ITEMS: usize = 24;
+/// The compositor's own history holds up to 300 entries; cliphist's list is cut to 24 by the
+/// command that reads it.
+pub const MAX_ITEMS: usize = 300;
 pub const MAX_LINE_BYTES: usize = 64 * 1024;
 const MAX_SANITIZE_SCAN_BYTES: usize = 8192;
 

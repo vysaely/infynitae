@@ -55,11 +55,11 @@ pub const TABLE: &[Setting] = &[
     Setting {
         key: "CLIPBOARD_HISTORY",
         name: "Clipboard history",
-        says: "Kept on disk",
+        says: "Kept in memory until you log out",
         control: ON_OFF,
         after: After::Reload("clipboard"),
         more: false,
-        needs: &["cliphist", "wl-paste"],
+        needs: &[],
     },
     Setting {
         key: "CLIPBOARD_PERSIST",
@@ -68,7 +68,7 @@ pub const TABLE: &[Setting] = &[
         control: ON_OFF,
         after: After::Reload("clipboard"),
         more: true,
-        needs: &["wl-clip-persist"],
+        needs: &[],
     },
     Setting {
         key: "SCREENCOPY_CURSOR",
@@ -727,7 +727,7 @@ mod tests {
     }
 
     #[test]
-    fn rows_hide_when_empty_or_missing_tools() {
+    fn rows_hide_when_empty() {
         let th = Theme::from_config(&crate::config::Config::from_text(""));
         let cx_s = test_cx(&th);
         let mut cx_m = test_cx(&th);
@@ -736,7 +736,8 @@ mod tests {
         let mut c = PrivacyCard::new();
         assert_eq!(c.status(&cx_s), Status::Loading);
 
-        // No clipboard tools, both lists empty: at S, only SCREENSHARE_ASK, CAPTURE_INDICATOR, More
+        // No clipboard tools (the compositor keeps the clipboard, 2026-11-25), both lists empty: at
+        // S, SCREENSHARE_ASK, CAPTURE_INDICATOR, Clipboard history and More
         c.apply(
             "config",
             &data(
@@ -750,26 +751,8 @@ mod tests {
             ) as &dyn Any,
         );
         assert_eq!(c.status(&cx_s), Status::Ready);
-        assert_eq!(c.height(&cx_s, 360.0), 3.0 * ui::ROW_H);
-        // At M without wl-clip-persist: SCREENSHARE_ASK, CAPTURE_INDICATOR, SCREENCOPY_CURSOR, REMOTE_DESKTOP
-        assert_eq!(c.height(&cx_m, 360.0), 4.0 * ui::ROW_H);
-
-        // Having only cliphist (without wl-paste) still hides Clipboard history
-        c.apply("config", &data(&[], &[], &["cliphist"]) as &dyn Any);
-        assert_eq!(c.height(&cx_s, 360.0), 3.0 * ui::ROW_H);
-
-        // Having both cliphist and wl-paste shows Clipboard history at S
-        c.apply(
-            "config",
-            &data(&[], &[], &["cliphist", "wl-paste"]) as &dyn Any,
-        );
         assert_eq!(c.height(&cx_s, 360.0), 4.0 * ui::ROW_H);
-
-        // Adding wl-clip-persist shows Keep the clipboard after an app closes at M
-        c.apply(
-            "config",
-            &data(&[], &[], &["cliphist", "wl-paste", "wl-clip-persist"]) as &dyn Any,
-        );
+        // At M also Keep the clipboard after an app closes, SCREENCOPY_CURSOR, REMOTE_DESKTOP
         assert_eq!(c.height(&cx_m, 360.0), 6.0 * ui::ROW_H);
 
         // Non-empty shares and PRIVACY_APPS grow the card; filtering to an unmatched query hides it
@@ -783,7 +766,7 @@ mod tests {
         );
         assert_eq!(
             c.height(&cx_s, 360.0),
-            3.0 * ui::ROW_H
+            4.0 * ui::ROW_H
                 + (LIST_LABEL_H + ui::LIST_ROW_H + 8.0)
                 + (LIST_LABEL_H + 2.0 * ui::LIST_ROW_H + 8.0)
         );

@@ -210,17 +210,21 @@ if infy_on "${ENABLE_REPLAY_BUFFER:-false}"; then
     fi
 fi
 
-# 6b. Clipboard persistence and history
-if infy_on "${CLIPBOARD_PERSIST:-true}"; then
-    if command -v wl-clip-persist >/dev/null 2>&1; then
-        infy_run_unpriv wl-clip-persist --clipboard regular >/dev/null 2>&1
+# 6b. Clipboard persistence and history: the compositor keeps both itself (it answers
+# `infynitae msg clipboard`); one from before that needs wl-clip-persist and cliphist
+INFY_CLI=$(infy_bin infynitae || true)
+if [ -z "$INFY_CLI" ] || ! "$INFY_CLI" msg clipboard >/dev/null 2>&1; then
+    if infy_on "${CLIPBOARD_PERSIST:-true}"; then
+        if command -v wl-clip-persist >/dev/null 2>&1; then
+            infy_run_unpriv wl-clip-persist --clipboard regular >/dev/null 2>&1
+        fi
     fi
-fi
 
-if infy_on "${CLIPBOARD_HISTORY:-true}"; then
-    if command -v cliphist >/dev/null 2>&1 && command -v wl-paste >/dev/null 2>&1; then
-        infy_run_unpriv wl-paste --type text --watch cliphist store >/dev/null 2>&1
-        infy_run_unpriv wl-paste --type image --watch cliphist store >/dev/null 2>&1
+    if infy_on "${CLIPBOARD_HISTORY:-true}"; then
+        if command -v cliphist >/dev/null 2>&1 && command -v wl-paste >/dev/null 2>&1; then
+            infy_run_unpriv wl-paste --type text --watch cliphist store >/dev/null 2>&1
+            infy_run_unpriv wl-paste --type image --watch cliphist store >/dev/null 2>&1
+        fi
     fi
 fi
 
