@@ -12,8 +12,11 @@ portal can answer `org.freedesktop.portal.FileChooser` (`OpenFile`,
 `SaveFile`, `SaveFiles`) with a window that matches the rest of the desktop.
 
 An interactive drawing of the Open and Save windows using the default theme
-colours is in [file-picker.html](mockups/file-picker.html). No code is written
-yet; the owner reviews this design first.
+colours is in [file-picker.html](mockups/file-picker.html). The portal picker
+(stage 1, below) and the full file manager (stage 2, [FILE_MANAGER.md](FILE_MANAGER.md))
+share one crate (`live/files/`) and one binary (`infynitae-files`): `--portal`
+opens a single picker dialog, and running `infynitae-files` directly opens the
+file manager. No code is written yet; the owner reviews this design first.
 
 ---
 
@@ -266,10 +269,12 @@ Two pieces:
    caller, exports `Request`, converts the D-Bus `GVariant` arguments to JSON,
    spawns the Rust UI asynchronously, and turns its stdout JSON back into a
    D-Bus reply. Built into `infynitae-portal` by `live/build-helpers.sh`.
-2. **Standalone Rust crate `live/file-picker/` (binary `infynitae-file-picker`).**
+2. **Standalone Rust crate `live/files/` (binary `infynitae-files`).**
+   Shared between the portal picker (`infynitae-files --portal`) and the file
+   manager (`infynitae-files`, designed in [FILE_MANAGER.md](FILE_MANAGER.md)).
    Structured like `live/shot-rs/` and `live/edge-apps/`: its own `Cargo.toml`,
    `Cargo.lock`, and `[workspace]`, built by `build_rust` in
-   `live/build-helpers.sh`, installed to `~/.local/bin/infynitae-file-picker`
+   `live/build-helpers.sh`, installed to `~/.local/bin/infynitae-files`
    with `.previous` rollback support, and checked in `.github/workflows/ci.yml`
    (fmt, clippy, `cargo-machete`, tests, `cargo-audit`, `verify-theme-colours`).
 
@@ -302,7 +307,7 @@ stage 3 `zwp_text_input_v3`), `cairo-rs` 0.20 (`png` feature), `pango` 0.20,
 
 Parts to mirror or share with `live/edge-apps` and `live/shot-rs`:
 
-| Concern | Existing source | How `live/file-picker` uses it |
+| Concern | Existing source | How `live/files` uses it |
 | :--- | :--- | :--- |
 | Theme tokens | `live/shot-rs/src/look.rs` (reads 6 keys) and `live/edge-apps/src/theme.rs` (prints 21 `LOOK_*` keys) | Read all 21 keys from `$XDG_CACHE_HOME/infynitae/look` with `config/config` defaults if missing. |
 | Drawing primitives | `live/edge-apps/src/draw.rs`, `src/ui.rs` | Same `round_rect`, `bar`, Pango font/ellipsize helpers, `SIZE_*` sizes, `LIGHT_ALPHA` (0.08), `CHOSEN_ALPHA` (0.16), 16 px / 1.6 px line icons. |
@@ -320,7 +325,7 @@ are the `image` crate (default features disabled, only `png`, `jpeg`, `webp`,
 
 If a third Rust helper later needs `look` or `drives`, those small pure-Rust
 modules can move into a shared path crate under `live/`; until then, keeping
-`live/file-picker` independent avoids churning `live/edge-apps` and
+`live/files` independent avoids churning `live/edge-apps` and
 `live/shot-rs`.
 
 ### 3. Process launch, parenting, and URI handoff
@@ -335,7 +340,7 @@ xdg-desktop-portal  (rewrites /run/user/<uid>/doc/... -> host path on input)
 infynitae-portal  (live/portal/file-chooser.c)
   |-- checks from_portal(conn, sender)
   |-- registers org.freedesktop.impl.portal.Request on `handle`
-  |-- spawns ~/.local/bin/infynitae-file-picker --portal
+  |-- spawns ~/.local/bin/infynitae-files --portal
   |     stdin  <- one JSON object (method, title, parent_window, options;
   |                raw byte paths base64-encoded so non-UTF-8 survives)
   |     stdout -> one JSON object ({ "response": 0|1, "uris": [...],
@@ -358,7 +363,7 @@ files:
   loss.
 - No temporary files remain on disk if the picker or portal exits abruptly.
 - Manual and VM testing can drive the binary directly with
-  `infynitae-file-picker --portal < req.json` or simple CLI flags.
+  `infynitae-files --portal < req.json` or simple CLI flags.
 
 #### Window parenting (`parent_window`)
 
@@ -368,7 +373,7 @@ implements `xdg_foreign` (`crates/infynitae-wayland/src/handlers.rs:1413,1458`),
 and its placement rule centres child toplevels over their parent window
 ([WINDOWS.md](WINDOWS.md)).
 
-When `parent_window` starts with `"wayland:"`, `infynitae-file-picker` binds
+When `parent_window` starts with `"wayland:"`, `infynitae-files --portal` binds
 `zxdg_importer_v2`, calls `import_toplevel(handle)`, and invokes
 `set_parent_of(&xdg_surface)` before the first commit. When `parent_window` is
 empty or starts with `"x11:"` (Xwayland apps cannot be imported by a Wayland
@@ -379,7 +384,7 @@ toplevel placed by `PLACEMENT_POLICY`.
 
 `infynitae-portal` drops privileges at startup (`prctl(PR_SET_NO_NEW_PRIVS, 1)`
 in `infynitae-portal.c:1031` and `setpriv --no-new-privs --inh-caps=-all` in
-`live/env.sh:243`). The spawned `infynitae-file-picker` inherits those
+`live/env.sh:243`). The spawned `infynitae-files --portal` inherits those
 restrictions, so it can never escalate privileges.
 
 Clicking an unmounted Roman-numeral drive in the sidebar mounts it through
@@ -392,7 +397,7 @@ works under `NO_NEW_PRIVS`.
 
 ### 4. Sandboxed apps (Flatpak document portal)
 
-`infynitae-file-picker` runs on the host session outside the calling app's
+`infynitae-files --portal` runs on the host session outside the calling app's
 sandbox, so it sees the user's real home folders and drives `I`–`VI`.
 
 `xdg-desktop-portal` owns the boundary with `xdg-document-portal`
@@ -429,7 +434,7 @@ Fallback works at two points:
    `infynitae-portal` for `ScreenCast` and `Settings` so a script still works
    with an older binary installed before an update, `live/env.sh` checks that
    both `org.freedesktop.impl.portal.FileChooser` is in
-   `~/.local/bin/infynitae-portal` and `~/.local/bin/infynitae-file-picker` is
+   `~/.local/bin/infynitae-portal` and `~/.local/bin/infynitae-files` is
    executable (cached in an env var so `Super+key` presses do not grep the
    binary).
    - When available and `FILE_PICKER != "gtk"`: `infynitae.portal` includes
@@ -442,7 +447,7 @@ Fallback works at two points:
 2. **Runtime fallback (`live/portal/file-chooser.c`).**
    `xdg-desktop-portal` picks one `FileChooser` backend at startup and does not
    re-try the second backend in `infynitae;gtk` if a call fails at runtime.
-   Therefore, if `infynitae-file-picker` cannot be spawned, dies from a signal,
+   Therefore, if `infynitae-files` cannot be spawned, dies from a signal,
    exits with a non-zero code, or returns invalid JSON, `file-chooser.c` logs
    the failure to `~/.local/state/infynitae/portal.log` and forwards the exact
    D-Bus call (`OpenFile`, `SaveFile`, or `SaveFiles`, same arguments) to
@@ -460,16 +465,18 @@ and `live/shot-rs/src/` is 6,491 lines total.
 | Component | Path | Estimated lines |
 | :--- | :--- | :--- |
 | Portal C bridge + Request table + GTK fallback | `live/portal/file-chooser.{c,h}`, edits to `infynitae-portal.c`, `env.sh`, `build-helpers.sh`, `config/config` | 300–400 |
-| Stage 1 Rust core (protocol JSON, state, navigation, filters, choices, MIME tables, `SaveFiles` collisions) | `live/file-picker/src/{protocol,state,filters,mime}.rs` | 900–1,200 |
-| Stage 1 places & filesystem (drives I–VI, XDG folders, `recently-used.xbel` read/write, worker thread) | `live/file-picker/src/{places,fs_worker,recent}.rs` | 400–550 |
-| Stage 1 theme, layout, Cairo/Pango rendering, text inputs | `live/file-picker/src/{look,draw,layout,text_input}.rs` | 800–1,050 |
-| Stage 1 Wayland client (`xdg_toplevel`, `xdg_foreign`, shm buffers, keyboard/pointer/clipboard) | `live/file-picker/src/wayland.rs` | 550–750 |
-| Stage 2 (grid view, async thumbnails, preview pane, `plocate` search, unmounted drive mount, bookmarks) | `live/file-picker/src/{grid,preview,thumbs,locate}.rs` | 1,000–1,400 |
-| Stage 3 (per-app state memory, `zwp_text_input_v3`, fractional scale, optional Firefox/Qt wiring) | `live/file-picker/src/` + `live/settings.sh` | 500–800 |
-| Tests (Rust unit tests, `tools/test-portal-file-chooser`, `tools/vm-edge/pfilepicker.py`) | `live/file-picker/`, `tools/` | 1,000–1,400 |
-| **Total (all stages, code + tests)** | | **5,450–7,550** |
+| Stage 1 Rust core (protocol JSON, state, navigation, filters, choices, MIME tables, `SaveFiles` collisions) | `live/files/src/{portal/,mime.rs}` | 900–1,200 |
+| Stage 1 places & filesystem (drives I–VI, XDG folders, `recently-used.xbel` read/write, worker thread) | `live/files/src/{places,fs_list,recent}.rs` | 400–550 |
+| Stage 1 theme, layout, Cairo/Pango rendering, text inputs | `live/files/src/{look,draw,ui,text_input}.rs` | 800–1,050 |
+| Stage 1 Wayland client (`xdg_toplevel`, `xdg_foreign`, shm buffers, keyboard/pointer/clipboard) | `live/files/src/wayland.rs` | 550–750 |
+| Stage 2 (grid view, async thumbnails, preview pane, `plocate` search, unmounted drive mount, bookmarks) | `live/files/src/{grid,preview,thumbs,locate}.rs` | 1,000–1,400 |
+| Stage 3 (per-app state memory, `zwp_text_input_v3`, fractional scale, optional Firefox/Qt wiring) | `live/files/src/` + `live/settings.sh` | 500–800 |
+| Tests (Rust unit tests, `tools/test-portal-file-chooser`, `tools/vm-edge/pfilepicker.py`) | `live/files/`, `tools/` | 1,000–1,400 |
+| **Total (picker stages, code + tests)** | | **5,450–7,550** |
 
-Stage 1 alone (code without tests) is roughly **3,000–4,000 lines**.
+Stage 1 alone (code without tests) is roughly **3,000–4,000 lines**. Additional
+file manager modules built on top of this shared crate are sized in
+[FILE_MANAGER.md](FILE_MANAGER.md).
 
 ### 7. Stages
 
@@ -477,7 +484,7 @@ Stage 1 alone (code without tests) is roughly **3,000–4,000 lines**.
 - `live/portal/file-chooser.{c,h}`: `OpenFile`, `SaveFile`, `SaveFiles`,
   `from_portal` check, `Request.Close()` cancellation, async wait, GTK runtime
   fallback, `live/env.sh` probe and `FILE_PICKER` config key.
-- `live/file-picker/`: `xdg_toplevel` with `xdg_foreign` parent attachment,
+- `live/files/`: `xdg_toplevel` with `xdg_foreign` parent attachment,
   21-token theme loader (`~/.cache/infynitae/look`), Places sidebar (Recent,
   Home + XDG folders, mounted drives I–VI), List view with sorting, breadcrumb
   and `Ctrl+L` type-a-path with `Tab` completion, current-folder search
@@ -561,7 +568,7 @@ Stage 1 alone (code without tests) is roughly **3,000–4,000 lines**.
 
 #### Automated tests (run in CI without a screen)
 
-1. **`live/file-picker` unit tests (`cargo test --locked`, new CI job):**
+1. **`live/files` unit tests (`cargo test --locked`, new CI job):**
    - Portal JSON serialization/deserialization, including non-UTF-8 raw path
      bytes (`ay` -> base64 -> percent-encoded `file://` URI), mnemonic `_`
      stripping, `current_file` splitting, and `SaveFiles` collision renaming.
@@ -578,7 +585,7 @@ Stage 1 alone (code without tests) is roughly **3,000–4,000 lines**.
      `look.rs`.
 2. **Portal D-Bus test (`tools/test-portal-file-chooser`, CI "C helpers" job):**
    - Runs `infynitae-portal` in a private `dbus-run-session` with a stand-in
-     `HOME`, `XDG_RUNTIME_DIR`, and stub `infynitae-file-picker` binary
+     `HOME`, `XDG_RUNTIME_DIR`, and stub `infynitae-files` binary
      (matching `tools/test-portal-screencast` and `tools/test-portal-settings`).
    - Checks: direct callers other than `xdg-desktop-portal` get `AccessDenied`;
      `OpenFile`, `SaveFile`, and `SaveFiles` forward all options and return
