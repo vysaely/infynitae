@@ -61,21 +61,19 @@ with held sizes it no longer changes their size.
 ## Cluster layouts
 
 A cluster is the windows within 300 px of each other (`Core::clusters`). These are the only
-times one window's change moves other windows, and each is the person's asking: a key, a shell
-command, or a setting they turned on (owner, 2026-11-21; `crates/infynitae-core/src/arrange.rs`).
+times one window's change moves other windows, and each is the person's asking: a key or a shell
+command (owner, 2026-11-21; `crates/infynitae-core/src/arrange.rs`). Nothing re-arranges by
+itself: a window that closes or is minimized leaves its gap (owner, 2026-11-28).
 
 | Asked by | What |
 | :--- | :--- |
-| `BIND_CLUSTER_LAYOUT` (no default key since 2026-11-23), `infynitae msg arrange spiral\|tiles\|line\|tidy [inst elem]` | The focused window's cluster (a dialog's: its parent's; nothing when the focused window is fullscreen or kept on top), arranged once; the camera frames the result on the pointer's screen, at zoom 1 at most. The key takes the next layout at each press on the same cluster, spiral first (2026-11-23, in place of tidy, grid and columns). The room is the pointer's screen's usable area at zoom 1 less 12 px on each side (1896 x 1056 on 1920 x 1080). **Spiral**: own sizes; the focused window stays and the others, the biggest first, each go to the free spot nearest to it, beside a window already placed, 12 px apart, lined up with one of its edges or its middle; across counts less than up and down by the screen's shape, so the cluster grows wide like the screen. **Tiles**: from the cluster's top-left corner, the room split in halves along its longer side, again in each half, until each window has a tile (three windows: a half and two quarters); the focused window gets the first; each window is asked for its tile's size and, until it answers, centred in it. **Line**: from the cluster's top-left corner, one row in reading order, each window asked for the room's height and the width of its shape at that height. **Tidy** (not on the key): own sizes, in reading order, rows as wide as the room, 12 px apart. Under `CLUSTER_SORT` "tidy" a cluster the key arranged last is arranged again in that layout when a window leaves it; any other cluster is tidied. A window that keeps a size bigger than its tile has its cluster tidied once all have answered. |
-| Super+Shift+G (`BIND_CLUSTER_BY_APP`), `infynitae msg arrange app` | The focused window's cluster sorted by app: every window at its own size (nothing asked to resize), one row per app in the order the apps' first windows read, left to right, rows 12 px apart and as wide as they need (not squeezed into one view); the camera frames the result. Not in the layout key's cycle. |
-| A layout's window keeps a size bigger than its cell (an app's minimum, such as Discord's width) | Once every window of that layout has answered, its cluster is tidied at the sizes the windows took, so none covers another. |
-| `CLUSTER_SORT` "tidy" (off by default) | A window of a cluster closes or is minimized: the rest of its cluster is tidied, the gap closes. The camera stays. Not for a dialog, not during a drag. |
+| `BIND_CLUSTER_LAYOUT` (no default key since 2026-11-23), `infynitae msg arrange grid [inst elem]` | The focused window's cluster (a dialog's: its parent's; nothing when the focused window is fullscreen or kept on top) sorted into a square grid (owner, 2026-11-28, in place of spiral, tiles and line): k windows in n x n slots, n = ceil(sqrt(k)) (1, 2x2, 3x3, 4x4, ...), filled row by row, the focused window first and the others in reading order; the slots left over stay empty (5 windows: 3x3, a row of three and a row of two). Every window keeps its size: no configure is sent. A column is as wide as its widest window, a row as high as its tallest, 12 px apart, each window centred in its slot. The grid starts at the cluster's top-left corner; the camera frames it on the pointer's screen, at zoom 1 at most. |
+| Super+Shift+G (`BIND_CLUSTER_BY_APP`), `infynitae msg arrange app` | The focused window's cluster sorted by app: every window at its own size (nothing asked to resize), one row per app in the order the apps' first windows read, left to right, rows 12 px apart and as wide as they need (not squeezed into one view); the camera frames the result. |
 
-A layout asks a window for its cell's size by configure, held like a resize (INV-PROTO-1); it
-ends a maximize. Until the app answers, each of its frames is centred in the cell, so an app that
-keeps its size sits in the middle of its cell. A Super+drag or a resize on it first ends that.
 Fullscreen, minimized, kept-on-top and notification windows and dialogs are left out; a dialog
-moves with its parent.
+moves with its parent. `CLUSTER_SORT` "app" only picks where a new window opens (First map,
+above); "tidy", which closed the gap a window left, was removed on 2026-11-28 and is ignored in an
+old config (`live/config-check` names it).
 
 ## Screens
 
@@ -106,6 +104,6 @@ reopens at every login, `false` saves nothing.
 fullscreen windows across 1920x1080, 1366x768, 2560x1440 at 1/1.5/2, 3840x2160 at 2, portrait,
 and every change between them; unplug; Super+Shift+Enter moves nothing), `t1_protocol_bounds`
 (room, oversize fit), `t1_fit_constraints`, `t1_fit_bindings`, `t1_window_slots`,
-`t1_window_drag`, `t1_fullscreen`, `t1_transform`, `t1_outputs`, `t1_cluster_layout` (layouts);
-the layouts and `CLUSTER_SORT` also in `crates/infynitae-core/src/arrange.rs`. Free space (new windows near
+`t1_window_drag`, `t1_fullscreen`, `t1_transform`, `t1_outputs`, `t1_cluster_layout` (the grid,
+1 to 10 windows); the layouts and `CLUSTER_SORT` also in `crates/infynitae-core/src/arrange.rs`. Free space (new windows near
 the cursor, self-resize, back from fullscreen in every way): `t1_window_states` too.
