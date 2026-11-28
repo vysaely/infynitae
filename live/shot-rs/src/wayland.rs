@@ -189,6 +189,8 @@ struct App {
     ready_ms: Option<f64>,
     editor: Option<Editor>,
     editor_output: usize,
+    /// the pointer is on an editor toolbar control: a hand there, the crosshair on the picture
+    editor_on_control: bool,
     finish: Option<Finish>,
     editor_failed: Option<String>,
     /// INFYNITAE_SHOT_BOXES: a file the VM tests read, rewritten after each editor frame
@@ -322,6 +324,9 @@ impl App {
             return;
         };
         let shape = match self.mode {
+            _ if self.editor.is_some() && self.editor_on_control => {
+                wp_cursor_shape_device_v1::Shape::Pointer
+            }
             _ if self.editor.is_some() => wp_cursor_shape_device_v1::Shape::Crosshair,
             Mode::Region => wp_cursor_shape_device_v1::Shape::Crosshair,
             Mode::Window => {
@@ -641,7 +646,10 @@ fn present(
         vp.set_destination(ov.logical_w as i32, ov.logical_h as i32);
     }
     let surf = ov.layer.wl_surface();
-    surf.attach(Some(buffer.wl_buffer()), 0, 0);
+    // marks the buffer busy until the compositor releases it, so the next frame takes another
+    buffer
+        .attach_to(surf)
+        .map_err(|e| format!("shm buffer attach failed: {e}"))?;
     surf.damage_buffer(0, 0, buf_w as i32, buf_h as i32);
     surf.commit();
     ov.buffers.push(buffer);
@@ -930,6 +938,7 @@ fn run_wayland_with_conn(
         ready_ms: None,
         editor: None,
         editor_output: 0,
+        editor_on_control: false,
         finish: None,
         editor_failed: None,
         boxes,
@@ -1340,13 +1349,11 @@ impl Dispatch<zwlr_screencopy_frame_v1::ZwlrScreencopyFrameV1, usize> for App {
                         .as_mut()
                         .ok_or_else(|| "missing screencopy shm pool".to_string())?;
                     let transform = state.outputs[job.output_idx].transform;
-                    let force_opaque = offered.format == wl_shm::Format::Xrgb8888;
                     upright_surface_from_panel(&PanelFrame {
                         data: pool.mmap(),
                         width: offered.width,
                         height: offered.height,
                         stride: offered.stride as usize,
-                        force_opaque,
                         y_invert: job.y_invert,
                         transform,
                     })
@@ -1857,10 +1864,21 @@ impl App {
         };
         let step = match ev.kind {
             PointerEventKind::Enter { serial } => {
+                self.editor_on_control = editor.control_at(x, y);
                 self.update_cursor_shape(serial);
                 return;
             }
-            PointerEventKind::Motion { .. } => Ok(editor.motion(x, y)),
+            PointerEventKind::Motion { .. } => {
+                let step = editor.motion(x, y);
+                let on_control = editor.control_at(x, y);
+                if on_control != self.editor_on_control {
+                    self.editor_on_control = on_control;
+                    if let Some((_, serial)) = self.last_pointer_enter {
+                        self.update_cursor_shape(serial);
+                    }
+                }
+                Ok(step)
+            }
             PointerEventKind::Press { button, .. } if button == BTN_LEFT => editor.press(x, y),
             PointerEventKind::Release { button, .. } if button == BTN_LEFT => editor.release(x, y),
             _ => return,
@@ -2030,6 +2048,12 @@ mod tests {
         /// `wl_keyboard.enter` after mapping.
         defer_second_surface_focus: bool,
         deferred_focus_surface: Option<u32>,
+        /// Keeps each surface's committed buffer until another one replaces it, as a compositor
+        /// that reads shm buffers when it draws does (the default releases at once).
+        hold_buffers: bool,
+        shown_buf: HashMap<u32, u32>,
+        /// commits of a buffer the mock still held: the client drew into it while it was shown
+        redrawn_while_held: usize,
     }
 
     struct MockWayland {
@@ -2644,7 +2668,16 @@ mod tests {
                                             }
                                         }
                                     }
-                                    out_bytes.extend(Self::msg(bid, 0, &[])); // wl_buffer.release
+                                    if !st.hold_buffers {
+                                        // wl_buffer.release
+                                        out_bytes.extend(Self::msg(bid, 0, &[]));
+                                    } else {
+                                        match st.shown_buf.insert(obj_id, bid) {
+                                            Some(old) if old == bid => st.redrawn_while_held += 1,
+                                            Some(old) => out_bytes.extend(Self::msg(old, 0, &[])),
+                                            None => {}
+                                        }
+                                    }
                                 } else {
                                     st.last_overlay_center_alpha = None;
                                 }
@@ -3335,6 +3368,131 @@ mod tests {
         let st = mock.shared.0.lock().unwrap();
         assert_eq!(st.layer_creates, 1);
         assert_eq!(st.layer_destroys, 1);
+    }
+
+    /// The overlay drew each frame into the buffer the compositor was still showing: attached
+    /// with `wl_surface.attach` alone, SCTK never marked it busy, so the next frame reused it and
+    /// a compositor that reads it while drawing showed it half redrawn (frozen picture without
+    /// the dim, or cleared to transparent in `--live`).
+    #[test]
+    fn a_new_frame_never_draws_into_the_buffer_on_screen() {
+        let box_path = std::env::temp_dir().join(format!("shot-boxes-held-{}", std::process::id()));
+        let _ = std::fs::remove_file(&box_path);
+        let (mock, conn) = MockWayland::start(vec![MockOutputSpec {
+            width: 800,
+            height: 600,
+            x: 0,
+            y: 0,
+            name: "DP-1",
+        }]);
+        mock.shared.0.lock().unwrap().hold_buffers = true;
+        let box_for_client = box_path.clone();
+        let client = std::thread::spawn(move || {
+            run_wayland_with_conn(
+                &conn,
+                Mode::Region,
+                false,
+                test_look(),
+                Snapshot::default(),
+                Some(box_for_client),
+            )
+        });
+
+        mock.wait_until(|st| st.focused_surface.is_some());
+        let sid = mock.focused_surface().unwrap();
+        // the picker's frame is on screen; the pick opens the editor, which draws its first frame
+        mock.send_pointer_drag(sid, (100.0, 100.0), (300.0, 300.0));
+        wait_boxes_file(&box_path).expect("editor boxes dump");
+        let _ = std::fs::remove_file(&box_path);
+        assert!(mock.send_key_if_focused(KEY_ESC, false));
+        let outcome = client.join().unwrap().unwrap();
+        assert!(matches!(outcome, Outcome::Plain(_)));
+        assert_eq!(mock.shared.0.lock().unwrap().redrawn_while_held, 0);
+    }
+
+    /// An Argb8888 capture carried the renderer's alpha, which the screen does not show: where
+    /// a window left it below 255, the frozen overlay let the live screen show through.
+    #[test]
+    fn the_frozen_overlay_is_opaque_when_the_capture_has_alpha() {
+        let (mock, conn) = MockWayland::start(vec![MockOutputSpec {
+            width: 800,
+            height: 600,
+            x: 0,
+            y: 0,
+            name: "DP-1",
+        }]);
+        // premultiplied, alpha 128
+        mock.shared.0.lock().unwrap().screen_bg = [100, 50, 25, 128];
+        let client = std::thread::spawn(move || {
+            run_wayland_with_conn(
+                &conn,
+                Mode::Region,
+                false,
+                test_look(),
+                Snapshot::default(),
+                None,
+            )
+        });
+        mock.wait_until(|st| st.focused_surface.is_some());
+        let alpha = mock.shared.0.lock().unwrap().last_overlay_center_alpha;
+        assert!(mock.send_key_if_focused(KEY_ESC, false));
+        assert!(matches!(
+            client.join().unwrap().unwrap(),
+            Outcome::Cancelled
+        ));
+        assert_eq!(alpha, Some(255));
+    }
+
+    /// The editor showed the crosshair everywhere, the toolbar's buttons included.
+    #[test]
+    fn editor_cursor_is_a_hand_on_the_toolbar_and_a_crosshair_on_the_picture() {
+        let box_path = std::env::temp_dir().join(format!("shot-boxes-hand-{}", std::process::id()));
+        let _ = std::fs::remove_file(&box_path);
+        let (mock, conn) = MockWayland::start(vec![MockOutputSpec {
+            width: 800,
+            height: 600,
+            x: 0,
+            y: 0,
+            name: "DP-1",
+        }]);
+        let box_for_client = box_path.clone();
+        let client = std::thread::spawn(move || {
+            run_wayland_with_conn(
+                &conn,
+                Mode::Region,
+                false,
+                test_look(),
+                Snapshot::default(),
+                Some(box_for_client),
+            )
+        });
+
+        mock.wait_until(|st| st.focused_surface.is_some());
+        let sid = mock.focused_surface().unwrap();
+        mock.send_pointer_drag(sid, (100.0, 100.0), (300.0, 300.0));
+        let (_, ix, iy) = wait_boxes_file(&box_path).expect("editor boxes dump");
+        let dump = std::fs::read_to_string(&box_path).unwrap();
+        let _ = std::fs::remove_file(&box_path);
+        let undo: Vec<f64> = dump
+            .lines()
+            .find_map(|l| l.strip_prefix("hit undo "))
+            .expect("an undo control")
+            .split_whitespace()
+            .map(|v| v.parse().unwrap())
+            .collect();
+        let move_to = |x: f64, y: f64| {
+            let pid = mock.shared.0.lock().unwrap().pointer_id.unwrap();
+            let mut raw = Vec::new();
+            MockWayland::push_pointer_motion_bytes(pid, x, y, &mut raw);
+            MockWayland::write_all(&mock.server_sock, &raw);
+        };
+        // 4 is the hand (pointer), 8 the crosshair
+        move_to(undo[0] + undo[2] / 2.0, undo[1] + undo[3] / 2.0);
+        mock.wait_until(|st| st.cursor_shapes.last() == Some(&4));
+        move_to(ix + 10.0, iy + 10.0);
+        mock.wait_until(|st| st.cursor_shapes.last() == Some(&8));
+        assert!(mock.send_key_if_focused(KEY_ESC, false));
+        assert!(matches!(client.join().unwrap().unwrap(), Outcome::Plain(_)));
     }
 
     #[test]

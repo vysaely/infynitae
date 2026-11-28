@@ -2,7 +2,8 @@ import sys, os, time, struct, subprocess
 exec(open("/home/tester/g/feat.py").read().split("which = sys.argv[1:]")[0])
 # infynitae-shot with real input: the whole screen, a dragged region, a click on a window, Escape,
 # the clipboard holding the PNG afterwards, and the markup editor after a pick (its INFYNITAE_SHOT_BOXES
-# dump: `editor MS` from the end of the pick to its first frame, `image X Y W H`, `hit NAME X Y W H`).
+# dump: `editor MS` from the end of the pick to its first frame, `image X Y W H`, `hit NAME X Y W H`),
+# the first frame's dim and hover outline before the pointer moves, and each markup tool.
 SHOT = "/home/tester/.local/bin/infynitae-shot"
 D = "/tmp/shots"
 sh(f"rm -rf {D}; mkdir -p {D}; chmod 777 {D}")
@@ -59,13 +60,20 @@ def pixels(path):
                 line[x] = (line[x] + (a if pa <= pb and pa <= pc else b if pb <= pc else c)) & 255
         rows.append(line); prev = line
     return lambda x, y: tuple(rows[y][x * bpp:x * bpp + 3])
-def accent():
-    v = "7aa2f7"
+def look(key, v):
+    # a colour of the look file, else the helper's default `v`
     try:
         for l in open("/home/tester/.cache/infynitae/look"):
-            if l.startswith("LOOK_ACCENT="): v = l.split("=", 1)[1].strip().strip("\"'").lstrip("#")
+            if l.startswith(key + "="): v = l.split("=", 1)[1].strip().strip("\"'").lstrip("#")
     except OSError: pass
     return tuple(int(v[i:i + 2], 16) for i in (0, 2, 4))
+def accent(): return look("LOOK_ACCENT", "7aa2f7")
+def pixel(x, y):
+    # one pixel of the screen as it is now
+    sh(f"rm -f {D}/px.png; grim -g '{int(x)},{int(y)} 1x1' {D}/px.png")
+    try: return pixels(f"{D}/px.png")(0, 0)
+    except OSError: return None
+def near(a, b, tol=3): return a is not None and b is not None and all(abs(p - q) <= tol for p, q in zip(a, b))
 
 # 1. the whole screen
 sh(f"rm -f {D}/rc"); bg(f"{SHOT} screen {D}/screen.png"); wait(2.0)
@@ -163,6 +171,53 @@ for i in range(3):
     if i == 0:
         check("Shift held: saved without the editor, exit 0", size(f"{D}/plain0.png") == (400, 300) and rc() == "0", f"{size(f'{D}/plain0.png')} rc {rc()}")
 print("TIMING Shift: release to exit (ms)", plain, flush=True)
+
+# 11. the first frame, frozen and --live, the pointer still: the dim is the look's card at 40% over
+# the screen (once: a second dim or a see-through frozen picture gives another colour), and the
+# window under the pointer has its accent outline before any motion
+card = look("LOOK_CARD", "111317")
+clean(); run_bg("alacritty --title shotfirst"); until(lambda: find("shotfirst") is not None, 10); wait(1.0)
+e = find("shotfirst"); c = snap()["outputs"][0]["camera"]; z = c["zoom"]; cx, cy = c["center"]
+wx, wy = round(960 + (e["anchor"][0] - cx) * z), round(540 + (e["anchor"][1] - cy) * z)
+ww, wh = round(e["size"][0] * z), round(e["size"][1] * z)
+# a desktop point beside the window, away from the pointer
+dx, dy = (wx - 40, wy + wh // 2) if wx > 80 else (wx + ww + 40, wy + wh // 2)
+for name, flag in (("frozen", ""), ("live", " --live")):
+    at(wx + ww / 2, wy + wh / 2); wait(0.5)
+    base = pixel(dx, dy)
+    want = tuple(round(b * 0.6 + k * 0.4) for b, k in zip(base, card)) if base else None
+    sh(f"rm -f {D}/rc"); t = time.time(); bg(f"{SHOT} region{flag} {D}/first-{name}.png")
+    until(lambda: pixel(dx, dy) != base, 3, 0.005); dim_ms = round((time.time() - t) * 1000)
+    got = pixel(dx, dy)
+    outlined = until(lambda: any(pixel(wx + d, wy + wh // 2) == acc for d in (-1, 0, 1)), 2, 0.01)
+    shot(f"s-6-first-{name}")
+    print(f"TIMING {name}: start to the dim on screen (ms, grim polling)", dim_ms, flush=True)
+    check(f"{name}: the first frame dims once with the card at 40%", near(got, want), f"base {base} got {got} want {want}")
+    check(f"{name}: the hovered window is outlined before the pointer moves", bool(outlined), f"edge x {wx} y {wy + wh // 2}")
+    chord("esc"); wait(0.8)
+    check(f"{name}: Escape cancels, exit 1", rc() == "1", f"rc {rc()}")
+clean()
+
+# 12. the other tools on a picked 400 x 300 rectangle, saved with Control+S: arrow and pen leave the
+# accent on their line, text in the accent near where it was clicked, pixelate keeps the size
+def marked(name, tool, act):
+    bg(editor_cmd(name)); wait(1.2)
+    b, _ = pick(300, 300, 400, 300)
+    x, y = b["image"][:2] if b else (300, 300)
+    chord(tool); act(x, y); wait(0.3); shot(f"s-7-{name}")
+    chord("ctrl+s"); wait(1.0)
+    ok = size(f"{D}/{name}.png") == (400, 300) and rc() == "0"
+    check(f"{name}: saved at the picked size, exit 0", ok, f"{size(f'{D}/{name}.png')} rc {rc()}")
+    return pixels(f"{D}/{name}.png") if ok else None
+for name, tool in (("arrow", "a"), ("pen", "p")):
+    p = marked(name, tool, lambda x, y: drag(x + 50, y + 150, x + 250, y + 150))
+    check(f"{name}: the line is in the accent", p is not None and near(p(120, 150), acc, 8), f"{p(120, 150) if p else None} want {acc}")
+def type_ab(x, y):
+    at(x + 50, y + 150); click(); wait(0.2); chord("a"); chord("b")
+p = marked("text", "t", type_ab)
+hit = p is not None and any(near(p(px, py), acc, 8) for px in range(48, 90) for py in range(130, 160))
+check("text: the typed letters are in the accent", hit, "no accent pixel in (48..90, 130..160)")
+marked("pixelate", "x", lambda x, y: drag(x + 50, y + 50, x + 250, y + 200))
 
 print("SUMMARY", sum(1 for _, ok in RES if ok), "of", len(RES), flush=True)
 for n, ok in RES:
