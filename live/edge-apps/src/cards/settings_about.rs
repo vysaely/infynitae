@@ -2,8 +2,11 @@
 //! actions, the last undo entry, and a warning when a restart setting changed in this session
 //! (docs/EDGE_SETTINGS.md section 4).
 
-use crate::card::{self, Action, Button, Card, Cx, Data, Event, Hits, Rect, Source, Status};
+use crate::card::{
+    self, Action, Button, Card, CommandResult, Cx, Data, Event, Hits, Rect, Source, Status,
+};
 use crate::cards::{
+    health::{self, HealthCard, HealthData, HealthState},
     settings,
     settings_rows::{self, After, ConfigData},
 };
@@ -16,7 +19,7 @@ use std::any::Any;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{Duration, UNIX_EPOCH};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 pub const KIND: CardKind = CardKind {
     id: "about",
@@ -56,7 +59,9 @@ const HIT_LOAD_APPLY: u32 = 7;
 const HIT_LOAD_CANCEL: u32 = 8;
 const HIT_UPDATE_CHECK_ROW: u32 = 9;
 const HIT_UPDATE_CHECK_SWITCH: u32 = 10;
+const HIT_HEALTH: u32 = 11;
 const HIT_LOAD_ITEM_BASE: u32 = 100;
+const HIT_HEALTH_CHILD_BASE: u32 = 10_000;
 
 /// Keys tagged `[restart]` in `config/config` ([`is_restart_key`]).
 const RESTART_KEYS: &[&str] = &["XWAYLAND"];
@@ -102,6 +107,7 @@ struct PcInfo {
     preview: Option<ImportPreview>,
     load_active: bool,
     updates: UpdateStatus,
+    health: Option<HealthData>,
 }
 
 #[derive(Clone, Debug)]
@@ -311,6 +317,8 @@ impl Source for PcSource {
             });
         let updates_raw = read_or_render(&self.paths.update_status, "pc_updates");
         let updates = parse_update_status(updates_raw.as_deref(), path_checkupdates);
+        let health =
+            health::fetch_health_data("pc_health", "pc_health_log", self.paths.run_external_cmds);
 
         let info = PcInfo {
             hostname: hostname_raw.as_deref().and_then(parse_hostname),
@@ -332,6 +340,7 @@ impl Source for PcSource {
             preview,
             load_active,
             updates,
+            health,
         };
         Box::new(info)
     }
@@ -834,6 +843,8 @@ pub struct AboutCard {
     dismissed_preview: Option<String>,
     undo_load: bool,
     loading_name: Option<String>,
+    health_open: bool,
+    health_card: HealthCard,
 }
 
 struct InfoRow {
@@ -1177,6 +1188,7 @@ impl AboutCard {
         }
 
         y = self.measure_and_draw_updates(cr, cx, body, y, &mut hits);
+        y = self.measure_and_draw_health(cr, cx, body, y, &mut hits);
 
         let btn_start_y = if y > body.1 && !self.visible_buttons(cr, th, inner_w).is_empty() {
             y + ACTS_TOP_GAP
@@ -1428,9 +1440,95 @@ impl AboutCard {
         y
     }
 
+    fn showing_health_row(&self) -> bool {
+        self.info
+            .health
+            .as_ref()
+            .is_some_and(|h| self.matches(&h.search_haystack()))
+    }
+
+    fn embedded_health_cx<'a>(cx: &'a Cx<'a>) -> Cx<'a> {
+        Cx {
+            theme: cx.theme,
+            now: cx.now,
+            size: Size::M,
+            app: cx.app,
+            apps: cx.apps,
+            recent: cx.recent,
+            windows: cx.windows,
+            notes: cx.notes,
+            list_above: cx.list_above,
+            editing: cx.editing,
+            room: cx.room,
+        }
+    }
+
+    fn measure_and_draw_health(
+        &self,
+        cr: &Context,
+        cx: &Cx,
+        body: Rect,
+        mut y: f64,
+        hits: &mut Option<&mut Hits>,
+    ) -> f64 {
+        let Some(health) = &self.info.health else {
+            return y;
+        };
+        if !self.matches(&health.search_haystack()) {
+            return y;
+        }
+        let (summary, state) = health.summary_text();
+        let row_rect = (body.0, y, body.2, ui::ROW_H);
+        if let Some(h) = hits.as_deref_mut() {
+            let lit = ui::row_alert(
+                cr,
+                cx,
+                h,
+                HIT_HEALTH,
+                row_rect,
+                &Row {
+                    icon: None,
+                    name: "Health",
+                    state: &summary,
+                    on: state == HealthState::Watch,
+                    right: 44.0,
+                },
+                state == HealthState::Problem,
+            );
+            if lit || self.health_open {
+                let cue = if self.health_open { "Less" } else { "More" };
+                let cue_t = Text {
+                    size: draw::SIZE_NOTE,
+                    bold: false,
+                    color: cx.theme.muted,
+                    text: cue,
+                };
+                let cw = draw::measure(cr, &cue_t).0;
+                draw::text(cr, body.0 + body.2 - 8.0 - cw, y + 13.5, &cue_t);
+            }
+            h.label(HIT_HEALTH, format!("Health: {summary}"));
+        }
+        y += ui::ROW_H;
+
+        if self.health_open {
+            let child_cx = Self::embedded_health_cx(cx);
+            let child_body = (body.0, y, body.2, 0.0);
+            let child_h = self.health_card.measure_and_draw_embedded(
+                cr,
+                &child_cx,
+                child_body,
+                hits.as_deref_mut(),
+                HIT_HEALTH_CHILD_BASE,
+            );
+            y += child_h + 4.0;
+        }
+        y
+    }
+
     fn has_visible_content(&self, cx: &Cx) -> bool {
         if !self.info_rows(cx.size).is_empty()
             || self.restart_subtext().is_some()
+            || self.showing_health_row()
             || self.showing_load_list()
             || self.showing_preview()
             || self.showing_loading()
@@ -1512,6 +1610,9 @@ impl Card for AboutCard {
                     self.undo_load = info.load_active;
                 }
                 let changed = !self.loaded || self.info != *info;
+                if let Some(h) = &info.health {
+                    self.health_card.set_data(h.clone());
+                }
                 self.info = info.clone();
                 self.loaded = true;
                 changed
@@ -1553,7 +1654,7 @@ impl Card for AboutCard {
         let _ = self.measure_and_draw(cr, cx, body, Some(hits));
     }
 
-    fn event(&mut self, ev: &Event, _cx: &Cx, out: &mut Vec<Action>) -> bool {
+    fn event(&mut self, ev: &Event, cx: &Cx, out: &mut Vec<Action>) -> bool {
         match ev {
             Event::Text(q) => {
                 if self.query == *q {
@@ -1562,24 +1663,53 @@ impl Card for AboutCard {
                 self.query = (*q).to_string();
                 true
             }
-            Event::Scroll { dy, notches, .. } => {
-                if !self.showing_load_list() {
-                    return false;
+            Event::Scroll { dy, notches, hit } => {
+                if self.showing_load_list() {
+                    let max_scroll = self.info.saved_files.len().saturating_sub(MAX_LOAD_ROWS);
+                    return crate::card::scroll_rows(
+                        &mut self.load_scroll,
+                        &mut self.load_scroll_accum,
+                        max_scroll,
+                        *dy,
+                        *notches,
+                    );
                 }
-                let max_scroll = self.info.saved_files.len().saturating_sub(MAX_LOAD_ROWS);
-                crate::card::scroll_rows(
-                    &mut self.load_scroll,
-                    &mut self.load_scroll_accum,
-                    max_scroll,
-                    *dy,
-                    *notches,
-                )
+                if self.health_open && self.showing_health_row() {
+                    let child_cx = Self::embedded_health_cx(cx);
+                    let child_hit = hit.and_then(|id| id.checked_sub(HIT_HEALTH_CHILD_BASE));
+                    return self.health_card.event(
+                        &Event::Scroll {
+                            hit: child_hit,
+                            dy: *dy,
+                            notches: *notches,
+                        },
+                        &child_cx,
+                        out,
+                    );
+                }
+                false
             }
             Event::Press {
                 hit,
                 button: Button::Left,
-                ..
+                at,
             } => match *hit {
+                HIT_HEALTH => {
+                    self.health_open = !self.health_open;
+                    true
+                }
+                h if h >= HIT_HEALTH_CHILD_BASE => {
+                    let child_cx = Self::embedded_health_cx(cx);
+                    self.health_card.event(
+                        &Event::Press {
+                            hit: h - HIT_HEALTH_CHILD_BASE,
+                            button: Button::Left,
+                            at: *at,
+                        },
+                        &child_cx,
+                        out,
+                    )
+                }
                 HIT_UPDATE => {
                     out.push(Action::Run(UPDATE_COMMAND.to_string()));
                     out.push(Action::ClosePanel);
@@ -1641,7 +1771,7 @@ impl Card for AboutCard {
                     out.push(Action::Run(clear_preview_command()));
                     true
                 }
-                h if h >= HIT_LOAD_ITEM_BASE => {
+                h if (HIT_LOAD_ITEM_BASE..HIT_HEALTH_CHILD_BASE).contains(&h) => {
                     let idx = (h - HIT_LOAD_ITEM_BASE) as usize;
                     let Some(item) = self.info.saved_files.get(idx) else {
                         return false;
@@ -1670,6 +1800,10 @@ impl Card for AboutCard {
         if std::env::var_os("INFYNITAE_EDGE_RENDER_LOAD").is_some_and(|v| v == "1" || v == "true") {
             self.load_open = true;
         }
+        if std::env::var_os("INFYNITAE_EDGE_RENDER_HEALTH").is_some_and(|v| v == "1" || v == "true")
+        {
+            self.health_open = true;
+        }
     }
 
     fn panel_closed(&mut self) {
@@ -1678,7 +1812,21 @@ impl Card for AboutCard {
         self.load_scroll = 0;
         self.loading_name = None;
         self.undo_load = false;
+        self.health_open = false;
+        self.health_card.panel_closed();
         self.dismissed_preview = self.info.preview.as_ref().map(|p| p.id.clone());
+    }
+
+    fn command_done(&mut self, res: &CommandResult, now: Instant) -> bool {
+        self.health_card.command_done(res, now)
+    }
+
+    fn next_deadline(&self) -> Option<Instant> {
+        self.health_card.next_deadline()
+    }
+
+    fn expire(&mut self, now: Instant) -> bool {
+        self.health_card.expire(now)
     }
 }
 
@@ -2774,5 +2922,107 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn health_row_expands_in_place_routes_fix_clicks_and_matches_height() {
+        let th = Theme::from_config(&Config::from_text(""));
+        let cx = test_cx(&th);
+        let mut health = crate::cards::health::parse_health_now_json(
+            r#"{
+              "schema_version": 1,
+              "state": "problem",
+              "items": [
+                {
+                  "id": "btrfs:/",
+                  "category": "disk",
+                  "label": "Btrfs metadata /",
+                  "state": "problem",
+                  "summary": "92% used",
+                  "reason": "btrfs metadata on / is 92% full: a full one froze the PC on Nov 21",
+                  "action": "disk-fix"
+                },
+                {
+                  "id": "cpu",
+                  "category": "cpu",
+                  "label": "CPU",
+                  "state": "ok",
+                  "summary": "14%, 50°C",
+                  "reason": "CPU 14%, 50°C"
+                }
+              ]
+            }"#,
+        )
+        .unwrap();
+        health.events = crate::cards::health::parse_health_log_json(
+            r#"{"schema_version":1,"events":[{"local_time":"08:15","kind":"disk_guard","severity":"problem","summary":"btrfs metadata warning"}]}"#,
+        )
+        .unwrap();
+
+        let mut info = sample_info();
+        info.health = Some(health);
+        let mut card = AboutCard::default();
+        card.apply("pc", &info);
+
+        let closed_h = card.height(&cx, 404.0);
+        let surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 460, 900).unwrap();
+        let cr = Context::new(&surf).unwrap();
+        let mut hits = Hits::default();
+        let drawn_closed =
+            card.measure_and_draw(&cr, &cx, (10.0, 10.0, 404.0, closed_h), Some(&mut hits));
+        assert!((closed_h - drawn_closed).abs() < 0.01);
+        assert!(hits.list.iter().any(|(id, _)| *id == HIT_HEALTH));
+        assert!(hits
+            .texts
+            .iter()
+            .any(|(id, t)| *id == Some(HIT_HEALTH) && t.contains("1 problem: Btrfs metadata /")));
+
+        // Clicking Health expands the embedded Health view in place.
+        let mut out = Vec::new();
+        assert!(card.event(
+            &Event::Press {
+                hit: HIT_HEALTH,
+                button: Button::Left,
+                at: (20.0, 20.0),
+            },
+            &cx,
+            &mut out
+        ));
+        assert!(out.is_empty());
+        assert!(card.health_open);
+
+        let open_h = card.height(&cx, 404.0);
+        assert!(open_h > closed_h + 60.0);
+        let mut hits_open = Hits::default();
+        let drawn_open =
+            card.measure_and_draw(&cr, &cx, (10.0, 10.0, 404.0, open_h), Some(&mut hits_open));
+        assert!((open_h - drawn_open).abs() < 0.01);
+        let fix_hit = hits_open
+            .list
+            .iter()
+            .find(|(id, _)| *id >= HIT_HEALTH_CHILD_BASE + 100)
+            .map(|(id, _)| *id)
+            .expect("expanded problem item must register a child hit");
+
+        // Clicking the embedded problem item runs disk-fix.
+        card.event(
+            &Event::Press {
+                hit: fix_hit,
+                button: Button::Left,
+                at: (20.0, 20.0),
+            },
+            &cx,
+            &mut out,
+        );
+        assert_eq!(
+            out,
+            vec![Action::Run(
+                "pkexec /usr/local/lib/infynitae-disk-fix".into()
+            )]
+        );
+
+        // Panel close collapses the embedded Health section again.
+        card.panel_closed();
+        assert!(!card.health_open);
     }
 }

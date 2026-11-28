@@ -49,6 +49,7 @@ const KINDS: &[CardKind] = &[
         half: true,
         sources: &["gpu"],
     },
+    crate::cards::health::KIND,
 ];
 
 impl Provider for Monitor {
@@ -75,6 +76,7 @@ impl Provider for Monitor {
             "overview" => Some(Box::new(OverviewCard::default())),
             "memory" => Some(Box::new(MemoryCard::default())),
             "gpu" => Some(Box::new(GpuCard::default())),
+            "health" => Some(Box::new(crate::cards::health::HealthCard::default())),
             _ => None,
         }
     }
@@ -83,6 +85,7 @@ impl Provider for Monitor {
             "cpu" => Some(Box::new(CpuSource::real())),
             "memory" => Some(Box::new(MemorySource::real())),
             "gpu" => Some(Box::new(GpuSource::real())),
+            "health" => Some(Box::new(crate::cards::health::HealthSource::real())),
             _ => None,
         }
     }

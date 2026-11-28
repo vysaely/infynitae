@@ -61,7 +61,7 @@ jobs:
           tar -xzf "$RUNNER_TEMP/audit.tgz" --strip-components=1 -C "$RUNNER_TEMP/audit"
       - run: |
           status=0
-          for lock in Cargo.lock live/edge-apps/Cargo.lock live/shot-rs/Cargo.lock live/sandbox-socket/Cargo.lock; do
+          for lock in Cargo.lock live/edge-apps/Cargo.lock live/shot-rs/Cargo.lock live/sandbox-socket/Cargo.lock live/health/Cargo.lock; do
             "$RUNNER_TEMP/audit/cargo-audit" audit --file "$lock" || status=1
           done
           exit $status
@@ -157,6 +157,35 @@ jobs:
         with:
           name: infynitae-shot
           path: live/shot-rs/target/debug/infynitae-shot
+
+  # The system health collector in Rust (live/health): its own crate, built and tested like shot-rs.
+  health-rs:
+    name: Health (Rust)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain pinned by rust-toolchain.toml
+        run: |
+          channel=$(python3 -c 'import tomllib; print(tomllib.load(open("rust-toolchain.toml", "rb"))["toolchain"]["channel"])')
+          rustup toolchain install "$channel" --profile minimal --component rustfmt,clippy
+      - uses: Swatinem/rust-cache@v2.7.8
+        with:
+          workspaces: live/health
+      - run: cd live/health && cargo fmt -- --check
+      - run: cd live/health && cargo clippy --locked --all-targets -- -D warnings
+      - name: Unused dependencies (cargo-machete)
+        run: |
+          mkdir -p "$RUNNER_TEMP/machete"
+          curl -fsSL "$CARGO_MACHETE_URL" -o "$RUNNER_TEMP/machete.tar.gz"
+          echo "$CARGO_MACHETE_SHA256  $RUNNER_TEMP/machete.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/machete.tar.gz" --strip-components=1 -C "$RUNNER_TEMP/machete"
+          PATH="$RUNNER_TEMP/machete:$PATH" cargo machete --with-metadata live/health
+      - run: cd live/health && cargo test --locked
+      - run: cd live/health && cargo build --locked
+      - uses: actions/upload-artifact@v4
+        with:
+          name: infynitae-health
+          path: live/health/target/debug/infynitae-health
 
   # The sandbox socket (live/sandbox-socket): its own crate; its test runs a real session of the
   # workspace with the helper as built (t1_trust, ignored without INFYNITAE_SANDBOX_SOCKET).

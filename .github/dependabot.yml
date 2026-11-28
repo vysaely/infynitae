@@ -1,4 +1,4 @@
-# Weekly update pull requests for every shipped Cargo.lock (the same four the "Advisories" CI job
+# Weekly update pull requests for every shipped Cargo.lock (the same five the "Advisories" CI job
 # checks), merged when CI is green. Minor and patch updates are grouped into one pull request; a
 # major update comes alone, since it can change an API.
 version: 2
@@ -9,6 +9,7 @@ updates:
       - "/live/edge-apps"
       - "/live/shot-rs"
       - "/live/sandbox-socket"
+      - "/live/health"
     schedule:
       interval: weekly
     groups:

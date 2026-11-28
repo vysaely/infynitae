@@ -259,7 +259,8 @@ infynitae_binary_names() {
         infynitae xwayland-satellite \
         infynitae-portal infynitae-polkit infynitae-lock \
         infynitae-wallpaper infynitae-record-stream infynitae-xres-pid \
-        infynitae-edge-apps infynitae-shot infynitae-sandbox-socket
+        infynitae-edge-apps infynitae-shot infynitae-sandbox-socket \
+        infynitae-health
 }
 
 # Scripts from the source into ~/.local/bin ($1 source, $2 bin dir).
@@ -607,6 +608,32 @@ install_update_check() {
     fi
 }
 
+install_health_timer() {
+    src="$1"
+    dry="${2:-}"
+    svc="$src/live/health/infynitae-health.service"
+    tmr="$src/live/health/infynitae-health.timer"
+    unit_dir="$HOME/.config/systemd/user"
+    [ -f "$svc" ] && [ -f "$tmr" ] || return 0
+    if [ "$dry" = "--dry-run" ]; then
+        return 0
+    fi
+    mkdir -p "$unit_dir"
+    reload_user=false
+    for unit_src in "$svc" "$tmr"; do
+        base=$(basename "$unit_src")
+        if [ ! -f "$unit_dir/$base" ] || ! cmp -s "$unit_src" "$unit_dir/$base"; then
+            cp "$unit_src" "$unit_dir/$base"
+            reload_user=true
+        fi
+    done
+    [ "$reload_user" = true ] && { systemctl --user daemon-reload 2>/dev/null || true; }
+    if ! systemctl --user is-enabled --quiet infynitae-health.timer 2>/dev/null \
+        || ! systemctl --user is-active --quiet infynitae-health.timer 2>/dev/null; then
+        systemctl --user enable --now infynitae-health.timer 2>/dev/null || true
+    fi
+}
+
 # The login screen (infynitae-login-screen on) runs its own copies of the compositor and the lock
 # screen: after an update they get the new ones, so the login screen never runs an older compositor
 # than the desktop. Nothing when the login screen is off.
@@ -721,6 +748,7 @@ GUARD
     install_disk_guard "$src"
     refresh_login_screen
     install_update_check "$src"
+    install_health_timer "$src"
 }
 
 # The parts' own apps open their files: folders in Thunar (not a terminal that also says it opens

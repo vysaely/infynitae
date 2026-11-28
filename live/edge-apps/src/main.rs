@@ -382,4 +382,52 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn render_monitor_health_card_writes_png_with_items_and_log() {
+        let dir = std::env::temp_dir().join(format!(
+            "infynitae-edge-apps-render-health-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let png = dir.join("health.png");
+
+        let cfg = Config::from_text("PANEL_HEALTH=\"SUPER+H right center 440 monitor/health:l\"\n");
+        let mut sh = shell::Shell::new(cfg, Vec::new());
+        let idx = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "health")
+            .unwrap();
+        sh.open_panel(idx, false, std::time::Instant::now());
+        sh.open_ms = f64::INFINITY;
+        sh.opened_at = None;
+        let mut data = cards::health::parse_health_now_json(
+            r#"{
+              "schema_version": 1,
+              "state": "problem",
+              "items": [
+                {"id": "btrfs:/", "label": "Btrfs metadata /", "state": "problem", "summary": "92% used", "reason": "btrfs metadata on / is 92% full: a full one froze the PC on Nov 21", "action": "disk-fix"},
+                {"id": "cpu", "label": "CPU", "state": "ok", "summary": "18%, 50°C", "reason": "CPU 18%, 50°C"}
+              ]
+            }"#,
+        )
+        .unwrap();
+        data.events = cards::health::parse_health_log_json(
+            r#"{"schema_version": 1, "events": [{"local_time": "08:50", "kind": "oom", "severity": "problem", "summary": "OOM killed python3"}]}"#,
+        )
+        .unwrap();
+        let boxed: card::Data = Box::new(data);
+        assert!(sh.apply("monitor", "health", boxed.as_ref()));
+
+        paint(&sh, 1280, 800, png.to_str().unwrap()).unwrap();
+        let mut f = std::fs::File::open(&png).unwrap();
+        let img = cairo::ImageSurface::create_from_png(&mut f).unwrap();
+        assert_eq!((img.width(), img.height()), (1280, 800));
+        let meta = std::fs::metadata(&png).unwrap();
+        assert!(meta.len() > 1000, "png size={}", meta.len());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
