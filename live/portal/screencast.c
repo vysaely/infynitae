@@ -207,9 +207,39 @@ static gboolean gbm_for(dev_t dev) {
     return TRUE;
 }
 
+/* The compositor's display when this portal was started before it (the session starts the portal
+ * early, for shortcuts and settings): the name the session put in the user manager's environment
+ * (systemctl --user import-environment WAYLAND_DISPLAY). */
+static void learn_wayland_display(void) {
+    if (g_getenv("WAYLAND_DISPLAY")) return;
+    GDBusConnection *bus = g_bus_get_sync(G_BUS_TYPE_SESSION, NULL, NULL);
+    if (!bus) return;
+    GVariant *reply = g_dbus_connection_call_sync(
+        bus, "org.freedesktop.systemd1", "/org/freedesktop/systemd1",
+        "org.freedesktop.DBus.Properties", "Get",
+        g_variant_new("(ss)", "org.freedesktop.systemd1.Manager", "Environment"),
+        G_VARIANT_TYPE("(v)"), G_DBUS_CALL_FLAGS_NONE, 2000, NULL, NULL);
+    g_object_unref(bus);
+    if (!reply) return;
+    GVariant *v = NULL;
+    g_variant_get(reply, "(v)", &v);
+    gsize n = 0;
+    const gchar **env = g_variant_get_strv(v, &n);
+    for (gsize i = 0; i < n; i++) {
+        if (g_str_has_prefix(env[i], "WAYLAND_DISPLAY=") && env[i][16]) {
+            g_setenv("WAYLAND_DISPLAY", env[i] + 16, TRUE);
+            break;
+        }
+    }
+    g_free(env);
+    g_variant_unref(v);
+    g_variant_unref(reply);
+}
+
 /* Connected once, at the first share: FALSE when something a share needs is missing. */
 static gboolean ready(void) {
     if (!wl) {
+        learn_wayland_display();
         wl = wl_display_connect(NULL);
         if (!wl) {
             g_printerr("[infynitae-portal] screen sharing: no Wayland display\n");
