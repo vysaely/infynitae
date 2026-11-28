@@ -1,13 +1,18 @@
 # The edge from apps (2026-11-13)
 
-State (2026-11-13): stage 1 (panels, system cards, launcher, windows, clipboard, notification server,
-ask prompt, panel editing and Add a card in `edit.rs`), stage 2 app cards (calendar, monitor, music,
-Steam, chat, files, simple), and the Settings cards (`docs/EDGE_SETTINGS.md`, including
-`settings/keys`) are built in `live/edge-apps` with VM scripts in `tools/vm-edge/` (`papps.py`,
-`papps2.py`, `pask.py`, `pedit.py`, `psettings.py`, `pkeys.py`). The desktop's widgets (`WIDGETS`) are
-built too (2026-11-22, `widgets.rs`; below). It is the only edge since 2026-11-24: `live/edge` and
-`live/edge-rs` were deleted (their code is at the tags `edge-c-final` and `edge-rs-final`), and
-`live/edge-pick` links `infynitae-edge` to it.
+State (2026-11-28): panels, system cards, launcher and desktop search (`apps/results` in
+`cards/search.rs`, `locate.rs`, `psearch.py`), windows, compositor-backed clipboard with search and
+pins (`cards/clipboard.rs`), notification server and bottom-centre volume/brightness OSD
+(`infynitae-osd`, `notify.rs`, `posd.py`), shortcut help overlay (`Super+/` and `Super+F1`,
+`shortcuts.rs`, `pshortcuts.py`), ask prompt, panel editing and Add a card (`edit.rs`), app cards
+(calendar, monitor, music, Steam, chat, files, simple), Settings cards (`docs/EDGE_SETTINGS.md`,
+including `settings/keys` and `settings/advanced`), edge-anchored unfold animation
+(`shell/drawing.rs`, `ui.rs`, `notify.rs`), zero closed idle wakeups (`dbus.rs`,
+`tests/idle_wakeups.rs`), and released buffer pages on close (`madvise(MADV_REMOVE)` in
+`wayland/surfaces.rs`) are built in `live/edge-apps` with VM scripts in `tools/vm-edge/`. The
+desktop's widgets (`WIDGETS`) are built too (2026-11-22, `widgets.rs`; below). It is the only edge
+since 2026-11-24: `live/edge` and `live/edge-rs` were deleted (their code is at the tags
+`edge-c-final` and `edge-rs-final`), and `live/edge-pick` links `infynitae-edge` to it.
 
 Desktop widgets (2026-11-22): the `WIDGETS` line as `live/edge-rs` reads it (`module[:look]@x,y,WxH`,
 the old words mapped as in section 1, each switch word a Quick settings card of that one switch at
@@ -72,7 +77,7 @@ PANEL_CONTROL="SUPER+A top right hover calendar/clock sound/volume music/playing
 - `owner`: a provider id (`settings`, `music`) or a desktop entry id (`steam`, `org.qbittorrent.qBittorrent`).
   A provider id wins when both exist; the installed entry is then written with `.desktop` at its end.
 - `kind`: one of the provider's card kinds.
-- `=argument`: only where a kind needs one. Today only `settings/quick` (which switches, in order).
+- `=argument`: only where a kind needs one (`settings/quick` lists switches in order, `apps/search=settings` targets the Settings panel, `apps/favorites=...` lists pinned app ids).
 - `:size`: `s`, `m` or `l`; left out: the kind's default. `@half`: half the panel's width, as now.
 
 Old words (no `/`) are still read and mapped. An old line is rewritten in the new form the first time the
@@ -112,21 +117,33 @@ pango 0.20, zbus 5 (blocking), chrono, libc, signal-hook-registry. No new depend
 ```
 live/edge-apps/src/
   main.rs            the command line (section 9)
-  app.rs             App, desktop entries, icons            (from edge-rs modules/apps.rs:84-250, 548-1055)
+  app.rs, icons.rs   App, desktop entries, icon and thumbnail decoding
   provider.rs        Provider, Claim, Listed, CardKind, the registry, the old-word table
   card.rs            Card, Source, Cx, Hits, Event, Action, Status, Size
-  panel.rs           PANEL_ lines, layout (column, halves), panel geometry   (from config.rs, main.rs:24-295)
-  theme.rs, draw.rs  copied as they are, with their tests
+  config.rs          config file loading and built-in panel definitions
+  panel.rs           PANEL_ lines, layout (column, halves), panel geometry
+  paths.rs           checkout_dir (~/.config/infynitae/checkout, else ~/infynitae) and XDG paths
+  recent.rs          recent app launch tracking (~/.local/state/infynitae/recent-apps)
+  clipboard_entry.rs clipboard listing parser and command builders
+  locate.rs          plocate file-name search worker for apps/results
+  theme.rs, draw.rs  theme colours/corners and Cairo primitives
   ui.rs              the shared parts every card draws with (section 3.5)
   shell.rs           the state machine: open panel, hover, keyboard, edit mode, the animation clock
-  shell/             its parts: pointer.rs, touch.rs, keys.rs, edit.rs (edit mode), drawing.rs
-  wayland.rs         surfaces, buffers, input, signals, the worker channel   (section 5)
-  wayland/           its parts: surfaces.rs (layer surfaces, buffers), handlers.rs (Wayland events), workers.rs
-  ask.rs             the ask prompt, copied as it is                (edge-rs modules/ask.rs)
-  notify.rs, notify_server.rs   copied from origin/feat/edge-notify
-  cards/settings.rs  network, bluetooth, power, quick, session
-  cards/sound.rs  cards/calendar.rs  cards/notifications.rs  cards/apps.rs  cards/windows.rs  cards/clipboard.rs
-  cards/monitor.rs  cards/music.rs  cards/steam.rs  cards/chat.rs  cards/files.rs  cards/simple.rs
+  shell/             its parts: pointer.rs, touch.rs, keys.rs, edit.rs, drawing.rs
+  edit.rs            panel edit mode and Add a card
+  boxes.rs           INFYNITAE_EDGE_BOXES layout dump for VM tests
+  shortcuts.rs       Super+/ and Super+F1 shortcut help overlay
+  widgets.rs         WIDGETS desktop layer surface layout and input
+  dbus.rs            direct Unix-socket session bus connector (0 idle wakeups while closed)
+  wayland.rs         surfaces, buffers, input, signals, the worker channel (section 5)
+  wayland/           its parts: surfaces.rs (layer surfaces, buffers, MADV_REMOVE), handlers.rs, workers.rs
+  ask.rs             the ask prompt (infynitae-edge ask)
+  notify.rs, notify_server.rs   org.freedesktop.Notifications server, top-right pop-ups and bottom-centre OSD
+  tray_watcher.rs    org.kde.StatusNotifierWatcher server
+  cards/settings.rs, cards/quick.rs, cards/session.rs   network, bluetooth, power, quick, session
+  cards/settings_*.rs   Settings cards (docs/EDGE_SETTINGS.md)
+  cards/sound.rs  cards/calendar.rs  cards/notifications.rs  cards/apps.rs  cards/search.rs  cards/tray_menu.rs
+  cards/windows.rs  cards/clipboard.rs  cards/monitor.rs  cards/music.rs  cards/steam.rs  cards/chat.rs  cards/files.rs  cards/simple.rs
 ```
 
 `shell.rs` and every card are plain state: no Wayland, no threads, no process spawned from them. Only
@@ -403,7 +420,7 @@ pub fn button(cr: &Context, cx: &Cx, hits: &mut Hits, id: u32, r: Rect, word: &s
 pub struct List { pub open: bool, reveal: f64 }
 impl List {
     pub fn toggle(&mut self);
-    /// 220 ms, eased out (origin/feat/edge-fluid child.rs:106, LIST_MS). True while moving.
+    /// 175 ms, quartic ease-out (ui.rs, LIST_MS). True while moving.
     pub fn tick(&mut self, dt_ms: f64) -> bool;
     /// Its height now, for `rows` rows of 32 px: add it to Card::height.
     pub fn height(&self, rows: usize) -> f64;
@@ -547,24 +564,29 @@ Kept as in `live/edge-rs/src/wayland.rs`, which was measured and fixed over seve
   window can be shown directly; its buffer stays, so the compositor need not upload it again when the
   window leaves (`apply_mode` in `wayland.rs`; until 2026-11-23 it was unmapped, 7-10 ms each time).
 - **Buffers and damage**: two shm buffers per surface; each frame clears and redraws the panel's box and
-  damages that box, the box this buffer held before, and the box last committed (`wayland.rs:319-343`,
-  `403-711`, damage at `692-702`). Known cost, kept for now: a hover change redraws the whole panel, not
-  one card. Not measured on the new cards; if a VM measurement shows it matters, the step is a clip to the
-  cards whose `apply`, `event` or `tick` returned true.
-- **Frame pacing**: draw only after the compositor's frame callback (`frame_pending`, `wayland.rs:1290-1321`);
-  when both buffers are still held, commit unchanged and draw on the callback (`wayland.rs:414-422`).
-- **The animation clock**: as `World::tick` on `origin/feat/edge-fluid` (`modules/mod.rs:1333-1379`, called
-  from the frame callback at `wayland.rs:1310-1332`). In the new edge `Shell::tick(now) -> bool` does three
-  things: the cards' arrival after a panel opens (200 ms each, 28 ms between, at most 8 spaced; drawn by the
-  core with `push_group` and `paint_with_alpha`, `modules/mod.rs:1472-1492` there), every shown card's
-  `Card::tick(dt)`, and the notification popups' arrival. A step is capped at 50 ms so a stalled frame does
-  not jump to the end. While it returns true the surface is marked dirty on each frame callback; when it
-  returns false no more frames are asked for, and the input region is set once for the settled size.
-- **Timers**: none while closed. Open: sources by their `every`. Widgets: the clock wakes the edge on the
-  minute (`wayland.rs:109`), sources only for the kinds placed.
-- **Pointer, keyboard, touch**: `PointerHandler::pointer_frame` (`wayland.rs:1571-1636`) hands motion,
+  damages that box, the box this buffer held before, and the box last committed. When closed (after the
+  clear frame's callback), cleared buffer pages are returned to the OS with `madvise(MADV_REMOVE)`, and
+  the notification strip switches back to a 4 KB pool when its last pop-up goes (`wayland/surfaces.rs`).
+- **Frame pacing**: draw only after the compositor's frame callback (`frame_pending`);
+  when both buffers are still held, commit unchanged and draw on the callback.
+- **The animation clock**: `Shell::tick(now) -> bool` drives four animations with quartic ease-out
+  (`ui::ease`): cards unfolding from their panel's anchored screen edge on open (**170 ms** `ARRIVE_MS`,
+  **18 ms** stagger `ARRIVE_STAGGER_MS`, at most 8 spaced, 0.955..1.0 edge-anchored scale), cards
+  tucking back toward the edge on close (**105 ms** `LEAVE_MS`), each shown card's `Card::tick(dt)`
+  (inline lists open in **175 ms**, `ui::LIST_MS`), and notification pop-ups unfolding from the right
+  edge (**165 ms**, `notify::ARRIVE_MS`). A step is capped at 50 ms so a stalled frame does not jump to
+  the end. While it returns true the surface is marked dirty on each frame callback; when it returns
+  false no more frames are asked for, and the input region is set once for the settled size.
+- **Timers and idle wakeups**: none while closed. Session D-Bus connections use direct Unix sockets
+  (`dbus.rs`) instead of zbus's `blocking-1` thread; closed idle wakeups are 0/s
+  (`tests/idle_wakeups.rs`). Open: sources run by their `every`. Widgets: the clock wakes the edge on
+  the minute, sources only for the kinds placed.
+- **Pointer, keyboard, touch**: `PointerHandler::pointer_frame` hands motion,
   press, release and axis to the shell; the shell finds the card and the hit and calls `Card::event`.
-- **Popups**: the notification popups are drawn on the same surface, as on `origin/feat/edge-notify`.
+- **Popups and OSD**: notification pop-ups draw on their own layer surface `infynitae-notifications`
+  at the top right. Synchronous volume, mute and brightness notifications draw on a 240x56 bottom-centre
+  layer surface `infynitae-osd` (Top layer, no keyboard, empty input region, 1.2 s timeout, excluded
+  from notification history).
 
 ## 6. Building order
 
@@ -706,8 +728,8 @@ focus its newest window when it has one, else `Action::Launch`.
 
 ## 7. Tests every card must have
 
-Run by CI in a job "Edge (apps)" copied from the `edge-rs` job (`.github/workflows`, fmt, clippy with
-`-D warnings`, `cargo test --locked`, then the shell scripts). Never on the owner's PC.
+Run by CI in the job "Edge (apps)" (`.github/workflows/ci.yml`: fmt, clippy with
+`-D warnings`, `cargo-machete`, `cargo test --locked`, `cargo build --locked`). Never on the owner's PC.
 
 1. **Parsing**, unit tests in the card's file, on text copied from a real machine (as
    `parses_real_nmcli_outputs`, `switches.rs:835`): each source's parser with a usual output, an empty
@@ -717,7 +739,7 @@ Run by CI in a job "Edge (apps)" copied from the `edge-rs` job (`.github/workflo
    `Run("powerprofilesctl set performance")` and shows it chosen).
 3. **Height**: `height` equals what `draw` uses, for each size, with a list closed, half open and open.
 4. **Render**: `infynitae-edge-apps --render NAME WxH OUT.png` with `INFYNITAE_EDGE_RENDER_DATA` and
-   `INFYNITAE_EDGE_RENDER_TIME` fixed, compared as `tools/test-edge-render` compares today. One picture per
+   `INFYNITAE_EDGE_RENDER_TIME` fixed. One picture per
    size and per state that looks different (for Network: wired, Wi-Fi joined, not connected, off, list
    open). `INFYNITAE_EDGE_RENDER_POINTER` puts the pointer on a hit to check the light and More.
 5. **A VM test with real input** in `tools/vm-edge/p<card>.py`, in the form of `pcards.py`: open the panel
@@ -746,18 +768,18 @@ that calls `infynitae-edge` must not be able to tell which edge answered.
 
 | What | Used by | How the new crate keeps it |
 |---|---|---|
-| `infynitae-edge ask [--title-stdin] [--text] [--secret] [--default TEXT] [TITLE]`; choices on standard input, the answer on standard output; exit 0 answered, 1 cancelled, 3 no edge running (2: wrong use) | infynitae-keyring's permission and password cards, `live/infynitae-format-drive`, `live/screenshare-chooser` (as the picker it is given; on `main` the script does not name the edge itself) | `modules/ask.rs` is copied whole with its tests (`run_client` at 196, the limits at 23-27, the card's drawing and keys). The prompt is not a card: the shell draws it over everything, queues requests, and closes it when the asker is gone, as now (`main.rs:678-696`, `wayland.rs:903-956`). `tools/test-edge-ask` runs against the new binary |
-| The ask files in `$XDG_RUNTIME_DIR`: `infynitae-edge-rs.ask`, `.ask.<pid>` pipes, `.ask-cancel`, and `infynitae-edge-rs.features` holding the line `ask` | `live/infynitae-format-drive:53-54` reads the features file to decide between the edge and fuzzel | the same file names (only one edge runs at a time); the features file is written at start and removed at exit (`wayland.rs:1936`, `2098`) |
-| `infynitae-edge panel NAME`, `control`, `apps`, `clipboard`, `toggle` / `center` / `open` (the windows panel), `widgets`, `stop` | the compositor's keys through `live/launch.sh`, `live/session.sh`, `live/infynitae-reload` | `parse_args` (`main.rs:311-336`) is copied with its tests; a second call finds the running edge by `infynitae-edge-rs.pid` (`wayland.rs:71-85`; its check of the process name accepts any `infynitae-edge-*`), writes the panel's name to `infynitae-edge-rs.panel` and sends SIGRTMIN+2 (`wayland.rs:88-97`) |
-| Signals: SIGUSR1 windows, SIGUSR2 control, SIGRTMIN clipboard, SIGRTMIN+1 apps, SIGRTMIN+2 the panel named in the file, SIGRTMIN+3 an ask request or a refresh, SIGTERM / SIGINT stop | the same callers, and scripts that refresh the open panel after changing something | `setup_signal_pipe` (`wayland.rs:1894-1921`) and `handle_signal_byte` (`wayland.rs:1187-1232`) copied; "refresh" fetches the open panel's sources again |
-| `--print-panels` | `tools/test-edge-panel-lines`, `tools/test-edge-rs` | prints the panels as now, the cards as new words; an old line prints mapped. The test's expected output changes in the same commit, old-word lines kept as inputs |
-| `--print-theme` | `live/settings.sh` (the look file `~/.cache/infynitae/look`: LOOK_CARD, LOOK_EDGE, LOOK_TEXT, LOOK_ACCENT, LOOK_CORNERS...) | `theme.rs` copied; same lines (`theme.rs:121-146`) |
-| `--render NAME WxH FILE`, `--render widgets WxH FILE`, with `INFYNITAE_EDGE_RENDER_DATA`, `_TIME`, `_POINTER`, `_EDIT`, `_ADD`, `_ASK`, `_SEARCH`, `_SELECT`, `_SUB`, `_RECT` | `tools/test-edge-render`, `tools/test-edge-rs` | the same arguments and variables (`main.rs:2194-2470`). The fixture keys stay as listed at the top of `modules/mod.rs` (wifi, bluetooth, power, volume...), since the stage 1 sources run the same commands. `_SUB` (a list open) names a card kind |
-| `INFYNITAE_EDGE_BOXES`: after each drawing a file with `panel NAME x y w h editing|locked SIDE`, optional `query TEXT`, one `module WORD x y w h` per card, `card OWNER/KIND x y w h`, `hit OWNER/KIND ID x y w h`, `label OWNER/KIND ID TEXT` / `note OWNER/KIND TEXT`, `bar`, `barbutton`, the open list's and the add sheet's boxes; `closed` when closed | `tools/vm-edge/*.py` | `dump_boxes` (`modules/mod.rs:1016`) kept. For a card that came from an old word the line keeps `module <old word>` so today's VM scripts pass unchanged; every card also gets `card OWNER/KIND x y w h`, each hit `hit OWNER/KIND ID x y w h`, and optional `query` / `label` / `note` lines so search and settings scripts check hit ids and row text |
-| The notification server: `org.freedesktop.Notifications` on the session bus (Notify, CloseNotification, GetCapabilities, GetServerInformation; the signals NotificationClosed and ActionInvoked), the name asked for without queueing so another daemon that holds it keeps working | every app that sends notifications; `live/session.sh` and `live/infynitae-reload` on that branch decide whether to start mako | `notify_server.rs` and `modules/notify.rs` copied from `origin/feat/edge-notify` with their tests; started in `run_loop` as there (`wayland.rs:2138`). Its history is `cx.notes`, read by the Notifications, chat and simple cards. That branch is not merged to `main` yet: if it changes before it merges, the copy follows it |
-| The tray watcher: `org.kde.StatusNotifierWatcher` at `/StatusNotifierWatcher` (RegisterStatusNotifierItem by bus name or object path, RegisterStatusNotifierHost, RegisteredStatusNotifierItems, IsStatusNotifierHostRegistered, ProtocolVersion; the signals StatusNotifierItemRegistered, StatusNotifierItemUnregistered and StatusNotifierHostRegistered; an item goes when its bus name does). The name is asked for in the queue and may be taken over, so a bar or desktop that serves the watcher keeps it; the edge registers as a host with whichever watcher serves | tray apps (Discord, Steam, Telegram...); the Background card reads the list back over the bus | `tray_watcher.rs`, started in `run_loop`; the C edge served the same interface (`live/edge/infynitae-edge.c:594-760`) |
-| `PANEL_<NAME>`, `WIDGETS`, `FAVORITES`, `CONTROL_MODULES`, `EDGE_POSITION`, `EDGE_CONTROL_SIDE`, `PANELS_SNAP`, `PANELS_OVERLAP`, the look settings | the owner's config | read as now (`config.rs:623-790`); section 1 for the card words |
-| The layer names `infynitae-edge` and `infynitae-widgets` | the compositor's rules for layers | the same names (`wayland.rs:1121-1125`) |
+| `infynitae-edge ask [--title-stdin] [--text] [--secret] [--default TEXT] [TITLE]`; choices on standard input, the answer on standard output; exit 0 answered, 1 cancelled, 3 no edge running (2: wrong use) | infynitae-keyring's permission and password cards, `live/infynitae-format-drive`, `live/screenshare-chooser`, `live/launch.sh` (not responding) | `ask.rs` with unit tests and VM test `tools/vm-edge/pask.py`. The prompt is not a card: the shell draws it over everything, queues requests, and closes it when the asker is gone |
+| The ask files in `$XDG_RUNTIME_DIR`: `infynitae-edge-rs.ask`, `.ask.<pid>` pipes, `.ask-cancel`, and `infynitae-edge-rs.features` holding the line `ask` | `live/infynitae-format-drive`, `live/launch.sh` | the same file names (only one edge runs at a time); the features file is written at start and removed at exit |
+| `infynitae-edge panel NAME`, `control`, `apps`, `clipboard`, `toggle` / `center` / `open` (the windows panel), `shortcuts` (shortcut help overlay), `--crop-face SRC DST`, `stop` | the compositor's keys through `live/launch.sh`, `live/session.sh`, `live/infynitae-reload` | `main.rs`; a second call finds the running edge by `infynitae-edge-rs.pid` (accepting any `infynitae-edge-*`), writes the panel's name to `infynitae-edge-rs.panel` and sends SIGRTMIN+2 |
+| Signals: SIGUSR1 windows, SIGUSR2 control, SIGRTMIN clipboard, SIGRTMIN+1 apps, SIGRTMIN+2 the panel named in the file, SIGRTMIN+3 an ask request or a refresh, SIGTERM / SIGINT stop | the same callers, and scripts that refresh the open panel after changing something | `wayland.rs`; "refresh" fetches the open panel's sources again |
+| `--print-panels` | `live/edge-apps/src/panel.rs` unit tests | prints the panels, with cards as new words; an old line prints mapped |
+| `--print-theme` | `live/settings.sh` (the look file `~/.cache/infynitae/look`: LOOK_CARD, LOOK_EDGE, LOOK_TEXT, LOOK_ACCENT, LOOK_CORNERS...) | `theme.rs` |
+| `--render NAME WxH FILE`, `--render widgets WxH FILE`, with `INFYNITAE_EDGE_RENDER_DATA`, `_TIME`, `_POINTER`, `_EDIT`, `_ADD`, `_ASK`, `_SEARCH`, `_SELECT`, `_SUB`, `_BG` | `live/edge-apps` render tests | `main.rs`; `_SUB` (a list open) names a card kind |
+| `INFYNITAE_EDGE_BOXES`: after each drawing a file with `panel NAME x y w h editing|locked SIDE`, optional `query TEXT`, one `module WORD x y w h` per card, `card OWNER/KIND x y w h`, `hit OWNER/KIND ID x y w h`, `label OWNER/KIND ID TEXT` / `note OWNER/KIND TEXT`, `bar`, `barbutton`, the open list's and the add sheet's boxes; `closed` when closed | `tools/vm-edge/*.py` | `boxes.rs`. For a card that came from an old word the line keeps `module <old word>` so VM scripts pass; every card also gets `card OWNER/KIND x y w h`, each hit `hit OWNER/KIND ID x y w h`, and optional `query` / `label` / `note` lines so search and settings scripts check hit ids and row text |
+| The notification server: `org.freedesktop.Notifications` on the session bus (Notify, CloseNotification, GetCapabilities, GetServerInformation; the signals NotificationClosed and ActionInvoked), the name asked for without queueing so another daemon that holds it keeps working | every app that sends notifications; `live/session.sh` and `live/infynitae-reload` decide whether to start mako | `notify_server.rs` and `notify.rs`, started in `wayland.rs`. Its history is `cx.notes`, read by the Notifications, chat and simple cards; synchronous volume/brightness notes render as the bottom-centre OSD |
+| The tray watcher: `org.kde.StatusNotifierWatcher` at `/StatusNotifierWatcher` (RegisterStatusNotifierItem by bus name or object path, RegisterStatusNotifierHost, RegisteredStatusNotifierItems, IsStatusNotifierHostRegistered, ProtocolVersion; the signals StatusNotifierItemRegistered, StatusNotifierItemUnregistered and StatusNotifierHostRegistered; an item goes when its bus name does). The name is asked for in the queue and may be taken over, so a bar or desktop that serves the watcher keeps it; the edge registers as a host with whichever watcher serves | tray apps (Discord, Steam, Telegram...); the Background card reads the list back over the bus | `tray_watcher.rs`, started in `wayland.rs` |
+| `PANEL_<NAME>`, `WIDGETS`, `FAVORITES`, `CONTROL_MODULES`, `EDGE_POSITION`, `EDGE_CONTROL_SIDE`, the look settings | the owner's config | `config.rs`; section 1 for the card words |
+| The layer names `infynitae-edge`, `infynitae-widgets`, `infynitae-notifications` and `infynitae-osd` | the compositor's rules for layers | `wayland.rs` and `wayland/surfaces.rs` |
 
 ## 10. Decisions made here, and what is still open
 
@@ -797,7 +819,7 @@ nothing run.
 | Favorites shown (`FAVORITES`) | rs/modules/favorites.rs:162; c:1935 | ea/config.rs:678, ea/cards/apps.rs:620 | apps.rs `favorites_skips_missing_ids_hides_when_empty_and_respects_sizes` | same |
 | Pin or unpin a favorite from the panel (rewrites `FAVORITES`) | rs/modules/favorites.rs:82-104; c:2040-2054 | none (a Settings row only) | none | missing |
 | Windows: list, focus, close | rs/modules/windows.rs:304; c:1446, 3956 | ea/cards/windows.rs:27, ea/wayland.rs:2279, 1315-1327 | windows.rs `focus_and_close_hits_and_actions` | same (the C edge used `infynitae msg`) |
-| Clipboard: list, copy back, delete one | rs/modules/clipboard.rs:15; c:1505, 4022 | ea/cards/clipboard.rs:28, 316, 321 | clipboard.rs `parses_real_cliphist_output_images_links_home_and_pinned` | same |
+| Clipboard: list, copy back, delete one, pin, search | rs/modules/clipboard.rs:15; c:1505, 4022 | ea/cards/clipboard.rs (`infynitae msg clipboard`, fallback to cliphist on older compositor; updated 2026-11-28) | clipboard.rs | same, plus compositor history, search and pins |
 | Clipboard: clear all (`cliphist wipe`) | rs/modules/search.rs:39; c:4459 | none | none | missing |
 | Clock, month calendar | rs/modules/clock.rs:53, calendar.rs:81; c:2578 | ea/cards/calendar.rs:17, 26 | calendar.rs `clock_renders_both_sizes_and_widths_without_hits_or_actions`, `month_arrows_and_today_reset_change_shown_month` | same |
 | Battery level beside the clock (`/sys/class/power_supply/BAT*/capacity`) | c:1397-1417 | none (power_supply is read only for the charge limit, ea/cards/settings_lock.rs:100) | none | missing (C edge only) |
@@ -822,7 +844,7 @@ nothing run.
 | Session: lock, sleep, log out, restart, shut down (confirm) | rs/modules/session.rs:45-83; c:4393-4447 | ea/cards/session.rs:20, 58-75 | session.rs `exact_commands_match_session_module`, `confirm_actions_require_second_press_on_same_button_within_3s` | same |
 | Ask prompt (`infynitae-edge ask`), queued, cancel | rs/modules/ask.rs; c:3860-3935, 5618 | ea/ask.rs:219-371, 588, 899 | ask.rs `cli_args_and_request_formatting_match_c_edge`, `queued_ask_files_and_fifo_removal_advances_queue`; VM `pask.py` | same |
 | Editing a panel: move, size, Add, Undo, Done, `panels.backup` | rs/modules/flow.rs; c:4512-4584 | ea/edit.rs:1542-1563 | edit.rs `save_rewrites_panel_line_adds_missing_line_and_appends_backup`; VM `pedit.py` | same |
-| `PANELS_SNAP`, `PANELS_OVERLAP` (free placement; toggled in edit mode by the C edge) | rs/modules/edit.rs:121-224; c:4663-4667 | read at ea/config.rs:679, used nowhere | none | different: no effect |
+| `PANELS_SNAP`, `PANELS_OVERLAP` (free placement; toggled in edit mode by the C edge) | rs/modules/edit.rs:121-224; c:4663-4667 | removed from ea/config.rs and retired in `live/config-renames` (2026-11-25) | none | retired |
 | Hover strips | rs/main.rs; c:105 | ea/wayland.rs:228 | shell.rs `a_hover_panel_opens_from_its_strip_and_closes_when_left` | same |
 | Look: colours, `CORNERS`, `THEME_SCHEME`, `CARD_OPACITY`; `--print-theme` | rs/config.rs:702-719, theme.rs | ea/config.rs:688-723, ea/theme.rs:203 | config.rs `theme_settings_with_their_older_names`; theme.rs `the_look_prints_as_shell_lines` | same |
 | Desktop widgets drawn and clicked (`WIDGETS`) | rs/main.rs:2646 | ea/widgets.rs:33-217 | widgets.rs `widgets_come_from_the_line_only_and_at_their_places`, `a_click_on_a_widget_reaches_its_card_and_beside_it_nothing` | same |
