@@ -1,0 +1,21 @@
+# Weekly update pull requests for every shipped Cargo.lock (the same four the "Advisories" CI job
+# checks), merged when CI is green. Minor and patch updates are grouped into one pull request; a
+# major update comes alone, since it can change an API.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directories:
+      - "/"
+      - "/live/edge-apps"
+      - "/live/shot-rs"
+      - "/live/sandbox-socket"
+    schedule:
+      interval: weekly
+    groups:
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
+    ignore:
+      # vendored with local patches (patches/README.md); moved by hand
+      - dependency-name: smithay

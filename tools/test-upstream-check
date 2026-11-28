@@ -1,0 +1,103 @@
+#!/bin/sh
+# tools/test-upstream-check: tools/upstream-check with curl stubbed (GitHub's answers are files):
+# - only releases newer than ours are listed, oldest first, with their security-relevant entries
+# - an entry wrapped over lines is matched and printed whole; other entries are not printed
+# - Smithay's unreleased changelog section is read, the released sections below it are not
+# - our version missing from the releases, or a failed download, is said and exits 1
+set -u
+
+REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/infynitae-test-upstream-check.XXXXXX")
+trap 'rm -rf "$TMP"' EXIT INT TERM
+
+smithay=$(sed -n 's|^smithay = { path = "vendor/smithay-\(.*\)" }$|\1|p' "$REPO_DIR/Cargo.toml")
+satellite=$(sed -n 's/^TAG="\(.*\)"$/\1/p' "$REPO_DIR/live/build-satellite.sh")
+[ -n "$smithay" ] && [ -n "$satellite" ] || { echo "FAIL: versions not found in the repo"; exit 1; }
+
+mkdir -p "$TMP/bin" "$TMP/web"
+# serves $WEB/<host and path, / as _>; a missing file is a failed download
+cat > "$TMP/bin/curl" << 'EOF'
+#!/bin/sh
+out=""
+url=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -o) out="$2"; shift ;;
+        -H | --max-time) shift ;;
+        -*) ;;
+        *) url="$1" ;;
+    esac
+    shift
+done
+f="$WEB/$(printf '%s' "${url#https://}" | tr '/?=&' '____')"
+[ -f "$f" ] || exit 22
+cp "$f" "$out"
+EOF
+chmod +x "$TMP/bin/curl"
+export WEB="$TMP/web"
+
+web() { cat > "$WEB/$(printf '%s' "$1" | tr '/?=&' '____')"; }
+
+web "api.github.com/repos/Smithay/smithay/releases?per_page=30" << EOF
+[{"tag_name": "v$smithay", "published_at": "2025-06-24T21:18:45Z", "html_url": "u0",
+  "body": "- Fix a crash in v$smithay itself"}]
+EOF
+web "raw.githubusercontent.com/Smithay/smithay/HEAD/CHANGELOG.md" << 'EOF'
+# Smithay Changelog
+
+## Unreleased
+
+- Renamed a type
+- A client could cause an integer
+  overflow in the shm pool
+
+## 0.7.0
+
+- Fixed a use-after-free that is released already
+EOF
+web "api.github.com/repos/Supreeeme/xwayland-satellite/releases?per_page=30" << EOF
+[{"tag_name": "v9.2", "published_at": "2030-02-01T00:00:00Z", "html_url": "u2", "prerelease": true,
+  "body": "Nothing to see"},
+ {"tag_name": "v9.1", "published_at": "2030-01-01T00:00:00Z", "html_url": "u1",
+  "body": "Notable fixes:\r\n- Fix for a panic when no output is present\r\n- New popups for Steam"},
+ {"tag_name": "$satellite", "published_at": "2026-09-24T03:48:49Z", "html_url": "u0",
+  "body": "- Fix a crash in ours"}]
+EOF
+
+fail=0
+check() { # name, expected exit status, expected output
+    if [ "$got_status" != "$2" ] || [ "$got" != "$3" ]; then
+        echo "FAIL: $1"
+        echo "  status $got_status (expected $2), output:"
+        printf '%s\n' "$got" | sed 's/^/    /'
+        fail=1
+    else
+        echo "ok: $1"
+    fi
+}
+
+got=$(PATH="$TMP/bin:$PATH" sh "$REPO_DIR/tools/upstream-check" 2>&1)
+got_status=$?
+check "newer releases and unreleased entries" 0 "Smithay: ours v$smithay, newest release v$smithay (2025-06-24)
+  no newer release
+  unreleased on the main branch (CHANGELOG.md):
+    A client could cause an integer overflow in the shm pool
+xwayland-satellite: ours $satellite, newest release v9.2 (2030-02-01)
+  v9.1 (2030-01-01) u1
+    Fix for a panic when no output is present
+  v9.2 (2030-02-01, pre-release) u2
+    no entry names a security-relevant change"
+
+web "api.github.com/repos/Supreeeme/xwayland-satellite/releases?per_page=30" << 'EOF'
+[{"tag_name": "v9.1", "published_at": "2030-01-01T00:00:00Z", "html_url": "u1", "body": ""}]
+EOF
+got=$(PATH="$TMP/bin:$PATH" sh "$REPO_DIR/tools/upstream-check" 2>&1 | tail -n 1)
+got_status=$(PATH="$TMP/bin:$PATH" sh "$REPO_DIR/tools/upstream-check" >/dev/null 2>&1; echo $?)
+check "ours not among the releases" 1 "xwayland-satellite: ours $satellite is not among its last 1 releases"
+
+rm "$WEB/raw.githubusercontent.com_Smithay_smithay_HEAD_CHANGELOG.md"
+got=$(PATH="$TMP/bin:$PATH" sh "$REPO_DIR/tools/upstream-check" 2>&1 | sed -n 3p)
+got_status=$(PATH="$TMP/bin:$PATH" sh "$REPO_DIR/tools/upstream-check" >/dev/null 2>&1; echo $?)
+check "a failed download" 1 "  could not read CHANGELOG.md of github.com/Smithay/smithay"
+
+exit $fail
