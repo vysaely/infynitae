@@ -99,6 +99,8 @@ build_rust infynitae-shot "$LIVE/shot-rs"
 build infynitae-xres-pid "xcb xcb-res" "$LIVE/xres/infynitae-xres-pid.c"
 # the Wayland socket of a sandboxed Windows program (live/windows-run)
 build_rust infynitae-sandbox-socket "$LIVE/sandbox-socket"
+# PC health collector and condensed event log (docs/HEALTH.md)
+build_rust infynitae-health "$LIVE/health"
 
 if [ -n "$FAILED" ]; then
     echo "[build-helpers] Not built:$FAILED" >&2

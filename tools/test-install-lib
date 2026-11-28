@@ -648,4 +648,39 @@ check "wanted_pkgs omits snap-pac on non-btrfs" "$snap_want_ext4" "0"
 check "install.sh --help lists --snap-pac" \
     "$("$REPO_DIR/install.sh" --help | grep -c -- '--snap-pac' || true)" "1"
 
+# 14. Health sampler binary registration and user timer installation (install_health_timer)
+check "infynitae_binary_names lists infynitae-health" \
+    "$(bash -c '. "'"$REPO_DIR"'/live/install-lib.sh"; infynitae_binary_names' | grep -cx 'infynitae-health' || true)" "1"
+ht_home="$TMP/health-timer-home"
+ht_bin="$TMP/health-timer-bin"
+ht_log="$TMP/health-timer.log"
+mkdir -p "$ht_home" "$ht_bin"
+cat > "$ht_bin/systemctl" <<EOF
+#!/bin/sh
+echo "systemctl \$*" >> "$ht_log"
+case "\$*" in
+    *"is-enabled"*|*"is-active"*) exit "\${HT_ACTIVE_EXIT:-1}" ;;
+esac
+exit 0
+EOF
+chmod +x "$ht_bin/systemctl"
+: > "$ht_log"
+HOME="$ht_home" PATH="$ht_bin:/usr/bin:/bin" bash -c \
+    '. "'"$REPO_DIR"'/live/install-lib.sh"; install_health_timer "'"$REPO_DIR"'" --dry-run'
+check "install_health_timer --dry-run does not create unit dir" \
+    "$([ -e "$ht_home/.config/systemd/user/infynitae-health.timer" ] && echo yes || echo no)" "no"
+HOME="$ht_home" PATH="$ht_bin:/usr/bin:/bin" HT_ACTIVE_EXIT=1 bash -c \
+    '. "'"$REPO_DIR"'/live/install-lib.sh"; install_health_timer "'"$REPO_DIR"'"'
+check "install_health_timer installs service unit" \
+    "$([ -f "$ht_home/.config/systemd/user/infynitae-health.service" ] && echo yes || echo no)" "yes"
+check "install_health_timer installs timer unit" \
+    "$([ -f "$ht_home/.config/systemd/user/infynitae-health.timer" ] && echo yes || echo no)" "yes"
+check "install_health_timer reloads user daemon and enables timer" \
+    "$(grep -c 'enable --now infynitae-health.timer' "$ht_log" || true)" "1"
+: > "$ht_log"
+HOME="$ht_home" PATH="$ht_bin:/usr/bin:/bin" HT_ACTIVE_EXIT=0 bash -c \
+    '. "'"$REPO_DIR"'/live/install-lib.sh"; install_health_timer "'"$REPO_DIR"'"'
+check "install_health_timer is idempotent when units match and timer active" \
+    "$(grep -c 'daemon-reload\|enable --now' "$ht_log" || true)" "0"
+
 exit $fail
