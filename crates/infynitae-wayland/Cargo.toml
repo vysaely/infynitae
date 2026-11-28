@@ -17,7 +17,7 @@ smithay = { version = "=0.7.0", default-features = false, features = ["wayland_f
 # (`signals`, its `unsafe` listed in UNSAFE_INVENTORY U-005/U-006); signal-hook rejected, libc used
 # instead (already in the locked graph through Smithay's dependencies: no new crate). Unlike
 # calloop's signalfd source it blocks no signal, so the session's children inherit no blocked mask.
-libc = { version = "=0.2.190", default-features = false }
+libc = { version = "=0.2.191", default-features = false }
 # Server-side bindings for wlr-gamma-control-unstable-v1 and wlr-output-power-management-unstable-v1
 # (already in the locked graph through Smithay and winit: no new crate).
 wayland-protocols-wlr = { version = "=0.3.12", default-features = false, features = ["server"] }
