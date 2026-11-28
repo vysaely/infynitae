@@ -49,14 +49,10 @@ pub const PAD_TOP: f64 = 14.0;
 pub const PAD_BOTTOM: f64 = 12.0;
 pub const HEAD_H: f64 = 26.0;
 pub const GAP: f64 = 12.0;
-/// A card unfolds from its panel's screen edge as it opens; the next card starts this much later.
-pub const ARRIVE_MS: f64 = 170.0;
-pub const ARRIVE_STAGGER_MS: f64 = 18.0;
-pub const ARRIVE_LIFT: f64 = 8.0;
-const ARRIVE_CARDS: f64 = 8.0;
-/// Leaving animation: cards tuck back toward their screen edge when a panel closes.
-pub const LEAVE_MS: f64 = 105.0;
-pub const LEAVE_DROP: f64 = 5.0;
+/// A panel fades in where it stands when it opens, and fades out in place when it closes. It stops
+/// taking clicks the moment it starts closing (`open` is cleared before the fade-out).
+pub const ARRIVE_MS: f64 = 150.0;
+pub const LEAVE_MS: f64 = 120.0;
 /// Pointer dwell before opening a hover panel, and grace before closing when left.
 pub const HOVER_OPEN_MS: f64 = 120.0;
 pub const HOVER_CLOSE_MS: f64 = 250.0;
@@ -1446,6 +1442,7 @@ impl Shell {
         self.open.is_some() || self.ask.ask.on || self.window_menu.is_some() || self.shortcuts.open
     }
 
+    #[cfg(test)]
     pub fn is_closing(&self) -> bool {
         self.closing.is_some()
     }
@@ -1563,7 +1560,7 @@ impl Shell {
         let mut running = false;
         if let Some(t0) = self.opened_at {
             let ms = now.duration_since(t0).as_secs_f64() * 1000.0;
-            if ms < ARRIVE_MS + ARRIVE_STAGGER_MS * ARRIVE_CARDS {
+            if ms < ARRIVE_MS {
                 self.open_ms = ms;
             } else {
                 self.opened_at = None;
@@ -1943,6 +1940,50 @@ mod tests {
         assert!(!sh.is_closing());
         assert!(!sh.visible());
         assert!(sh.shown_box(1280.0, 800.0).is_none());
+    }
+
+    #[test]
+    fn a_panel_fades_in_where_it_stands() {
+        // Owner 2026-11-28: the panel feels like it was there all along, only invisible; the key
+        // makes it appear in place. Halfway through opening it covers the same pixels as when
+        // fully open, only fainter.
+        let mut sh = shell("SUPER+A top right settings/session");
+        let idx = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "control")
+            .unwrap();
+        assert!(sh.open_panel(idx, false, Instant::now()));
+        let shot = |sh: &Shell| {
+            let mut surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 1280, 800).unwrap();
+            {
+                let cr = cairo::Context::new(&surf).unwrap();
+                sh.draw(&cr, 1280.0, 800.0);
+            }
+            surf.flush();
+            let stride = surf.stride() as usize;
+            let data = surf.data().unwrap().to_vec();
+            let (mut x0, mut y0, mut x1, mut y1, mut alpha) = (usize::MAX, usize::MAX, 0, 0, 0u64);
+            for y in 0..800 {
+                for x in 0..1280 {
+                    let a = data[y * stride + x * 4 + 3];
+                    if a > 0 {
+                        (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+                        alpha += u64::from(a);
+                    }
+                }
+            }
+            ((x0, y0, x1, y1), alpha)
+        };
+        sh.open_ms = ARRIVE_MS / 2.0;
+        let (half_box, half_alpha) = shot(&sh);
+        sh.open_ms = f64::INFINITY;
+        let (full_box, full_alpha) = shot(&sh);
+        assert_eq!(
+            half_box, full_box,
+            "no travel and no scale while it appears"
+        );
+        assert!(half_alpha < full_alpha, "fainter while it appears");
     }
 
     pub(super) fn parse_box_center(dump: &str, prefix: &str) -> (f64, f64) {
