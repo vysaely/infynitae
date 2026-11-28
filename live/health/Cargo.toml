@@ -1,0 +1,26 @@
+# Infynitae's system health and condensed log collector (`infynitae-health`): its own crate and
+# lockfile, outside the compositor workspace, like live/shot-rs.
+[package]
+name = "infynitae-health"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Infynitae's system health snapshot, 60 s sampler, and condensed event log"
+
+[[bin]]
+name = "infynitae-health"
+path = "src/main.rs"
+
+[dependencies]
+libc = "0.2"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[profile.release]
+opt-level = "s"
+lto = "thin"
+codegen-units = 1
+strip = true
+
+# not a member of the compositor's workspace
+[workspace]

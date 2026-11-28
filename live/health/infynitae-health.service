@@ -1,0 +1,8 @@
+[Unit]
+Description=Sample PC health metrics and notify on new problems
+
+[Service]
+Type=oneshot
+Nice=19
+IOSchedulingClass=idle
+ExecStart=%h/.local/bin/infynitae-health sample
