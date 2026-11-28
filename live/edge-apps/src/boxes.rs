@@ -276,6 +276,9 @@ mod tests {
             transient: false,
             resident: false,
             time: "12:00".into(),
+            desktop_entry: String::new(),
+            program: String::new(),
+            private: false,
         };
         sh.notify
             .receive(note, std::time::Instant::now(), crate::notify::Quiet::No);

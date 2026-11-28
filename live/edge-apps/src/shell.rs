@@ -436,6 +436,8 @@ pub struct Shell {
     frame_scroll: std::cell::Cell<f64>,
     frame_screen: std::cell::Cell<(f64, f64)>,
     frames: RefCell<HashMap<OutputId, OutputFrame>>,
+    /// where the last `draw_on` or `draw_widgets` drew private notifications (`Hits::private`)
+    pub drawn_private: RefCell<Vec<(i32, i32, i32, i32)>>,
     last_output: Option<OutputId>,
     /// what the cards asked for: the action, its card ("owner/kind": one command at a time per
     /// card), and the provider and source keys to fetch again after it ran
@@ -546,6 +548,7 @@ impl Shell {
             frame_scroll: std::cell::Cell::new(0.0),
             frame_screen: std::cell::Cell::new((1920.0, 1080.0)),
             frames: RefCell::new(HashMap::new()),
+            drawn_private: RefCell::new(Vec::new()),
             last_output: None,
             actions: Vec::new(),
             opened_at: None,
@@ -1755,6 +1758,7 @@ mod tests {
                 actions: vec![],
                 urgency: 1,
                 time: "12:00".into(),
+                private: false,
             })
             .collect();
         let idx = sh

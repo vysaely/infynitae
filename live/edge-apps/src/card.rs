@@ -52,6 +52,8 @@ pub struct Note {
     pub urgency: u8,
     /// "HH:MM" it came
     pub time: String,
+    /// from an app in PRIVACY_APPS: drawn only where captures do not reach (`Hits::private`)
+    pub private: bool,
 }
 
 /// What a card can read while it measures, draws or handles input. Fixed in tests.
@@ -225,6 +227,10 @@ pub struct Hits {
     /// optional `(hit_id, text)` annotations for `INFYNITAE_EDGE_BOXES` (`Some(id)` labels a
     /// hit; `None` is unclickable status text drawn by the card)
     pub texts: Vec<(Option<u32>, String)>,
+    /// where a private notification (`Note::private`) was drawn, in the device pixels of the
+    /// surface drawn on: the surface leaves them clear and a surface kept out of captures draws
+    /// them (`wayland::surfaces::cut_private`)
+    pub private: Vec<(i32, i32, i32, i32)>,
 }
 
 fn inside(r: Rect, (x, y): (f64, f64)) -> bool {
@@ -239,6 +245,27 @@ impl Hits {
             list: Vec::new(),
             draggable: Vec::new(),
             texts: Vec::new(),
+            private: Vec::new(),
+        }
+    }
+
+    /// Records `r` (in `cr`'s user space, as far as its clip shows it) as holding a private
+    /// notification.
+    pub fn private(&mut self, cr: &cairo::Context, r: Rect) {
+        let device = |x0: f64, y0: f64, x1: f64, y1: f64| {
+            let a = cr.user_to_device(x0, y0);
+            let b = cr.user_to_device(x1, y1);
+            (a.0.min(b.0), a.1.min(b.1), a.0.max(b.0), a.1.max(b.1))
+        };
+        let (x0, y0, x1, y1) = device(r.0, r.1, r.0 + r.2, r.1 + r.3);
+        let (cx0, cy0, cx1, cy1) = match cr.clip_extents() {
+            Ok((a, b, c, d)) => device(a, b, c, d),
+            Err(_) => (x0, y0, x1, y1),
+        };
+        let (x0, y0) = (x0.max(cx0).floor() as i32, y0.max(cy0).floor() as i32);
+        let (x1, y1) = (x1.min(cx1).ceil() as i32, y1.min(cy1).ceil() as i32);
+        if x1 > x0 && y1 > y0 {
+            self.private.push((x0, y0, x1 - x0, y1 - y0));
         }
     }
 
@@ -510,6 +537,7 @@ pub fn render_notes() -> Vec<Note> {
                 actions: vec![],
                 urgency: 1,
                 time: f.get(4).unwrap_or(&"").to_string(),
+                private: false,
             })
         })
         .collect()

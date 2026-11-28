@@ -178,6 +178,9 @@ impl Card for ListCard {
             let h = note_h(notes, i);
             let head = shows_app(notes, i);
             let block = (x - 8.0, y - 5.0, w + 16.0, h + GAP);
+            if note.private {
+                hits.private(cr, block);
+            }
             let id = i as u32;
             let pointed = hits.add(H_NOTE + id, block);
             if pointed || hits.selected(H_NOTE + id) {
@@ -331,6 +334,7 @@ mod tests {
             actions: vec![],
             urgency: 1,
             time: "12:00".into(),
+            private: false,
         }
     }
 

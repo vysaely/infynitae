@@ -11,6 +11,7 @@ impl Shell {
     }
 
     pub fn draw_on(&self, output: OutputId, cr: &cairo::Context, w: f64, h: f64) -> Option<Rect> {
+        self.drawn_private.borrow_mut().clear();
         if !self.visible_on(output) {
             return None;
         }
@@ -227,6 +228,9 @@ impl Shell {
                 cr.translate(-m.anchor_x, -m.anchor_y);
             }
             draw_card(cr, th, pc, &cx, status, *r, &mut hits);
+            self.drawn_private
+                .borrow_mut()
+                .extend_from_slice(&hits.private);
             if animated {
                 let _ = cr.pop_group_to_source();
                 let _ = cr.paint_with_alpha(alpha);

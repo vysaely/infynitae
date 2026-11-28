@@ -34,6 +34,7 @@ impl CompositorHandler for App {
         for pl in self
             .popups
             .iter_mut()
+            .chain(self.private_layers.iter_mut())
             .chain(self.widget_layer.iter_mut())
             .chain(self.osd_layer.iter_mut())
             .filter(|p| p.layer.wl_surface() == surface)
@@ -103,8 +104,8 @@ impl CompositorHandler for App {
         }
         if let Some(pl) = self
             .popups
-            .as_mut()
-            .filter(|p| p.layer.wl_surface() == surface)
+            .iter_mut()
+            .find(|p| p.layer.wl_surface() == surface)
         {
             pl.frame_pending = false;
             pl.render(qh, &self.compositor, &self.shell);
@@ -177,11 +178,12 @@ impl OutputHandler for App {
         output: wl_output::WlOutput,
     ) {
         self.remove_output_matching(|o| o.output == output);
-        if self.popups.as_ref().is_some_and(|p| p.output == output) {
+        if self.popups.iter().any(|p| p.output == output) {
             // the next pop-up makes the strip again, on the first screen left
-            self.popups = None;
+            self.popups.retain(|p| p.output != output);
             self.popup_touch = None;
         }
+        self.private_layers.retain(|p| p.output != output);
         if self.osd_layer.as_ref().is_some_and(|o| o.output == output) {
             self.osd_layer = None;
         }
@@ -201,10 +203,11 @@ impl OutputHandler for App {
 impl LayerShellHandler for App {
     fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, layer: &LayerSurface) {
         self.remove_output_matching(|o| &o.layer == layer);
-        if self.popups.as_ref().is_some_and(|p| &p.layer == layer) {
-            self.popups = None;
+        if self.popups.iter().any(|p| &p.layer == layer) {
+            self.popups.retain(|p| &p.layer != layer);
             self.popup_touch = None;
         }
+        self.private_layers.retain(|p| &p.layer != layer);
         if self.osd_layer.as_ref().is_some_and(|o| &o.layer == layer) {
             self.osd_layer = None;
         }
@@ -235,6 +238,7 @@ impl LayerShellHandler for App {
         if let Some(pl) = self
             .popups
             .iter_mut()
+            .chain(self.private_layers.iter_mut())
             .chain(self.widget_layer.iter_mut())
             .chain(self.osd_layer.iter_mut())
             .find(|p| &p.layer == layer)
@@ -489,8 +493,8 @@ impl PointerHandler for App {
             }
             if let Some(pl) = self
                 .popups
-                .as_mut()
-                .filter(|p| p.layer.wl_surface() == &event.surface)
+                .iter_mut()
+                .find(|p| p.layer.wl_surface() == &event.surface)
             {
                 // the pop-ups: pointing holds one's time; a click on its x, a button, or the card
                 use crate::notify::{hit, popup_at, Hit};
@@ -609,11 +613,7 @@ impl TouchHandler for App {
         id: i32,
         position: (f64, f64),
     ) {
-        if self
-            .popups
-            .as_ref()
-            .is_some_and(|p| p.layer.wl_surface() == &surface)
-        {
+        if self.popups.iter().any(|p| p.layer.wl_surface() == &surface) {
             if self.popup_touch.is_none() {
                 self.popup_touch = Some((id, position));
             }
@@ -667,7 +667,8 @@ impl TouchHandler for App {
         id: i32,
     ) {
         if let Some((_, start)) = self.popup_touch.take().filter(|(pid, _)| *pid == id) {
-            let pop_changed = if let Some(pl) = self.popups.as_mut() {
+            // both strips are as wide, and a card is in the same place on either
+            let pop_changed = if let Some(pl) = self.popups.first() {
                 use crate::notify::{hit, Hit};
                 let w = pl.width as f64;
                 let n = &mut self.shell.notify;
@@ -825,6 +826,7 @@ impl Dispatch<WpFractionalScaleV1, wl_surface::WlSurface> for App {
         if let Some(pl) = state
             .popups
             .iter_mut()
+            .chain(state.private_layers.iter_mut())
             .chain(state.widget_layer.iter_mut())
             .chain(state.osd_layer.iter_mut())
             .find(|p| p.layer.wl_surface() == surface)

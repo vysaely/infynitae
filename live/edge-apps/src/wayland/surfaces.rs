@@ -32,6 +32,39 @@ pub(super) fn zero_by_release(bytes: &mut [u8]) {
     bytes[end..].fill(0);
 }
 
+/// Clears where private notifications were drawn (`Shell::drawn_private`, device pixels), so the
+/// surface, and every capture of it, has nothing there. Returns those places in `cr`'s user space
+/// (the surface's logical pixels): a private overlay (`SurfaceKind::PrivatePanel`,
+/// `PrivateWidgets`) draws the same frame there, kept out of captures by the compositor.
+pub(super) fn cut_private(cr: &cairo::Context, rects: &[(i32, i32, i32, i32)]) -> Vec<Rect> {
+    if rects.is_empty() {
+        return Vec::new();
+    }
+    // the surfaces draw at a scale (and nothing else) from logical to buffer pixels
+    let m = cr.matrix();
+    let logical = rects
+        .iter()
+        .map(|&(x, y, w, h)| {
+            (
+                (f64::from(x) - m.x0()) / m.xx(),
+                (f64::from(y) - m.y0()) / m.yy(),
+                f64::from(w) / m.xx(),
+                f64::from(h) / m.yy(),
+            )
+        })
+        .collect();
+    cr.save().ok();
+    cr.identity_matrix();
+    cr.reset_clip();
+    cr.set_operator(cairo::Operator::Clear);
+    for &(x, y, w, h) in rects {
+        cr.rectangle(f64::from(x), f64::from(y), f64::from(w), f64::from(h));
+    }
+    let _ = cr.fill();
+    cr.restore().ok();
+    logical
+}
+
 pub(super) fn scaled_dimension(logical: u32, scale_120: u32) -> u32 {
     ((u64::from(logical) * u64::from(scale_120.max(1)) + 60) / 120).max(1) as u32
 }
@@ -66,6 +99,10 @@ pub(super) struct OutputSurface {
     /// a clear frame is committed: on its frame callback, when the compositor has read it, its
     /// buffer's pages are given back (`release_shown_buffer`)
     pub(super) release_pending: bool,
+    /// where the last frame left private notifications out (`cut_private`), logical pixels
+    pub(super) private: Vec<Rect>,
+    /// `private` is new: the private overlay draws again (`App::sync_private`)
+    pub(super) private_changed: bool,
 }
 
 impl Drop for OutputSurface {
@@ -287,6 +324,10 @@ impl OutputSurface {
     /// Closed: a clear frame, damaging what this buffer held and what is on screen (the other
     /// buffer's box); with both buffers still held, again on the next frame callback.
     pub(super) fn clear_and_commit(&mut self, qh: &QueueHandle<App>, shell: &Shell) {
+        if !self.private.is_empty() {
+            self.private.clear();
+            self.private_changed = true;
+        }
         let any_visible = shell.visible();
         let dump = |this: &Self| {
             if !any_visible {
@@ -398,6 +439,10 @@ impl OutputSurface {
                 if let Ok(cr) = cairo::Context::new(&surface) {
                     cr.scale(sx, sy);
                     shell.draw_on(self.id, &cr, lw, lh);
+                    let cut = cut_private(&cr, &shell.drawn_private.borrow());
+                    // drawn again with each frame while one shows (a light, a scroll may move it)
+                    self.private_changed |= !cut.is_empty() || !self.private.is_empty();
+                    self.private = cut;
                 }
                 surface.flush();
             }
@@ -424,13 +469,24 @@ impl OutputSurface {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum SurfaceKind {
     Popups,
+    /// the pop-ups of private apps (PRIVACY_APPS), on a strip of their own kept out of captures
+    PrivatePopups,
     Widgets,
     Osd,
+    /// over the panel on this output, kept out of captures: the panel's frame where it left
+    /// private notifications out (`cut_private`), nothing elsewhere
+    PrivatePanel(OutputId),
+    /// the same over the desktop's widgets, on the Bottom layer with them
+    PrivateWidgets,
 }
+
+/// The namespace the compositor keeps out of every capture, as it does private windows
+/// (`PRIVATE_NAMESPACE` in crates/infynitae-wayland/src/layers.rs).
+pub(super) const PRIVATE_NAMESPACE: &str = "infynitae-private";
 
 /// The notification pop-ups' surface (in place of mako): a strip down the right of the first
 /// screen on the Top layer, taking the pointer only on the cards, and unmapped (no buffer) while
-/// there is nothing to show, so it costs nothing and is never one more surface over a full-screen
+/// there is nothing to show (private apps' pop-ups on a second strip over it, `PrivatePopups`), so it costs nothing and is never one more surface over a full-screen
 /// window. The desktop's widgets (`Widgets`) sit on the Bottom layer on the first screen, and the
 /// volume/brightness OSD (`Osd`) sits at the bottom centre on the Top layer with no input region
 /// and unmapped when hidden.
@@ -459,6 +515,11 @@ pub(super) struct PopupLayer {
     pub(super) again: bool,
     /// where the pointer is on it
     pub(super) pointer: Option<(f64, f64)>,
+    /// `Widgets`: where the last frame left private notifications out (`cut_private`); a private
+    /// overlay: where it draws them. Logical pixels.
+    pub(super) private: Vec<Rect>,
+    /// `Widgets`: `private` is new, its overlay draws again (`App::sync_private`)
+    pub(super) private_changed: bool,
 }
 
 impl Drop for PopupLayer {
@@ -520,16 +581,37 @@ impl PopupLayer {
                 l.set_anchor(Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT);
                 l
             }
-            SurfaceKind::Popups => {
+            SurfaceKind::Popups | SurfaceKind::PrivatePopups => {
+                let namespace = if kind == SurfaceKind::PrivatePopups {
+                    PRIVATE_NAMESPACE
+                } else {
+                    "infynitae-notifications"
+                };
                 let l = app.layer_shell.create_layer_surface(
                     &app.qh,
                     surface,
                     Layer::Top,
-                    Some("infynitae-notifications"),
+                    Some(namespace),
                     Some(&output),
                 );
                 l.set_anchor(Anchor::TOP | Anchor::RIGHT | Anchor::BOTTOM);
                 l.set_size(POPUP_STRIP_W, 0);
+                l
+            }
+            SurfaceKind::PrivatePanel(_) | SurfaceKind::PrivateWidgets => {
+                let layer = if kind == SurfaceKind::PrivateWidgets {
+                    Layer::Bottom
+                } else {
+                    Layer::Top
+                };
+                let l = app.layer_shell.create_layer_surface(
+                    &app.qh,
+                    surface,
+                    layer,
+                    Some(PRIVATE_NAMESPACE),
+                    Some(&output),
+                );
+                l.set_anchor(Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT);
                 l
             }
             SurfaceKind::Osd => {
@@ -575,6 +657,8 @@ impl PopupLayer {
             frame_pending: false,
             again: false,
             pointer: None,
+            private: Vec::new(),
+            private_changed: false,
         })
     }
 
@@ -653,29 +737,63 @@ impl PopupLayer {
             SurfaceKind::Widgets => {
                 // a frame after each: the cards' animations (a list opening) go on from there
                 let region = shell.widget_region();
-                self.present(qh, compositor, &region, true, |cr, _, _| {
-                    shell.draw_widgets(cr)
+                let mut cut = None;
+                let committed = self.present(qh, compositor, &region, true, |cr, _, _| {
+                    shell.draw_widgets(cr);
+                    cut = Some(cut_private(cr, &shell.drawn_private.borrow()));
+                });
+                if let Some(cut) = cut {
+                    self.private_changed |= !cut.is_empty() || !self.private.is_empty();
+                    self.private = cut;
+                }
+                committed
+            }
+            SurfaceKind::PrivatePanel(_) | SurfaceKind::PrivateWidgets => {
+                if self.private.is_empty() {
+                    return self.unmap();
+                }
+                let clip = self.private.clone();
+                let kind = self.kind;
+                // no input: clicks go to the panel or widgets under it
+                self.present(qh, compositor, &[], false, |cr, lw, lh| {
+                    for &(x, y, w, h) in &clip {
+                        cr.rectangle(x, y, w, h);
+                    }
+                    cr.clip();
+                    match kind {
+                        SurfaceKind::PrivatePanel(id) => {
+                            shell.draw_on(id, cr, lw, lh);
+                        }
+                        _ => shell.draw_widgets(cr),
+                    }
                 })
             }
-            SurfaceKind::Popups => {
+            SurfaceKind::Popups | SurfaceKind::PrivatePopups => {
                 let n = &shell.notify;
-                if n.popups.is_empty() {
+                let private = self.kind == SurfaceKind::PrivatePopups;
+                if !n.popups.iter().any(|p| p.note.private == private) {
                     return self.unmap();
                 }
                 let now = Instant::now();
-                // only the cards take the pointer; the rest of the strip lets clicks through
+                // only its own cards take the pointer; the rest of the strip lets clicks through
+                // (to the other strip's cards, or what is under both)
                 let region: Vec<(i32, i32, i32, i32)> = crate::notify::layout(n, self.width as f64)
                     .into_iter()
-                    .map(|(_, r)| (r.0 as i32, r.1 as i32, r.2.ceil() as i32, r.3.ceil() as i32))
+                    .zip(&n.popups)
+                    .filter(|(_, p)| p.note.private == private)
+                    .map(|((_, r), _)| {
+                        (r.0 as i32, r.1 as i32, r.2.ceil() as i32, r.3.ceil() as i32)
+                    })
                     .collect();
                 // a card still sliding in: the next frame too
                 let arriving = n.popups.iter().any(|p| {
-                    now.saturating_duration_since(p.born).as_secs_f64() * 1000.0
-                        < crate::notify::ARRIVE_MS
+                    p.note.private == private
+                        && now.saturating_duration_since(p.born).as_secs_f64() * 1000.0
+                            < crate::notify::ARRIVE_MS
                 });
                 let pointer = self.pointer;
                 self.present(qh, compositor, &region, arriving, |cr, lw, _| {
-                    crate::notify::draw(cr, &shell.theme, n, lw, pointer, now)
+                    crate::notify::draw(cr, &shell.theme, n, lw, private, pointer, now)
                 })
             }
             SurfaceKind::Osd => match &shell.notify.osd {
@@ -960,6 +1078,9 @@ mod tests {
             transient: false,
             resident: false,
             time: "12:00".into(),
+            desktop_entry: String::new(),
+            program: String::new(),
+            private: false,
         };
         let quiet = crate::notify::Quiet::No;
         assert!(app.shell.notify.receive(note, Instant::now(), quiet));
@@ -969,7 +1090,7 @@ mod tests {
         }
         let pl = app
             .popups
-            .as_ref()
+            .first()
             .expect("the strip is made with the first pop-up");
         assert!(pl.mapped);
         let drawn = pl.pool.len();
@@ -977,7 +1098,7 @@ mod tests {
 
         assert!(app.shell.notify.close(1));
         app.sync_popups();
-        let pl = app.popups.as_ref().unwrap();
+        let pl = app.popups.first().unwrap();
         assert!(!pl.mapped);
         assert_eq!(
             pl.pool.len(),
@@ -1086,6 +1207,9 @@ mod tests {
             transient: true,
             resident: false,
             time: "12:00".into(),
+            desktop_entry: String::new(),
+            program: String::new(),
+            private: false,
         };
 
         let t0 = Instant::now();
@@ -1186,5 +1310,296 @@ mod tests {
             crate::boxes::text(&app.shell, 1280.0, 800.0),
             "osd 520 720 240 56 80 Brightness\n"
         );
+    }
+
+    fn private_test_note(id: u32, app: &str, desktop_entry: &str) -> crate::notify::Note {
+        crate::notify::Note {
+            id,
+            app: app.into(),
+            summary: format!("Secret {id}"),
+            body: "body".into(),
+            actions: vec![],
+            urgency: 2,
+            value: None,
+            sync: None,
+            expire: None,
+            transient: false,
+            resident: false,
+            time: "12:00".into(),
+            desktop_entry: desktop_entry.into(),
+            program: String::new(),
+            private: false,
+        }
+    }
+
+    /// Whether any pixel of `pl`'s last buffer inside `r` (logical = buffer pixels, scale 1) is
+    /// drawn.
+    fn drawn_in(pl: &mut PopupLayer, r: (i32, i32, i32, i32)) -> bool {
+        let w = pl.width as i32;
+        let Some(buffer) = pl.buffer.as_ref() else {
+            return false;
+        };
+        let Some(bytes) = buffer.canvas(&mut pl.pool) else {
+            return false;
+        };
+        (r.1..r.1 + r.3).any(|y| {
+            (r.0..r.0 + r.2).any(|x| bytes[((y * w + x) * 4) as usize..][..4] != [0, 0, 0, 0])
+        })
+    }
+
+    fn strip(app: &mut App, kind: SurfaceKind) -> &mut PopupLayer {
+        app.popups
+            .iter_mut()
+            .find(|p| p.kind == kind)
+            .expect("the strip is made")
+    }
+
+    fn write_config(path: &std::path::Path, text: &str, ahead_s: u64) {
+        std::fs::write(path, text).unwrap();
+        let t = std::time::SystemTime::now() + Duration::from_secs(ahead_s);
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(t)
+            .unwrap();
+    }
+
+    /// PRIVACY_APPS="signal": Signal's pop-up is drawn on the strip named "infynitae-private"
+    /// (which the compositor keeps out of captures), Mail's on the usual strip, each only where
+    /// its card is. Mail added to the config moves its pop-up over while it shows; an app found by
+    /// its desktop entry alone goes there too.
+    #[test]
+    fn headless_a_private_apps_pop_up_is_on_the_private_strip_and_follows_the_config() {
+        let dir = std::env::temp_dir().join(format!(
+            "infynitae-edge-private-popups-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg_path = dir.join("config");
+        write_config(&cfg_path, "PRIVACY_APPS=\"signal\"\n", 0);
+        let (mock, conn) = MockWayland::start(
+            vec![MockOutputSpec {
+                width: 1280,
+                height: 800,
+                scale: 1,
+                fractional_120: 120,
+            }],
+            false,
+        );
+        let sh = Shell::new_at(
+            crate::config::Config::from_text(&std::fs::read_to_string(&cfg_path).unwrap()),
+            Vec::new(),
+            &cfg_path,
+        );
+        let (fetch_tx, _fetch_rx) = channel::channel::<Fetched>();
+        let (mut app, mut eq) = init_app(&conn, sh, fetch_tx).unwrap();
+        let t0 = Instant::now();
+        let clock = std::rc::Rc::new(std::cell::Cell::new(t0));
+        app.clock = Some(std::rc::Rc::clone(&clock));
+        app.config_path = Some(cfg_path.clone());
+        eq.roundtrip(&mut app).unwrap();
+
+        let quiet = crate::notify::Quiet::No;
+        // born long ago: drawn whole, not sliding in
+        let born = Instant::now() - Duration::from_secs(5);
+        app.shell
+            .notify
+            .receive(private_test_note(1, "Signal", ""), born, quiet);
+        app.shell
+            .notify
+            .receive(private_test_note(2, "Mail", ""), born, quiet);
+        app.sync_popups();
+        for _ in 0..3 {
+            eq.roundtrip(&mut app).unwrap();
+        }
+        let names: Vec<String> = mock
+            .state
+            .lock()
+            .unwrap()
+            .layer_kind
+            .values()
+            .map(|(_, n)| n.clone())
+            .collect();
+        assert!(names.contains(&PRIVATE_NAMESPACE.to_string()), "{names:?}");
+        assert!(names.contains(&"infynitae-notifications".to_string()));
+        // newest at the top: Mail, then Signal
+        let w = strip(&mut app, SurfaceKind::Popups).width as f64;
+        let cards: Vec<(i32, i32, i32, i32)> = crate::notify::layout(&app.shell.notify, w)
+            .into_iter()
+            .map(|(_, r)| (r.0 as i32, r.1 as i32, r.2 as i32, r.3 as i32))
+            .collect();
+        let (mail, signal) = (cards[0], cards[1]);
+        let public = strip(&mut app, SurfaceKind::Popups);
+        assert!(public.mapped);
+        assert!(drawn_in(public, mail), "Mail's card on the usual strip");
+        assert!(!drawn_in(public, signal), "nothing of Signal's there");
+        let private = strip(&mut app, SurfaceKind::PrivatePopups);
+        assert!(private.mapped);
+        assert!(
+            drawn_in(private, signal),
+            "Signal's card on the private strip"
+        );
+        assert!(!drawn_in(private, mail));
+        let sid = |pl: &PopupLayer| {
+            use smithay_client_toolkit::reexports::client::Proxy;
+            pl.layer.wl_surface().id().protocol_id()
+        };
+        let private_sid = sid(strip(&mut app, SurfaceKind::PrivatePopups));
+        assert_eq!(
+            mock.last_commit(private_sid).input_rects,
+            vec![signal],
+            "the private strip takes the pointer on its own card only"
+        );
+
+        // Mail added (as Super+Shift+P writes it): read at the next turn after 250 ms
+        write_config(&cfg_path, "PRIVACY_APPS=\"signal,mail\"\n", 5);
+        clock.set(t0 + Duration::from_millis(300));
+        app.sync_popups();
+        for _ in 0..3 {
+            eq.roundtrip(&mut app).unwrap();
+        }
+        assert!(
+            !strip(&mut app, SurfaceKind::Popups).mapped,
+            "nothing left on the usual strip"
+        );
+        let private = strip(&mut app, SurfaceKind::PrivatePopups);
+        assert!(drawn_in(private, mail) && drawn_in(private, signal));
+        assert!(app.shell.notes.iter().all(|n| n.private), "the history too");
+
+        // found by its desktop entry, its name says nothing
+        write_config(&cfg_path, "PRIVACY_APPS=\"keepassxc\"\n", 10);
+        clock.set(t0 + Duration::from_millis(600));
+        app.shell.notify.receive(
+            private_test_note(3, "Passwords", "org.keepassxc.KeePassXC"),
+            born,
+            quiet,
+        );
+        app.sync_popups();
+        let shown: Vec<(String, bool)> = app
+            .shell
+            .notify
+            .popups
+            .iter()
+            .map(|p| (p.note.app.clone(), p.note.private))
+            .collect();
+        assert_eq!(
+            shown,
+            vec![
+                ("Passwords".to_string(), true),
+                ("Mail".to_string(), false),
+                ("Signal".to_string(), false),
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The Notifications card lists a private app's entry: the panel's surface has nothing where
+    /// it is (a capture of it shows nothing there), the private overlay draws it there, and the
+    /// other entry stays on the panel. Taken out of the history, the overlay goes.
+    #[test]
+    fn headless_a_private_entry_in_the_history_is_drawn_only_on_the_private_overlay() {
+        let (mock, conn) = MockWayland::start(
+            vec![MockOutputSpec {
+                width: 1280,
+                height: 800,
+                scale: 1,
+                fractional_120: 120,
+            }],
+            false,
+        );
+        let cfg = crate::config::Config::from_text(
+            "PANEL_CONTROL=\"SUPER+A top right 380 notifications/list\"\nPRIVACY_APPS=\"signal\"\n",
+        );
+        let sh = Shell::new(cfg, Vec::new());
+        let (fetch_tx, _fetch_rx) = channel::channel::<Fetched>();
+        let (mut app, mut eq) = init_app(&conn, sh, fetch_tx).unwrap();
+        app.config_path = Some(std::env::temp_dir().join("infynitae-edge-test-no-config"));
+        eq.roundtrip(&mut app).unwrap();
+        // in the history only: a game kept the pop-ups back
+        let quiet = crate::notify::Quiet::Game;
+        let now = Instant::now();
+        app.shell
+            .notify
+            .receive(private_test_note(1, "Signal", ""), now, quiet);
+        app.shell
+            .notify
+            .receive(private_test_note(2, "Mail", ""), now, quiet);
+        app.sync_popups();
+        assert_eq!(app.shell.notes.len(), 2);
+
+        let target = app.key_target_output();
+        assert!(app.shell.toggle_named_on(target, "control"));
+        app.shell.open_ms = f64::INFINITY;
+        app.shell.opened_at = None;
+        app.sync_all();
+        eq.roundtrip(&mut app).unwrap();
+        app.sync_private();
+        for _ in 0..3 {
+            eq.roundtrip(&mut app).unwrap();
+        }
+
+        let rects = app.outputs[0].private.clone();
+        assert_eq!(rects.len(), 1, "one private entry: {rects:?}");
+        let r = rects[0];
+        let inner = (
+            r.0.ceil() as i32 + 2,
+            r.1.ceil() as i32 + 2,
+            r.2 as i32 - 4,
+            r.3 as i32 - 4,
+        );
+        let os = &mut app.outputs[0];
+        let w = os.buf_size.0 as i32;
+        let slot = os.slots[os.last_slot].as_ref().unwrap();
+        let bytes = slot.buffer.canvas(&mut os.pool).unwrap();
+        let px = |x: i32, y: i32| bytes[((y * w + x) * 4) as usize..][..4].to_vec();
+        let clear = (inner.1..inner.1 + inner.3)
+            .all(|y| (inner.0..inner.0 + inner.2).all(|x| px(x, y) == [0, 0, 0, 0]));
+        assert!(clear, "nothing of the private entry on the panel's surface");
+        // the card (and Mail's entry) right under it is drawn
+        let below = (inner.1 + inner.3 + 6..inner.1 + inner.3 + 40)
+            .any(|y| (inner.0..inner.0 + inner.2).any(|x| px(x, y) != [0, 0, 0, 0]));
+        assert!(below, "the rest of the card is on the panel's surface");
+
+        let overlay = app
+            .private_layers
+            .iter_mut()
+            .find(|p| matches!(p.kind, SurfaceKind::PrivatePanel(_)))
+            .expect("the overlay is made");
+        assert!(overlay.mapped);
+        assert!(
+            drawn_in(overlay, inner),
+            "the entry is drawn on the overlay"
+        );
+        let outside = (0, 0, 1280, inner.1 - 4);
+        assert!(!drawn_in(overlay, outside), "and nothing else");
+        let names: Vec<String> = mock
+            .state
+            .lock()
+            .unwrap()
+            .layer_kind
+            .values()
+            .map(|(_, n)| n.clone())
+            .collect();
+        assert_eq!(
+            names.iter().filter(|n| *n == PRIVATE_NAMESPACE).count(),
+            1,
+            "{names:?}"
+        );
+
+        assert!(app.shell.notify.dismiss(1));
+        app.sync_popups();
+        app.sync_all();
+        eq.roundtrip(&mut app).unwrap();
+        app.sync_private();
+        eq.roundtrip(&mut app).unwrap();
+        assert!(app.outputs[0].private.is_empty());
+        let overlay = app
+            .private_layers
+            .iter()
+            .find(|p| matches!(p.kind, SurfaceKind::PrivatePanel(_)))
+            .unwrap();
+        assert!(!overlay.mapped, "no private entry: the overlay unmaps");
     }
 }

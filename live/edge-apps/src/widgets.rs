@@ -78,6 +78,7 @@ impl Shell {
 
     /// Draws every shown widget at its place, keeping their hits for the pointer.
     pub fn draw_widgets(&self, cr: &cairo::Context) {
+        self.drawn_private.borrow_mut().clear();
         crate::draw::with_font(&self.theme.font, || {
             let mut frame = Vec::new();
             for (i, w, cx, status) in self.shown_widgets() {
@@ -88,6 +89,9 @@ impl Shell {
                 cr.clip();
                 shell::draw_card(cr, &self.theme, &w.placed, &cx, status, w.rect, &mut hits);
                 cr.restore().ok();
+                self.drawn_private
+                    .borrow_mut()
+                    .extend_from_slice(&hits.private);
                 frame.push((i, hits));
             }
             *self.widgets.frame.borrow_mut() = frame;
@@ -328,6 +332,7 @@ mod tests {
             actions: vec![],
             urgency: 1,
             time: "17:20".into(),
+            private: false,
         }];
         assert_eq!(
             s.widget_region(),
