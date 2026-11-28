@@ -131,11 +131,11 @@ PLACEMENT_POLICY="cluster"
     #    origin    the canvas origin
 
 CLUSTER_SORT="off"
-    # Windows near each other (a cluster) kept in order by themselves; Super+Shift+G sorts one by hand
-    # default: off   (no window moves another unless you ask)
-    #   tidy        when a window closes or is minimized, the others in its cluster close the gap
+    # Where a new window of an app opens; nothing moves the windows already open. Windows near
+    # each other (a cluster) are sorted only by hand: BIND_CLUSTER_LAYOUT (a grid, the focused
+    # window first, no default key) or Super+Shift+G (by app)
+    # default: off   (beside the windows nearest the pointer, by PLACEMENT_POLICY)
     #   app         a new window opens beside its app's window in view instead of at the pointer
-    #   "tidy app"  both
 
 KEEP_ON_TOP="Picture-in-Picture, Picture in picture"
     # Windows kept on top of the others from the moment they open, by title or app id, comma

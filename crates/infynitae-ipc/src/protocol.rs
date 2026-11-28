@@ -306,7 +306,7 @@ fn request(v: &Value, core: &Core) -> Result<Request, RequestError> {
                 element: element("element")?,
             })
         }
-        // `{"cmd": "arrange", "layout": "tidy"|"grid"|"columns", "element"?}`: the cluster of the
+        // `{"cmd": "arrange", "layout": "grid"|"app", "element"?}`: the cluster of the
         // window named, else of the focused one
         "arrange" => Request::Command(ShellCommand::ArrangeCluster {
             element: match v.get("element") {

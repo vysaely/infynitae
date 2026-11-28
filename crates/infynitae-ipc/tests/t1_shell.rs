@@ -1124,9 +1124,9 @@ fn show_window_menu_emits_ipc_event_and_window_menu_commands_apply() {
 }
 
 /// `arrange` (2026-11-21): a layout by name for the cluster of the window named; an unknown
-/// layout is an invalid request and moves nothing.
+/// layout (spiral was removed on 2026-11-28) is an invalid request and moves nothing.
 #[test]
-fn arrange_tidies_the_named_windows_cluster() {
+fn arrange_grids_the_named_windows_cluster() {
     let (mut core, mut server, _o) = setup();
     // both open centred in the view, one over the other
     let a = map_win(&mut core, 1, 400, 300);
@@ -1138,7 +1138,7 @@ fn arrange_tidies_the_named_windows_cluster() {
     let bad = cmd.reply(
         &mut server,
         &mut core,
-        &format!(r#"{{"id":1,"cmd":"arrange","layout":"diagonal","element":{a_ref}}}"#),
+        &format!(r#"{{"id":1,"cmd":"arrange","layout":"spiral","element":{a_ref}}}"#),
     );
     assert_eq!(
         bad.get("error").and_then(Value::as_str),
@@ -1148,14 +1148,14 @@ fn arrange_tidies_the_named_windows_cluster() {
     let ok = cmd.reply(
         &mut server,
         &mut core,
-        &format!(r#"{{"id":2,"cmd":"arrange","layout":"tidy","element":{a_ref}}}"#),
+        &format!(r#"{{"id":2,"cmd":"arrange","layout":"grid","element":{a_ref}}}"#),
     );
     assert_eq!(ok.get("ok"), Some(&Value::Bool(true)));
     let (ax, ay) = at(&core, a).unwrap();
     assert_eq!(
         at(&core, b),
         Some((ax + 412, ay)),
-        "side by side, 12 px apart"
+        "2 x 2 slots, the named window first, 12 px apart"
     );
 }
 

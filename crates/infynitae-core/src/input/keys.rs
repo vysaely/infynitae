@@ -172,8 +172,8 @@ pub enum KeyAction {
     /// focused window).
     WindowMenu,
     /// No default key since 2026-11-23 (owner: "remove super g"), bound by `BIND_CLUSTER_LAYOUT`:
-    /// the focused window's cluster in a spiral around it, then in tiles, then in a line, at each
-    /// press (`arrange`)
+    /// the focused window's cluster in a square grid, the focused window first, every window at
+    /// its own size (`arrange`, `ClusterLayout::Grid`)
     ArrangeCluster,
     /// Super+Shift+G (2026-11-22): the focused window's cluster by app, every window at its own
     /// size, one row per app, as wide as it needs (`arrange`, `ClusterLayout::ByApp`)

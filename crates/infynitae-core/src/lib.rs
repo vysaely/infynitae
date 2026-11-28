@@ -585,15 +585,6 @@ pub struct Core {
     closed_windows: Vec<(String, geom::CanvasPoint)>,
     /// `CLUSTER_SORT` (`arrange`): off unless the config turns it on.
     cluster_sort: arrange::ClusterSort,
-    /// Windows a layout asked for another size, with their cell, until they answer
-    /// (`Core::laid_out_anchor`).
-    layout_cells: Vec<(stage::ElementId, arrange::Cell)>,
-    /// A window of the last layout kept a size bigger than its cell: its cluster is tidied once
-    /// every window of the layout has answered (`Core::layout_answered`).
-    layout_overflow: Option<stage::ElementId>,
-    /// The cluster the layout key arranged last (by the window it was pressed on) and the layout:
-    /// the next press there takes the next layout.
-    last_layout: Option<(stage::ElementId, arrange::ClusterLayout)>,
     /// Whether camera teleports/recenters to newly opened windows.
     pub teleport_on_open: bool,
     /// Whether physical input occurred since the last query (INV-IDLE-1).
@@ -703,9 +694,6 @@ impl Core {
                 toplevel_parents: Vec::new(),
                 closed_windows: Vec::new(),
                 cluster_sort: arrange::ClusterSort::default(),
-                layout_cells: Vec::new(),
-                layout_overflow: None,
-                last_layout: None,
                 teleport_on_open: false,
                 physical_input_activity: false,
                 touches: touch::Touches::default(),

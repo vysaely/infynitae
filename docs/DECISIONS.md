@@ -248,9 +248,12 @@ these by date, e.g. "(owner, 2026-10-24)".
   (Super+Shift+Space, the key first suggested, keeps the zoom of Super+Space) arranges the focused
   window's cluster, spiral, tiles or line at each press (2026-11-23, owner, in place of tidy, grid and columns), and `infynitae msg arrange` does one
   layout for the edge. Super+G lost its default on 2026-11-23 (owner: "remove super g and keep
-  only super shift g"): Super+Shift+G sorts by app, the layouts stay on `BIND_CLUSTER_LAYOUT`. `CLUSTER_SORT` keeps clusters in order without a key, off by default:
-  "tidy" closes the gap a closed or minimized window leaves, "app" opens a new window beside its
-  app's window in view. docs/WINDOWS.md "Cluster layouts".
+  only super shift g"): Super+Shift+G sorts by app, the layouts stay on `BIND_CLUSTER_LAYOUT`.
+  2026-11-28 (owner: "make just proper sorting like 1x1 2x2 3x3 4x4", "just the positions, not
+  changing the windows themselves", "dont make it auto fill out the lost window place"): one
+  square grid in place of spiral, tiles and line, every window at its own size, empty slots left
+  empty; `CLUSTER_SORT` "tidy" removed, nothing re-arranges by itself; "app" (off by default)
+  opens a new window beside its app's window in view. docs/WINDOWS.md "Cluster layouts".
 - **Drag-and-drop is offered** (2026-11-23, owner: Discord's server list "doesnt hold the mouse";
   refused since 2026-10-16). An app drags only while you hold a press on it; the drag goes to the
   window under the pointer and drops there at the release, and the app's drag icon follows the

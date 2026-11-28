@@ -1,42 +1,33 @@
 //! Cluster layouts (owner, 2026-11-21): the windows of a cluster (`Core::clusters`, windows
 //! within 300 px of each other) arranged once when the person asks (a key, `infynitae msg
-//! arrange`), and kept arranged by `CLUSTER_SORT` when they turn it on. These are the only
-//! paths on which one window's change moves other windows (docs/DECISIONS.md, 2026-11-06 and
-//! 2026-11-21).
+//! arrange`). These are the only paths on which one window's change moves other windows
+//! (docs/DECISIONS.md, 2026-11-06 and 2026-11-21). Nothing arranges by itself: a window that
+//! closes or is minimized leaves its gap (owner, 2026-11-28).
 //!
-//! The key's layouts (owner, 2026-11-23, in place of tidy, grid and columns):
-//! - spiral: own sizes; the focused window stays and the others, the biggest first, are put
-//!   around it, each at the free spot nearest to it, so the cluster grows out from it;
-//! - tiles: the usable view at zoom 1 split in two along its longer side, again and again, until
-//!   each window has a tile, all of about the same area; the focused window gets the first;
-//! - line: one row, each window as high as the usable view, its shape kept.
+//! - grid (owner, 2026-11-28, in place of spiral, tiles and line): k windows in n x n slots,
+//!   n = ceil(sqrt(k)) (1, 2x2, 3x3, ...), filled row by row, the focused window first and the
+//!   others in reading order; the slots left over stay empty. A column is as wide as its widest
+//!   window, a row as high as its tallest, the gap between; each window is centred in its slot.
+//! - by app (Super+Shift+G): one row per app.
 //!
-//! Tidy (own sizes, reading order, rows as wide as the usable view) is not on the key: it closes
-//! the gap a window leaves under `CLUSTER_SORT` "tidy" and tidies a layout a window would not fit.
-//!
-//! Tiles and line start at the cluster's top-left corner; spiral keeps the focused window's place. Fullscreen, minimized, kept-on-top and
-//! notification windows and children (dialogs) are left out; a child moves with its parent.
+//! Both keep every window's size (no configure is sent) and start at the cluster's top-left
+//! corner. Fullscreen, minimized, kept-on-top and notification windows and children (dialogs)
+//! are left out; a child moves with its parent.
 
 use crate::Core;
 use crate::protocol::Effect;
 use crate::stage::ElementId;
 
-/// The placement gap between windows (F-PLACE-1), and between the room and the usable view's edge.
+/// The placement gap between windows (F-PLACE-1).
 pub(crate) const GAP: i64 = 12;
-/// The smallest cell side a layout asks a window for (the cluster scale's smallest size).
-const MIN_SIDE: i64 = 64;
 
-/// One of the layouts; the key cycles spiral, tiles and line.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ClusterLayout {
-    Spiral,
-    Tiles,
-    Line,
-    /// `CLUSTER_SORT` "tidy" and `infynitae msg arrange tidy`; not on the key.
-    Tidy,
+    /// The layout key (`BIND_CLUSTER_LAYOUT`) and `infynitae msg arrange grid`.
+    Grid,
     /// Super+Shift+G (owner, 2026-11-22): every window at its own size, one row per app, rows as
     /// wide as they need (not squeezed into one view: an app with a minimum size such as Discord
-    /// keeps it). Not in the layout key's cycle.
+    /// keeps it).
     ByApp,
 }
 
@@ -44,49 +35,30 @@ impl ClusterLayout {
     /// The layout's name as `infynitae msg arrange` takes it.
     pub fn parse(name: &str) -> Option<ClusterLayout> {
         match name.trim().to_ascii_lowercase().as_str() {
-            "spiral" => Some(ClusterLayout::Spiral),
-            "tiles" => Some(ClusterLayout::Tiles),
-            "line" => Some(ClusterLayout::Line),
-            "tidy" => Some(ClusterLayout::Tidy),
+            "grid" => Some(ClusterLayout::Grid),
             "app" | "by-app" => Some(ClusterLayout::ByApp),
             _ => None,
         }
     }
-
-    fn next(self) -> ClusterLayout {
-        match self {
-            ClusterLayout::Spiral => ClusterLayout::Tiles,
-            ClusterLayout::Tiles => ClusterLayout::Line,
-            ClusterLayout::Line | ClusterLayout::Tidy | ClusterLayout::ByApp => {
-                ClusterLayout::Spiral
-            }
-        }
-    }
 }
 
-/// `CLUSTER_SORT`: what is kept arranged without a key. Both off by default: no window moves
-/// another unless the person asks (owner, 2026-11-06).
+/// `CLUSTER_SORT`: off by default, no window moves another unless the person asks (owner,
+/// 2026-11-06).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ClusterSort {
-    /// "tidy": a cluster is tidied again after one of its windows closes or is minimized.
-    pub tidy: bool,
     /// "app": a new window opens beside its app's newest window in the first screen's view.
     pub app: bool,
 }
 
 impl ClusterSort {
-    /// The config's words, any of "tidy" and "app" separated by spaces or commas; "off", an empty
-    /// value or other words turn nothing on.
+    /// The config's words separated by spaces or commas: "app" turns it on; "off", an empty value
+    /// and other words (the removed "tidy", which live/config-check names) turn nothing on.
     pub fn parse(value: &str) -> ClusterSort {
-        let mut sort = ClusterSort::default();
-        for word in value.split([' ', ',', '\t']) {
-            match word.to_ascii_lowercase().as_str() {
-                "tidy" => sort.tidy = true,
-                "app" => sort.app = true,
-                _ => {}
-            }
+        ClusterSort {
+            app: value
+                .split([' ', ',', '\t'])
+                .any(|word| word.eq_ignore_ascii_case("app")),
         }
-        sort
     }
 }
 
@@ -118,20 +90,37 @@ pub(crate) fn reading_order(rects: &[Cell]) -> Vec<usize> {
     order
 }
 
-/// Tidy: `sizes` in order, at their own sizes, left to right from `origin`, a new row when the
-/// next one would reach past `width`; rows `GAP` apart, as high as their tallest window.
-pub(crate) fn tidy(sizes: &[(i64, i64)], origin: (i64, i64), width: i64) -> Vec<Cell> {
-    let (mut x, mut y, mut row_h) = (origin.0, origin.1, 0);
-    sizes
-        .iter()
-        .map(|&(w, h)| {
-            if x > origin.0 && x + w > origin.0 + width {
-                (x, y, row_h) = (origin.0, y + row_h + GAP, 0);
-            }
-            let cell = Cell { x, y, w, h };
-            x += w + GAP;
-            row_h = row_h.max(h);
-            cell
+/// Grid: the slots of `sizes` in order, n x n from `origin` with n = ceil(sqrt(len)), filled row
+/// by row; each column as wide as its widest window, each row as high as its tallest, `GAP`
+/// between. Slots in order (one per size; the empty ones are not returned).
+pub(crate) fn grid(sizes: &[(i64, i64)], origin: (i64, i64)) -> Vec<Cell> {
+    let mut n = 1;
+    while n * n < sizes.len() {
+        n += 1;
+    }
+    let (mut col_w, mut row_h) = (vec![0; n], vec![0; n]);
+    for (i, &(w, h)) in sizes.iter().enumerate() {
+        col_w[i % n] = col_w[i % n].max(w);
+        row_h[i / n] = row_h[i / n].max(h);
+    }
+    let starts = |from: i64, sides: &[i64]| -> Vec<i64> {
+        let mut at = from;
+        sides
+            .iter()
+            .map(|&s| {
+                let start = at;
+                at += s + GAP;
+                start
+            })
+            .collect()
+    };
+    let (xs, ys) = (starts(origin.0, &col_w), starts(origin.1, &row_h));
+    (0..sizes.len())
+        .map(|i| Cell {
+            x: xs[i % n],
+            y: ys[i / n],
+            w: col_w[i % n],
+            h: row_h[i / n],
         })
         .collect()
 }
@@ -156,158 +145,7 @@ pub(crate) fn by_app(sizes: &[(i64, i64)], apps: &[&str], origin: (i64, i64)) ->
         .collect()
 }
 
-/// `a` and `b` at least `GAP` apart on one axis.
-fn clear(a: &Cell, b: &Cell) -> bool {
-    a.x + a.w + GAP <= b.x
-        || b.x + b.w + GAP <= a.x
-        || a.y + a.h + GAP <= b.y
-        || b.y + b.h + GAP <= a.y
-}
-
-/// Spiral: `sizes` at their own sizes; `centre`'s window stays at `at` and the others, the
-/// biggest (by area) first and else in `sizes`' order, each go to the free spot nearest to its
-/// middle: beside a window already placed, the gap between, lined up with one of its edges or
-/// its middle. Distance counts across as `aspect` times less than up and down, so the cluster
-/// grows in the screen's shape; on a tie the spot first clockwise from the top. Cells in
-/// `sizes`' order.
-pub(crate) fn spiral(
-    sizes: &[(i64, i64)],
-    centre: usize,
-    at: (i64, i64),
-    aspect: f64,
-) -> Vec<Cell> {
-    let mut cells = vec![
-        Cell {
-            x: 0,
-            y: 0,
-            w: 0,
-            h: 0
-        };
-        sizes.len()
-    ];
-    let Some(&(cw, ch)) = sizes.get(centre) else {
-        return Vec::new();
-    };
-    cells[centre] = Cell {
-        x: at.0,
-        y: at.1,
-        w: cw,
-        h: ch,
-    };
-    let (mx, my) = (at.0 as f64 + cw as f64 / 2.0, at.1 as f64 + ch as f64 / 2.0);
-    let mut rest: Vec<usize> = (0..sizes.len()).filter(|&i| i != centre).collect();
-    rest.sort_by_key(|&i| std::cmp::Reverse(sizes[i].0 * sizes[i].1));
-    let mut placed = vec![cells[centre]];
-    for i in rest {
-        let (w, h) = sizes[i];
-        let mut spots = Vec::new();
-        for p in &placed {
-            let xs = [p.x, p.x + p.w - w, p.x + (p.w - w) / 2];
-            let ys = [p.y, p.y + p.h - h, p.y + (p.h - h) / 2];
-            for x in xs {
-                spots.push((x, p.y - GAP - h));
-                spots.push((x, p.y + p.h + GAP));
-            }
-            for y in ys {
-                spots.push((p.x - GAP - w, y));
-                spots.push((p.x + p.w + GAP, y));
-            }
-        }
-        let rank = |&(x, y): &(i64, i64)| {
-            let dx = (x as f64 + w as f64 / 2.0 - mx) / aspect;
-            let dy = y as f64 + h as f64 / 2.0 - my;
-            // clockwise from the top: 0 straight up, growing to the right
-            let turn = dx.atan2(-dy).rem_euclid(std::f64::consts::TAU);
-            (dx * dx + dy * dy, turn)
-        };
-        let best = spots
-            .into_iter()
-            .filter(|&(x, y)| {
-                let c = Cell { x, y, w, h };
-                placed.iter().all(|p| clear(&c, p))
-            })
-            .min_by(|a, b| {
-                let (ra, rb) = (rank(a), rank(b));
-                ra.0.total_cmp(&rb.0).then(ra.1.total_cmp(&rb.1))
-            });
-        // a spot beside the outermost window is always free, so there is always a best
-        let (x, y) = best.unwrap_or((at.0, at.1 - GAP - h));
-        cells[i] = Cell { x, y, w, h };
-        placed.push(cells[i]);
-    }
-    cells
-}
-
-/// Tiles: `room` from `origin` split in two halves along its longer side, the gap between, the
-/// first half for half the windows rounded down and the second for the rest, again in each half
-/// until each window has its own tile (three windows: one half and two quarters). The first
-/// window gets the first tile (left or top). Tiles in order.
-pub(crate) fn tiles(n: usize, origin: (i64, i64), room: (i64, i64)) -> Vec<Cell> {
-    fn split(n: usize, r: Cell, out: &mut Vec<Cell>) {
-        if n <= 1 {
-            out.push(r);
-            return;
-        }
-        let first = n / 2;
-        let part = |side: i64| ((side - GAP) / 2).max(MIN_SIDE);
-        let (a, b) = if r.w >= r.h {
-            let w = part(r.w);
-            (
-                Cell { w, ..r },
-                Cell {
-                    x: r.x + w + GAP,
-                    w: (r.w - w - GAP).max(MIN_SIDE),
-                    ..r
-                },
-            )
-        } else {
-            let h = part(r.h);
-            (
-                Cell { h, ..r },
-                Cell {
-                    y: r.y + h + GAP,
-                    h: (r.h - h - GAP).max(MIN_SIDE),
-                    ..r
-                },
-            )
-        };
-        split(first, a, out);
-        split(n - first, b, out);
-    }
-    let mut out = Vec::with_capacity(n);
-    if n > 0 {
-        let room = Cell {
-            x: origin.0,
-            y: origin.1,
-            w: room.0,
-            h: room.1,
-        };
-        split(n, room, &mut out);
-    }
-    out
-}
-
-/// Line: `sizes` in one row from `origin`, the gap between, each `height` high and as wide as
-/// its shape at that height (at least `MIN_SIDE`).
-pub(crate) fn line(sizes: &[(i64, i64)], origin: (i64, i64), height: i64) -> Vec<Cell> {
-    let mut x = origin.0;
-    sizes
-        .iter()
-        .map(|&(w, h)| {
-            let w = (w * height / h.max(1)).max(MIN_SIDE);
-            let cell = Cell {
-                x,
-                y: origin.1,
-                w,
-                h: height,
-            };
-            x += w + GAP;
-            cell
-        })
-        .collect()
-}
-
-/// The anchor of a window of `size` centred in `cell` (an app that keeps a size of its own).
+/// The anchor of a window of `size` centred in `cell`.
 pub(crate) fn centred_in(cell: Cell, size: (i64, i64)) -> crate::geom::CanvasPoint {
     crate::geom::CanvasPoint {
         x: cell.x + (cell.w - size.0) / 2,
@@ -355,72 +193,49 @@ impl Core {
             .collect()
     }
 
-    /// The room a layout fills: the usable area of the pointer's screen (else the first) at
-    /// zoom 1, less the gap on each side.
-    fn layout_room(&self) -> Option<(i64, i64)> {
-        let output = self
-            .pointer_output()
-            .or_else(|| self.outputs().first().map(|o| o.id))?;
-        let (_, _, w, h) = self.usable_area(output)?;
-        let fit = |v: f64| ((v.floor() as i64) - 2 * GAP).max(MIN_SIDE);
-        Some((fit(w), fit(h)))
-    }
-
-    /// Arranges `members` by `layout` (spiral around `first`, tiles giving it the first tile;
-    /// without it, around or to the biggest window). A window whose cell has
-    /// another size is asked for it and centred in the cell at the size it has now; its commits
-    /// keep it centred until it answers (`laid_out_anchor`). Its children move with it. Returns
-    /// the cells' bounding box `(x, y, w, h)`, or `None` when no window is arranged.
+    /// Arranges `members` by `layout`, `first` in the grid's first slot. Each window keeps its
+    /// size and is centred in its slot; its children move with it. Returns the slots' bounding
+    /// box `(x, y, w, h)`, or `None` when no window is arranged.
     pub(crate) fn arrange(
         &mut self,
         members: &[ElementId],
         layout: ClusterLayout,
-        first: Option<ElementId>,
+        first: ElementId,
         out: &mut Vec<Effect>,
     ) -> Option<(i64, i64, i64, i64)> {
         let (ids, rects): (Vec<ElementId>, Vec<Cell>) = self.arranged(members).into_iter().unzip();
         let mut order = reading_order(&rects);
-        // by app: each app's windows together, the apps in the order their first window reads
         let app_of = |i: usize| -> String {
             self.stage
                 .meta(ids[i])
                 .and_then(|m| m.app_id.clone())
                 .unwrap_or_default()
         };
-        if layout == ClusterLayout::ByApp {
-            let mut firsts: Vec<String> = Vec::new();
-            for &i in &order {
-                let a = app_of(i);
-                if !firsts.contains(&a) {
-                    firsts.push(a);
-                }
+        match layout {
+            ClusterLayout::Grid => {
+                let lead = ids.iter().position(|&e| e == first)?;
+                order.retain(|&i| i != lead);
+                order.insert(0, lead);
             }
-            order.sort_by_key(|&i| firsts.iter().position(|a| *a == app_of(i)));
+            // each app's windows together, the apps in the order their first window reads
+            ClusterLayout::ByApp => {
+                let mut firsts: Vec<String> = Vec::new();
+                for &i in &order {
+                    let a = app_of(i);
+                    if !firsts.contains(&a) {
+                        firsts.push(a);
+                    }
+                }
+                order.sort_by_key(|&i| firsts.iter().position(|a| *a == app_of(i)));
+            }
         }
         let origin = (
             rects.iter().map(|r| r.x).min()?,
             rects.iter().map(|r| r.y).min()?,
         );
-        let room = self.layout_room()?;
-        // the window the layout starts from: `first`, else the biggest
-        let lead = ids
-            .iter()
-            .position(|&e| Some(e) == first)
-            .or_else(|| (0..rects.len()).max_by_key(|&i| rects[i].w * rects[i].h))?;
-        if layout == ClusterLayout::Tiles {
-            order.retain(|&i| i != lead);
-            order.insert(0, lead);
-        }
         let sizes: Vec<_> = order.iter().map(|&i| (rects[i].w, rects[i].h)).collect();
         let cells = match layout {
-            ClusterLayout::Tidy => tidy(&sizes, origin, room.0),
-            ClusterLayout::Spiral => {
-                let centre = order.iter().position(|&i| i == lead)?;
-                let at = (rects[lead].x, rects[lead].y);
-                spiral(&sizes, centre, at, room.0 as f64 / room.1.max(1) as f64)
-            }
-            ClusterLayout::Tiles => tiles(ids.len(), origin, room),
-            ClusterLayout::Line => line(&sizes, origin, room.1),
+            ClusterLayout::Grid => grid(&sizes, origin),
             ClusterLayout::ByApp => {
                 let apps: Vec<String> = order.iter().map(|&i| app_of(i)).collect();
                 let apps: Vec<&str> = apps.iter().map(String::as_str).collect();
@@ -435,25 +250,7 @@ impl Core {
             .collect();
         for (&i, &cell) in order.iter().zip(&cells) {
             let (e, old) = (ids[i], rects[i]);
-            self.layout_cells.retain(|(x, _)| *x != e);
-            let at = if (cell.w, cell.h) == (old.w, old.h) {
-                crate::geom::CanvasPoint {
-                    x: cell.x,
-                    y: cell.y,
-                }
-            } else {
-                // the cell's size, asked as a resize asks (held, INV-PROTO-1): it ends a maximize
-                self.resized_out_of_maximize(e);
-                out.push(Effect::ToplevelConfigureSize {
-                    element: e,
-                    size: crate::geom::LocalSize {
-                        w: cell.w as i32,
-                        h: cell.h as i32,
-                    },
-                });
-                self.layout_cells.push((e, cell));
-                centred_in(cell, (old.w, old.h))
-            };
+            let at = centred_in(cell, (old.w, old.h));
             let (dx, dy) = (at.x - old.x, at.y - old.y);
             if self.place_by_shell(e, at, out).is_err() {
                 continue;
@@ -475,15 +272,15 @@ impl Core {
         Some((x0, y0, x1 - x0, y1 - y0))
     }
 
-    /// The layout key (`BIND_CLUSTER_LAYOUT`, no default) and `infynitae msg arrange`: `around`'s cluster (its
-    /// parent's, for a child) arranged by `layout`, or by the layout after the one this cluster
-    /// got last (spiral first). With `proof`, the camera frames the result. False when nothing was
-    /// arranged, and when `around` is a window a layout leaves out (a fullscreen game focused:
-    /// the windows hidden behind it stay as they are).
+    /// The layout key (`BIND_CLUSTER_LAYOUT`, no default), Super+Shift+G and `infynitae msg
+    /// arrange`: `around`'s cluster (its parent's, for a child) arranged by `layout`. With
+    /// `proof`, the camera frames the result. False when nothing was arranged, and when `around`
+    /// is a window a layout leaves out (a fullscreen game focused: the windows hidden behind it
+    /// stay as they are).
     pub(crate) fn arrange_cluster(
         &mut self,
         around: ElementId,
-        layout: Option<ClusterLayout>,
+        layout: ClusterLayout,
         proof: Option<crate::authority::Authorized>,
         out: &mut Vec<Effect>,
     ) -> bool {
@@ -494,98 +291,14 @@ impl Core {
         if self.arranged(&[around]).is_empty() {
             return false;
         }
-        let layout = layout.unwrap_or(match self.last_layout {
-            Some((e, last)) if e == around => last.next(),
-            _ => ClusterLayout::Spiral,
-        });
         let cluster = self.cluster_for_element(around);
-        let Some(bounds) = self.arrange(&cluster, layout, Some(around), out) else {
+        let Some(bounds) = self.arrange(&cluster, layout, around, out) else {
             return false;
         };
-        self.last_layout = Some((around, layout));
         if let Some(p) = proof {
             self.frame_bounds(p, bounds, out);
         }
         true
-    }
-
-    /// `CLUSTER_SORT` "tidy", before `id` closes or is minimized: the rest of its cluster, to be
-    /// tidied once it has left (`tidy_after_leave`). Empty when the setting is off, `id` is not a
-    /// window a layout arranges (a dialog leaves no gap) or a drag is on.
-    pub(crate) fn cluster_left_by(&self, id: ElementId) -> Vec<ElementId> {
-        if !self.cluster_sort.tidy
-            || self.input.interaction.active()
-            || self.arranged(&[id]).is_empty()
-        {
-            return Vec::new();
-        }
-        let mut rest = self.cluster_for_element(id);
-        rest.retain(|&e| e != id);
-        rest
-    }
-
-    /// The windows `cluster_left_by` named, arranged again: the gap closes. A cluster the key
-    /// arranged last keeps that layout (around the same window when it is still there); any other
-    /// is tidied. The camera stays.
-    pub(crate) fn tidy_after_leave(&mut self, rest: &[ElementId], out: &mut Vec<Effect>) {
-        if rest.is_empty() {
-            return;
-        }
-        let (layout, first) = match self.last_layout {
-            Some((e, l)) if l != ClusterLayout::ByApp && rest.contains(&e) => (l, Some(e)),
-            _ => (ClusterLayout::Tidy, None),
-        };
-        self.arrange(rest, layout, first, out);
-    }
-
-    /// A commit of a window a layout asked for a size: the anchor that centres the size it drew
-    /// in its cell, until it answers that configure (`layout_answered`).
-    pub(crate) fn laid_out_anchor(
-        &self,
-        id: ElementId,
-        size: crate::geom::LocalSize,
-    ) -> Option<crate::geom::CanvasPoint> {
-        let (_, cell) = self.layout_cells.iter().find(|(e, _)| *e == id)?;
-        Some(centred_in(*cell, (i64::from(size.w), i64::from(size.h))))
-    }
-
-    /// `id` drew a frame of `drawn` size under the configure that asked for `acked`: a layout's
-    /// cell is done with once its size was acknowledged, whatever size the app drew. A window
-    /// that kept a size bigger than its cell (an app's minimum, such as Discord's width) would
-    /// cover its neighbours: once the last window of the layout has answered, its cluster is
-    /// tidied at the sizes the windows took, so none covers another (owner, 2026-11-22).
-    pub(crate) fn layout_answered(
-        &mut self,
-        id: ElementId,
-        acked: Option<crate::geom::LocalSize>,
-        drawn: crate::geom::LocalSize,
-        out: &mut Vec<Effect>,
-    ) {
-        let Some(s) = acked else { return };
-        let Some(k) = self
-            .layout_cells
-            .iter()
-            .position(|(e, c)| *e == id && (i64::from(s.w), i64::from(s.h)) == (c.w, c.h))
-        else {
-            return;
-        };
-        let (_, cell) = self.layout_cells.remove(k);
-        if i64::from(drawn.w) > cell.w || i64::from(drawn.h) > cell.h {
-            self.layout_overflow = Some(id);
-        }
-        let Some(over) = self.layout_overflow else {
-            return;
-        };
-        if self.stage.mapped(over).is_none() {
-            self.layout_overflow = None;
-            return;
-        }
-        let cluster = self.cluster_for_element(over);
-        if self.layout_cells.iter().any(|(e, _)| cluster.contains(e)) {
-            return;
-        }
-        self.layout_overflow = None;
-        self.arrange(&cluster, ClusterLayout::Tidy, None, out);
     }
 
     /// `CLUSTER_SORT` "app": where a new window of an app goes when the app already has a window
@@ -650,7 +363,7 @@ mod tests {
         }
     }
 
-    /// One 1920 x 1080 screen at scale 1, camera at the origin: the room is 1896 x 1056.
+    /// One 1920 x 1080 screen at scale 1, camera at the origin.
     struct Desk {
         c: Core,
         i: InputPort,
@@ -743,98 +456,29 @@ mod tests {
         assert_eq!(reading_order(&rects), vec![1, 3, 0, 2]);
     }
 
-    /// Tidy keeps sizes and order, wraps at the width, keeps the gap and starts at the origin.
+    /// Five windows: 3 x 3 slots, two rows used and four slots left empty; a column as wide as
+    /// its widest window, a row as high as its tallest, the gap between. n x n for n = 1..=4.
     #[test]
-    fn tidy_packs_rows_with_the_gap() {
-        let sizes = [(800, 600), (800, 400), (500, 300), (300, 200)];
-        let cells = tidy(&sizes, (-50, 40), 1896);
-        assert_eq!(cells[0], cell(-50, 40, 800, 600));
-        assert_eq!(cells[1], cell(-50 + 812, 40, 800, 400));
-        // 1624 + 500 > 1896: the third starts the second row, under the tallest of the first
-        assert_eq!(cells[2], cell(-50, 40 + 612, 500, 300));
-        assert_eq!(cells[3], cell(-50 + 512, 40 + 612, 300, 200));
-        for (c, s) in cells.iter().zip(sizes) {
-            assert_eq!((c.w, c.h), s, "sizes kept");
-            assert!(c.x + c.w <= -50 + 1896, "within the width: {c:?}");
-        }
-        assert!(all_apart(&cells));
-    }
-
-    /// A window wider than the room has a row of its own.
-    #[test]
-    fn tidy_gives_a_wide_window_its_own_row() {
-        let cells = tidy(&[(400, 300), (2500, 500), (400, 300)], (0, 0), 1896);
-        assert_eq!(cells[1], cell(0, 312, 2500, 500));
-        assert_eq!(cells[2], cell(0, 824, 400, 300));
-        assert!(all_apart(&cells));
-    }
-
-    /// Tiles: halves along the longer side; three windows get a half and two quarters, the first
-    /// the half; 25 tiles fill the room without touching.
-    #[test]
-    fn tiles_split_the_room_in_halves() {
-        let room = (1896, 1056);
+    fn grid_fills_square_slots_row_by_row() {
+        let sizes = [(400, 300), (200, 100), (300, 500), (100, 100), (250, 200)];
         assert_eq!(
-            tiles(3, (10, 20), room),
+            grid(&sizes, (10, 20)),
             vec![
-                cell(10, 20, 942, 1056),
-                cell(10 + 954, 20, 942, 522),
-                cell(10 + 954, 20 + 534, 942, 522)
+                cell(10, 20, 400, 500),
+                cell(10 + 412, 20, 250, 500),
+                cell(10 + 412 + 262, 20, 300, 500),
+                cell(10, 20 + 512, 400, 200),
+                cell(10 + 412, 20 + 512, 250, 200),
             ]
         );
-        let portrait = tiles(2, (0, 0), (1056, 1896));
-        assert_eq!(
-            portrait,
-            vec![cell(0, 0, 1056, 942), cell(0, 954, 1056, 942)]
-        );
-        let many = tiles(25, (0, 0), room);
-        assert_eq!(many.len(), 25);
-        assert!(all_apart(&many));
-        assert!(many.iter().all(|c| c.x + c.w <= 1896 && c.y + c.h <= 1056));
-        assert!(tiles(0, (0, 0), room).is_empty());
-    }
-
-    /// Line: one row, the room's height, each window's shape kept.
-    #[test]
-    fn line_keeps_shapes_at_full_height() {
-        let cells = line(&[(400, 300), (160, 90), (300, 600)], (5, 6), 1056);
-        assert_eq!(
-            cells,
-            vec![
-                cell(5, 6, 1408, 1056),
-                cell(5 + 1420, 6, 1877, 1056),
-                cell(5 + 1420 + 1889, 6, 528, 1056)
-            ]
-        );
-    }
-
-    /// Spiral: the centre window stays, the others keep their sizes and gather around it, the
-    /// cluster wider than high on a wide screen.
-    #[test]
-    fn spiral_grows_around_the_centre_window() {
-        // four mains and twenty-one small windows, as the owner runs them
-        let mut sizes = vec![(160, 90); 4];
-        sizes.extend([(64, 48); 21]);
-        let cells = spiral(&sizes, 2, (300, -40), 1896.0 / 1056.0);
-        assert_eq!(cells[2], cell(300, -40, 160, 90), "the centre stays");
-        assert!(all_apart(&cells));
-        for (c, s) in cells.iter().zip(&sizes) {
-            assert_eq!((c.w, c.h), *s, "sizes kept");
+        for (k, n) in [(1, 1), (2, 2), (4, 2), (5, 3), (9, 3), (10, 4), (16, 4)] {
+            let cells = grid(&vec![(100, 100); k], (0, 0));
+            let cols = cells.iter().filter(|c| c.y == 0).count();
+            assert_eq!(cols, n, "{k} windows: {n} columns");
+            assert!(cells.iter().all(|c| c.x <= (n as i64 - 1) * 112));
+            assert!(all_apart(&cells));
         }
-        let x0 = cells.iter().map(|c| c.x).min().unwrap();
-        let x1 = cells.iter().map(|c| c.x + c.w).max().unwrap();
-        let y0 = cells.iter().map(|c| c.y).min().unwrap();
-        let y1 = cells.iter().map(|c| c.y + c.h).max().unwrap();
-        assert!(x1 - x0 > y1 - y0, "wider than high: {x0} {y0} {x1} {y1}");
-        // around the centre: as far left of it as right, give or take a column
-        let (left, right) = (300 - x0, x1 - 460);
-        assert!((left - right).abs() <= 200, "{left} {right}");
-        // the big windows are next to the centre
-        for c in &cells[..4] {
-            let near = (c.x - 300).abs() <= 172 && (c.y + 40).abs() <= 102;
-            assert!(near, "{c:?}");
-        }
-        assert!(spiral(&[], 0, (0, 0), 1.0).is_empty());
+        assert!(grid(&[], (0, 0)).is_empty());
     }
 
     #[test]
@@ -859,179 +503,15 @@ mod tests {
         assert_eq!(ClusterLayout::parse("app"), Some(ClusterLayout::ByApp));
     }
 
+    /// "tidy" was removed (owner, 2026-11-28): read as nothing, beside "app" too.
     #[test]
     fn cluster_sort_reads_its_words() {
+        let app = ClusterSort { app: true };
         assert_eq!(ClusterSort::parse("off"), ClusterSort::default());
         assert_eq!(ClusterSort::parse(""), ClusterSort::default());
-        assert_eq!(
-            ClusterSort::parse("tidy"),
-            ClusterSort {
-                tidy: true,
-                app: false
-            }
-        );
-        assert_eq!(
-            ClusterSort::parse("Tidy app"),
-            ClusterSort {
-                tidy: true,
-                app: true
-            }
-        );
-        assert_eq!(
-            ClusterSort::parse("app,tidy"),
-            ClusterSort {
-                tidy: true,
-                app: true
-            }
-        );
-    }
-
-    /// Tidy on a real Core: three overlapping windows end up apart with the gap, at their own
-    /// sizes, in reading order, from the cluster's top-left corner; no size is asked.
-    #[test]
-    fn tidy_separates_a_cluster_and_keeps_its_corner() {
-        let mut d = desk();
-        let a = open(&mut d, 1, "a", (400, 300), (-900, -500));
-        let b = open(&mut d, 2, "b", (500, 400), (-700, -450));
-        let c = open(&mut d, 3, "c", (300, 200), (-1000, -100));
-        assert_eq!(d.c.cluster_for_element(a).len(), 3);
-        let mut fx = Vec::new();
-        assert!(d.c.arrange_cluster(a, Some(ClusterLayout::Tidy), None, &mut fx));
-        assert_eq!(rect(&d.c, a), cell(-1000, -500, 400, 300));
-        assert_eq!(rect(&d.c, b), cell(-1000 + 412, -500, 500, 400));
-        assert_eq!(rect(&d.c, c), cell(-1000 + 412 + 512, -500, 300, 200));
-        assert!(all_apart(&[rect(&d.c, a), rect(&d.c, b), rect(&d.c, c)]));
-        assert!(
-            fx.iter()
-                .all(|f| !matches!(f, Effect::ToplevelConfigureSize { .. })),
-            "tidy keeps sizes: {fx:?}"
-        );
-    }
-
-    /// Tiles: four windows get quarters of the room (942 x 522), asked as configures, the one
-    /// pressed on the first. Until a window answers it is centred in its tile; one that draws the
-    /// tile's size sits at its corner; one that keeps its own size stays centred, and its tile is
-    /// then done with.
-    #[test]
-    fn tiles_size_windows_and_centre_the_ones_that_refuse() {
-        let mut d = desk();
-        let a = open(&mut d, 1, "a", (400, 300), (0, 0));
-        let b = open(&mut d, 2, "b", (400, 300), (420, 10));
-        let c = open(&mut d, 3, "c", (400, 300), (0, 330));
-        let e = open(&mut d, 4, "e", (300, 200), (430, 340));
-        let mut fx = Vec::new();
-        assert!(d.c.arrange_cluster(a, Some(ClusterLayout::Tiles), None, &mut fx));
-        for id in [a, b, c, e] {
-            assert_eq!(asked(&fx, id), Some((942, 522)), "{id:?}");
-        }
-        // reading order a, b, c, e: the left half for a and b, the right for c and e
-        assert_eq!(anchor(&d.c, a), (271, 111));
-        assert_eq!(anchor(&d.c, b), (271, 534 + 111));
-        assert_eq!(anchor(&d.c, c), (954 + 271, 111));
-        assert_eq!(anchor(&d.c, e), (954 + 321, 534 + 161));
-        // A draws the cell's size
-        d.c.toplevel_committed(a, win(1, 942, 522, true)).unwrap();
-        d.c.toplevel_size_drawn(
-            a,
-            Some(LocalSize { w: 942, h: 522 }),
-            LocalSize { w: 942, h: 522 },
-        );
-        assert_eq!(rect(&d.c, a), cell(0, 0, 942, 522));
-        // E acknowledges and keeps its size: centred, and no longer held to the cell
-        d.c.toplevel_committed(e, win(4, 300, 200, true)).unwrap();
-        d.c.toplevel_size_drawn(
-            e,
-            Some(LocalSize { w: 942, h: 522 }),
-            LocalSize { w: 300, h: 200 },
-        );
-        assert_eq!(rect(&d.c, e), cell(954 + 321, 534 + 161, 300, 200));
-        assert!(d.c.layout_cells.iter().all(|(x, _)| *x != a && *x != e));
-        // B draws a frame of the old size before it acknowledged: still centred
-        d.c.toplevel_committed(b, win(2, 400, 300, true)).unwrap();
-        assert_eq!(anchor(&d.c, b), (271, 534 + 111));
-    }
-
-    /// Tiles where one window keeps a bigger width than its tile (an app's minimum width):
-    /// once both have answered, the cluster is tidied at the sizes they took and nothing covers
-    /// anything (owner, 2026-11-22).
-    #[test]
-    fn a_window_bigger_than_its_cell_does_not_cover_its_neighbour() {
-        let mut d = desk();
-        let a = open(&mut d, 1, "a", (400, 300), (-500, -200));
-        let b = open(&mut d, 2, "chat", (400, 300), (0, -200));
-        let mut fx = Vec::new();
-        assert!(d.c.arrange_cluster(b, Some(ClusterLayout::Tiles), None, &mut fx));
-        let (cw, ch) = asked(&fx, a).unwrap();
-        let cell_size = Some(LocalSize { w: cw, h: ch });
-        // A takes its cell; B acknowledges and stays wider than the cell
-        d.c.toplevel_committed(a, win(1, cw, ch, true)).unwrap();
-        d.c.toplevel_size_drawn(a, cell_size, LocalSize { w: cw, h: ch });
-        d.c.toplevel_committed(b, win(2, cw + 300, ch, true))
-            .unwrap();
-        assert!(
-            !all_apart(&[rect(&d.c, a), rect(&d.c, b)]),
-            "centred over its neighbour"
-        );
-        d.c.toplevel_size_drawn(b, cell_size, LocalSize { w: cw + 300, h: ch });
-        assert!(
-            all_apart(&[rect(&d.c, a), rect(&d.c, b)]),
-            "tidied: {:?} {:?}",
-            rect(&d.c, a),
-            rect(&d.c, b)
-        );
-        assert_eq!(
-            rect(&d.c, b).w,
-            i64::from(cw) + 300,
-            "nothing asked to shrink again"
-        );
-    }
-
-    /// Tiles: two windows side by side, each half the room's width and its full height, the one
-    /// pressed on at the left.
-    #[test]
-    fn tiles_fill_the_usable_view() {
-        let mut d = desk();
-        let a = open(&mut d, 1, "a", (400, 300), (-500, -200));
-        let b = open(&mut d, 2, "b", (400, 300), (0, -200));
-        let mut fx = Vec::new();
-        assert!(d.c.arrange_cluster(b, Some(ClusterLayout::Tiles), None, &mut fx));
-        assert_eq!(asked(&fx, a), Some((942, 1056)));
-        assert_eq!(asked(&fx, b), Some((942, 1056)));
-        d.c.toplevel_committed(a, win(1, 942, 1056, true)).unwrap();
-        d.c.toplevel_committed(b, win(2, 942, 1056, true)).unwrap();
-        assert_eq!(rect(&d.c, b), cell(-500, -200, 942, 1056));
-        assert_eq!(rect(&d.c, a), cell(-500 + 954, -200, 942, 1056));
-    }
-
-    /// Spiral on a real Core: the window pressed on stays, nothing is asked to resize, and under
-    /// `CLUSTER_SORT` "tidy" the cluster is spiralled again around it when another closes.
-    #[test]
-    fn spiral_keeps_the_pressed_window_and_stays_a_spiral() {
-        let mut d = desk();
-        d.c.set_cluster_sort(ClusterSort::parse("tidy"));
-        let a = open(&mut d, 1, "a", (400, 300), (-900, -500));
-        let b = open(&mut d, 2, "b", (500, 400), (-700, -450));
-        let c = open(&mut d, 3, "c", (300, 200), (-1000, -100));
-        let e = open(&mut d, 4, "e", (300, 200), (-800, -150));
-        let mut fx = Vec::new();
-        assert!(d.c.arrange_cluster(a, Some(ClusterLayout::Spiral), None, &mut fx));
-        assert_eq!(rect(&d.c, a), cell(-900, -500, 400, 300));
-        let all = [a, b, c, e].map(|x| rect(&d.c, x));
-        assert!(all_apart(&all), "{all:?}");
-        assert!(
-            fx.iter()
-                .all(|f| !matches!(f, Effect::ToplevelConfigureSize { .. })),
-            "spiral keeps sizes: {fx:?}"
-        );
-        d.c.toplevel_destroyed(b);
-        assert_eq!(rect(&d.c, a), cell(-900, -500, 400, 300), "A stays");
-        let rest = [a, c, e].map(|x| rect(&d.c, x));
-        assert!(all_apart(&rest), "{rest:?}");
-        // the gap B left is closed: C and E are next to A
-        let a_mid = rest[0].x + rest[0].w / 2;
-        for r in &rest[1..] {
-            assert!((r.x + r.w / 2 - a_mid).abs() < 600, "{r:?}");
-        }
+        assert_eq!(ClusterSort::parse("tidy"), ClusterSort::default());
+        assert_eq!(ClusterSort::parse("Tidy App"), app);
+        assert_eq!(ClusterSort::parse("app,tidy"), app);
     }
 
     /// Kept-on-top, minimized and fullscreen windows are left where they are; a dialog moves with
@@ -1067,8 +547,9 @@ mod tests {
         assert!(d.c.fullscreen_of(full).is_some());
         let before: Vec<_> = [top, mini, full].map(|e| anchor(&d.c, e)).to_vec();
         let mut fx = Vec::new();
-        assert!(d.c.arrange_cluster(q, Some(ClusterLayout::Tidy), None, &mut fx));
-        assert_eq!(anchor(&d.c, q), (-500, 0));
+        assert!(d.c.arrange_cluster(q, ClusterLayout::Grid, None, &mut fx));
+        // Q and P in one row, the row as high as P: Q centred in its slot
+        assert_eq!(anchor(&d.c, q), (-500, 50));
         assert_eq!(anchor(&d.c, p), (-500 + 412, 0));
         assert_eq!(
             anchor(&d.c, dialog),
@@ -1080,38 +561,17 @@ mod tests {
         // pressed on the fullscreen window or the one kept on top: nothing is arranged
         let (q_at, p_at) = (anchor(&d.c, q), anchor(&d.c, p));
         for e in [full, top] {
-            assert!(!d.c.arrange_cluster(e, Some(ClusterLayout::Tiles), None, &mut fx));
+            assert!(!d.c.arrange_cluster(e, ClusterLayout::Grid, None, &mut fx));
         }
         assert_eq!((anchor(&d.c, q), anchor(&d.c, p)), (q_at, p_at));
-        // pressed on the dialog, its parent's cluster is arranged
-        assert!(d.c.arrange_cluster(dialog, Some(ClusterLayout::Tiles), None, &mut fx));
-        assert_eq!(asked(&fx, p), Some((942, 1056)));
-        assert_eq!(asked(&fx, dialog), None);
-    }
-
-    /// The key's cycle: spiral, tiles, line, spiral again; another cluster starts at spiral.
-    #[test]
-    fn the_layout_key_cycles() {
-        let mut d = desk();
-        let a = open(&mut d, 1, "a", (400, 300), (0, 0));
-        let b = open(&mut d, 2, "b", (400, 300), (5000, 0));
-        let mut fx = Vec::new();
-        let mut layouts = Vec::new();
-        for _ in 0..4 {
-            assert!(d.c.arrange_cluster(a, None, None, &mut fx));
-            layouts.push(d.c.last_layout.unwrap().1);
+        // pressed on the dialog, its parent's cluster is arranged, the parent first
+        assert!(d.c.arrange_cluster(dialog, ClusterLayout::Grid, None, &mut fx));
+        assert_eq!(anchor(&d.c, p), (-500, 0));
+        assert_eq!(anchor(&d.c, q), (-500 + 612, 50));
+        assert_eq!(anchor(&d.c, dialog), (200 - 500, 150));
+        for e in [p, q, dialog] {
+            assert_eq!(asked(&fx, e), None, "no window is asked for another size");
         }
-        assert_eq!(
-            layouts,
-            [
-                ClusterLayout::Spiral,
-                ClusterLayout::Tiles,
-                ClusterLayout::Line,
-                ClusterLayout::Spiral
-            ]
-        );
-        assert!(d.c.arrange_cluster(b, None, None, &mut fx));
-        assert_eq!(d.c.last_layout, Some((b, ClusterLayout::Spiral)));
     }
 
     /// The shell's command: the focused window's cluster without an element; refused with no
@@ -1124,14 +584,15 @@ mod tests {
         d.c.set_focus(&mut d.i, None).unwrap();
         let cmd = ShellCommand::ArrangeCluster {
             element: None,
-            layout: ClusterLayout::Tidy,
+            layout: ClusterLayout::Grid,
         };
         assert_eq!(d.c.shell_command(&mut d.s, cmd), Err(ShellError::Refused));
         assert_eq!(anchor(&d.c, b), (-700, -450));
         d.c.set_focus(&mut d.i, Some(b)).unwrap();
         d.c.shell_command(&mut d.s, cmd).unwrap();
-        assert_eq!(anchor(&d.c, a), (-900, -500));
-        assert_eq!(anchor(&d.c, b), (-900 + 412, -500));
+        // B, focused, in the first slot; A beside it, centred in a slot as high as B
+        assert_eq!(anchor(&d.c, b), (-900, -500));
+        assert_eq!(anchor(&d.c, a), (-900 + 512, -450));
     }
 
     /// Super+Shift+G (owner, 2026-11-22): sizes kept, nothing asked to resize, one row per app.
@@ -1143,7 +604,7 @@ mod tests {
         let c = open(&mut d, 3, "game", (900, 600), (-500, -400));
         d.c.set_focus(&mut d.i, Some(b)).unwrap();
         let mut fx = Vec::new();
-        assert!(d.c.arrange_cluster(b, Some(ClusterLayout::ByApp), None, &mut fx));
+        assert!(d.c.arrange_cluster(b, ClusterLayout::ByApp, None, &mut fx));
         for e in [a, b, c] {
             assert_eq!(asked(&fx, e), None, "no window is asked for another size");
         }
@@ -1160,79 +621,38 @@ mod tests {
         );
     }
 
-    /// Four windows in a row; B closes, then C is minimized: the others move only with
-    /// CLUSTER_SORT "tidy", each time closing the gap the window left.
+    /// Nothing arranges by itself (owner, 2026-11-28): a window that closes, is destroyed while
+    /// mapped or is minimized (by its app or the shell) leaves its gap, whatever `CLUSTER_SORT`
+    /// says, "tidy" from an old config included.
     #[test]
-    fn cluster_sort_tidy_closes_the_gap_a_window_leaves() {
-        for sort in ["off", "app", "tidy", "tidy app"] {
+    fn a_window_leaving_its_cluster_moves_nothing() {
+        for sort in ["off", "tidy", "tidy app"] {
             let mut d = desk();
             d.c.set_cluster_sort(ClusterSort::parse(sort));
             let a = open(&mut d, 1, "a", (400, 300), (-900, 0));
             let b = open(&mut d, 2, "b", (400, 300), (-488, 0));
             let c = open(&mut d, 3, "c", (400, 300), (-76, 0));
             let e = open(&mut d, 4, "e", (400, 300), (336, 0));
-            let tidy = sort.contains("tidy");
+            let f = open(&mut d, 5, "f", (400, 300), (748, 0));
+            let g = open(&mut d, 6, "g", (400, 300), (1160, 0));
             // B closes: its client unmaps it, then destroys it
             d.c.toplevel_committed(b, win(2, 400, 300, false)).unwrap();
             d.c.toplevel_destroyed(b);
-            assert_eq!(anchor(&d.c, a), (-900, 0), "{sort}");
-            let want = if tidy {
-                [(-488, 0), (-76, 0)]
-            } else {
-                [(-76, 0), (336, 0)]
-            };
-            assert_eq!(
-                [anchor(&d.c, c), anchor(&d.c, e)],
-                want,
-                "{sort}: after B closed"
-            );
-            // C is minimized
+            // E is destroyed while mapped
+            d.c.toplevel_destroyed(e);
+            // C is minimized by its app, F by the shell
             d.c.set_focus(&mut d.i, Some(c)).unwrap();
             d.c.client_minimize(c);
             assert!(d.c.stage().is_minimized(c));
+            let element = ElementRef {
+                instance: d.c.stage().instance(),
+                element: f,
+            };
+            d.c.shell_command(&mut d.s, ShellCommand::MinimizeElement { element })
+                .unwrap();
             assert_eq!(anchor(&d.c, a), (-900, 0), "{sort}");
-            let want = if tidy { (-488, 0) } else { (336, 0) };
-            assert_eq!(anchor(&d.c, e), want, "{sort}: E after C was minimized");
+            assert_eq!(anchor(&d.c, g), (1160, 0), "{sort}");
         }
-    }
-
-    /// A window destroyed while still mapped tidies too, and one minimized by the shell; a
-    /// dialog closing over its parent moves nothing.
-    #[test]
-    fn cluster_sort_tidy_on_destroy_and_not_for_a_dialog() {
-        let mut d = desk();
-        d.c.set_cluster_sort(ClusterSort::parse("tidy"));
-        let a = open(&mut d, 1, "a", (400, 300), (-700, 0));
-        let b = open(&mut d, 2, "b", (400, 300), (-200, 0));
-        let dialog = open(&mut d, 3, "b", (200, 100), (-100, 100));
-        d.c.set_toplevel_parent(dialog, Some(b));
-        d.c.toplevel_destroyed(dialog);
-        assert_eq!(anchor(&d.c, b), (-200, 0), "a dialog leaves no gap");
-        d.c.toplevel_destroyed(a);
-        assert_eq!(
-            anchor(&d.c, b),
-            (-200, 0),
-            "B alone is its cluster's corner"
-        );
-        let c = open(&mut d, 4, "c", (400, 300), (300, 0));
-        d.c.toplevel_destroyed(b);
-        assert_eq!(anchor(&d.c, c), (300, 0));
-        let e = open(&mut d, 5, "e", (400, 300), (-300, 0));
-        d.c.toplevel_destroyed(e);
-        assert_eq!(anchor(&d.c, c), (300, 0), "C keeps its corner");
-        let f = open(&mut d, 6, "f", (400, 300), (712, 0));
-        let g = open(&mut d, 7, "g", (400, 300), (1300, 0));
-        d.c.toplevel_destroyed(f);
-        assert_eq!(anchor(&d.c, g), (712, 0), "G closes the gap F left");
-        // minimized from a taskbar or the edge (the shell's command)
-        let h = open(&mut d, 8, "h", (400, 300), (1300, 0));
-        let element = ElementRef {
-            instance: d.c.stage().instance(),
-            element: g,
-        };
-        d.c.shell_command(&mut d.s, ShellCommand::MinimizeElement { element })
-            .unwrap();
-        assert_eq!(anchor(&d.c, h), (712, 0), "H closes the gap G left");
     }
 
     /// CLUSTER_SORT "app": a new window of an app with a window in view opens right of it, the
