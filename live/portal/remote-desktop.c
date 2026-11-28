@@ -1,10 +1,9 @@
 /*
  * Remote desktop for Infynitae's portal: org.freedesktop.impl.portal.RemoteDesktop, and
- * org.freedesktop.impl.portal.ScreenCast so that a remote desktop session has its screens.
+ * org.freedesktop.impl.portal.ScreenCast for screen sharing and a remote desktop's screens.
  *
- * ScreenCast is xdg-desktop-portal-wlr's, passed through: every call goes to it unchanged (its
- * chooser, its PipeWire streams) under the same session handle, so screen sharing works as it
- * did, except that a screen share's Start asks you first (live/remote/screenshare-ask: this time,
+ * ScreenCast's sources and PipeWire streams are screencast.c's (xdg-desktop-portal-wlr's before
+ * 2026-11-25). A screen share's Start asks you first (live/remote/screenshare-ask: this time,
  * always, or deny; owner, 2026-10-31). A remote desktop session adds the input. The first time
  * an app asks you are asked (live/remote/remote-desktop-ask); then its pointer drives a virtual
  * pointer (zwlr_virtual_pointer_v1; one per shared screen for absolute motion, bound to it) and
@@ -27,6 +26,7 @@
 #include <xkbcommon/xkbcommon.h>
 
 #include "remote-desktop.h"
+#include "screencast.h"
 #include "virtual-keyboard-protocol.h"
 #include "wlr-virtual-pointer-protocol.h"
 #include "xdg-output-protocol.h"
@@ -35,7 +35,6 @@
 #define RD_IFACE "org.freedesktop.impl.portal.RemoteDesktop"
 #define SC_IFACE "org.freedesktop.impl.portal.ScreenCast"
 #define SESSION_IFACE "org.freedesktop.impl.portal.Session"
-#define WLR_NAME "org.freedesktop.impl.portal.desktop.wlr"
 
 #define DEVICE_KEYBOARD 1
 #define DEVICE_POINTER 2
@@ -308,11 +307,11 @@ typedef struct {
     char *handle;
     char *app_id;
     gboolean remote;  /* a RemoteDesktop session (else a ScreenCast one) */
-    gboolean cast;    /* xdg-desktop-portal-wlr has it too */
+    Cast *cast;       /* its screens, once it has sources */
+    struct Call *starting; /* the Start waiting for the chooser and the streams */
     gboolean started;
     guint32 devices;
     guint reg_id;
-    guint closed_sub;
     GArray *streams; /* Stream */
     struct zwlr_virtual_pointer_v1 *pointer;
     struct zwp_virtual_keyboard_v1 *keyboard;
@@ -346,16 +345,17 @@ static void devices_destroy(Session *s) {
         wl_display_flush(wl);
 }
 
+static void call_fail(struct Call *call);
+
 /* The session ends: its devices go (the compositor releases what they held), the cast with it. */
-static void session_end(Session *s, gboolean tell_wlr, gboolean emit_closed) {
+static void session_end(Session *s, gboolean emit_closed) {
     devices_destroy(s);
-    if (s->cast && tell_wlr)
-        g_dbus_connection_call(conn, WLR_NAME, s->handle, SESSION_IFACE, "Close", NULL, NULL,
-                               G_DBUS_CALL_FLAGS_NONE, -1, NULL, NULL, NULL);
+    if (s->starting)
+        call_fail(s->starting);
+    if (s->cast)
+        cast_free(s->cast);
     if (emit_closed)
         g_dbus_connection_emit_signal(conn, NULL, s->handle, SESSION_IFACE, "Closed", NULL, NULL);
-    if (s->closed_sub)
-        g_dbus_connection_signal_unsubscribe(conn, s->closed_sub);
     if (s->reg_id)
         g_dbus_connection_unregister_object(conn, s->reg_id);
     rd_sessions = g_list_remove(rd_sessions, s);
@@ -364,14 +364,6 @@ static void session_end(Session *s, gboolean tell_wlr, gboolean emit_closed) {
     g_free(s->handle);
     g_free(s->app_id);
     g_free(s);
-}
-
-static void wlr_session_closed(GDBusConnection *c, const gchar *sender, const gchar *path,
-                               const gchar *iface, const gchar *signal, GVariant *params,
-                               gpointer data) {
-    Session *s = session_find(path);
-    if (s)
-        session_end(s, FALSE, TRUE);
 }
 
 static void method_call(GDBusConnection *c, const gchar *sender, const gchar *path,
@@ -393,38 +385,21 @@ static Session *session_new(const char *handle, const char *app_id, gboolean rem
     return s;
 }
 
-static void session_cast(Session *s) {
-    s->cast = TRUE;
-    s->closed_sub = g_dbus_connection_signal_subscribe(conn, WLR_NAME, SESSION_IFACE, "Closed",
-                                                       s->handle, NULL, G_DBUS_SIGNAL_FLAGS_NONE,
-                                                       wlr_session_closed, NULL, NULL);
-}
-
-/* ---- xdg-desktop-portal-wlr, passed through --------------------------------------------- */
-
-typedef enum { STEP_CREATE, STEP_SELECT_AFTER_CREATE, STEP_SELECT, STEP_START, STEP_RD_START } Step;
+/* ---- a call waiting for you --------------------------------------------------------------- */
 
 /* what an app is asked for: the keyboard and mouse (remote desktop), or the screen (sharing) */
 typedef enum { CONSENT_INPUT, CONSENT_SCREEN } Consent;
 
-typedef struct {
+typedef struct Call {
     GDBusMethodInvocation *inv;
-    Step step;
     Consent consent;
-    char *handle;
     char *session;
     char *app_id;
-    char *parent;
-    GVariant *options;
 } Call;
 
 static void call_free(Call *call) {
-    g_free(call->handle);
     g_free(call->session);
     g_free(call->app_id);
-    g_free(call->parent);
-    if (call->options)
-        g_variant_unref(call->options);
     g_free(call);
 }
 
@@ -437,7 +412,10 @@ static void reply(GDBusMethodInvocation *inv, guint32 response, GVariantBuilder 
     g_dbus_method_invocation_return_value(inv, g_variant_new("(ua{sv})", response, results));
 }
 
-static void wlr_call(const char *method, GVariant *params, Call *call);
+static void call_fail(Call *call) {
+    reply(call->inv, 2, NULL);
+    call_free(call);
+}
 
 /* the devices of a started remote desktop session: a pointer, one per stream, a keyboard */
 static gboolean devices_create(Session *s) {
@@ -472,11 +450,8 @@ static gboolean devices_create(Session *s) {
     return TRUE;
 }
 
-/* the streams xdg-desktop-portal-wlr started: kept for absolute motion, and handed on */
-static void keep_streams(Session *s, GVariant *results, GVariantBuilder *out) {
-    GVariant *streams = g_variant_lookup_value(results, "streams", G_VARIANT_TYPE("a(ua{sv})"));
-    if (!streams)
-        return;
+/* the streams started (a(ua{sv})): kept for absolute motion, and handed on */
+static void keep_streams(Session *s, GVariant *streams, GVariantBuilder *out) {
     GVariantIter it;
     guint32 node_id;
     GVariant *props;
@@ -491,7 +466,7 @@ static void keep_streams(Session *s, GVariant *results, GVariantBuilder *out) {
     g_variant_builder_add(out, "{sv}", "streams", streams);
 }
 
-static void rd_finish_start(Call *call, GVariant *wlr_results) {
+static void rd_finish_start(Call *call, GVariant *streams) {
     Session *s = session_find(call->session);
     if (!s) {
         reply(call->inv, 2, NULL);
@@ -499,8 +474,8 @@ static void rd_finish_start(Call *call, GVariant *wlr_results) {
     }
     GVariantBuilder results;
     g_variant_builder_init(&results, G_VARIANT_TYPE_VARDICT);
-    if (wlr_results)
-        keep_streams(s, wlr_results, &results);
+    if (streams)
+        keep_streams(s, streams, &results);
     if (!devices_create(s)) {
         g_variant_builder_clear(&results);
         reply(call->inv, 2, NULL);
@@ -512,68 +487,6 @@ static void rd_finish_start(Call *call, GVariant *wlr_results) {
            s->app_id, s->devices, s->streams->len);
     fflush(stdout);
     reply(call->inv, 0, &results);
-}
-
-static void wlr_done(GObject *source, GAsyncResult *res, gpointer data) {
-    Call *call = data;
-    GError *error = NULL;
-    GVariant *ret = g_dbus_connection_call_finish(conn, res, &error);
-    if (!ret) {
-        g_printerr("[infynitae-portal] xdg-desktop-portal-wlr: %s\n", error->message);
-        g_clear_error(&error);
-        reply(call->inv, 2, NULL);
-        call_free(call);
-        return;
-    }
-    guint32 response;
-    GVariant *results;
-    g_variant_get(ret, "(u@a{sv})", &response, &results);
-    Session *s = session_find(call->session);
-    switch (call->step) {
-    case STEP_CREATE:
-        if (response == 0 && !s)
-            session_cast(session_new(call->session, call->app_id, FALSE));
-        g_dbus_method_invocation_return_value(call->inv, ret);
-        break;
-    case STEP_SELECT_AFTER_CREATE:
-        /* a remote desktop session's cast exists now: then its sources */
-        if (response == 0 && s) {
-            session_cast(s);
-            Call *next = g_new0(Call, 1);
-            *next = *call;
-            next->step = STEP_SELECT;
-            g_free(call);
-            call = NULL;
-            wlr_call("SelectSources",
-                     g_variant_new("(oos@a{sv})", next->handle, next->session, next->app_id,
-                                   next->options),
-                     next);
-        } else {
-            g_dbus_method_invocation_return_value(call->inv, ret);
-        }
-        break;
-    case STEP_SELECT:
-    case STEP_START:
-        g_dbus_method_invocation_return_value(call->inv, ret);
-        break;
-    case STEP_RD_START:
-        if (response == 0)
-            rd_finish_start(call, results);
-        else
-            g_dbus_method_invocation_return_value(call->inv, ret);
-        break;
-    }
-    g_variant_unref(results);
-    g_variant_unref(ret);
-    if (call)
-        call_free(call);
-}
-
-static void wlr_call(const char *method, GVariant *params, Call *call) {
-    /* no timeout: the chooser waits for you */
-    g_dbus_connection_call(conn, WLR_NAME, OBJECT_PATH, SC_IFACE, method, params,
-                           G_VARIANT_TYPE("(ua{sv})"), G_DBUS_CALL_FLAGS_NONE, G_MAXINT, NULL,
-                           wlr_done, call);
 }
 
 /* ---- asking you ------------------------------------------------------------------------- */
@@ -622,27 +535,47 @@ static void remember(Consent kind, const char *app_id) {
     g_free(path);
 }
 
-/* a screen share's Start goes on to xdg-desktop-portal-wlr (its chooser picks the source) */
-static void cast_start(Call *call) {
-    call->step = STEP_START;
-    wlr_call("Start",
-             g_variant_new("(ooss@a{sv})", call->handle, call->session, call->app_id, call->parent,
-                           call->options),
-             call);
+/* the chooser picked a source and its stream runs, or nothing was picked (`streams` NULL) */
+static void cast_started(GVariant *streams, gpointer data) {
+    Session *s = data;
+    Call *call = s->starting;
+    s->starting = NULL;
+    if (!streams) {
+        call_fail(call);
+        return;
+    }
+    g_variant_ref_sink(streams);
+    if (call->consent == CONSENT_INPUT) {
+        rd_finish_start(call, streams);
+    } else {
+        GVariantBuilder results;
+        g_variant_builder_init(&results, G_VARIANT_TYPE_VARDICT);
+        g_variant_builder_add(&results, "{sv}", "streams", streams);
+        printf("[infynitae-portal] Screen sharing started: app='%s'\n", s->app_id);
+        fflush(stdout);
+        reply(call->inv, 0, &results);
+    }
+    g_variant_unref(streams);
+    call_free(call);
 }
 
+/* the compositor ended the share: the app hears that its session closed */
+static void cast_ended(gpointer data) {
+    session_end(data, TRUE);
+}
+
+/* After you said yes: the session's screens (the chooser), a remote desktop's input after. */
 static void start_after_consent(Call *call) {
     Session *s = session_find(call->session);
     if (s && s->cast) {
-        call->step = STEP_RD_START;
-        wlr_call("Start",
-                 g_variant_new("(ooss@a{sv})", call->handle, call->session, call->app_id,
-                               call->parent, call->options),
-                 call);
-        return;
+        s->starting = call;
+        cast_start(s->cast, cast_started, cast_ended, s);
+    } else if (s && call->consent == CONSENT_INPUT) {
+        rd_finish_start(call, NULL);
+        call_free(call);
+    } else {
+        call_fail(call);
     }
-    rd_finish_start(call, NULL);
-    call_free(call);
 }
 
 static void asked(GObject *source, GAsyncResult *res, gpointer data) {
@@ -653,10 +586,7 @@ static void asked(GObject *source, GAsyncResult *res, gpointer data) {
     if (g_strcmp0(answer, "always") == 0)
         remember(call->consent, call->app_id);
     if (g_strcmp0(answer, "always") == 0 || g_strcmp0(answer, "once") == 0) {
-        if (call->consent == CONSENT_SCREEN)
-            cast_start(call);
-        else
-            start_after_consent(call);
+        start_after_consent(call);
     } else {
         printf("[infynitae-portal] %s denied: app='%s'\n",
                call->consent == CONSENT_SCREEN ? "Screen sharing" : "Remote desktop", call->app_id);
@@ -805,22 +735,18 @@ static void notify(Session *s, const char *method, GVariant *params) {
 
 /* ---- the interfaces --------------------------------------------------------------------- */
 
-static Call *call_new(GDBusMethodInvocation *inv, Step step, const char *handle, const char *session,
-                      const char *app_id, const char *parent, GVariant *options) {
+static Call *call_new(GDBusMethodInvocation *inv, Consent consent, const char *session, const char *app_id) {
     Call *call = g_new0(Call, 1);
     call->inv = inv;
-    call->step = step;
-    call->handle = g_strdup(handle);
+    call->consent = consent;
     call->session = g_strdup(session);
     call->app_id = g_strdup(app_id);
-    call->parent = g_strdup(parent);
-    call->options = options ? g_variant_ref(options) : NULL;
     return call;
 }
 
 /* Whether `sender` is xdg-desktop-portal, the only caller a portal backend serves: the app id
  * it passes is the one it checked; any other caller could name any app. */
-static gboolean from_portal(GDBusConnection *c, const gchar *sender) {
+gboolean from_portal(GDBusConnection *c, const gchar *sender) {
     GVariant *ret = g_dbus_connection_call_sync(c, "org.freedesktop.DBus", "/org/freedesktop/DBus",
                                                 "org.freedesktop.DBus", "GetNameOwner",
                                                 g_variant_new("(s)", "org.freedesktop.portal.Desktop"),
@@ -846,7 +772,7 @@ static void method_call(GDBusConnection *c, const gchar *sender, const gchar *pa
     if (g_strcmp0(iface, SESSION_IFACE) == 0) {
         Session *s = session_find(path);
         if (s)
-            session_end(s, TRUE, FALSE);
+            session_end(s, FALSE);
         g_dbus_method_invocation_return_value(inv, NULL);
         return;
     }
@@ -881,13 +807,12 @@ static void method_call(GDBusConnection *c, const gchar *sender, const gchar *pa
                 s->devices = types & (DEVICE_KEYBOARD | DEVICE_POINTER);
             reply(inv, s ? 0 : 2, NULL);
         } else if (g_strcmp0(method, "Start") == 0) {
-            if (!s || !s->remote) {
+            if (!s || !s->remote || s->starting) {
                 reply(inv, 2, NULL);
             } else {
                 if (!s->devices)
                     s->devices = DEVICE_KEYBOARD | DEVICE_POINTER;
-                Call *call = call_new(inv, STEP_RD_START, handle, session, app_id, parent, options);
-                call->consent = CONSENT_INPUT;
+                Call *call = call_new(inv, CONSENT_INPUT, session, app_id);
                 if (always_allowed(CONSENT_INPUT, app_id))
                     start_after_consent(call);
                 else
@@ -896,47 +821,35 @@ static void method_call(GDBusConnection *c, const gchar *sender, const gchar *pa
         }
     } else if (g_strcmp0(iface, SC_IFACE) == 0) {
         if (g_strcmp0(method, "CreateSession") == 0) {
-            wlr_call("CreateSession", params,
-                     call_new(inv, STEP_CREATE, handle, session, app_id, NULL, options));
+            if (!s)
+                s = session_new(session, app_id, FALSE);
+            if (!s->cast)
+                s->cast = cast_new();
+            gboolean ok = s->cast != NULL;
+            if (!ok)
+                session_end(s, FALSE);
+            reply(inv, ok ? 0 : 2, NULL);
         } else if (g_strcmp0(method, "SelectSources") == 0) {
-            if (s && s->remote && !s->cast) {
-                /* xdg-desktop-portal-wlr hears of a remote desktop session at its sources */
-                char *create = g_strconcat(handle, "_cast", NULL);
-                Call *call = call_new(inv, STEP_SELECT_AFTER_CREATE, handle, session, app_id, NULL, options);
-                GVariantBuilder none;
-                g_variant_builder_init(&none, G_VARIANT_TYPE_VARDICT);
-                wlr_call("CreateSession", g_variant_new("(oosa{sv})", create, session, app_id, &none), call);
-                g_free(create);
-            } else {
-                wlr_call("SelectSources", params,
-                         call_new(inv, STEP_SELECT, handle, session, app_id, NULL, options));
-            }
+            /* a remote desktop session gets its cast at its sources */
+            if (s && !s->cast)
+                s->cast = cast_new();
+            if (s && s->cast)
+                cast_select(s->cast, options);
+            reply(inv, s && s->cast ? 0 : 2, NULL);
         } else if (g_strcmp0(method, "Start") == 0) {
-            /* a screen share asks you first, once per app (owner, 2026-10-31) */
-            Call *call = call_new(inv, STEP_START, handle, session, app_id, parent, options);
-            call->consent = CONSENT_SCREEN;
-            if (always_allowed(CONSENT_SCREEN, app_id))
-                cast_start(call);
-            else
-                ask(call);
+            if (!s || !s->cast || s->remote || s->starting) {
+                reply(inv, 2, NULL);
+            } else {
+                /* a screen share asks you first, once per app (owner, 2026-10-31) */
+                Call *call = call_new(inv, CONSENT_SCREEN, session, app_id);
+                if (always_allowed(CONSENT_SCREEN, app_id))
+                    start_after_consent(call);
+                else
+                    ask(call);
+            }
         }
     }
     g_variant_unref(options);
-}
-
-/* xdg-desktop-portal-wlr's ScreenCast properties, read once */
-static GVariant *wlr_property(const char *prop, guint32 fallback) {
-    GVariant *ret = g_dbus_connection_call_sync(conn, WLR_NAME, OBJECT_PATH,
-                                                "org.freedesktop.DBus.Properties", "Get",
-                                                g_variant_new("(ss)", SC_IFACE, prop),
-                                                G_VARIANT_TYPE("(v)"), G_DBUS_CALL_FLAGS_NONE, 3000,
-                                                NULL, NULL);
-    if (!ret)
-        return g_variant_new_uint32(fallback);
-    GVariant *v;
-    g_variant_get(ret, "(v)", &v);
-    g_variant_unref(ret);
-    return v;
 }
 
 static GVariant *get_property(GDBusConnection *c, const gchar *sender, const gchar *path,
@@ -948,10 +861,11 @@ static GVariant *get_property(GDBusConnection *c, const gchar *sender, const gch
     }
     if (g_strcmp0(iface, SC_IFACE) == 0) {
         if (g_strcmp0(prop, "AvailableSourceTypes") == 0)
-            return wlr_property(prop, 1);
+            return g_variant_new_uint32(CAST_MONITOR | CAST_WINDOW);
         if (g_strcmp0(prop, "AvailableCursorModes") == 0)
-            return wlr_property(prop, 1 | 2);
-        return wlr_property(prop, 4);
+            return g_variant_new_uint32(CURSOR_HIDDEN | CURSOR_EMBEDDED);
+        /* 3: no persist_mode (version 4), so an app asks for its source each time */
+        return g_variant_new_uint32(3);
     }
     return g_variant_new_uint32(1);
 }

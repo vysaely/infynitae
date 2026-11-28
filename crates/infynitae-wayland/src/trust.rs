@@ -110,11 +110,13 @@ impl Capability {
     /// Infynitae's own helpers that always have this capability, by installed name.
     fn helpers(self) -> &'static [&'static str] {
         match self {
-            Capability::Capture => &["infynitae-record-stream"],
+            // the portal makes screen shares' streams itself (2026-11-25), from the screens and
+            // the windows of the list
+            Capability::Capture => &["infynitae-record-stream", "infynitae-portal"],
             Capability::Clipboard => &["xwayland-satellite"],
             Capability::Input => &["infynitae-portal"],
             Capability::InputMethod => &[],
-            Capability::Windows => &["infynitae-edge", "infynitae-island"],
+            Capability::Windows => &["infynitae-edge", "infynitae-island", "infynitae-portal"],
             Capability::Lock => &["infynitae-lock"],
             Capability::Display => &[],
             Capability::Layers => &[
@@ -558,6 +560,17 @@ mod tests {
             assert!(!p.names(&path, Capability::Layers), "{name} layers");
             assert!(!p.names(&path, Capability::Windows), "{name} windows");
         }
+    }
+
+    /// The portal shares a screen or a window itself (`live/portal/screencast.c`): it captures
+    /// and lists the windows even when `native` is taken out of both lists.
+    #[test]
+    fn the_portal_may_share_screens_and_windows() {
+        let p = Policy::from_lists(None, [(Capability::Capture, ""), (Capability::Windows, "")]);
+        let path = Path::new("/home/someone/.local/bin/infynitae-portal");
+        assert!(p.names(path, Capability::Capture), "capture");
+        assert!(p.names(path, Capability::Windows), "windows");
+        assert!(!p.names(path, Capability::Lock), "lock");
     }
 
     /// An update writes each helper anew and renames it into place (`live/build-helpers.sh`): the

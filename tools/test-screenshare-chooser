@@ -53,4 +53,17 @@ check "MENU_PICKER given: that picker" "$(cat "$TMP/mark" 2>/dev/null)" "fuzzel"
 got=$(printf '%s\n' "$sources" | PICK=4 run first "")
 check "first: a screen at once" "$got" "Monitor: DP-1"
 
+# infynitae-portal runs it with no arguments: the mode and the picker from the config
+mkdir -p "$TMP/home/infynitae/live"
+printf 'SCREENSHARE_ASK="%s"\nMENU_PICKER="%s"\n' app "" > "$TMP/home/infynitae/live/config.sh"
+got=$(printf '%s\n' "$sources" | PICK=4 run)
+check "no arguments, SCREENSHARE_ASK=app: a screen at once" "$got" "Monitor: DP-1"
+printf 'SCREENSHARE_ASK="%s"\nMENU_PICKER="%s"\n' true "" > "$TMP/home/infynitae/live/config.sh"
+got=$(printf '%s\n' "$sources" | PICK=4 run)
+check "no arguments, SCREENSHARE_ASK=true: the card" "$got" "Window: Discord (discord)"
+rm -f "$TMP/mark"
+printf 'SCREENSHARE_ASK="%s"\nMENU_PICKER="%s"\n' true "fuzzel --dmenu" > "$TMP/home/infynitae/live/config.sh"
+got=$(printf '%s\n' "$sources" | run)
+check "no arguments, MENU_PICKER: that picker" "$(cat "$TMP/mark" 2>/dev/null) $got" "fuzzel Window: Discord (discord)"
+
 [ "$fail" -eq 0 ] && echo "test-screenshare-chooser: passed" || { echo "test-screenshare-chooser: FAILED"; exit 1; }

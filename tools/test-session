@@ -544,3 +544,36 @@ if ! grep -q -- "--no-new-privs --inh-caps=-all .*infynitae-wallpaper" "$TMP/pri
     exit 1
 fi
 echo "ok explicit WALLPAPER launches infynitae-wallpaper with NoNewPrivs=1"
+
+# ---- 9. A failed xdg-desktop-portal-wlr is started again only while env.sh routes a portal to it
+# (an infynitae-portal from before 2026-11-25); the newer one shares screens itself
+HOME9="$TMP/home9"
+mkdir -p "$HOME9/infynitae/live" "$TMP/bin7"
+SYSTEMCTL_LOG="$TMP/systemctl.log"
+cat > "$TMP/bin7/systemctl" <<EOF
+#!/bin/sh
+echo "systemctl \$*" >> "$SYSTEMCTL_LOG"
+case "\$*" in *is-failed*xdg-desktop-portal-wlr*) exit 0 ;; esac
+exit 1
+EOF
+chmod +x "$TMP/bin7/systemctl"
+wlr_started() {
+    : > "$SYSTEMCTL_LOG"
+    printf '%s\n' "$1" > "$HOME9/infynitae/live/env.sh"
+    (
+        export HOME="$HOME9" WAYLAND_DISPLAY="wayland-test" START_TERMINAL="false" START_LOCKED="0"
+        export SESSION_RESTORE="false" PATH="$TMP/bin7:$PATH"
+        sh "$SESSION_SCRIPT" >/dev/null 2>&1
+    ) || true
+    grep -c 'start --no-block xdg-desktop-portal-wlr' "$SYSTEMCTL_LOG" || true
+}
+if [ "$(wlr_started 'DEFAULT_BACKEND="gtk;wlr"')" != 1 ]; then
+    echo "FAIL a failed wlr portal is not started again while routed to"
+    exit 1
+fi
+echo "ok a failed wlr portal is started again while a portal is routed to it"
+if [ "$(wlr_started 'DEFAULT_BACKEND="gtk"')" != 0 ]; then
+    echo "FAIL a failed wlr portal is started again though nothing is routed to it"
+    exit 1
+fi
+echo "ok   and not when nothing is routed to it"

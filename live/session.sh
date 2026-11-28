@@ -154,11 +154,14 @@ systemctl --user start infynitae-shutdown-guard.service 2>/dev/null || true
 # a compositor restart (Ctrl+Alt+Backspace after an update) ends the wlroots portal, and systemd
 # starts it again before the new display exists: three failures in a second, then it gives up for the
 # session, and screenshots and remote desktop through the portal stop working (2026-11-15: 64 times
-# in 3 days). Started again now that the display is there.
-if systemctl --user is-failed --quiet xdg-desktop-portal-wlr.service 2>/dev/null; then
-    systemctl --user reset-failed xdg-desktop-portal-wlr.service 2>/dev/null || true
-    systemctl --user start --no-block xdg-desktop-portal-wlr.service 2>/dev/null || true
-fi
+# in 3 days). Started again now that the display is there, only while a portal is routed to it
+# (env.sh: an infynitae-portal from before 2026-11-25); else it would run all session unused (43 MB).
+case "${DEFAULT_BACKEND:-gtk;wlr}" in *wlr*)
+    if systemctl --user is-failed --quiet xdg-desktop-portal-wlr.service 2>/dev/null; then
+        systemctl --user reset-failed xdg-desktop-portal-wlr.service 2>/dev/null || true
+        systemctl --user start --no-block xdg-desktop-portal-wlr.service 2>/dev/null || true
+    fi ;;
+esac
 
 # 2b. Screen sharing: the portal's config for the screens present (infynitae-reload screenshare)
 RELOAD_BIN=$(infy_bin infynitae-reload || true)

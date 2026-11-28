@@ -3,8 +3,9 @@
  * C and GIO; idle, it only waits for D-Bus calls.
  * Implements org.freedesktop.impl.portal.GlobalShortcuts for Discord, OBS, WebRTC,
  * org.freedesktop.ScreenSaver (apps keeping the screens on while they play video), and
- * RemoteDesktop with ScreenCast (remote-desktop.c), and Settings: dark or light and the accent colour
- * from the Infynitae config (settings.c).
+ * RemoteDesktop with ScreenCast (remote-desktop.c, its streams screencast.c), Screenshot
+ * (screenshot.c), and Settings: dark or light and the accent colour from the Infynitae config
+ * (settings.c).
  */
 
 #include <gio/gio.h>
@@ -18,6 +19,7 @@
 #include <sys/stat.h>
 
 #include "remote-desktop.h"
+#include "screenshot.h"
 #include "settings.h"
 #include <xkbcommon/xkbcommon.h>
 
@@ -731,6 +733,7 @@ static void on_bus_acquired(GDBusConnection *connection,
         fflush(stdout);
     }
     remote_desktop_init(connection, OBJECT_PATH);
+    screenshot_init(connection, OBJECT_PATH);
     gchar *config = g_build_filename(g_get_home_dir(), ".config", "infynitae", "config", NULL);
     portal_settings_init(connection, OBJECT_PATH, config);
     g_free(config);
