@@ -616,7 +616,7 @@ impl Probe {
 
     /// A layer surface (L1): a role-less surface given the layer role on no particular output,
     /// with its state, committed without a buffer (the compositor answers with a configure, which
-    /// the probe acknowledges; draw after it).
+    /// the probe acknowledges; draw after it). Its label is its namespace.
     #[allow(clippy::too_many_arguments)]
     pub fn layer_surface(
         &mut self,
@@ -634,7 +634,7 @@ impl Probe {
             .layer_shell
             .as_ref()
             .expect("zwlr_layer_shell_v1 bound")
-            .get_layer_surface(&wl, None, layer, "probe".into(), qh, idx);
+            .get_layer_surface(&wl, None, layer, label.into(), qh, idx);
         ls.set_size(size.0, size.1);
         ls.set_anchor(anchor);
         ls.set_exclusive_zone(exclusive_zone);

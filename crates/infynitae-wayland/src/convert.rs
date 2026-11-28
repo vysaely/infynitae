@@ -1269,7 +1269,8 @@ where
     Ok(Some((elements, k, size)))
 }
 
-/// One frame's elements for screencopy, excluding any private window (hidden from screenshots/screenshares).
+/// One frame's elements for screencopy, excluding any private window and private layer surface
+/// (hidden from screenshots/screenshares).
 pub fn output_elements_screencopy<R>(
     state: &mut WaylandState,
     renderer: &mut R,
@@ -1295,7 +1296,10 @@ where
     {
         entries.retain(|e| e.element == window);
     }
-    let layers = state.core.layer_frame(output);
+    let mut layers = state.core.layer_frame(output);
+    // a private layer surface (private apps' notifications) is left out as a private window is
+    layers.above.retain(|e| !state.is_layer_private(e.layer));
+    layers.below.retain(|e| !state.is_layer_private(e.layer));
     let mut elements =
         Vec::with_capacity(entries.len() + layers.above.len() + layers.below.len() + 2);
     if include_cursor {
