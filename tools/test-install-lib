@@ -581,7 +581,9 @@ check "rollback: xwayland-satellite reverted to sat-v1" "$(cat "$rb_home/.local/
 check "rollback: satellite stamp cleared" "$([ -e "$rb_home/.local/bin/.xwayland-satellite.stamp" ] && echo yes || echo no)" no
 check "rollback: checkout reset to c1" "$(git -C "$rb_repo" rev-parse HEAD)" "$C1"
 check "rollback: installed infynitae-session reverted to v1" "$(tail -n1 "$rb_home/.local/bin/infynitae-session")" "echo v1"
-check "rollback: ~/infynitae/live/session.sh reverted to v1" "$(tail -n1 "$rb_home/infynitae/live/session.sh")" "echo v1-session"
+# the scripts run from the recorded checkout itself (nothing is copied into ~/infynitae)
+check "rollback: the recorded checkout is the repository" "$(head -n1 "$rb_home/.config/infynitae/checkout" 2>/dev/null)" "$rb_repo"
+check "rollback: the checkout's live/session.sh reverted to v1" "$(tail -n1 "$rb_repo/live/session.sh")" "echo v1-session"
 
 # Rollback while running fallback compositor (infynitae.previous) triggers helper reload
 mkdir -p "$rb_home/.local/state/infynitae" "$TMP/rb-prev"
