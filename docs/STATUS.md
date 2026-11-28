@@ -8,7 +8,8 @@ edges on other hardware.
 ## Solid
 
 - **The spatial model:** the endless canvas, a camera per screen (pan, zoom, fit, overview),
-  clusters, window slots, fullscreen you can pan out of. The core is a pure state machine with
+  clusters, window slots, fullscreen you can pan out of, Super+Tab as Windows' Alt+Tab with
+  the camera going to each window in place of thumbnails. The core is a pure state machine with
   no Wayland code in it, tested exactly.
 - **The test suite:** 1,398 `#[test]` in `crates/` (plus 489 in `live/edge-apps` and 37 in `live/shot-rs`, counted 2026-11-28), most of them real Wayland clients against a headless
   compositor; the test harness isolates the launcher in a temporary directory so shortcuts and reload actions never reach the live desktop. `tools/verify-test-efficacy` seeds bugs on purpose to prove the tests catch them (sharing build paths so cargo rebuilds only what a seed touched),

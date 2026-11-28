@@ -118,7 +118,8 @@ FOCUS_ON_ACTIVATE="user"
     #    always    · never
 
 FOCUS_CYCLE_NAVIGATE="true"
-    # Super+Tab also centres the camera on the window (always on a window asking for attention)
+    # Super+Tab also centres the camera on each window it goes to (always on a window asking for
+    # attention)
     # default: true
     # options: true  · false   (1 and 0, the older spelling, still work)
 
@@ -839,7 +840,7 @@ RECORD_AUDIO="desktop"
 
 # ═══ Key bindings ══════════════════════════════════════════════════════════════════ [save] ═══
 # The built-in keys follow one rule: often used on the left hand, rare on the right.
-#   Often:  Super+Tab  last two windows (a window asking for attention first)
+#   Often:  Super+Tab  window used before; hold Super, Tab again: the next ones (Shift back, Escape cancels)
 #           Super+Shift+Tab  overview    Super+arrows  nearest window that way
 #           Super+Q / E  terminal / files    Super+W  apps
 #           Super+A  control panel

@@ -545,6 +545,9 @@ pub struct Core {
     key_opened: bool,
     /// Whether focus cycling (Super+Tab) moves the camera to the focused window.
     pub focus_cycle_navigate: bool,
+    /// The pointer's screen, its camera and where that camera was at a Super+Tab cycle's first
+    /// Tab, for Escape to go back to.
+    cycle_camera: Option<(output::OutputId, usize, navigation::CameraValue)>,
     /// Super+Enter action mode: Maximize (fill usable viewport) vs Fit (camera zoom).
     pub enter_mode: EnterMode,
     /// Outputs on which fullscreen presentation is temporarily suppressed (e.g. user navigated to another window).
@@ -678,6 +681,7 @@ impl Core {
                 keyed_focus: None,
                 key_opened: false,
                 focus_cycle_navigate: false,
+                cycle_camera: None,
                 enter_mode: EnterMode::default(),
                 presentation_suppressed: Vec::new(),
                 overview_at: Vec::new(),
@@ -1246,33 +1250,6 @@ impl Core {
         self.fullscreen()
             .iter()
             .any(|f| self.stage.mapped(f.element).is_some())
-    }
-
-    /// FocusNext binding (Super+Tab): the window that most recently asked for attention if one
-    /// does, else the window used before the focused one (`FocusModel::focus_next`). Returns the
-    /// effects and whether it went to a window that asked for attention (the camera then always
-    /// follows).
-    pub(crate) fn focus_next(&mut self) -> (Vec<protocol::Effect>, bool) {
-        let live = self.focusable_elements();
-        let (mut fx, attention) = match self.focus.focus_attention(&live) {
-            Some(fx) => (fx, true),
-            None => (
-                self.focus.focus_next_at(self.input.clock.now_us(), &live),
-                false,
-            ),
-        };
-        // Super+Tab brings the newly focused window to the front; what lies under the pointer may
-        // have changed, so it gets one true-position event (M10), as after a camera write
-        let raised = self.focus.target().is_some_and(|id| self.raise_by_user(id));
-        fx.extend(self.reconcile_constraints());
-        if raised
-            && matches!(self.pointer, pointer::PointerState::Located { .. })
-            && !self.input.interaction.active()
-            && !self.locked()
-        {
-            self.true_position_into(&mut fx);
-        }
-        (fx, attention)
     }
 
     /// A new window opened without the focus: FOCUS_ON_OPEN "user" (the user did not open it)

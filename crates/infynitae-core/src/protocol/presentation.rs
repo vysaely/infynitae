@@ -1365,10 +1365,32 @@ mod tests {
             "the presenter is never hidden"
         );
 
-        // set_focus is declined; FocusNext cycles among what may be focused (W alone)
+        // set_focus is declined; Super+Tab cycles among what may be focused (W alone)
         assert_eq!(c.set_focus(&mut i, Some(o)).unwrap(), vec![]);
         assert_eq!(c.focus().target(), Some(w));
-        c.focus_next();
+        use crate::input::keys::{KEY_LEFTMETA, KEY_TAB};
+        for (key, pressed, logo) in [
+            (KEY_LEFTMETA, true, true),
+            (KEY_TAB, true, true),
+            (KEY_TAB, false, true),
+            (KEY_LEFTMETA, false, false),
+        ] {
+            let modifiers = crate::input::bindings::Modifiers {
+                logo,
+                ..Default::default()
+            };
+            c.physical_input_vec(
+                &mut i,
+                crate::PhysicalEvent::KeyboardKey {
+                    key,
+                    pressed,
+                    modifiers,
+                    mods_changed: key == KEY_LEFTMETA,
+                    time_us: 1000,
+                },
+            )
+            .unwrap();
+        }
         assert_eq!(
             c.focus().target(),
             Some(w),

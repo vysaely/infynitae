@@ -134,6 +134,10 @@ impl Core {
                 } else {
                     self.button_release(button, ms(time_us), out);
                 }
+                // a button bound to FOCUS_NEXT without Super: no Super to let go, the press is a tap
+                if self.focus.cycling() && !modifiers.logo {
+                    self.cycle_commit(authority::Authorized::mint(), out);
+                }
                 self.physical_input_activity = true;
                 Ok(())
             }
@@ -207,11 +211,19 @@ impl Core {
                                     | KeyAction::FocusDirection(_)
                                     | KeyAction::ToggleOverview
                             )
-                        ))
+                        )
+                        // Super+Shift+Tab and Escape while Super+Tab cycles
+                        || self.focus.cycling()
+                            && matches!(key, crate::input::keys::KEY_TAB | crate::input::keys::KEY_ESC))
                     .then(authority::Authorized::mint);
                     self.keyboard_press(key, modifiers, mods_changed, time_us, navigation, out);
                 } else {
                     self.keyboard_release(key, mods_changed, time_us, out);
+                }
+                // Super let go ends a Super+Tab cycle on the window it chose (a key bound to
+                // FOCUS_NEXT without Super: at once, each press a tap)
+                if self.focus.cycling() && !modifiers.logo {
+                    self.cycle_commit(authority::Authorized::mint(), out);
                 }
                 self.physical_input_activity = true;
                 Ok(())
