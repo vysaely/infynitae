@@ -1,7 +1,8 @@
-//! Cluster layouts (2026-11-23; `infynitae msg arrange`, no default key): the focused window's
-//! cluster in a spiral around it, then in tiles, then in a line, with real clients: the windows
-//! move, sizes are asked by configure for tiles and the line, and the spiral keeps every size and
-//! the focused window's place.
+//! Cluster grid (owner, 2026-11-28; `infynitae msg arrange grid`, `BIND_CLUSTER_LAYOUT`, no
+//! default key): the focused window's cluster in n x n slots, n = ceil(sqrt(k)), with real
+//! clients. Every window keeps its size (no configure asks for another), the focused window takes
+//! the first slot and the others follow in reading order; a column is as wide as its widest
+//! window, a row as high as its tallest, 12 px apart, each window centred in its slot.
 
 mod common;
 
@@ -10,6 +11,22 @@ use common::input::*;
 use infynitae_core::ShellCommand;
 use infynitae_core::arrange::ClusterLayout;
 use infynitae_core::stage::{ElementId, ElementRef};
+
+/// Ten sizes, every width different (the reading order of windows sharing a centre is then
+/// left to right, the widest first), even so that centring rounds nothing.
+const SIZES: [(i32, i32); 10] = [
+    (640, 480),
+    (500, 400),
+    (420, 300),
+    (360, 240),
+    (300, 500),
+    (260, 200),
+    (220, 340),
+    (180, 160),
+    (160, 280),
+    (120, 100),
+];
+const LABELS: [&str; 10] = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"];
 
 fn open(r: &mut Rig, label: &'static str, size: (i32, i32)) -> (ElementId, usize) {
     let qh = r.ls.qh.clone();
@@ -20,110 +37,133 @@ fn open(r: &mut Rig, label: &'static str, size: (i32, i32)) -> (ElementId, usize
     (id, idx)
 }
 
-fn rect(r: &Rig, id: ElementId) -> (i64, i64, i32, i32) {
+fn rect(r: &Rig, id: ElementId) -> (i64, i64, i64, i64) {
     let core = r.ls.state.core();
     let a = core.stage().anchor(id).unwrap();
     let s = core.stage().tree(id).unwrap().geometry.size;
-    (a.x, a.y, s.w, s.h)
+    (a.x, a.y, i64::from(s.w), i64::from(s.h))
 }
 
-fn arrange(r: &mut Rig, layout: ClusterLayout) {
+fn shell(r: &mut Rig, cmd: ShellCommand) {
     let fx =
         r.ls.state
             .core_mut()
-            .shell_command(
-                &mut r.ls.shell,
-                ShellCommand::ArrangeCluster {
-                    element: None,
-                    layout,
-                },
-            )
+            .shell_command(&mut r.ls.shell, cmd)
             .unwrap();
     r.ls.state.apply(&fx);
     r.ls.pump();
     r.frame();
 }
 
-/// The last size each surface was asked for by a configure since `from`.
-fn asked_since(r: &Rig, from: usize, idx: usize) -> Option<(i32, i32)> {
-    r.ls.probe.toplevel_configures[from..]
-        .iter()
-        .rev()
-        .find(|(i, ..)| *i == idx)
-        .map(|(_, size, _)| *size)
+/// `k` windows of mixed sizes, all opened centred in the view (the policy here), one over the
+/// other; the one at `k / 2` focused and the grid run.
+fn grid_of(k: usize) {
+    let mut r = Rig::new(Lockstep::new(Some(a_1080())));
+    let wins: Vec<(ElementId, usize)> = (0..k).map(|i| open(&mut r, LABELS[i], SIZES[i])).collect();
+    let focused = wins[k / 2].0;
+    let element = ElementRef {
+        instance: r.ls.state.core().stage().instance(),
+        element: focused,
+    };
+    shell(&mut r, ShellCommand::Focus { element });
+    let before: Vec<_> = wins.iter().map(|&(e, _)| rect(&r, e)).collect();
+
+    let from = r.ls.probe.toplevel_configures.len();
+    shell(
+        &mut r,
+        ShellCommand::ArrangeCluster {
+            element: None,
+            layout: ClusterLayout::Grid,
+        },
+    );
+    let after: Vec<_> = wins.iter().map(|&(e, _)| rect(&r, e)).collect();
+
+    // no window resized, and none asked for another size
+    for (i, (b, a)) in before.iter().zip(&after).enumerate() {
+        assert_eq!((a.2, a.3), (b.2, b.3), "{k}: {} kept its size", LABELS[i]);
+        let own = (b.2 as i32, b.3 as i32);
+        for (_, size, _) in r.ls.probe.toplevel_configures[from..]
+            .iter()
+            .filter(|(s, ..)| *s == wins[i].1)
+        {
+            assert!(
+                *size == (0, 0) || *size == own,
+                "{k}: {} asked for {size:?}",
+                LABELS[i]
+            );
+        }
+    }
+    // no two overlap, 12 px apart at least
+    for (i, x) in after.iter().enumerate() {
+        for y in &after[i + 1..] {
+            let apart = x.0 + x.2 + 12 <= y.0
+                || y.0 + y.2 + 12 <= x.0
+                || x.1 + x.3 + 12 <= y.1
+                || y.1 + y.3 + 12 <= x.1;
+            assert!(apart, "{k}: {x:?} {y:?}");
+        }
+    }
+
+    // the slots by the owner's rule, from the windows' places before: the focused window in
+    // the first, the others in reading order
+    let lead = k / 2;
+    let mut order: Vec<usize> = (0..k).filter(|&i| i != lead).collect();
+    order.sort_by_key(|&i| (before[i].0, before[i].1));
+    order.insert(0, lead);
+    let n = (1..).find(|n| n * n >= k).unwrap();
+    let (mut col_w, mut row_h) = (vec![0; n], vec![0; n]);
+    for (slot, &i) in order.iter().enumerate() {
+        col_w[slot % n] = col_w[slot % n].max(before[i].2);
+        row_h[slot / n] = row_h[slot / n].max(before[i].3);
+    }
+    let x0 = before.iter().map(|b| b.0).min().unwrap();
+    let y0 = before.iter().map(|b| b.1).min().unwrap();
+    for (slot, &i) in order.iter().enumerate() {
+        let (col, row) = (slot % n, slot / n);
+        let sx = x0 + col_w[..col].iter().map(|w| w + 12).sum::<i64>();
+        let sy = y0 + row_h[..row].iter().map(|h| h + 12).sum::<i64>();
+        let want = (
+            sx + (col_w[col] - before[i].2) / 2,
+            sy + (row_h[row] - before[i].3) / 2,
+        );
+        assert_eq!(
+            (after[i].0, after[i].1),
+            want,
+            "{k}: {} in slot {slot}",
+            LABELS[i]
+        );
+        // centred: the slot's row and column line up the windows' middles
+        let mid = (after[i].0 + after[i].2 / 2, after[i].1 + after[i].3 / 2);
+        assert_eq!(mid, (sx + col_w[col] / 2, sy + row_h[row] / 2));
+    }
+    // the slots used: n columns in the first row, ceil(k / n) rows; the rest stay empty
+    let mut tops: Vec<i64> = order.iter().map(|&i| after[i].1 + after[i].3 / 2).collect();
+    tops.dedup();
+    assert_eq!(tops.len(), k.div_ceil(n), "{k}: rows used");
 }
 
 #[test]
-fn arrange_spiral_tiles_and_line() {
-    let mut r = Rig::new(Lockstep::new(Some(a_1080())));
-    // four windows opened centred in the view (the policy here): one over the other
-    let (a, ia) = open(&mut r, "A", (500, 400));
-    let (b, ib) = open(&mut r, "B", (400, 300));
-    let (c, ic) = open(&mut r, "C", (300, 200));
-    let (d, id) = open(&mut r, "D", (200, 150));
-    assert_eq!(rect(&r, a), (-250, -200, 500, 400));
-    assert_eq!(rect(&r, d), (-100, -75, 200, 150));
-    let element = ElementRef {
-        instance: r.ls.state.core().stage().instance(),
-        element: a,
-    };
-    let fx =
-        r.ls.state
-            .core_mut()
-            .shell_command(&mut r.ls.shell, ShellCommand::Focus { element })
-            .unwrap();
-    r.ls.state.apply(&fx);
-    r.ls.pump();
+fn grid_of_one_window_keeps_it_in_place() {
+    grid_of(1);
+}
 
-    // spiral: A stays, the others around it at their own sizes, 12 px apart at least
-    let from = r.ls.probe.toplevel_configures.len();
-    arrange(&mut r, ClusterLayout::Spiral);
-    assert_eq!(rect(&r, a), (-250, -200, 500, 400));
-    let rects: Vec<_> = [a, b, c, d].iter().map(|&e| rect(&r, e)).collect();
-    for (k, x) in rects.iter().enumerate() {
-        for y in &rects[k + 1..] {
-            let apart = x.0 + i64::from(x.2) + 12 <= y.0
-                || y.0 + i64::from(y.2) + 12 <= x.0
-                || x.1 + i64::from(x.3) + 12 <= y.1
-                || y.1 + i64::from(y.3) + 12 <= x.1;
-            assert!(apart, "{x:?} {y:?}");
-        }
-    }
-    for i in [ia, ib, ic, id] {
-        let asked = asked_since(&r, from, i);
-        assert!(
-            asked.is_none_or(|s| s == (0, 0)),
-            "spiral asked {i} for {asked:?}"
-        );
-    }
+#[test]
+fn grid_of_four_windows_is_two_by_two() {
+    grid_of(4);
+}
 
-    // tiles: the usable view (1896 x 1056) in quarters of 942 x 522, each asked by configure
-    let from = r.ls.probe.toplevel_configures.len();
-    arrange(&mut r, ClusterLayout::Tiles);
-    for i in [ia, ib, ic, id] {
-        assert_eq!(asked_since(&r, from, i), Some((942, 522)));
-    }
+/// 3 x 3 with four slots empty: a row of three, a row of two, the third row unused.
+#[test]
+fn grid_of_five_windows_is_three_by_three_with_four_empty() {
+    grid_of(5);
+}
 
-    // the clients draw their tiles' size, as apps do (the cluster stays one: 12 px apart)
-    let qh = r.ls.qh.clone();
-    for i in [ia, ib, ic, id] {
-        r.ls.probe.surfaces[i].size = (942, 522);
-        r.ls.probe.draw(&qh, i);
-    }
-    r.ls.pump();
-    r.frame();
-    for e in [a, b, c, d] {
-        let (_, _, w, h) = rect(&r, e);
-        assert_eq!((w, h), (942, 522));
-    }
+#[test]
+fn grid_of_nine_windows_is_three_by_three() {
+    grid_of(9);
+}
 
-    // line: each asked for the usable height and the width of its shape at that height
-    let before: Vec<_> = [a, b, c, d].iter().map(|&e| rect(&r, e)).collect();
-    let from = r.ls.probe.toplevel_configures.len();
-    arrange(&mut r, ClusterLayout::Line);
-    for (k, i) in [ia, ib, ic, id].into_iter().enumerate() {
-        let (_, _, w, h) = before[k];
-        let want = ((i64::from(w) * 1056 / i64::from(h)).max(64) as i32, 1056);
-        assert_eq!(asked_since(&r, from, i), Some(want), "{i}");
-    }
+#[test]
+fn grid_of_ten_windows_is_four_by_four() {
+    grid_of(10);
 }

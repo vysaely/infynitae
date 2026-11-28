@@ -541,23 +541,19 @@ impl Core {
 
     /// `id` committed a frame of `drawn` size under the configure it acknowledged last, which
     /// asked for `acked` (none: its own choice). A client that acknowledged the held size and
-    /// drew another one chose its own size: it is no longer held to it. The effects are a
-    /// layout's tidy when a window kept a size bigger than its cell (`layout_answered`).
+    /// drew another one chose its own size: it is no longer held to it.
     pub fn toplevel_size_drawn(
         &mut self,
         id: ElementId,
         acked: Option<LocalSize>,
         drawn: LocalSize,
-    ) -> Vec<Effect> {
+    ) {
         if let Some(held) = self.held_size(id)
             && acked == Some(held)
             && drawn != held
         {
             self.held_sizes.retain(|(e, _)| *e != id);
         }
-        let mut out = Vec::new();
-        self.layout_answered(id, acked, drawn, &mut out);
-        out
     }
 }
 

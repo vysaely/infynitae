@@ -102,8 +102,6 @@ impl Core {
         anchor: CanvasPoint,
         out: &mut Vec<Effect>,
     ) -> Result<(), ProtocolError> {
-        // where the user puts it wins over a layout's cell it has not answered yet
-        self.layout_cells.retain(|(e, _)| *e != id);
         self.place_by_shell(id, anchor, out)
     }
 

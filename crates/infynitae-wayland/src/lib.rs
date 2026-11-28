@@ -3205,11 +3205,9 @@ mod key_binding_config_tests {
 
         std::fs::write(&cfg, "CLUSTER_SORT=\"tidy app\"\n").unwrap();
         state.reload_config();
-        let both = ClusterSort {
-            tidy: true,
-            app: true,
-        };
-        assert_eq!(state.core().cluster_sort(), both);
+        // "tidy" was removed (2026-11-28): an old config's word is read as nothing
+        let app = ClusterSort { app: true };
+        assert_eq!(state.core().cluster_sort(), app);
 
         std::fs::write(&cfg, "CLUSTER_SORT=\"off\"\n").unwrap();
         state.reload_config();
@@ -3218,7 +3216,7 @@ mod key_binding_config_tests {
         // as the Settings card writes it (live/settings.sh set: single quotes)
         std::fs::write(&cfg, "CLUSTER_SORT='tidy app'\n").unwrap();
         state.reload_config();
-        assert_eq!(state.core().cluster_sort(), both);
+        assert_eq!(state.core().cluster_sort(), app);
 
         std::fs::write(&cfg, "CLUSTER_SORT=\"tidy app\"\n").unwrap();
         state.reload_config();

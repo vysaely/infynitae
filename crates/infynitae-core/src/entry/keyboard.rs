@@ -187,18 +187,13 @@ impl Core {
             }
             KeyAction::ArrangeCluster => {
                 if let Some(id) = self.focus.target() {
-                    self.arrange_cluster(id, None, proof, out);
+                    self.arrange_cluster(id, crate::arrange::ClusterLayout::Grid, proof, out);
                 }
                 return;
             }
             KeyAction::ArrangeClusterByApp => {
                 if let Some(id) = self.focus.target() {
-                    self.arrange_cluster(
-                        id,
-                        Some(crate::arrange::ClusterLayout::ByApp),
-                        proof,
-                        out,
-                    );
+                    self.arrange_cluster(id, crate::arrange::ClusterLayout::ByApp, proof, out);
                 }
                 return;
             }

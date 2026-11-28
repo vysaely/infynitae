@@ -14,7 +14,6 @@ impl Core {
         let (anchor, tree) = (self.stage.anchor(id)?, self.stage.tree(id)?);
         let size = (tree.geometry.size.w, tree.geometry.size.h);
         self.resized_out_of_maximize(id);
-        self.layout_cells.retain(|(e, _)| *e != id);
         self.resize = Some(ResizeTrack {
             element: id,
             left,

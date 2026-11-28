@@ -12,8 +12,8 @@
 //! infynitae msg shortcut <name>                 a global shortcut (mute, deafen, …) to apps
 //! infynitae msg overview                        pick a window from a menu and go to it
 //! infynitae msg layers [app]                    every window's surfaces and where they are drawn
-//! infynitae msg arrange <layout> [inst elem]    spiral, tiles, line, tidy or app: the focused window's
-//!                                               cluster, or that window's
+//! infynitae msg arrange <layout> [inst elem]    grid or app: the focused window's cluster, or that
+//!                                               window's
 //! infynitae msg clipboard                       the clipboard history, one entry a line
 //! infynitae msg clipboard use|pin|unpin|delete <id>
 //! ```
@@ -103,7 +103,7 @@ fn first_output() -> u64 {
 
 fn usage() -> ExitCode {
     eprintln!(
-        "Usage: infynitae msg snapshot | focus <inst> <elem> | navigate <x> <y> [zoom] | navigate element <inst> <elem> | place <name> | restore [output] | shortcut <name> | overview | lock | night-light [on|off] | keyboard-layout | osk [on|off] | capture-chord | layers [app] | journal [--since T] [--app X] | arrange spiral|tiles|line|tidy|app [<inst> <elem>] | clipboard [use|pin|unpin|delete <id>]"
+        "Usage: infynitae msg snapshot | focus <inst> <elem> | navigate <x> <y> [zoom] | navigate element <inst> <elem> | place <name> | restore [output] | shortcut <name> | overview | lock | night-light [on|off] | keyboard-layout | osk [on|off] | capture-chord | layers [app] | journal [--since T] [--app X] | arrange grid|app [<inst> <elem>] | clipboard [use|pin|unpin|delete <id>]"
     );
     ExitCode::from(2)
 }
@@ -431,7 +431,7 @@ pub fn run(args: &[String]) -> ExitCode {
         },
         Some("arrange") => {
             let layout = match args.get(1).map(String::as_str) {
-                Some(l @ ("spiral" | "tiles" | "line" | "tidy" | "app")) => l,
+                Some(l @ ("grid" | "app")) => l,
                 _ => return usage(),
             };
             let element = match (args.len(), num(2), num(3)) {

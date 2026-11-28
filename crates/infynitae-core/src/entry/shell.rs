@@ -232,7 +232,6 @@ impl Core {
                 if self.input.interaction.active() {
                     return Err(ShellError::Busy);
                 }
-                let rest = self.cluster_left_by(id);
                 if self.stage.set_minimized(id, true).is_ok() {
                     let live: Vec<_> = self
                         .focusable_elements()
@@ -243,7 +242,6 @@ impl Core {
                     self.invalidate_all_frames();
                     self.membership_pass_element(id, &mut out);
                     out.extend(self.visibility_pass());
-                    self.tidy_after_leave(&rest, &mut out);
                 }
             }
             ShellCommand::MaximizeElement { element, maximized } => {
@@ -286,12 +284,8 @@ impl Core {
                 if self.input.interaction.active() {
                     return Err(ShellError::Busy);
                 }
-                if !self.arrange_cluster(
-                    id,
-                    Some(layout),
-                    Some(authority::Authorized::mint()),
-                    &mut out,
-                ) {
+                if !self.arrange_cluster(id, layout, Some(authority::Authorized::mint()), &mut out)
+                {
                     return Err(ShellError::Refused);
                 }
             }

@@ -273,7 +273,6 @@ impl Core {
     pub(super) fn drop_fullscreen(&mut self, id: ElementId) {
         // nor is it held to a size or maximized: its next map starts at its own size
         self.held_sizes.retain(|(e, _)| *e != id);
-        self.layout_cells.retain(|(e, _)| *e != id);
         self.returning.retain(|e| *e != id);
         self.maximized.retain(|(e, _)| *e != id);
         self.maximized_at.retain(|(e, _)| *e != id);

@@ -246,10 +246,7 @@ impl WaylandState {
                 .toplevel()
                 .and_then(|t| t.current_state().size)
                 .map(|s| infynitae_core::geom::LocalSize { w: s.w, h: s.h });
-            let fx = self.core.toplevel_size_drawn(id, acked, drawn);
-            if !fx.is_empty() {
-                self.apply(&fx);
-            }
+            self.core.toplevel_size_drawn(id, acked, drawn);
         }
         if window.toplevel().is_some() {
             // an acked fullscreen or unfullscreen changes the states the edge reads: told now, not at
