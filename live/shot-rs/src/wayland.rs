@@ -189,6 +189,8 @@ struct App {
     ready_ms: Option<f64>,
     editor: Option<Editor>,
     editor_output: usize,
+    /// the pointer is on an editor toolbar control: a hand there, the crosshair on the picture
+    editor_on_control: bool,
     finish: Option<Finish>,
     editor_failed: Option<String>,
     /// INFYNITAE_SHOT_BOXES: a file the VM tests read, rewritten after each editor frame
@@ -322,6 +324,9 @@ impl App {
             return;
         };
         let shape = match self.mode {
+            _ if self.editor.is_some() && self.editor_on_control => {
+                wp_cursor_shape_device_v1::Shape::Pointer
+            }
             _ if self.editor.is_some() => wp_cursor_shape_device_v1::Shape::Crosshair,
             Mode::Region => wp_cursor_shape_device_v1::Shape::Crosshair,
             Mode::Window => {
@@ -933,6 +938,7 @@ fn run_wayland_with_conn(
         ready_ms: None,
         editor: None,
         editor_output: 0,
+        editor_on_control: false,
         finish: None,
         editor_failed: None,
         boxes,
@@ -1858,10 +1864,21 @@ impl App {
         };
         let step = match ev.kind {
             PointerEventKind::Enter { serial } => {
+                self.editor_on_control = editor.control_at(x, y);
                 self.update_cursor_shape(serial);
                 return;
             }
-            PointerEventKind::Motion { .. } => Ok(editor.motion(x, y)),
+            PointerEventKind::Motion { .. } => {
+                let step = editor.motion(x, y);
+                let on_control = editor.control_at(x, y);
+                if on_control != self.editor_on_control {
+                    self.editor_on_control = on_control;
+                    if let Some((_, serial)) = self.last_pointer_enter {
+                        self.update_cursor_shape(serial);
+                    }
+                }
+                Ok(step)
+            }
             PointerEventKind::Press { button, .. } if button == BTN_LEFT => editor.press(x, y),
             PointerEventKind::Release { button, .. } if button == BTN_LEFT => editor.release(x, y),
             _ => return,
@@ -3424,6 +3441,58 @@ mod tests {
             Outcome::Cancelled
         ));
         assert_eq!(alpha, Some(255));
+    }
+
+    /// The editor showed the crosshair everywhere, the toolbar's buttons included.
+    #[test]
+    fn editor_cursor_is_a_hand_on_the_toolbar_and_a_crosshair_on_the_picture() {
+        let box_path = std::env::temp_dir().join(format!("shot-boxes-hand-{}", std::process::id()));
+        let _ = std::fs::remove_file(&box_path);
+        let (mock, conn) = MockWayland::start(vec![MockOutputSpec {
+            width: 800,
+            height: 600,
+            x: 0,
+            y: 0,
+            name: "DP-1",
+        }]);
+        let box_for_client = box_path.clone();
+        let client = std::thread::spawn(move || {
+            run_wayland_with_conn(
+                &conn,
+                Mode::Region,
+                false,
+                test_look(),
+                Snapshot::default(),
+                Some(box_for_client),
+            )
+        });
+
+        mock.wait_until(|st| st.focused_surface.is_some());
+        let sid = mock.focused_surface().unwrap();
+        mock.send_pointer_drag(sid, (100.0, 100.0), (300.0, 300.0));
+        let (_, ix, iy) = wait_boxes_file(&box_path).expect("editor boxes dump");
+        let dump = std::fs::read_to_string(&box_path).unwrap();
+        let _ = std::fs::remove_file(&box_path);
+        let undo: Vec<f64> = dump
+            .lines()
+            .find_map(|l| l.strip_prefix("hit undo "))
+            .expect("an undo control")
+            .split_whitespace()
+            .map(|v| v.parse().unwrap())
+            .collect();
+        let move_to = |x: f64, y: f64| {
+            let pid = mock.shared.0.lock().unwrap().pointer_id.unwrap();
+            let mut raw = Vec::new();
+            MockWayland::push_pointer_motion_bytes(pid, x, y, &mut raw);
+            MockWayland::write_all(&mock.server_sock, &raw);
+        };
+        // 4 is the hand (pointer), 8 the crosshair
+        move_to(undo[0] + undo[2] / 2.0, undo[1] + undo[3] / 2.0);
+        mock.wait_until(|st| st.cursor_shapes.last() == Some(&4));
+        move_to(ix + 10.0, iy + 10.0);
+        mock.wait_until(|st| st.cursor_shapes.last() == Some(&8));
+        assert!(mock.send_key_if_focused(KEY_ESC, false));
+        assert!(matches!(client.join().unwrap().unwrap(), Outcome::Plain(_)));
     }
 
     #[test]

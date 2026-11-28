@@ -206,6 +206,12 @@ impl Editor {
         &self.hits
     }
 
+    /// Whether a press at (`x`, `y`) would work a toolbar control; never during a stroke, which
+    /// keeps drawing wherever the pointer goes.
+    pub fn control_at(&self, x: f64, y: f64) -> bool {
+        self.stroke.is_none() && self.hits.iter().any(|(r, _)| contains(*r, x, y))
+    }
+
     /// The part of the capture shown and kept: the last crop, else all of it.
     pub fn crop(&self) -> Rect {
         crop_of(&self.marks, self.base.width(), self.base.height())
