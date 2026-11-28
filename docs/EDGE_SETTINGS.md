@@ -1,8 +1,12 @@
 # Settings in the edge (2026-11-13)
 
-State (2026-11-13): all 13 Settings cards below plus `settings/keys`
-(`live/edge-apps/src/cards/settings_keys.rs`, VM script `tools/vm-edge/pkeys.py`) are built in
-`live/edge-apps/src/cards/settings*.rs`.
+State (2026-11-28): all 14 Settings cards (`settings/all`, `settings/appearance`, `settings/wallpaper`,
+`settings/fonts`, `settings/display`, `settings/input`, `settings/windows`, `settings/keys`,
+`settings/defaults`, `settings/games`, `settings/lock`, `settings/privacy`, `settings/recording`,
+`settings/advanced`, plus `settings/about`) are built in `live/edge-apps/src/cards/settings*.rs`
+with VM tests (`tools/vm-edge/psettings.py`, `pkeys.py`, `ppicker.py`, `pprofile.py`). `settings/all`
+groups Appearance, Wallpaper and Fonts under one `Personalization` row (11 groups covering 13 child
+cards), and `settings/about` also handles Save/Load settings and waiting update counts.
 
 The rest of this document is the plan as written before building. Infynitae has no settings window: the settings are lines in
 `~/.config/infynitae/config` (defaults and comments in `config/config`) and `live/settings.sh` changes
@@ -25,27 +29,26 @@ hold. Line numbers are in the worktree `feat/edge-apps`.
 | `settings/display` | Display | Displays & sharpness, night light |
 | `settings/input` | Keyboard and mouse | Keyboard & mouse |
 | `settings/windows` | Windows | Windows & canvas (behaviour) |
+| `settings/keys` | Keys | Key bindings (`BIND_*`, `EXEC_*`) |
 | `settings/defaults` | Apps | Apps (default apps, what starts) |
 | `settings/games` | Games | Performance & latency |
 | `settings/lock` | Lock and sleep | Lock & idle, battery limit |
 | `settings/privacy` | Privacy | Privacy & screen capture, clipboard |
 | `settings/recording` | Screenshots and recording | Screen recorder, screenshots |
 | `settings/advanced` | Advanced | Advanced (the last section) |
-| `settings/about` | This PC | nothing in the config: what the PC is, updates, the config file |
+| `settings/about` | This PC | PC info, `UPDATE_CHECK` and waiting updates, save/load/undo settings, config file |
 
 Already there and unchanged: `network`, `bluetooth`, `power`, `quick`, `session`.
 
 Not cards, and why:
 
-- **Notifications.** The config has two keys: `GAME_QUIET` (a row in Games) and `NOTIFICATIONS` (which
+- **Notifications.** The config has two keys: `GAME_QUIET` (left to the file) and `NOTIFICATIONS` (which
   program shows them; left to the file). Do not disturb is in `settings/quick`. Two rows do not make a
   card; typing "notifications" in the panel finds both (section 5).
 - **Sound devices.** `sound/volume` switches the output sink (and moves playing streams to it),
   mutes and adjusts the default microphone when a non-monitor source exists, and sets per-app
   playback levels (shown only while streams play). The config has no sound key.
-- **Keys** (`BIND_*`, `EXEC_*`, `GLOBAL_SHORTCUTS`). Changing a key needs the edge to hear a held chord,
-  and `Event` (`card.rs:190`) carries typed text only. Left to the file until the owner asks for it.
-- **Panels.** `PANEL_*` and `FAVORITES` are changed by editing a panel, as now; `WIDGETS` in the
+- **Panels.** `PANEL_*` and `FAVORITES` are changed by editing a panel or the config; `WIDGETS` in the
   config file (the edge from apps does not arrange widgets in place).
 
 ## 2. Needed before any card (the core and `settings.sh`, one change each)
@@ -67,8 +70,9 @@ These are faults found while reading; a card built without them misbehaves.
    for keys only the compositor reads. Not measured. If the VM shows more than 100 ms, add
    `set --no-apply` for those keys; not before.
 5. **A source for the config.** `settings` gets the source key `config` (`every`: None; fetched again
-   after each `Action::Run`, `docs/EDGE_APPS.md` 3.2): `ConfigData { now: map, default: map }` from
-   `~/.config/infynitae/config` and `config.template` beside it. Its root folder is a field, for tests.
+   after each `Action::Run`, `docs/EDGE_APPS.md` 3.2): `ConfigData { now: map, default: map, programs }`
+   from `~/.config/infynitae/config` and `config/config` in the recorded checkout (`paths::checkout_dir`).
+   Its paths are fields, for tests.
 6. **Two parts in `ui.rs`**: `value(cr, cx, row, x_right, text)` (a row's value at its right, 12 px,
    muted; in the accent when it differs from the default) and `step(...)` (minus, the number, plus; for
    font and cursor size). Nothing else is new: `row`, `switch`, `more`, `choice`, `slider`, `List`,
@@ -82,18 +86,17 @@ One file, `cards/settings_rows.rs`, holds what the cards share; each card file i
 pub enum Control {
     Switch { on: &'static str, off: &'static str },          // the two values written
     Pick(&'static [(&'static str, &'static str)]),           // (value, word): a list in place
-    Words(&'static [(&'static str, &'static str)]),          // at most 3: ui::choice under the name
     Slide { min: f64, max: f64, step: f64, unit: &'static str },
-    Step { min: i64, max: i64 },
-    Found(&'static str),     // a list from a source key ("fonts"): what this PC has
     Text,                    // asked with `infynitae-edge ask --text --default <now>`
 }
-pub enum After { Save, Use, Restart, Reload(&'static str) }  // Reload: the infynitae-reload part
+pub enum After { Save, Use, Restart, Login, Reload(&'static str) }  // Reload: the infynitae-reload part
 pub struct Setting {
     pub key: &'static str, pub name: &'static str, pub says: &'static str,
     pub control: Control, pub after: After, pub more: bool,   // more: only under More (or at M)
+    pub needs: &'static [&'static str],                       // programs required on PATH
 }
 ```
+(`settings_look.rs` also has `Step`, `Found`, `Accent` and `Wallpapers` controls on `LookControl`.)
 
 - **Reading.** The value is `config.now[key]`, else `config.default[key]`.
 - **Sizes.** S: the rows with `more: false`, then one row "More" that opens the others in place. M: all
@@ -138,50 +141,52 @@ Columns: the row's name; control; key; values (word shown = value written where 
 
 ### `settings/all` (`cards/settings_all.rs`)
 
-One row per card of this section that is not `Hidden`, in the order of section 1: its title, and as
-state one line of what is set ("Dark, corners 8 px"; "DP-1 2560x1440 165 Hz"). A click opens that
-card's body in place under the row (`ui::List`; one open at a time; the body drawn at S, its own More
-working). It owns one `Box<dyn Card>` per kind and passes `apply`, `event`, `tick` through; its
-sources are theirs together. Hits: child `i` gets ids `1000 * (i + 1) + child id`. While something is
-typed, the rows are replaced by every child's matching rows under the child's title, then "In the
-file" (section 5). Sizes: M only. No setting of its own.
+One row per visible group (11 groups covering 13 child cards: **Personalization** merges Appearance,
+Wallpaper and Fonts, icons, cursor into one row whose open body stacks their bodies under headings,
+followed by Display, Keyboard and mouse, Windows, Keys, Apps, Games, Lock and sleep, Privacy,
+Screenshots and recording, and Advanced): its title, and as state one line of what is set ("Dark,
+corners 8 px"; "DP-1 2560x1440 165 Hz"). A click opens that group's body in place under the row (one
+open at a time; each child drawn at S, its own More working). It owns one `Box<dyn Card>` per child
+and passes `apply`, `event`, `tick` through; its sources are theirs together. Hits: child `i` gets
+ids `100_000 * (i + 1) + child id` (`CHILD_STRIDE = 100_000`). While something is typed, the rows are
+replaced by every child's matching rows under the child's title, then "In the file" (section 5).
+Sizes: M only. No setting of its own.
 
 ### `settings/appearance` (`cards/settings_look.rs`)
 
 | Row | Control | Key | Values | After |
 |---|---|---|---|---|
 | Dark or light | Pick | `COLOR_SCHEME` | Dark `prefer-dark`, Light `prefer-light` | look |
-| Accent | Text, with a 16 px swatch of the value | `ACCENT` (a config with only `BORDER_ACTIVE` shows that) | `#rrggbb`; anything else is refused and the row says "Not a colour" | look |
+| Accent | Colour picker in place (`accent.rs`), with a 16 px swatch | `ACCENT` (a config with only `BORDER_ACTIVE` shows that) | Wallpaper candidates tab, HSV picker tab, recent colours, and `#rrggbb` entry | look |
 | Colours from the wallpaper | Pick | `THEME_FROM_WALLPAPER` | Off `false`, The accent `accent`, Everything `all`, A new accent each time `shuffle` | look |
 | Corners | Slide 0-24 px | `WINDOW_CORNERS` | | look |
 | Colours | Pick | `THEME_SCHEME` | Yours, Monochrome, Neutral, Tonal, Vibrant, Expressive (lower case written) | look |
 | M Card opacity | Slide 20-100 % | `CARD_OPACITY` | | look |
 | M Window border | Step 0-8 | `BORDER_WIDTH` | | save |
 | M Folders in the accent | Switch | `FOLDER_COLOR` | `accent` / `theme` | look |
+| Your picture | Thumbnail grid (`FaceSource`) | `~/.face` (not a config key) | Crops and writes `~/.face` (`--crop-face`) | use |
 
-The swatch is the setting's own value drawn as data; nothing else on the card has a colour of its own.
-Hidden: "Folders in the accent" unless `ICON_THEME` starts with `Papirus`, or is `auto` and the
-Papirus set it picks (Papirus-Dark, Papirus with prefer-light) is in the `icons` source. "Colours from the
-wallpaper" without `~/.local/bin/infynitae-wallpaper`. Left to the file: the four colours "Yours"
-uses (`SURFACE_COLOR`, `TEXT_COLOR`, `BORDER_INACTIVE`, `CANVAS_COLOR`, one block under
-`THEME_SCHEME` in `config/config`), `THEME_SYNC`, `BORDER_ACTIVE`, `CORNERS` and `SQUARE_CORNERS` (both
-unset overrides under `WINDOW_CORNERS`: one corner for everything is the rule), `BORDER_IGNORE_CSD`,
-`SWITCH_LOOK`. `CLIP_TO_GEOMETRY`, `WINE_TRANSPARENCY` and `FORCE_TRANSPARENT_APPS` are on
-`settings/advanced`. Not known without trying: whether
-`WINDOW_CORNERS` reaches open windows on save or only on reload (its tag says reload; the compositor
-reloads on save).
+The swatch and colour picker show the chosen colour as data; nothing else on the card has a colour of
+its own. Hidden: "Folders in the accent" unless `ICON_THEME` starts with `Papirus`, or is `auto` and
+the Papirus set it picks (Papirus-Dark, Papirus with prefer-light) is in the `icons` source. "Colours
+from the wallpaper" without `~/.local/bin/infynitae-wallpaper`. Left to the file: the four colours
+"Yours" uses (`SURFACE_COLOR`, `TEXT_COLOR`, `BORDER_INACTIVE`, `CANVAS_COLOR`, one block under
+`THEME_SCHEME` in `config/config`), `THEME_SYNC`, `BORDER_ACTIVE`, `CORNERS` and `SQUARE_CORNERS`
+(both unset overrides under `WINDOW_CORNERS`: one corner for everything is the rule),
+`BORDER_IGNORE_CSD`, `SWITCH_LOOK`. `CLIP_TO_GEOMETRY`, `WINE_TRANSPARENCY` and
+`FORCE_TRANSPARENT_APPS` are on `settings/advanced`. The compositor reads `WINDOW_CORNERS` on save,
+and `settings.sh set` re-applies the look to toolkits and the edge.
 
 ### `settings/wallpaper` (same file)
 
 | Row | Control | Key | Values | After |
 |---|---|---|---|---|
-| Picture | Found `wallpapers` | `WALLPAPER` | the file's name shown, its path written; first entry "The first in Pictures/Wallpapers" writes `""` | save (the compositor restarts the wallpaper, `infynitae-wayland/src/lib.rs:453`) |
+| Picture | Thumbnail grid (`Wallpapers`) | `WALLPAPER` | up to 24 thumbnails (2 columns in S, 3 in M; "More" list for extras) from `~/Pictures/Wallpapers` and `~/.local/share/wallpapers` | save (the compositor restarts the wallpaper) |
 | Placement | Pick | `WALLPAPER_MODE` | Fill, Fit, Stretch, Center, Tile | save |
 | M Depth | Pick | `WALLPAPER_PARALLAX` | Off, Subtle, Strong | save |
 
-Source `wallpapers`: the png, jpg, jpeg, webp files of `~/Pictures/Wallpapers` and
-`~/.local/share/wallpapers` (`live/wallpaper/infynitae-wallpaper.c:782`), by name, at most 12 listed and
-"Other file" (asked as text). No thumbnails in this stage (decoding images is not in the crate).
+Source `wallpapers`: png, jpg, jpeg and webp files in `~/Pictures/Wallpapers` and
+`~/.local/share/wallpapers`, decoded into thumbnails for the grid.
 Hidden: the whole card without `infynitae-wallpaper`.
 
 ### `settings/fonts` (same file)
@@ -267,14 +272,23 @@ names in `/usr/share/X11/xkb/rules/evdev.lst` is a later step.
 | Focus | Pick | `FOCUS_FOLLOWS_MOUSE` | Under the pointer `strict`, Under the pointer, kept over empty space `sloppy`, On a click `click` | save |
 | A new window takes the focus | Pick | `FOCUS_ON_OPEN` | Unless you are busy `priority`, Only ones you opened `user`, Always `1`, Never `0` | save |
 | A new window opens | Pick | `PLACEMENT_POLICY` | Beside the others `cluster`, In the middle `center`, At the origin `origin` | save |
-| Super+Enter | Words | `SUPER_ENTER_ACTION` | Maximize, Fit | save |
+| Super+Enter | Pick | `SUPER_ENTER_ACTION` | Maximize, Fit | save |
 | M The view follows a new window | Pick | `TELEPORT_ON_OPEN` | Only ones you opened `user`, Always `1`, Never `0` | save |
 | M An app asks for the focus | Pick | `FOCUS_ON_ACTIVATE` | From you `user`, Always, Never | save |
 | M Super+Tab moves the view | Switch | `FOCUS_CYCLE_NAVIGATE` | `true` / `false` (an older `1`, `yes` or `on` shows on: a true/false switch reads them as the compositor does) | save |
 | M Dragging the canvas | Pick | `PAN_MODE` | Pointer moves with it `free`, Pointer stays `grab`, Grip `rts` | save |
 | M Pan out of fullscreen | Switch | `FULLSCREEN_PAN` | | save |
+| M Zoom feel | Pick | `ZOOM_FEEL` | Smooth `smooth`, Quick `quick`, Floaty `floaty`, Instant `instant` | save |
 | M Keep on top | Text | `KEEP_ON_TOP` | Titles or apps, with commas | save |
 | M Windows near each other | Pick | `CLUSTER_SORT` | Stay where they are `off`, Close the gap a window leaves `tidy`, Open beside their app `app`, Both `tidy app` | save |
+
+### `settings/keys` (`cards/settings_keys.rs`)
+
+Lists built-in compositor actions (`BIND_*`, grouped by Windows, Canvas, Apps, Screenshots and
+recording, System) and custom `EXEC_*` commands, draws bound chords as key caps, captures the next
+chord through `infynitae msg capture-chord` (`key_capture` source), and offers to swap on conflict.
+`GLOBAL_SHORTCUTS` stays in the config file. The read-only shortcut help overlay (`Super+/` and
+`Super+F1`, `shortcuts.rs`) reuses this card's rows and live config overrides.
 
 ### `settings/defaults` (`cards/settings_apps.rs`)
 
@@ -282,7 +296,7 @@ names in `/usr/share/X11/xkb/rules/evdev.lst` is a later step.
 |---|---|---|---|---|
 | Terminal | Found | `TERMINAL` | "Automatic" `auto`, then `cx.apps` with `TerminalEmulator` in Categories; the app's `exec` written | use |
 | Files | Found | `FILE_MANAGER` | `auto`, apps with `FileManager` | use |
-| Browser | Found | `BROWSER` | `auto`, apps with `WebBrowser` | use |
+| Browser | Found | `BROWSER` | `auto`, apps with `WebBrowser`; also sets `xdg-settings set default-web-browser` (with `mimeapps.list` fallback) | use |
 | System monitor | Found | `SYSTEM_MONITOR` | `auto`, apps with `System` and `Monitor` | use |
 | Reopen apps | Pick | `SESSION_RESTORE` | Off `false`, After a restart `restart`, Always `true` | Reload(`restore`) |
 | M Open a terminal when nothing was reopened | Switch | `START_TERMINAL` | | at login |
@@ -292,13 +306,12 @@ names in `/usr/share/X11/xkb/rules/evdev.lst` is a later step.
 
 No source: the lists come from `cx.apps`. A value that is no listed app's `exec` shows as written and
 stays (a command of the owner's). "Automatic" shows what it resolves to only where that is cheap to
-know; otherwise the word alone. Hidden: a row with no app of its category installed; "Mount USB
-drives" and "Name drives" without `udisksctl`. Left to the file: `LAUNCHER`, `MENU_PICKER`,
-`POLKIT_AGENT`, `NOTIFICATIONS`, `ENABLE_EDGE`, `EDGE_POSITION`,
-`EDGE_CONTROL_SIDE` (a reload of the edge closes the panel; a panel's edge is set by editing it).
-Open: `BROWSER` is only what command-line programs run (`live/config.sh`); the browser other apps
-open links with is `xdg-settings set default-web-browser`. This row should set both; that is the
-owner's call (section 8).
+know; otherwise the word alone. When `plocate` is not installed, a note at the bottom says
+"Searching files by name needs plocate, which is not installed" (hidden while searching). Hidden: a
+row with no app of its category installed; "Mount USB drives" and "Name drives" without `udisksctl`.
+Left to the file: `LAUNCHER`, `MENU_PICKER`, `POLKIT_AGENT`, `NOTIFICATIONS`, `TRAY_CARD`,
+`FAVORITES`, `ENABLE_EDGE`, `EDGE_POSITION`, `EDGE_CONTROL_SIDE` (a reload of the edge closes the
+panel; a panel's edge is set by editing it).
 
 ### `settings/games` (`cards/settings_games.rs`)
 
@@ -317,15 +330,15 @@ and `OVERLAY_PLANES` are on `settings/advanced`.
 | Row | Control | Key | Values | After |
 |---|---|---|---|---|
 | Screens off after | Pick | `IDLE_SLEEP_TIMEOUT_MIN` | 5, 10, 15, 30, 60 minutes, Never `0`; another number shows as it is | save |
-| Lock when the screens go off | Switch | `IDLE_AUTO_LOCK` | | save |
-| Lock before sleep | Switch | `SLEEP_LOCK` | | Reload(`sleep-lock`) |
-| Stop charging at | Pick | `BATTERY_LIMIT` | Full `off`, 80 %, 90 % | save, then `sh "${INFYNITAE_DIR:-$HOME/infynitae}/live/battery-limit"` |
+| Lock when away | Switch | `LOCK_WHEN_AWAY` | When the screens go off or before sleep | Reload(`sleep-lock`) |
+| Stop charging at | Pick | `BATTERY_LIMIT` | Full `off`, 80 %, 90 % | save, then `sh "${INFYNITAE_DIR:-$HOME/infynitae}/live/battery-limit" VALUE` |
 | M Start at the lock screen | Switch | `START_LOCKED` | | at login |
 | M Show "Shutting down" | Switch | `SHUTDOWN_SCREEN` | | use |
 
 Hidden: "Stop charging at" unless a `/sys/class/power_supply/BAT*/charge_control_end_threshold`
-exists (`live/battery-limit:12`). Not known without trying: how `battery-limit` is called to apply
-now (read its head before building). `SCREEN_LOCKER` is on `settings/advanced`.
+exists (`live/battery-limit:12`). Left to the file: `IDLE_AUTO_LOCK` and `SLEEP_LOCK` (older
+fallbacks read only when `LOCK_WHEN_AWAY` is unset or empty). `SCREEN_LOCKER` is on
+`settings/advanced`.
 
 ### `settings/privacy` (`cards/settings_privacy.rs`)
 
@@ -350,18 +363,19 @@ file has the explanation beside each).
 | Row | Control | Key | Values | After |
 |---|---|---|---|---|
 | Replay keeps the last | Pick | `REPLAY_BUFFER_MINUTES` | 2, 5, 10, 20, 30 minutes | Reload(`recorder`) |
-| M Replay kept in | Pick | `REPLAY_STORAGE` | Memory `ram`, The clips folder `disk` | Reload(`recorder`) |
 | Sound recorded | Pick | `RECORD_AUDIO` | The PC `desktop`, The microphone `mic`, Both, None | Reload(`recorder`) |
 | Frames per second | Pick | `RECORD_FPS` | 30, 60, 120 | Reload(`recorder`) |
 | Freeze the screen while picking a region | Switch | `FREEZE_SCREENSHOT` | | use |
 | Screenshots, Clips, Recordings | three buttons | `SCREENSHOT_DIR`, `CLIPS_DIR`, `RECORDINGS_DIR` | each opens its folder (`Action::OpenUri`); the folders are changed in the file | |
 | M Format | Pick | `RECORD_CODEC` | HEVC, AV1, H.264, Automatic | Reload(`recorder`) |
 | M Recorder | Pick | `REPLAY_BACKEND` | Automatic, gpu-screen-recorder, Infynitae | Reload(`recorder`) |
+| M Replay kept in | Pick | `REPLAY_STORAGE` | Memory `ram`, The clips folder `disk` (requires `gpu-screen-recorder` on PATH) | Reload(`recorder`) |
 
 Replay on or off stays in `settings/quick`. The recorder is reloaded only while
 `ENABLE_REPLAY_BUFFER` is true (else the key is written and nothing runs). Hidden: the
-gpu-screen-recorder choice without it on PATH; the whole card without `infynitae-recorder`. Left to
-the file: `REPLAY_DIR`, `RECORD_NOTIFY`. `SCREENSHOT_CMD` is on `settings/advanced`.
+gpu-screen-recorder choice and `REPLAY_STORAGE` row without `gpu-screen-recorder` on PATH; the whole
+card without `infynitae-recorder`. Left to the file: `REPLAY_DIR`, `REPLAY_DISK_DIR`, `RECORD_NOTIFY`.
+`SCREENSHOT_CMD` is on `settings/advanced`.
 
 ### `settings/advanced` (`cards/settings_advanced.rs`)
 
@@ -401,12 +415,15 @@ Source `pc` (`every`: None), each line left out when its file or program is miss
 | Infynitae | `git -C CHECKOUT log -1 --format='%h %cs'`, CHECKOUT as `paths::checkout_dir` resolves it |
 | Time zone | `timedatectl show -p Timezone --value` |
 
-Then the actions: **Check for updates** (`Action::Run` of `infynitae-update` in the terminal:
-`xdg-terminal-exec infynitae-update`), **Undo** (section 3; not drawn with an empty log), **Open the
-config file**, **Restart needed** (drawn only when a restart key was changed since the compositor
-started: the keys, and "Ctrl+Alt+Backspace restarts; it closes your windows"). Sizes: S (the name,
-System, the actions), M (all). Not known without trying: `lspci` names for integrated graphics read
-long; cut at the bracket.
+Then the update rows and actions: **Check for updates** (`Action::Run` of `infynitae-update` in the
+terminal: `xdg-terminal-exec infynitae-update`; shows waiting system and Infynitae update counts from
+`~/.local/state/infynitae/update-status`, "Up to date", or a hint to install `pacman-contrib`),
+**Check for updates automatically** (`UPDATE_CHECK` switch, default `true`, every 6 hours), **Open
+the config file**, **Save my settings** (`settings.sh export` into `~/Documents/Infynitae`), **Load
+settings** (`settings.sh import-preview` and `import`, with **Undo load**), **Undo** (section 3; not
+drawn with an empty log), and **Restart needed** (drawn only when a `[restart]` key — `XWAYLAND` —
+was changed since the compositor started: the key, and "Ctrl+Alt+Backspace restarts; it closes your
+windows"). Sizes: S (the name, System, updates and actions), M (all).
 
 ## 5. The Settings panel, and the rest of the file
 
@@ -425,11 +442,11 @@ the key Windows uses. No hover. Any of the cards can also be put in any other pa
 then `ClosePanel` (`settings.sh:921` runs `$EDITOR`, else nano). Saving the file applies as the tags
 say; the cards read it again the next time the panel opens.
 
-**In the file.** While something is typed, `settings/all` ends with the keys of `config.template`
-that are on no card and whose name or comment matches: the key, its value, the first comment line. A
-click opens the editor at that line (`+N` before the file name, for nano, vim, nvim, vi, micro; other
-editors open the file's top). So every setting is found from one place, and the ones without a
-control say where they are.
+**In the file.** While something is typed, `settings/all` ends with the keys of `config/config` (from
+the recorded checkout) that are on no card and whose name or comment matches: the key, its value, the
+first comment line. A click opens the editor at that line (`+N` before the file name, for nano, vim,
+nvim, vi, micro; other editors open the file's top). So every setting is found from one place, and
+the ones without a control say where they are.
 
 A test in the crate reads `config/config` and fails when a key is neither in a card's table nor in
 the list `FILE_ONLY` in `settings_rows.rs`: a new setting cannot be added without deciding where it
@@ -451,35 +468,24 @@ None of these is measured yet. Each is a test that prints a number or PASS.
 | Claim | Check |
 |---|---|
 | It opens at once: no program starts, the edge is running | VM, as `tools/vm-edge/pfeel.py`: Super+I to the first drawn frame, 20 runs, the median and the worst. Target: under 50 ms. Windows' number to compare is not measured here; measure it on the owner's Windows drive before quoting one |
-| Every setting is found from one field | For each key of `config.template`: typing the key gives a row or an "In the file" line. Target: all of them. Windows' search does not reach the registry or the old Control Panel pages |
+| Every setting is found from one field | For each key of `config/config`: typing the key gives a row or an "In the file" line. Target: all of them. Windows' search does not reach the registry or the old Control Panel pages |
 | One place, no second app | The crate test of section 5: zero keys unassigned |
 | A change applies without an Apply button | Per `[save]` row in the VM: time from the click to the effect (the compositor's log line or the changed state). Target: under 300 ms (the 250 ms check plus a frame) |
 | Every change can be undone | VM: change 10 rows, press Undo 10 times, `cmp` the config with its copy from before. Target: the same bytes |
 | It says before, not after, that a restart is needed | Render test: every `After::Restart` row shows "At the next start" after a change; a crate test that the tag in `config/config` and `After` agree for every key |
-| It hides what the PC cannot do | VM without `wlr-randr`, `gamemoded`, a battery, a touchpad, `cliphist`: none of those rows is in `INFYNITAE_EDGE_BOXES`; no row says "not available" |
+| It hides what the PC cannot do | VM without `wlr-randr`, `gamemoded`, a battery, a touchpad: none of those rows is in `INFYNITAE_EDGE_BOXES`; no row says "not available" |
 | It costs nothing while closed | `ps` RSS of the edge before the first open and after closing; sources stopped (no `fc-list`, `wlr-randr` in `ps` 5 s after closing) |
 | The settings stay one readable file | After one change by a card: `diff` shows one line |
 
-## 8. Decided here, and open
+## 8. Decided here (as built)
 
-Decided here (the owner was not asked; each can change before step 1):
-
-- One index card (`settings/all`) in a panel of its own, not eleven cards stacked: eleven S cards are
-  about 2000 px tall and no panel scrolling was found in `shell.rs`.
-- A setting with more than three values is a row with its value at the right and a list in place
-  (variant A on the design page); two or three short words are a choice in one line only where it is
-  the card's first row. Variant B shows the choice always.
-- No Notifications, Sound, Keys or Panels card (section 1).
-- Colours are typed as `#rrggbb`; no colour picker.
-- Super+I, top centre, 440 px.
-
-Open for the owner:
-
-1. Variant A or B for rows with a few values (the design page shows both for Windows).
-2. Should Browser also set the system's default browser (`xdg-settings`), so links from every app
-   follow it?
-3. A card for keys (`BIND_*`): wanted? It needs chord capture in the core.
-4. A colour picker for the accent, or is typing the value enough, given "Colours from the wallpaper"?
-5. Wallpaper thumbnails: wanted enough to add image decoding to the edge?
-6. Should a display mode change ask "Keep this?" with a 10 s way back, as written, or apply without
-   asking?
+- One index card (`settings/all`, 11 groups covering 13 child cards) in a panel of its own (`Super+I`,
+  top centre, 440 px). Panels taller than the screen scroll in one column.
+- No Notifications, Sound or Panels card (section 1). `settings/keys` is built with chord capture
+  through `infynitae msg capture-chord`.
+- `settings/defaults` Browser sets both `BROWSER` and `xdg-settings set default-web-browser`.
+- `settings/appearance` has an in-place accent colour picker (wallpaper candidates, HSV, recent
+  colours, hex entry) and a "Your picture" (`~/.face`) row.
+- `settings/wallpaper` shows a thumbnail grid (up to 24 pictures).
+- `settings/display` asks "Keep this? 10" after a mode change through `wlr-randr` and reverts if not
+  confirmed within 10 s.

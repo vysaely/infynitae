@@ -11,9 +11,9 @@
 | `crates/infynitae-backend-headless` | An off-screen backend. Its `tests/` are the bulk of the test suite: real Wayland clients against a real compositor. |
 | `crates/infynitae-ipc` | The shell socket (`$XDG_RUNTIME_DIR/infynitae/shell.sock`, JSON lines). |
 | `crates/infynitae` | The binary: command line, picks a backend. |
-| `live/` | The desktop around the compositor: session scripts, environment, shortcut dispatcher, settings sync, and the helpers: C (lock, wallpaper, portal, polkit, recorder) and Rust (`live/edge-apps`, `live/shot-rs`; each its own crate and lockfile; CI jobs "Edge (apps)", "Shot (Rust)"). |
+| `live/` | The desktop around the compositor: session scripts, environment, shortcut dispatcher, settings sync, and the helpers: C (lock, wallpaper, portal, polkit, recorder, bus-watch, xres) and Rust (`live/edge-apps`, `live/shot-rs`, `live/sandbox-socket`; each its own crate and lockfile; CI jobs "Edge (apps)", "Shot (Rust)", "Sandbox socket (Rust)"). |
 | `config/config` | The config template, installed as `~/.config/infynitae/config`. |
-| `vendor/smithay-0.7.0` | Smithay, vendored with four authorized patches (`patches/`). |
+| `vendor/smithay-0.7.0` | Smithay, vendored with eight authorized patches (`patches/README.md`). |
 | `patches/xwayland-satellite-*` | Our patch to xwayland-satellite; `live/build-satellite.sh` builds it at install. |
 | `tools/`, `enforcement/` | The checks (below). |
 | `docs/foundation/` | The design specification. |
@@ -39,7 +39,7 @@ recorded in `~/.config/infynitae/checkout`; without that file (an install from b
 portal with `checkout_dir` in `live/portal/remote-desktop.c`. `tools/test-checkout` checks it.
 
 The C helpers (`live/build-helpers.sh`) build against pkg-config libraries: GLib/GIO, wayland-client,
-xkbcommon, cairo, pango, gdk-pixbuf, polkit, PAM, xcb-res, and for the portal's screen sharing
+xkbcommon, cairo, pango, gdk-pixbuf, gtk+-3.0, polkit, PAM, xcb-res, and for the portal's screen sharing
 libpipewire-0.3, gbm and libdrm (since 2026-11-25; installed with PipeWire and Mesa).
 
 ## Tests and checks
@@ -49,21 +49,22 @@ All of these run in CI on every push, and all must pass before a change lands on
 ```bash
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo test --workspace --locked          # over 1,000 tests, a few minutes
+cargo test --workspace --locked          # 1,398 tests in crates/, a few minutes
 tools/verify-architecture                # several minutes
 tools/check-foundation-docs              # and --self-test
 tools/verify-knowledge --content-only    # and --self-test
 tools/verify-theme-colours               # tested by tools/test-verify-theme-colours
-tools/verify-test-efficacy               # hours: CI, or single controls by hand
+tools/verify-test-efficacy               # hours (6 shards in CI with --shard K/N)
 ```
 
 | Check | What it guards |
 | :--- | :--- |
 | `verify-architecture` | The crate graph (Core depends on nothing), the exact Smithay pin and its files' hashes, the unsafe inventory (`docs/foundation/UNSAFE_INVENTORY.md`: every `unsafe` listed with its reasoning), source rules, compile probes that must fail. Each check has seeded defects it must detect. |
-| `verify-test-efficacy` | 543 controls: each injects one bug into the product code and requires a named test to fail. A control whose test already fails on clean code, or times out, is reported as broken. |
+| `verify-test-efficacy` | 545 controls: each injects one bug into the product code and requires a named test to fail. A control whose test already fails on clean code, or times out, is reported as broken. |
 | `check-foundation-docs` | The design spec is consistent: one home per namespace, the invariant set and its wording, the formulas. |
 | `verify-knowledge` | Knowledge records have their fields, unique IDs, working links, and an `INDEX.md` entry. |
 | `verify-theme-colours` | No colour literal (`"#rrggbb"`, `set_source_rgb(0.2, 0.6, 0.9)`, `Color32F::new(…)`) in `crates/` or `live/` outside the theme modules, tests and `tools/theme-colours-allow.txt` (one `path:reason` line per exception). |
+| `Advisories` CI job | Runs `cargo-audit` against RustSec advisories on every push and nightly across all four shipped `Cargo.lock` files and `xwayland-satellite` at its pinned commit (`tools/upstream-check` checks newer Smithay and `xwayland-satellite` releases). |
 
 When a change moves code a control is anchored on, update the control's anchor and seed to the
 new code (same defect), and confirm its test fails with the seed and passes without it.

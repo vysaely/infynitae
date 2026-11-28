@@ -1,6 +1,6 @@
 # Status
 
-Updated 2026-11-24 (the two old edges deleted; the edge: docs/EDGE_APPS.md; window rules: docs/DECISIONS.md).
+Updated 2026-11-28 (edge: docs/EDGE_APPS.md, settings: docs/EDGE_SETTINGS.md, window rules: docs/DECISIONS.md).
 
 Infynitae is my daily desktop. It is young and has only run on my own machine, so expect rough
 edges on other hardware.
@@ -10,15 +10,15 @@ edges on other hardware.
 - **The spatial model:** the endless canvas, a camera per screen (pan, zoom, fit, overview),
   clusters, window slots, fullscreen you can pan out of. The core is a pure state machine with
   no Wayland code in it, tested exactly.
-- **The test suite:** over 1,000 tests (1,058 `#[test]` in the crates, counted 2026-11-11), most of them real Wayland clients against a headless
+- **The test suite:** 1,398 `#[test]` in `crates/` (plus 489 in `live/edge-apps` and 37 in `live/shot-rs`, counted 2026-11-28), most of them real Wayland clients against a headless
   compositor; the test harness isolates the launcher in a temporary directory so shortcuts and reload actions never reach the live desktop. `tools/verify-test-efficacy` seeds bugs on purpose to prove the tests catch them (sharing build paths so cargo rebuilds only what a seed touched),
   `tools/verify-architecture` checks that the architecture holds, and CI tests config defaults and README shortcuts against the code.
-- **The desktop:** lock screen, wallpaper, screenshots, clipboard history, session restore,
+- **The desktop:** lock screen, wallpaper, screenshots, clipboard history (kept in memory by the compositor), session restore,
   recording and a replay buffer (defaulting to hevc), polkit prompts, notifications (the edge by default, else mako, swaync, dunst, or fnott), a keyring
   (gnome-keyring, or infynitae-keyring once switched via `infynitae-keyring`'s `tools/switch.sh`), USB automount (infynitae-automount on udisks2: drives named by Roman numeral like drive letters, mounted at /mnt/V, `DRIVE_NAMES`, docs/DRIVES.md; encrypted drives ask for their passphrase, a notification opens or ejects a drive, `infynitae-automount eject` makes every drive safe to pull; right click a drive's folder in PCManFM-Qt, "Format drive...", to erase it as exFAT, FAT32 or ext4, `infynitae-format-drive` from a terminal), the control menu (Super+A: Wi-Fi, Bluetooth, volume
   for all sound or one app, sound output, power mode), global shortcuts for
   apps, layer shell for bars, X11 apps through xwayland-satellite (can be disabled with `XWAYLAND=false`), VRR and direct scanout for
-  games, idle screen-off and auto-lock. Config defaults match documented settings: `FOCUS_FOLLOWS_MOUSE` is strict, `PAN_MODE` is free, `SQUARE_CORNERS`, `TOUCHPAD_TAP`, and `TOUCHPAD_GESTURES` are true.
+  games, idle screen-off and auto-lock. Shipped defaults match `config/config`: `FOCUS_FOLLOWS_MOUSE="strict"`, `FOCUS_ON_OPEN="user"`, `PAN_MODE="free"`, `CARD_OPACITY="100"`, `TEARING="true"`, `THEME_FROM_WALLPAPER="accent"`, `SESSION_RESTORE="restart"`, `EDGE_POSITION="bottom"`, `ICON_THEME="auto"`, `TOUCHPAD_TAP="true"`, `TOUCHPAD_GESTURES="true"`, and `SQUARE_CORNERS` unset (defaults to true).
 - **Screen sharing:** a screen or a single window, through the portal or screencopy (screencopy hides the cursor by default). The
   portal asks before an app's first share (this time, always, or deny; `SCREENSHARE_ASK`, defaults to `app`). A
   private window (`PRIVACY_APPS`, which accepts spaces or commas, `PRIVACY_TITLES` separated by commas, Super+Shift+P) is never shared, and nothing
@@ -67,8 +67,9 @@ These pass the test suite but have not run on a real screen or device yet:
     `infynitae-sleep-lock` keeps the sleep inhibitor if an external locker exits within the first second.
   - **Panels of modules (2026-11-07):** each panel is one config line, its key, its place on
     any screen edge and its modules in order (`PANEL_<NAME>`); new panels of your own; a
-    favorites module (FAVORITES, right click an app to pin it); arrows move to the nearest item
-    in every panel; opens at once (no animation); panels opened by key stay open when the pointer
+    favorites module (`FAVORITES` in the config); arrows move to the nearest item
+    in every panel; panels unfold from their anchored screen edge (170 ms open, 105 ms close;
+    inline lists 175 ms); panels opened by key stay open when the pointer
     leaves; overlapping cards route clicks and drags to the topmost card; ask cards close when
     their asking program ends, and later requests queue.
   - **Panels (Super+W, Super+L, Super+A, Super+V):** one look (sans-serif 12-15 px, 32 px rows,
@@ -80,8 +81,8 @@ These pass the test suite but have not run on a real screen or device yet:
     invoking a notification action keeps older unread notifications; the memory card protects the
     compositor and session processes; touch-and-hold emits a right click; the control panel
     spells everything out.
-  - **Window menu and Keep on top (2026-11-16):** `xdg_toplevel.show_window_menu` (right click on a
-    client title bar) and the configurable `BIND_WINDOW_MENU` binding open a menu in the edge
+  - **Window menu and Keep on top (2026-11-16, Super+M 2026-11-24):** `xdg_toplevel.show_window_menu` (right click on a
+    client title bar) and `Super+M` (`BIND_WINDOW_MENU`) open a menu in the edge
     with Keep on top (check mark when on), Minimize, Maximize or Restore, Fullscreen and Close;
     `KEEP_ON_TOP` is editable on the Windows settings card. Tested in `infynitae-core`,
     `infynitae-ipc`, `infynitae-backend-headless` and `infynitae-edge-apps`; not yet tried in the
@@ -159,8 +160,8 @@ These pass the test suite but have not run on a real screen or device yet:
   screen changed since its last one, sending only changed areas; a still screen costs nothing.
 - **Tearing for games** (`TEARING`, Super+Shift+O; Super+Shift+T too): a fullscreen window
   shown directly flips each frame at once (an atomic async page flip writing only the primary
-  plane's `FB_ID`) when `TEARING="always"` (the default), its app asks (`tearing-control-v1`;
-  hints apply on the next surface commit and destroying the object restores vsync on the next
+  plane's `FB_ID`) when `TEARING="always"`, when its app asks (`tearing-control-v1`; `TEARING="true"`,
+  the default; hints apply on the next surface commit and destroying the object restores vsync on the next
   commit), or after Super+Shift+O on it (X11 games, which cannot ask). Visible unlocked cursors
   (menus) and active overlay planes stay on vblank cleanly; pointer-locked tearing fullscreen
   windows suppress the cursor so the cursor plane stays free, transition frames sync once before
@@ -219,11 +220,27 @@ These pass the test suite but have not run on a real screen or device yet:
   it. Display tools and VNC servers (wayvnc) can also drive the pointer
   (`zwlr_virtual_pointer_v1`). Tested end to end on a private bus against a headless compositor,
   not yet with a real app.
-- **Screen sharing and app screenshots without xdg-desktop-portal-wlr** (2026-11-25):
+- **Screen sharing and app screenshots without xdg-desktop-portal-wlr** (2026-11-28):
   `infynitae-portal` streams a screen or a window to PipeWire itself (GPU buffers when the app
   takes them) and takes an app's screenshot with `infynitae-shot`; wlr is no longer started.
-  Builds and passes its D-Bus checks (`tools/test-portal-screencast`); not yet tried with a real
-  share (Discord, OBS, Firefox) in the test VM.
+  Tested with `tools/test-portal-screencast` (D-Bus checks) and `tools/vm-edge/pscreencast.py` (VM); not yet tried with Discord, OBS or Firefox on real hardware.
+- **Compositor clipboard and history** (2026-11-28): the compositor keeps copies after an app closes (`CLIPBOARD_PERSIST`, up to 32 MiB) and an in-memory history (`CLIPBOARD_HISTORY`, at most 300 entries and 64 MiB, cleared at logout; password-manager hints and private windows stay out of it), without `wl-clip-persist` or `cliphist`; `Super+V` searches, pins and copies back through `infynitae msg clipboard`.
+- **Runs from its install checkout** (2026-11-28): `install.sh` and `infynitae-update` record the folder in `~/.config/infynitae/checkout`; scripts, the compositor, the edge and the portal run from it instead of assuming `~/infynitae` (`tools/test-checkout`).
+- **Edge unfold animation, memory release and idle wakeups** (2026-11-26..28): panels unfold from their anchored screen edge (170 ms open, 105 ms close; 175 ms inline lists), return cleared buffer pages with `madvise(MADV_REMOVE)` when closed, and wake 0 times per second while closed (down from 2/s; `live/edge-apps/tests/idle_wakeups.rs`).
+- **Undoable updates and helper privilege dropping** (2026-11-27): `infynitae-update` saves `<name>.previous` copies in `~/.local/bin`, `infynitae-update --rollback` swaps them back without `sudo`, `infynitae-session` falls back to `infynitae.previous` after two crashes within 5 s at start, non-escalating helpers drop `NO_NEW_PRIVS`, and input parsers have `cargo-fuzz` targets in `fuzz/` ([RECOVERY.md](RECOVERY.md), [SECURITY.md](SECURITY.md)).
+- **Launcher search across desktop items** (2026-11-27): typing in `Super+W` also lists matching open windows, settings rows, clipboard entries, replay clips, recordings, recent files and files by name via `plocate` (4 rows per kind; `tools/vm-edge/psearch.py`).
+- **Screenshot markup** (2026-11-26): after a `Super+S` region or window pick, `infynitae-shot` opens an editor with arrow, box, pen, text, pixelate, crop and undo (`Enter` copies, `Ctrl+S` saves and copies, `Escape` keeps unmarked, `Shift` skips the editor; `tools/vm-edge/pshot.py`).
+- **Shortcut help overlay** (2026-11-26): `Super+/` (and `Super+F1`) opens a searchable overlay of bound shortcuts with live `BIND_*` and `EXEC_*` overrides from the config (`tools/vm-edge/pshortcuts.py`).
+- **Volume and brightness pop-up** (2026-11-26): the edge draws a 240x56 bottom-centre on-screen display (`infynitae-osd`, 1.2 s auto-hide, excluded from notification history) for volume, mute and brightness keys (`tools/vm-edge/posd.py`).
+- **Waiting update counts** (2026-11-26): `infynitae-update-check` (user timer every 6 hours, `UPDATE_CHECK`, default true) counts waiting Arch packages (`checkupdates`) and Infynitae commits, notifies once, and shows counts on Settings -> This PC (`tools/test-update-check`).
+- **One system-bus watcher** (2026-11-26): `infynitae-bus-watch` watches both UDisks2 automount and logind sleep-lock signals in one C process instead of separate shell and `gdbus` processes (`tools/test-automount`, `tools/test-sleep-lock`).
+- **Settings clean-up** (2026-11-25): expert workarounds and replacement commands live in the `Advanced` section and `settings/advanced` card, `ICON_THEME` defaults to `auto` (Papirus when installed, else Adwaita), and retired keys (`EDGE_IMPL`, `CLIPBOARD_PICKER`, `CONTROL_MENU`, `PANELS_SNAP`, `PANELS_OVERLAP`) are ignored without warnings.
+- **Desktop journal** (2026-11-25): security-relevant events from the compositor and helpers log locally to `~/.local/state/infynitae/journal/journal.tsv` (capped at 2 MiB), read with `infynitae msg journal` ([SECURITY.md](SECURITY.md)).
+- **Security upkeep** (2026-11-28): CI runs `cargo-audit` against RustSec advisories on every push and nightly across all four shipped `Cargo.lock` files and `xwayland-satellite`; Dependabot opens weekly PRs; `tools/upstream-check` checks newer Smithay and `xwayland-satellite` releases.
+- **Replay buffer on disk or another drive** (2026-11-22..24): `REPLAY_STORAGE="disk"` keeps `gpu-screen-recorder`'s replay buffer on disk instead of RAM, and `REPLAY_DISK_DIR` places it on a chosen drive while saving clips into `CLIPS_DIR` (`tools/test-recorder-backend`).
+- **Drag-and-drop and frame-pacing protocols** (2026-11-24..26): Wayland drag-and-drop follows Core's pointer routing with drag icons; `wp_fifo_v1`, `wp_commit_timing_v1` and `linux-drm-syncobj-v1` explicit sync are offered (explicit sync not yet tried on NVIDIA hardware); shared-memory screencopy copies into client buffers on a worker thread.
+- **Window control and cluster sorting** (2026-11-22..24): `Super+Shift+Delete` force-closes Wayland and X11 apps (via `infynitae-xres-pid`) even while shortcuts are inhibited; unresponsive windows asked to close prompt after 5 s; `Super+Shift+G` sorts a cluster by app (`CLUSTER_SORT` automates tidy/app placement, and spiral/tiles/line bind via `BIND_CLUSTER_LAYOUT`).
+- **Windows and Android programs** (2026-11-20): `.exe`/`.msi` open via `infynitae-windows-run` (umu-run and Proton inside bubblewrap) and `.apk` via `infynitae-android-run` (Waydroid), both sandboxed through `infynitae-sandbox-socket` (`security-context-v1`, [SECURITY.md](SECURITY.md); `tools/test-windows-run`, `tools/test-android-run`).
 - **The session scripts and the C helpers** have the least test coverage of anything here.
 
 ## Root drive and memory guard
@@ -272,7 +289,7 @@ section, and what it needs now. `[save]` is the console backend's check of the f
 
 - HDR, accessibility and screen readers.
 - **Output management:** tools cannot yet turn a screen off through it (wlopm can).
-- **Hardware:** a second GPU, NVIDIA's explicit sync.
+- **Hardware:** a second GPU.
 - **Packaging** for anything other than Arch Linux. The install assumes one user.
 
 ## Known limits

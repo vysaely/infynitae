@@ -23,7 +23,7 @@ It asks for your password once, then menus show what was found on the machine an
 install, with what fits it already ticked. After the last menu it runs by itself. Reboot when it
 is done:
 
-- **No display manager:** the machine starts at the Infynitae lock screen.
+- **No display manager:** the machine starts at the Infynitae lock screen. To use a login screen with username and password instead (in the lock screen's look, through greetd), run `sudo infynitae-login-screen on` afterwards (`off` restores the tty1 text login).
 - **A display manager** (GDM, SDDM…): pick **Infynitae** at its login.
 
 The installer updates the system first, installs the right graphics drivers (NVIDIA included),
@@ -38,11 +38,14 @@ there are no menus: it installs what fits the machine, minus what the options le
 | Flag | Effect |
 | :--- | :--- |
 | `--no-notifications` `--no-keyring` `--no-automount` `--no-clipboard` `--no-fonts` `--no-recorder` `--no-files` `--no-terminal` `--no-bluetooth` `--no-power-profiles` `--no-autorotate` `--no-osk` `--no-gamemode` `--no-realtime` `--no-thermal` `--no-viewers` | Leave out that part |
-| `--minimal` | Leave out all of them |
+| `--no-disk-guard` | Leave out the btrfs cleanup/reserve and alerts when systemd-oomd closes an app |
+| `--minimal` | Leave out all optional parts above (except disk guard) |
 | `--defaults` | No menus: what fits this machine |
+| `--timezone=AREA/CITY` | Set the time zone (for example `--timezone=Europe/Kyiv`; later: `infynitae-settings timezone`) |
 | `--replay-buffer` | Keep the last minutes of the screen, saved with `Super + Alt + C` |
 | `--gaming` | 32-bit graphics drivers for Steam, Wine and 32-bit games (automatic when Steam or Wine is installed; later: `infynitae-drivers --gaming`) |
 | `--foreign-apps` | Windows programs (`.exe`, `.msi`) and Android apps (`.apk`), each in a sandbox (umu-launcher, bubblewrap, waydroid; turns on `--gaming`). Android needs `sudo waydroid init` once afterwards (downloads ~1 GB). See docs/SECURITY.md, "Windows and Android programs" |
+| `--snap-pac` | Pre/post btrfs snapshots around pacman runs (`snap-pac`; needs snapper set up for `/`; see [docs/RECOVERY.md](docs/RECOVERY.md)) |
 | `--no-autologin` | Log in on tty1 instead of booting to the lock screen |
 
 `./install.sh --help` explains each one.
@@ -55,7 +58,10 @@ infynitae-update
 
 Your config is never overwritten, and parts left out at install stay out. The helpers restart in
 place with your windows open; at the end it says whether the compositor itself changed (then the
-new one runs from the next login or reboot) or nothing needs a restart.
+new one runs from the next login or reboot) or nothing needs a restart. Before replacing any
+binary in `~/.local/bin`, the old copy is saved as `<name>.previous`; `infynitae-update --rollback`
+puts the previous binaries and a clean checkout back without `sudo` (see
+[docs/RECOVERY.md](docs/RECOVERY.md)).
 
 ## Shortcuts
 
@@ -105,7 +111,8 @@ right.
 ## Configuration
 
 Everything is in **`~/.config/infynitae/config`**. Each option is explained there with its
-default, and most changes apply as soon as you save.
+default, and most changes apply as soon as you save. `Super + I` opens the Settings panel in the
+edge to change common settings with switches, lists and search, or open the file directly.
 
 ```bash
 TERMINAL="kitty"                    # apps: "auto" or any command
@@ -121,8 +128,10 @@ config lines it skipped, errors.
 
 After a crash the session restarts by itself (locked) and a notification says what happened.
 The report, with the panic message and the end of the log, is in
-`~/.local/state/infynitae/crashes/`; attach it to a bug report. After three crashes in a row
-within seconds it stops restarting. `infynitae-session stop` ends the session.
+`~/.local/state/infynitae/crashes/`; attach it to a bug report. If a newly updated compositor
+crashes twice within 5 s at start, `infynitae-session` starts `~/.local/bin/infynitae.previous`
+instead and notifies you to run `infynitae-update --rollback`. After three crashes in a row
+within 5 s it stops restarting. `infynitae-session stop` ends the session.
 
 ## Documentation
 
@@ -132,8 +141,11 @@ within seconds it stops restarting. `infynitae-session stop` ends the session.
 | [ROADMAP](docs/ROADMAP.md) | What comes next, and ideas such as desktops on the canvas |
 | [COMPONENTS](docs/COMPONENTS.md) | Every piece of the desktop and what to use instead |
 | [WINDOWS](docs/WINDOWS.md) | Where windows open, move and grow, and why |
+| [DRIVES](docs/DRIVES.md) | Drives named by Roman numeral (`/mnt/V`) |
+| [RECOVERY](docs/RECOVERY.md) | Rolling back Infynitae updates and Arch snapshots |
 | [SECURITY](docs/SECURITY.md) | Who may capture the screen, read the clipboard, send input |
 | [EDGE_APPS](docs/EDGE_APPS.md) | The edge (panels, cards, widgets): its design and what the old edges did |
+| [EDGE_SETTINGS](docs/EDGE_SETTINGS.md) | The Settings panel cards (`Super + I`) |
 | [NO_SLOP](docs/NO_SLOP.md) | The rule for everything made here: no padding, nothing invented |
 | [DEVELOPMENT](docs/DEVELOPMENT.md) | Layout, building, the test suite and the checks |
 | [DECISIONS](docs/DECISIONS.md) | The choices behind how it behaves, and why |
