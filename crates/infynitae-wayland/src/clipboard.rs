@@ -510,9 +510,26 @@ impl WaylandState {
             c.listing_changed = true;
         }
         c.held = Some(contents.clone());
-        if std::mem::take(&mut c.orphaned) && c.persist {
+        let orphaned = std::mem::take(&mut c.orphaned);
+        // The X11 bridge never lets its copy go: when the X11 app that copied quits, it still offers
+        // the selection and pastes then come back empty (VM, 2026-11-28: an xclip copy). So a copy
+        // from the bridge is taken over as soon as it is read, as wl-clip-persist did.
+        if c.persist && (orphaned || self.selection_owner_is_x11_bridge()) {
             self.clipboard_serve(contents);
         }
+    }
+
+    /// Whether the clipboard's owner is xwayland-satellite (the bridge for every X11 app).
+    fn selection_owner_is_x11_bridge(&self) -> bool {
+        self.selection_owners[0]
+            .as_ref()
+            .and_then(|id| {
+                self.dh
+                    .backend_handle()
+                    .get_client_credentials(id.clone())
+                    .ok()
+            })
+            .is_some_and(|c| crate::ownership::is_xwayland_satellite(c.pid))
     }
 
     /// The clipboard's app went: its copy is offered by the compositor when it is kept (or once
