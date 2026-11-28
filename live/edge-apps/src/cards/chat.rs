@@ -371,6 +371,11 @@ impl Card for MessagesCard {
                 y += GROUP_GAP;
             }
             first = false;
+            // a private app's group, heading (a summary) and rows, is drawn out of captures' reach
+            if g.notes.iter().any(|n| n.private) {
+                let h = SUB_H + g.notes.len() as f64 * ITEM_H;
+                hits.private(cr, (body.0, y, body.2, h));
+            }
             draw_sub(
                 cr,
                 cx,
@@ -624,6 +629,7 @@ mod tests {
             actions: vec![("default".into(), "Open".into())],
             urgency: 1,
             time: time.into(),
+            private: false,
         }
     }
 

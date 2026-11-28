@@ -372,6 +372,11 @@ impl Card for SimpleCard {
         }
         let mut note_idx = 0u32;
         for g in note_groups(cx, app) {
+            // a private app's group, heading (a summary) and rows, is drawn out of captures' reach
+            if g.items.iter().any(|n| n.private) {
+                let h = SUB_H + g.items.len() as f64 * ITEM_H;
+                hits.private(cr, (body.0, y, body.2, h));
+            }
             draw_sub(cr, cx, body.0, y, body.2, g.heading);
             y += SUB_H;
             for n in g.items {
@@ -493,6 +498,7 @@ mod tests {
             actions: vec![("default".into(), "Open".into())],
             urgency: 1,
             time: time.into(),
+            private: false,
         }
     }
 

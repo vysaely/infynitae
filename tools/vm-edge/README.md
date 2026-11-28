@@ -22,6 +22,9 @@ VM's helper scripts in ~/g (feat.py, fakempris.py, and everyday.py copied from t
                                   by key; NOIN=1 skips the click inside the panel (4)
     sudo -E python3 pfs.py EDGE    fullscreen on and off 5 times; the panel opens by key after each; counts
                                   null-buffer unmaps and layer changes in the edge's Wayland log (1)
+    sudo -E python3 pprivate.py   a PRIVACY_APPS app's pop-up and history entry are left out of a
+                                  screenshot, another app's are in it (4; look at the VM window
+                                  when it says so: the screen shows both)
 
 Each prints PASS or FAIL per check and a SUMMARY line. They read the edge's INFYNITAE_EDGE_BOXES
 dump: `panel`, one `card OWNER/KIND` per card, `hit OWNER/KIND ID` per control (the ids are constants

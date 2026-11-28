@@ -80,6 +80,21 @@ this time, always, or deny.
   module is open. Only the replay buffer Infynitae itself started is left out; it is known by a private
   socket the compositor gives it, never by a program name.
 
+## Hidden from captures
+
+A window of an app in `PRIVACY_APPS`, with a title in `PRIVACY_TITLES`, or marked with
+Super+Shift+P, is left out of every capture: screenshots, the recorder and replay buffer, screen
+sharing and remote desktop. A capture shows what is behind it.
+
+Its app's notifications too (2026-11-28). The edge matches each notification's app name,
+desktop-entry hint and sending program (the bus tells the edge the sender's process) against
+`PRIVACY_APPS`, as the compositor matches a window's app id, and draws a private one's pop-up and
+its entries in the notification lists on layer surfaces named `infynitae-private`. The compositor
+leaves every such surface out of captures as it does a private window; on the screen nothing
+changes. `PRIVACY_TITLES` does not apply: a notification has no window title. Any program allowed
+the layer shell (`ALLOW_LAYERS`) may name its own surface so; that only keeps its own surface out
+of captures.
+
 ## While the screen is locked
 
 Nothing captures (a capture shows the lock screen or is refused), no virtual keyboard or input

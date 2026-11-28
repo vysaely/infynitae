@@ -21,8 +21,8 @@ edges on other hardware.
   games, idle screen-off and auto-lock. Shipped defaults match `config/config`: `FOCUS_FOLLOWS_MOUSE="strict"`, `FOCUS_ON_OPEN="user"`, `PAN_MODE="free"`, `CARD_OPACITY="100"`, `TEARING="true"`, `THEME_FROM_WALLPAPER="accent"`, `SESSION_RESTORE="restart"`, `EDGE_POSITION="bottom"`, `ICON_THEME="auto"`, `TOUCHPAD_TAP="true"`, `TOUCHPAD_GESTURES="true"`, and `SQUARE_CORNERS` unset (defaults to true).
 - **Screen sharing:** a screen or a single window, through the portal or screencopy (screencopy hides the cursor by default). The
   portal asks before an app's first share (this time, always, or deny; `SCREENSHARE_ASK`, defaults to `app`). A
-  private window (`PRIVACY_APPS`, which accepts spaces or commas, `PRIVACY_TITLES` separated by commas, Super+Shift+P) is never shared, and nothing
-  is while the screen is locked. While anything captures, the edge's background apps module says
+  private window (`PRIVACY_APPS`, which accepts spaces or commas, `PRIVACY_TITLES` separated by commas, Super+Shift+P) is never shared, nor are
+  the edge's notifications from an app in `PRIVACY_APPS` (2026-11-28), and nothing is while the screen is locked. While anything captures, the edge's background apps module says
   "Screen capture" and which app (`CAPTURE_INDICATOR="edge"`, the default since 2026-11-12: nothing is
   drawn over the screen, so a game keeps going to it directly); `"dot"` shows a small red dot instead.
 - **App permissions** (2026-10-31, [SECURITY.md](SECURITY.md)): sandboxed apps (Flatpak, through

@@ -588,6 +588,9 @@ pub struct Config {
     pub monitor_log_dir: Option<PathBuf>,
     /// BIND_* and EXEC_* overrides from config (for shortcut help and custom commands)
     pub keys: std::collections::HashMap<String, String>,
+    /// PRIVACY_APPS, lowercase, split as the compositor splits it (`parse_list`): their
+    /// notifications are drawn where captures do not reach
+    pub privacy_apps: Vec<String>,
 }
 
 pub fn config_path() -> Option<PathBuf> {
@@ -641,6 +644,7 @@ impl Config {
             switch_look: "rows".into(),
             monitor_log_dir: None,
             keys: std::collections::HashMap::new(),
+            privacy_apps: Vec::new(),
         };
         let mut ctrl = vec![
             Module::Clock,
@@ -679,6 +683,13 @@ impl Config {
                     }
                 }
                 "FAVORITES" => c.favorites = value_text(v),
+                "PRIVACY_APPS" => {
+                    c.privacy_apps = value_text(v)
+                        .split([' ', ',', '\t'])
+                        .map(|s| s.trim().to_lowercase())
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                }
                 "SURFACE_COLOR" => c.surface = parse_hex(v).unwrap_or(c.surface),
                 "BORDER_INACTIVE" => c.hair = parse_hex(v).or(c.hair),
                 "ACCENT" => {
@@ -1038,6 +1049,13 @@ mod tests {
             n += 1;
         }
         assert!(n >= 20, "only {n} cases read");
+    }
+
+    #[test]
+    fn privacy_apps_are_split_and_lowercase_as_the_compositor_reads_them() {
+        let c = Config::from_text("PRIVACY_APPS=\"Signal, org.KeePassXC\tfoo,,\"\n");
+        assert_eq!(c.privacy_apps, vec!["signal", "org.keepassxc", "foo"]);
+        assert!(Config::from_text("").privacy_apps.is_empty());
     }
 
     #[test]

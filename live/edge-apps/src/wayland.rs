@@ -3,7 +3,7 @@
 //! drawn while closed, toplevel list from the compositor, signals and request files, worker
 //! threads for sources, detached actions, and the `org.freedesktop.Notifications` strip.
 
-use crate::card::{Action, Button, CommandResult, Data, Source, Window};
+use crate::card::{Action, Button, CommandResult, Data, Rect, Source, Window};
 use crate::paths::runtime_path;
 use crate::shell::{OutputId, Shell, ARRIVE_LIFT};
 use smithay_client_toolkit::{
@@ -171,8 +171,12 @@ struct App {
     #[cfg(test)]
     ran: Vec<String>,
     was_animating: bool,
-    /// the notification pop-ups' strip, made with the first pop-up
-    popups: Option<PopupLayer>,
+    /// the notification pop-ups' strip, made with the first pop-up, and private apps' strip
+    /// (`SurfaceKind::PrivatePopups`), made with the first of theirs
+    popups: Vec<PopupLayer>,
+    /// over the panel and the widgets where they show private notifications, made with the first
+    /// (`sync_private`)
+    private_layers: Vec<PopupLayer>,
     /// the desktop widgets' surface on the first screen, there only while the WIDGETS line has one
     widget_layer: Option<PopupLayer>,
     /// the volume/brightness OSD surface, made lazily with the first level notification
@@ -192,9 +196,18 @@ struct App {
 }
 
 impl App {
-    /// After the notifications changed: the senders told (signals), the cards' history from it,
-    /// the pop-ups drawn (their strip made on the first screen with the first pop-up).
+    /// After the notifications changed: the config read again when changed (PRIVACY_APPS), then
+    /// `show_notes`.
     fn sync_popups(&mut self) {
+        if !self.shell.notify.popups.is_empty() || self.shell.notify.osd.is_some() {
+            self.reload_config();
+        }
+        self.show_notes();
+    }
+
+    /// The senders told (signals), the cards' history from the notifications, the pop-ups drawn
+    /// (each strip made on the first screen with its first pop-up).
+    fn show_notes(&mut self) {
         let out = std::mem::take(&mut self.shell.notify.out);
         if let Some(conn) = &self.notify_conn {
             crate::notify_server::send(conn, out);
@@ -212,17 +225,28 @@ impl App {
                 actions: n.actions.clone(),
                 urgency: n.urgency,
                 time: n.time.clone(),
+                private: n.private,
             })
             .collect();
-        if !self.shell.notify.popups.is_empty() || self.shell.notify.osd.is_some() {
-            self.reload_config();
-        }
-        if self.popups.is_none() && !self.shell.notify.popups.is_empty() {
-            if let Some(output) = self.outputs.first().map(|o| o.output.clone()) {
-                self.popups = PopupLayer::new(self, output, SurfaceKind::Popups);
+        for (kind, private) in [
+            (SurfaceKind::Popups, false),
+            (SurfaceKind::PrivatePopups, true),
+        ] {
+            let wanted = self
+                .shell
+                .notify
+                .popups
+                .iter()
+                .any(|p| p.note.private == private);
+            if wanted && !self.popups.iter().any(|p| p.kind == kind) {
+                if let Some(output) = self.outputs.first().map(|o| o.output.clone()) {
+                    if let Some(pl) = PopupLayer::new(self, output, kind) {
+                        self.popups.push(pl);
+                    }
+                }
             }
         }
-        if let Some(pl) = self.popups.as_mut() {
+        for pl in &mut self.popups {
             pl.render(&self.qh, &self.compositor, &self.shell);
         }
         if self.shell.notify.osd.is_some() {
@@ -247,6 +271,62 @@ impl App {
         if self.shell.open.is_some() {
             // the open panel's cards list them too
             self.sync_all();
+        }
+    }
+
+    /// The private overlays drawn again where the panel or the widgets drew a new frame with
+    /// private notifications cut out of it (or one without them, which unmaps the overlay).
+    fn sync_private(&mut self) {
+        let mut due: Vec<(SurfaceKind, wl_output::WlOutput, Vec<Rect>)> = Vec::new();
+        for os in &mut self.outputs {
+            if std::mem::take(&mut os.private_changed) {
+                due.push((
+                    SurfaceKind::PrivatePanel(os.id),
+                    os.output.clone(),
+                    os.private.clone(),
+                ));
+            }
+        }
+        match self.widget_layer.as_mut() {
+            Some(wl) => {
+                if std::mem::take(&mut wl.private_changed) {
+                    due.push((
+                        SurfaceKind::PrivateWidgets,
+                        wl.output.clone(),
+                        wl.private.clone(),
+                    ));
+                }
+            }
+            // no widgets: nothing of theirs over them either
+            None => {
+                if let Some(pl) = self
+                    .private_layers
+                    .iter()
+                    .find(|p| p.kind == SurfaceKind::PrivateWidgets && !p.private.is_empty())
+                {
+                    due.push((SurfaceKind::PrivateWidgets, pl.output.clone(), Vec::new()));
+                }
+            }
+        }
+        for (kind, output, rects) in due {
+            let i = match self
+                .private_layers
+                .iter()
+                .position(|p| p.kind == kind && p.output == output)
+            {
+                Some(i) => i,
+                None if rects.is_empty() => continue,
+                None => match PopupLayer::new(self, output, kind) {
+                    Some(pl) => {
+                        self.private_layers.push(pl);
+                        self.private_layers.len() - 1
+                    }
+                    None => continue,
+                },
+            };
+            let pl = &mut self.private_layers[i];
+            pl.private = rects;
+            pl.render(&self.qh, &self.compositor, &self.shell);
         }
     }
 
@@ -342,6 +422,8 @@ impl App {
             integer_scale,
             fractional_scale_120: None,
             last_buffer_scale: 1,
+            private: Vec::new(),
+            private_changed: false,
             last_viewport_dest: None,
             buf_size: (0, 0),
             configured: false,
@@ -401,6 +483,7 @@ impl App {
         for pl in self
             .popups
             .iter_mut()
+            .chain(self.private_layers.iter_mut())
             .chain(self.widget_layer.iter_mut())
             .chain(self.osd_layer.iter_mut())
             .filter(|p| &p.output == output)
@@ -471,6 +554,15 @@ impl App {
         let changed = self.shell.reload_if_changed();
         if !changed {
             return false;
+        }
+        // an app added to PRIVACY_APPS (Super+Shift+P writes it) or taken out: its notifications
+        // move to or from the private surfaces now
+        if self
+            .shell
+            .notify
+            .set_privacy_apps(&self.shell.cfg.privacy_apps)
+        {
+            self.show_notes();
         }
         if self.shell.visible() {
             for os in &mut self.outputs {
@@ -947,7 +1039,8 @@ fn init_app(
         #[cfg(test)]
         ran: Vec::new(),
         was_animating: false,
-        popups: None,
+        popups: Vec::new(),
+        private_layers: Vec::new(),
         widget_layer: None,
         osd_layer: None,
         widget_touch: None,
@@ -958,6 +1051,9 @@ fn init_app(
         shell_buf: Vec::new(),
         exit: false,
     };
+    app.shell
+        .notify
+        .set_privacy_apps(&app.shell.cfg.privacy_apps);
     for output in existing {
         app.create_output_surface(output);
     }
@@ -1062,7 +1158,7 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
                 let n = &mut app.shell.notify;
                 match m {
                     crate::notify::Incoming::Notify(note) => {
-                        n.receive(note, Instant::now(), crate::notify::quiet_now());
+                        n.receive(*note, Instant::now(), crate::notify::quiet_now());
                     }
                     crate::notify::Incoming::Close(id) => {
                         n.close(id);
@@ -1160,6 +1256,8 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
         app.sync_all();
     }
     while !app.exit {
+        // what the last turn drew of private notifications, out of captures' reach
+        app.sync_private();
         if app.shell.hover_tick(Instant::now()) {
             app.sync_all();
         }

@@ -13,6 +13,9 @@
 //! - Do not disturb (`$XDG_RUNTIME_DIR/infynitae/do-not-disturb`) shows only critical ones; a game
 //!   (`.../game-quiet`, launch.sh's GAME_QUIET) shows none: a pop-up over a game ends its direct
 //!   path to the screen. Either way non-OSD notifications go to the history.
+//! - One from an app in PRIVACY_APPS (its name, desktop entry or program, matched as window app
+//!   ids are) is private: its pop-up and its history entry are drawn on surfaces the compositor
+//!   keeps out of captures.
 
 use crate::card::Rect;
 use crate::draw::{self, Text, PAD_X};
@@ -63,6 +66,23 @@ pub struct Note {
     pub resident: bool,
     /// "HH:MM" it came
     pub time: String,
+    /// the "desktop-entry" hint, empty without one
+    pub desktop_entry: String,
+    /// the sender's program (/proc/PID/comm), empty when the bus did not say
+    pub program: String,
+    /// from an app in PRIVACY_APPS (`from_private_app`)
+    pub private: bool,
+}
+
+/// Whether a notification comes from an app in `privacy_apps` (lowercase, as the config lists
+/// them): its app name, desktop entry or program contains one, case aside, as a window's app id
+/// does for the compositor (`is_element_private`).
+pub fn from_private_app(note: &Note, privacy_apps: &[String]) -> bool {
+    [&note.app, &note.desktop_entry, &note.program]
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_lowercase())
+        .any(|s| privacy_apps.iter().any(|p| s.contains(p.as_str())))
 }
 
 impl Note {
@@ -175,7 +195,7 @@ fn osd_from_note(note: Note, until: Instant) -> Osd {
 /// What the server thread hands the edge.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Incoming {
-    Notify(Note),
+    Notify(Box<Note>),
     /// CloseNotification(id)
     Close(u32),
 }
@@ -211,6 +231,8 @@ pub struct Notify {
     pub hovered: Option<u32>,
     /// signals to send
     pub out: Vec<Outgoing>,
+    /// PRIVACY_APPS from the config (`set_privacy_apps`)
+    privacy_apps: Vec<String>,
 }
 
 /// Why pop-ups are held back now.
@@ -300,7 +322,8 @@ impl Notify {
     /// entering the history; others go into the history (unless transient or a level) and a pop-up
     /// unless held back. One with the same id or synchronous tag takes the old one's place. Says
     /// whether anything shows differently.
-    pub fn receive(&mut self, note: Note, now: Instant, quiet: Quiet) -> bool {
+    pub fn receive(&mut self, mut note: Note, now: Instant, quiet: Quiet) -> bool {
+        note.private = from_private_app(&note, &self.privacy_apps);
         let same = |n: &Note| n.id == note.id || (note.sync.is_some() && n.sync == note.sync);
         let osd = is_osd_note(&note);
         // a notification that leaves without the sender being told keeps the sender waiting for
@@ -392,6 +415,27 @@ impl Notify {
             }
         }
         true
+    }
+
+    /// PRIVACY_APPS as the config has it now: each notification shown or listed is private or not
+    /// by it. True when one changed.
+    pub fn set_privacy_apps(&mut self, apps: &[String]) -> bool {
+        if self.privacy_apps == apps {
+            return false;
+        }
+        self.privacy_apps = apps.to_vec();
+        let mut changed = false;
+        for note in self
+            .popups
+            .iter_mut()
+            .map(|p| &mut p.note)
+            .chain(self.history.iter_mut())
+        {
+            let private = from_private_app(note, apps);
+            changed |= note.private != private;
+            note.private = private;
+        }
+        changed
     }
 
     /// CloseNotification: gone from the screen and the history, NotificationClosed(id, 3).
@@ -636,13 +680,15 @@ pub fn popup_at(n: &Notify, w: f64, p: (f64, f64)) -> Option<u32> {
         .map(|(id, _)| id)
 }
 
-/// Draws every pop-up on a surface `w` wide. `pointer` lights the x and buttons under it; each
-/// pop-up slides in from the right as it arrives.
+/// Draws the pop-ups that are `private` or not (each strip has its own) on a surface `w` wide,
+/// each in its place among all of them. `pointer` lights the x and buttons under it; each pop-up
+/// slides in from the right as it arrives.
 pub fn draw(
     cr: &Context,
     th: &Theme,
     n: &Notify,
     w: f64,
+    private: bool,
     pointer: Option<(f64, f64)>,
     now: Instant,
 ) {
@@ -650,7 +696,11 @@ pub fn draw(
         let inside = |r: Rect| {
             pointer.is_some_and(|p| p.0 >= r.0 && p.0 < r.0 + r.2 && p.1 >= r.1 && p.1 < r.1 + r.3)
         };
-        for ((_, r), pop) in layout(n, w).into_iter().zip(&n.popups) {
+        for ((_, r), pop) in layout(n, w)
+            .into_iter()
+            .zip(&n.popups)
+            .filter(|(_, p)| p.note.private == private)
+        {
             let age = now.saturating_duration_since(pop.born).as_secs_f64() * 1000.0;
             let t = crate::ui::ease(age / ARRIVE_MS);
             if t <= 0.0 {
@@ -871,6 +921,9 @@ mod tests {
             transient: false,
             resident: false,
             time: "12:00".into(),
+            desktop_entry: String::new(),
+            program: String::new(),
+            private: false,
         }
     }
 
@@ -1283,5 +1336,45 @@ mod tests {
         // control characters dropped (sanitize_inline_text), empty lines gone
         assert_eq!(clean_body("a\u{7}b\n\n  c  \n"), "ab\nc");
         assert!(clean_body(&"x".repeat(2000)).chars().count() <= 1000);
+    }
+
+    #[test]
+    fn a_private_app_is_found_by_its_name_desktop_entry_or_program() {
+        let apps = vec!["signal".to_string(), "org.keepassxc".to_string()];
+        let mut a = note(1);
+        a.app = "Signal".into();
+        assert!(from_private_app(&a, &apps), "the app name, case aside");
+        let mut b = note(2);
+        b.app = "Password manager".into();
+        b.desktop_entry = "org.keepassxc.KeePassXC".into();
+        assert!(from_private_app(&b, &apps), "the desktop entry");
+        let mut c = note(3);
+        c.app = "Messages".into();
+        c.program = "signal-desktop".into();
+        assert!(from_private_app(&c, &apps), "the program");
+        assert!(!from_private_app(&note(4), &apps), "Discord is not listed");
+        assert!(!from_private_app(&a, &[]), "nothing listed");
+    }
+
+    #[test]
+    fn privacy_apps_mark_what_comes_and_what_shows_when_they_change() {
+        let mut n = Notify::default();
+        n.set_privacy_apps(&["discord".to_string()]);
+        n.receive(note(1), Instant::now(), Quiet::No);
+        assert!(n.popups[0].note.private && n.history[0].private);
+        assert!(
+            !n.set_privacy_apps(&["discord".to_string()]),
+            "the same list"
+        );
+        assert!(
+            n.set_privacy_apps(&[]),
+            "taken out: it shows in captures again"
+        );
+        assert!(!n.popups[0].note.private && !n.history[0].private);
+        assert!(
+            n.set_privacy_apps(&["disc".to_string()]),
+            "a part of the name"
+        );
+        assert!(n.popups[0].note.private && n.history[0].private);
     }
 }

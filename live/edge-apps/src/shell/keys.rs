@@ -885,6 +885,7 @@ mod tests {
             actions: Vec::new(),
             urgency: 1,
             time: "12:00".into(),
+            private: false,
         }];
         let idx = sh
             .panels

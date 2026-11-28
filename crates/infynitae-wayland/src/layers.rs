@@ -19,11 +19,17 @@ use infynitae_core::layer::{Anchors, KeyboardInteractivity, Layer, LayerId, Laye
 
 use crate::{WaylandState, snapshot};
 
+/// The namespace of a layer surface kept out of every capture, as private windows are: the edge
+/// draws private apps' notifications on such a surface (`PRIVACY_APPS`).
+pub(crate) const PRIVATE_NAMESPACE: &str = "infynitae-private";
+
 /// A layer surface and its Core identity.
 #[derive(Debug, Clone)]
 pub(crate) struct LayerHandle {
     pub id: LayerId,
     pub surface: LayerSurface,
+    /// created with [`PRIVATE_NAMESPACE`]
+    pub private: bool,
 }
 
 fn layer_of(l: wlr_layer::Layer) -> Layer {
@@ -72,6 +78,11 @@ impl WaylandState {
         self.layers.iter().find(|h| h.id == id)
     }
 
+    /// Whether a layer surface is kept out of captures ([`PRIVATE_NAMESPACE`]).
+    pub fn is_layer_private(&self, id: LayerId) -> bool {
+        self.layer_handle(id).is_some_and(|h| h.private)
+    }
+
     /// The root surface of a layer surface (`None`: not one of ours).
     pub fn layer_surface(&self, id: LayerId) -> Option<WlSurface> {
         self.layer_handle(id)
@@ -94,7 +105,7 @@ impl WaylandState {
     /// protocol error (Smithay posts it), and is not passed on. An unmapped surface's popups are
     /// dismissed, as a toplevel's are.
     pub(crate) fn layer_committed(&mut self, index: usize) {
-        let LayerHandle { id, surface } = self.layers[index].clone();
+        let LayerHandle { id, surface, .. } = self.layers[index].clone();
         let root = surface.wl_surface().clone();
         let root_mapped = with_states(&root, |states| {
             states
@@ -221,11 +232,15 @@ impl WlrLayerShellHandler for WaylandState {
         surface: LayerSurface,
         output: Option<WlOutput>,
         _layer: wlr_layer::Layer,
-        _namespace: String,
+        namespace: String,
     ) {
         let output = output.as_ref().and_then(|o| self.output_id_of(o));
         match self.core.layer_created(output) {
-            Some(id) => self.layers.push(LayerHandle { id, surface }),
+            Some(id) => self.layers.push(LayerHandle {
+                id,
+                surface,
+                private: namespace == PRIVATE_NAMESPACE,
+            }),
             // no output to put it on: closed at once, as the protocol allows
             None => surface.send_close(),
         }

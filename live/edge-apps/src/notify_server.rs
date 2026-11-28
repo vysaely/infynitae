@@ -14,6 +14,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 use zbus::fdo::RequestNameReply;
+use zbus::message::Header;
+use zbus::names::{BusName, UniqueName};
 use zbus::zvariant::{OwnedValue, Value};
 
 pub const NAME: &str = "org.freedesktop.Notifications";
@@ -78,12 +80,13 @@ pub fn note_from(
     .iter()
     .find_map(|k| h(k).and_then(text))
     .filter(|s| !s.is_empty());
+    let desktop_entry = h("desktop-entry")
+        .and_then(text)
+        .map(|s| clean_line(&s))
+        .unwrap_or_default();
     let mut app = clean_line(app_name);
     if app.is_empty() {
-        app = h("desktop-entry")
-            .and_then(text)
-            .map(|s| clean_line(&s))
-            .unwrap_or_default();
+        app = desktop_entry.clone();
     }
     // [key, label, key, label, ...]; an odd one left over is dropped
     let actions = actions
@@ -112,6 +115,9 @@ pub fn note_from(
         transient: h("transient").is_some_and(flag),
         resident: h("resident").is_some_and(flag),
         time,
+        desktop_entry,
+        program: String::new(),
+        private: false,
     }
 }
 
@@ -155,7 +161,7 @@ impl Server {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn notify(
+    async fn notify(
         &self,
         app_name: String,
         replaces_id: u32,
@@ -165,6 +171,8 @@ impl Server {
         actions: Vec<String>,
         hints: HashMap<String, OwnedValue>,
         expire_timeout: i32,
+        #[zbus(header)] hdr: Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
     ) -> u32 {
         let hints: HashMap<String, Value> = hints
             .iter()
@@ -180,7 +188,7 @@ impl Server {
         .filter(|s| !s.is_empty());
         let id = self.id_for(replaces_id, sync.as_deref());
         let time = chrono::Local::now().format("%H:%M").to_string();
-        let note = note_from(
+        let mut note = note_from(
             id,
             &app_name,
             &summary,
@@ -190,7 +198,11 @@ impl Server {
             expire_timeout,
             time,
         );
-        let _ = self.tx.send(Incoming::Notify(note));
+        // PRIVACY_APPS matches the program too: an app that names itself otherwise (or not at all)
+        if let Some(sender) = hdr.sender() {
+            note.program = sender_program(conn, sender).await.unwrap_or_default();
+        }
+        let _ = self.tx.send(Incoming::Notify(Box::new(note)));
         id
     }
 
@@ -259,6 +271,19 @@ fn owner_pid(conn: &zbus::blocking::Connection) -> Option<u32> {
 /// Its program's name (/proc/PID/comm).
 fn owner_program(conn: &zbus::blocking::Connection) -> Option<String> {
     let pid = owner_pid(conn)?;
+    std::fs::read_to_string(format!("/proc/{pid}/comm"))
+        .ok()
+        .map(|s| s.trim().to_string())
+}
+
+/// The program (/proc/PID/comm) of the bus connection `sender`; None when the bus or /proc do not
+/// say (a sender gone already, a bus without process ids).
+async fn sender_program(conn: &zbus::Connection, sender: &UniqueName<'_>) -> Option<String> {
+    let dbus = zbus::fdo::DBusProxy::new(conn).await.ok()?;
+    let pid = dbus
+        .get_connection_unix_process_id(BusName::Unique(sender.clone()))
+        .await
+        .ok()?;
     std::fs::read_to_string(format!("/proc/{pid}/comm"))
         .ok()
         .map(|s| s.trim().to_string())

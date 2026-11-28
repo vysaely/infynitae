@@ -703,7 +703,9 @@ CAPTURE_INDICATOR="edge"
     #    false  nowhere
 
 PRIVACY_APPS=""
-    # Hidden from captures, by app. Super+Shift+P on a window adds its app here (and takes it out again)
+    # Hidden from captures, by app. Super+Shift+P on a window adds its app here (and takes it out again).
+    # Also hides its notifications from captures (the edge's pop-ups and lists; found by the
+    # notification's app name, desktop entry or program)
     # default: ""
     # options: ""  · e.g. "bitwarden,keepassxc" (comma or space separated)
 

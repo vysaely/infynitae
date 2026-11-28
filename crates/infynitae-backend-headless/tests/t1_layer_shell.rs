@@ -636,3 +636,58 @@ fn the_edge_moved_below_a_fullscreen_window_keeps_its_texture() {
     assert!(edge_hidden_under_fullscreen_keeps_its_texture(false));
     assert!(!edge_hidden_under_fullscreen_keeps_its_texture(true));
 }
+
+/// The rects of an output's surface elements, live (`output_elements`) or for a capture.
+fn surface_rects(r: &mut Rig, for_capture: bool) -> Vec<(i32, i32, i32, i32)> {
+    use infynitae_wayland::convert::{self, OutputElement};
+    use smithay::backend::renderer::element::Element;
+    let mut renderer = smithay::backend::renderer::pixman::PixmanRenderer::new().expect("pixman");
+    let o = r.ls.output();
+    let (elements, k) = if for_capture {
+        convert::output_elements_screencopy(&mut r.ls.state, &mut renderer, o, false)
+    } else {
+        convert::output_elements_opt(&mut r.ls.state, &mut renderer, o, false)
+    }
+    .unwrap_or_else(|_| panic!("a frame"));
+    elements
+        .iter()
+        .filter(|e| matches!(e, OutputElement::Surface(_)))
+        .map(|e| {
+            let g = e.geometry(smithay::utils::Scale::from(k));
+            (g.loc.x, g.loc.y, g.size.w, g.size.h)
+        })
+        .collect()
+}
+
+/// A layer surface with the namespace "infynitae-private" (the edge's private apps'
+/// notifications) is on the screen and in no capture; one with another namespace is in both.
+#[test]
+fn a_private_layer_surface_is_shown_and_left_out_of_captures() {
+    let mut r = setup();
+    layer(
+        &mut r,
+        "infynitae-private",
+        Layer::Top,
+        Anchor::Top | Anchor::Right,
+        (360, 120),
+        -1,
+        KeyboardInteractivity::None,
+    );
+    layer(
+        &mut r,
+        "infynitae-notifications",
+        Layer::Top,
+        Anchor::Bottom | Anchor::Right,
+        (360, 80),
+        -1,
+        KeyboardInteractivity::None,
+    );
+    let private = (1920 - 360, 0, 360, 120);
+    let public = (1920 - 360, 1080 - 80, 360, 80);
+    let shown = surface_rects(&mut r, false);
+    assert!(shown.contains(&private), "on the screen: {shown:?}");
+    assert!(shown.contains(&public), "on the screen: {shown:?}");
+    let captured = surface_rects(&mut r, true);
+    assert!(!captured.contains(&private), "not captured: {captured:?}");
+    assert!(captured.contains(&public), "captured: {captured:?}");
+}
