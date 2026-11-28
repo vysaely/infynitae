@@ -72,8 +72,9 @@ pub const KEY_BRIGHTNESSUP: u32 = 225;
 /// Shift+I, Alt+P, Shift+BackSpace).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KeyAction {
-    /// Super+Tab (owner, 2026-11-01): the window that asked for attention, else the window used
-    /// before this one, so it flips between the last two (`FocusModel::focus_next`)
+    /// Super+Tab (owner, 2026-11-28, as Alt+Tab on Windows): the window that asked for attention,
+    /// else the window used before this one; with Super held, each press the next one in the
+    /// order of use (`Core::cycle_step`)
     FocusNext,
     /// Super+arrow (owner, 2026-11-01): focus, raise, and centre the camera on the nearest window
     /// that way on the canvas
@@ -96,7 +97,8 @@ pub enum KeyAction {
     SpawnScreenshot,
     /// Super+S (owner, 2026-10-31), or Super+Shift+R as before: capture region screenshot
     SpawnRegionScreenshot,
-    /// Super+Shift+Tab: toggles canvas overview radar
+    /// Super+Shift+Tab: toggles canvas overview radar (while Super+Tab cycles it steps back
+    /// instead, `Core::keyboard_press`)
     ToggleOverview,
     /// Super+Shift+BackSpace: reload shell UI and scripts
     ReloadShell,
@@ -442,7 +444,7 @@ pub struct KeyBinding {
 
 /// Canonical key bindings: none beyond the exact-modifier bindings resolved in
 /// [`resolve_key_binding`]. FocusNext is on Super+Tab; Super+Shift+Tab is reserved for the overview
-/// (owner decisions 2026-10-21; Super+Tab flips between the last two windows, 2026-10-31).
+/// (owner decisions 2026-10-21; Super+Tab as Alt+Tab on Windows, 2026-11-28).
 pub const CANONICAL_BINDINGS: [KeyBinding; 0] = [];
 
 /// Pure binding filter: resolves an evdev keycode and modifier snapshot against bindings.
@@ -488,7 +490,7 @@ pub fn resolve_key_binding(
             return Some(KeyAction::FocusDirection(d));
         }
     }
-    // Super+Tab goes to the window asking for attention, else flips between the last two used;
+    // Super+Tab goes to the window asking for attention, else the next in the order of use;
     // Super+Shift+Tab toggles canvas overview radar
     if key == KEY_TAB && mods.logo && !mods.ctrl && !mods.alt && !interaction_active {
         if mods.shift {

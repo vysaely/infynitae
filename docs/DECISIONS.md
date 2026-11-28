@@ -64,9 +64,12 @@ these by date, e.g. "(owner, 2026-10-24)".
   screen), **Super+Shift+O the tearing toggle** and **Super+Alt+P recording**; the old chords
   (Super+Shift+R, Super+Shift+T, Super+Alt+R) stay as aliases, and a binding of the user's
   (`BIND_*`, `EXEC_*`) still wins over both.
-- **Super+Tab flips between the last two windows** (2026-10-31), most recently used order, so two
-  apps can be switched in one press. It never goes further back, even with Super held (2026-11-01, owner:
-  the step-through of 2026-10-31 felt like cycling every window). **Super+arrow** goes to the
+- **Super+Tab works as Alt+Tab on Windows, the canvas as the preview** (2026-11-28, replacing the
+  flip between the last two of 2026-11-01). A tap goes to the window used before, so two apps
+  are still switched in one press. With Super held, each Tab goes to the next window in the
+  order of use, focused and brought into view; Super+Shift+Tab goes back; letting Super go
+  puts the chosen window first in the order, and Escape returns to where the first Tab started.
+  No thumbnails. **Super+arrow** goes to the
   nearest window that way on the canvas and brings it into view (2026-11-01). **Attention first:** a
   window that opened without the focus (FOCUS_ON_OPEN "user" or "priority" held it back) or
   whose activation was refused wants attention; Super+Tab goes to the most recent such window
@@ -89,8 +92,8 @@ these by date, e.g. "(owner, 2026-10-24)".
   before). Super+F was removed, it duplicated Super+Enter.
 - **Super+Shift+Enter is native fullscreen** (2026-10-21), and with `FULLSCREEN_PAN` you can still
   pan out of it and use Super+1…9 (2026-10-25).
-- **Super+Shift+Tab is the overview** (2026-10-21). Super+Tab flips between the last two windows
-  (above); `FOCUS_CYCLE_NAVIGATE` centres the camera on it.
+- **Super+Shift+Tab is the overview** (2026-10-21), except while Super+Tab cycles: there it
+  steps back (2026-11-28). `FOCUS_CYCLE_NAVIGATE` makes Super+Tab centre the camera on each window.
 - **Super+Space centres the focused window at 100%, Super+Shift+Space keeps the zoom**
   (2026-10-05, restated 2026-10-24). Super+Shift+Middle click no longer resets the zoom
   (2026-10-24).
