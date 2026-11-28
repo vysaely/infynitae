@@ -18,6 +18,7 @@
 #include <sys/prctl.h>
 #include <sys/stat.h>
 
+#include "file-chooser.h"
 #include "remote-desktop.h"
 #include "screenshot.h"
 #include "settings.h"
@@ -734,6 +735,7 @@ static void on_bus_acquired(GDBusConnection *connection,
     }
     remote_desktop_init(connection, OBJECT_PATH);
     screenshot_init(connection, OBJECT_PATH);
+    file_chooser_init(connection, OBJECT_PATH);
     gchar *config = g_build_filename(g_get_home_dir(), ".config", "infynitae", "config", NULL);
     portal_settings_init(connection, OBJECT_PATH, config);
     g_free(config);

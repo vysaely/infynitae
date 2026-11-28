@@ -10,7 +10,7 @@ TMP=$(mktemp -d "/tmp/infynitae-test-portal-settings.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT INT TERM
 P="$REPO_DIR/live/portal"
 cc -O1 -o "$TMP/portal" "$P/infynitae-portal.c" "$P/remote-desktop.c" "$P/settings.c" \
-    "$P/screencast.c" "$P/screenshot.c" "$P/wlr-virtual-pointer-protocol.c" "$P/virtual-keyboard-protocol.c" \
+    "$P/screencast.c" "$P/screenshot.c" "$P/file-chooser.c" "$P/wlr-virtual-pointer-protocol.c" "$P/virtual-keyboard-protocol.c" \
     "$P/xdg-output-protocol.c" "$P/ext-image-copy-capture-v1-protocol.c" "$P/ext-image-capture-source-v1-protocol.c" \
     "$P/ext-foreign-toplevel-list-v1-protocol.c" "$P/linux-dmabuf-v1-protocol.c" \
     $(pkg-config --cflags --libs gio-2.0 gio-unix-2.0 wayland-client xkbcommon libpipewire-0.3 gbm libdrm)

@@ -134,6 +134,7 @@ export XWAYLAND="${XWAYLAND:-true}"
 export SCREENCOPY_CURSOR="${SCREENCOPY_CURSOR:-false}"
 export SCALING_FILTER="${SCALING_FILTER:-sharp}"
 export OUTPUT_SCALE="${OUTPUT_SCALE:-1.0}"
+export FILE_PICKER="${FILE_PICKER:-gtk}"
 
 if [ "${INFYNITAE_SETTINGS_APPLIED:-0}" != "1" ] && [ -f "$INFYNITAE_DIR/live/settings.sh" ]; then
     export INFYNITAE_SETTINGS_APPLIED="1"
@@ -184,6 +185,25 @@ fi
 if [ "$INFYNITAE_PORTAL_HAS_SETTINGS" = "1" ]; then
     SETTINGS_IFACE="org.freedesktop.impl.portal.Settings;" SETTINGS_BACKEND="infynitae;gtk"
 fi
+# FileChooser (Open and Save dialogs) from infynitae-portal when FILE_PICKER requests it and both
+# the portal binary and infynitae-files are installed. Cache the probe so Super+key never greps.
+FILECHOOSER_IFACE="" FILECHOOSER_BACKEND="gtk"
+case "${FILE_PICKER:-gtk}" in
+    infynitae|auto)
+        if [ -z "${INFYNITAE_PORTAL_HAS_FILECHOOSER:-}" ]; then
+            if [ -x "$HOME/.local/bin/infynitae-files" ] \
+                && grep -qF org.freedesktop.impl.portal.FileChooser "$HOME/.local/bin/infynitae-portal" 2>/dev/null; then
+                INFYNITAE_PORTAL_HAS_FILECHOOSER="1"
+            else
+                INFYNITAE_PORTAL_HAS_FILECHOOSER="0"
+            fi
+            export INFYNITAE_PORTAL_HAS_FILECHOOSER
+        fi
+        if [ "$INFYNITAE_PORTAL_HAS_FILECHOOSER" = "1" ]; then
+            FILECHOOSER_IFACE="org.freedesktop.impl.portal.FileChooser;" FILECHOOSER_BACKEND="infynitae;gtk"
+        fi
+        ;;
+esac
 # Each file is written only when its content changes: infynitae-reload portal restarts
 # xdg-desktop-portal when one is newer than its start (it reads them only then).
 # (read with the shell's own read: no process started per Super+key)
@@ -200,7 +220,7 @@ _infy_put() {
 }
 _infy_put "$PORTAL_DATA_DIR/infynitae.portal" "[portal]
 DBusName=org.freedesktop.impl.portal.desktop.infynitae
-Interfaces=org.freedesktop.impl.portal.GlobalShortcuts;$SETTINGS_IFACE$REMOTE_IFACES
+Interfaces=org.freedesktop.impl.portal.GlobalShortcuts;$SETTINGS_IFACE$FILECHOOSER_IFACE$REMOTE_IFACES
 UseIn=infynitae;wlroots;"
 
 PORTAL_CFG_DIR="$HOME/.config/xdg-desktop-portal"
@@ -212,7 +232,7 @@ org.freedesktop.impl.portal.RemoteDesktop=$RD_BACKEND
 org.freedesktop.impl.portal.ScreenCast=$SCREENCAST_BACKEND
 org.freedesktop.impl.portal.Screenshot=$SCREENSHOT_BACKEND
 org.freedesktop.impl.portal.Settings=$SETTINGS_BACKEND
-org.freedesktop.impl.portal.FileChooser=gtk
+org.freedesktop.impl.portal.FileChooser=$FILECHOOSER_BACKEND
 org.freedesktop.impl.portal.AppChooser=gtk
 org.freedesktop.impl.portal.Notification=gtk"
 unset -f _infy_put

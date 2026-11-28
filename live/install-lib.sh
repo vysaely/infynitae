@@ -259,7 +259,7 @@ infynitae_binary_names() {
         infynitae xwayland-satellite \
         infynitae-portal infynitae-polkit infynitae-lock \
         infynitae-wallpaper infynitae-record-stream infynitae-xres-pid \
-        infynitae-edge-apps infynitae-shot infynitae-sandbox-socket
+        infynitae-edge-apps infynitae-shot infynitae-files infynitae-sandbox-socket
 }
 
 # Scripts from the source into ~/.local/bin ($1 source, $2 bin dir).
