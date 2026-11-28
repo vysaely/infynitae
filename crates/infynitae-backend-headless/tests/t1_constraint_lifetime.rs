@@ -259,3 +259,34 @@ fn smithay_exposes_constraint_lifetime() {
     r.frame();
     assert_eq!(lifetime_of(&r), Some(WEnum::Value(Lifetime::Persistent)));
 }
+
+/// A game that releases its lock for a menu destroys the lock object while its window stays
+/// (CS2 2026-11-28: the cursor stayed at the centre in menus, clicks and keys seemed lost). Core
+/// must drop the lock in the same batch, so the pointer moves freely again.
+#[test]
+fn a_lock_the_client_destroys_is_gone_from_core() {
+    let mut r = Rig::x8();
+    let w = r.ls.state.elements().next().expect("W");
+    set_focus(&mut r.ls.state, &mut r.ls.input, Some(w)).unwrap();
+    r.ls.pump();
+    r.frame();
+    let qh = r.ls.qh.clone();
+    r.ls.probe.lock_pointer(&qh, 0, false);
+    r.ls.pump();
+    r.frame();
+    assert!(
+        r.ls.state.core().constraint().is_some(),
+        "the lock is active"
+    );
+    r.ls.probe.destroy_lock();
+    r.ls.pump();
+    r.frame();
+    assert!(!smithay_has_constraint(&r), "Smithay destroyed it");
+    // the next loop turn (any input or frame applies effects): the mouse moves in the menu
+    r.motion((5.0, 0.0));
+    assert!(
+        r.ls.state.core().constraint().is_none()
+            && r.ls.state.core().pending_constraints().is_empty(),
+        "Core no longer holds the lock the client released"
+    );
+}

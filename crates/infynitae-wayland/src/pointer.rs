@@ -260,6 +260,37 @@ impl PointerGrab<WaylandState> for PanDismissedPopupGrab {
 
 impl WaylandState {
     /// The seat's pointer, created with the seat.
+    /// INV-INPUT-5: at the end of each effect batch, Core drops any constraint whose Smithay
+    /// object no longer exists, so Core and Smithay keep the same constraint state. Smithay
+    /// destroys a constraint when the client destroys its lock or confinement (a game releasing
+    /// the mouse for its menu) and when a oneshot one ends through `leave()` (W-SM-4a); neither
+    /// tells Core. Without this, Core kept a released lock and held the pointer at the lock point
+    /// with absolute motion withheld (CS2 menus, 2026-11-28, after #182 removed it). Nothing
+    /// reaches the client: the constraint no longer exists.
+    pub(crate) fn drop_constraints_smithay_destroyed(&mut self) {
+        let mut surfaces = Vec::new();
+        if let Some(c) = self.core.constraint() {
+            surfaces.push(c.surface);
+        }
+        for c in self.core.pending_constraints() {
+            if !surfaces.contains(&c.surface) {
+                surfaces.push(c.surface);
+            }
+        }
+        if surfaces.is_empty() {
+            return;
+        }
+        let ptr = self.pointer_handle();
+        for surface in surfaces {
+            let Some(s) = self.registry.surface(surface) else {
+                continue;
+            };
+            if !with_pointer_constraint(s, &ptr, |c| c.is_some()) {
+                let _ = self.core.destroy_pointer_constraint(surface);
+            }
+        }
+    }
+
     pub(crate) fn pointer_handle(&self) -> PointerHandle<WaylandState> {
         self.seat.get_pointer().expect("the seat has a pointer")
     }
