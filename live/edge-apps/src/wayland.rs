@@ -5,7 +5,7 @@
 
 use crate::card::{Action, Button, CommandResult, Data, Source, Window};
 use crate::paths::runtime_path;
-use crate::shell::{OutputId, Shell, ARRIVE_LIFT};
+use crate::shell::{OutputId, Shell};
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState, Region},
     delegate_compositor, delegate_keyboard, delegate_layer, delegate_output, delegate_pointer,

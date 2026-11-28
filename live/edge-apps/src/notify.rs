@@ -637,7 +637,7 @@ pub fn popup_at(n: &Notify, w: f64, p: (f64, f64)) -> Option<u32> {
 }
 
 /// Draws every pop-up on a surface `w` wide. `pointer` lights the x and buttons under it; each
-/// pop-up slides in from the right as it arrives.
+/// pop-up fades in where it stands as it arrives.
 pub fn draw(
     cr: &Context,
     th: &Theme,
@@ -656,20 +656,15 @@ pub fn draw(
             if t <= 0.0 {
                 continue;
             }
+            // a pop-up fades in where it stands, like the panels
             let lifted = t < 1.0;
             if lifted {
-                let scale = 0.955 + 0.045 * t;
-                let ax = r.0 + r.2;
-                let ay = r.1 + r.3 * 0.5;
                 cr.push_group();
-                cr.translate(ax + (1.0 - t) * 12.0, ay);
-                cr.scale(scale, scale);
-                cr.translate(-ax, -ay);
             }
             draw_one(cr, th, &pop.note, r, inside(r), &inside);
             if lifted {
                 let _ = cr.pop_group_to_source();
-                let _ = cr.paint_with_alpha(t.powf(0.65));
+                let _ = cr.paint_with_alpha(t);
             }
         }
     });
