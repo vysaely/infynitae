@@ -641,7 +641,10 @@ fn present(
         vp.set_destination(ov.logical_w as i32, ov.logical_h as i32);
     }
     let surf = ov.layer.wl_surface();
-    surf.attach(Some(buffer.wl_buffer()), 0, 0);
+    // marks the buffer busy until the compositor releases it, so the next frame takes another
+    buffer
+        .attach_to(surf)
+        .map_err(|e| format!("shm buffer attach failed: {e}"))?;
     surf.damage_buffer(0, 0, buf_w as i32, buf_h as i32);
     surf.commit();
     ov.buffers.push(buffer);
@@ -2030,6 +2033,12 @@ mod tests {
         /// `wl_keyboard.enter` after mapping.
         defer_second_surface_focus: bool,
         deferred_focus_surface: Option<u32>,
+        /// Keeps each surface's committed buffer until another one replaces it, as a compositor
+        /// that reads shm buffers when it draws does (the default releases at once).
+        hold_buffers: bool,
+        shown_buf: HashMap<u32, u32>,
+        /// commits of a buffer the mock still held: the client drew into it while it was shown
+        redrawn_while_held: usize,
     }
 
     struct MockWayland {
@@ -2644,7 +2653,16 @@ mod tests {
                                             }
                                         }
                                     }
-                                    out_bytes.extend(Self::msg(bid, 0, &[])); // wl_buffer.release
+                                    if !st.hold_buffers {
+                                        // wl_buffer.release
+                                        out_bytes.extend(Self::msg(bid, 0, &[]));
+                                    } else {
+                                        match st.shown_buf.insert(obj_id, bid) {
+                                            Some(old) if old == bid => st.redrawn_while_held += 1,
+                                            Some(old) => out_bytes.extend(Self::msg(old, 0, &[])),
+                                            None => {}
+                                        }
+                                    }
                                 } else {
                                     st.last_overlay_center_alpha = None;
                                 }
@@ -3335,6 +3353,46 @@ mod tests {
         let st = mock.shared.0.lock().unwrap();
         assert_eq!(st.layer_creates, 1);
         assert_eq!(st.layer_destroys, 1);
+    }
+
+    /// The overlay drew each frame into the buffer the compositor was still showing: attached
+    /// with `wl_surface.attach` alone, SCTK never marked it busy, so the next frame reused it and
+    /// a compositor that reads it while drawing showed it half redrawn (frozen picture without
+    /// the dim, or cleared to transparent in `--live`).
+    #[test]
+    fn a_new_frame_never_draws_into_the_buffer_on_screen() {
+        let box_path = std::env::temp_dir().join(format!("shot-boxes-held-{}", std::process::id()));
+        let _ = std::fs::remove_file(&box_path);
+        let (mock, conn) = MockWayland::start(vec![MockOutputSpec {
+            width: 800,
+            height: 600,
+            x: 0,
+            y: 0,
+            name: "DP-1",
+        }]);
+        mock.shared.0.lock().unwrap().hold_buffers = true;
+        let box_for_client = box_path.clone();
+        let client = std::thread::spawn(move || {
+            run_wayland_with_conn(
+                &conn,
+                Mode::Region,
+                false,
+                test_look(),
+                Snapshot::default(),
+                Some(box_for_client),
+            )
+        });
+
+        mock.wait_until(|st| st.focused_surface.is_some());
+        let sid = mock.focused_surface().unwrap();
+        // the picker's frame is on screen; the pick opens the editor, which draws its first frame
+        mock.send_pointer_drag(sid, (100.0, 100.0), (300.0, 300.0));
+        wait_boxes_file(&box_path).expect("editor boxes dump");
+        let _ = std::fs::remove_file(&box_path);
+        assert!(mock.send_key_if_focused(KEY_ESC, false));
+        let outcome = client.join().unwrap().unwrap();
+        assert!(matches!(outcome, Outcome::Plain(_)));
+        assert_eq!(mock.shared.0.lock().unwrap().redrawn_while_held, 0);
     }
 
     #[test]
