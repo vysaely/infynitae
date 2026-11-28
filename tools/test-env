@@ -180,3 +180,35 @@ route="own screen sharing, REMOTE_DESKTOP" check_route 'default=gtk' 'org.freede
     'org.freedesktop.impl.portal.RemoteDesktop;org.freedesktop.impl.portal.ScreenCast;org.freedesktop.impl.portal.Screenshot;'
 rm -f "$TMP/home4/.local/bin/infynitae-portal"
 echo "ok portal routing: ScreenCast and Screenshot by our portal once it has them, wlr before"
+
+# ---- 6. FILE_PICKER routing: default gtk; infynitae/auto routes FileChooser to infynitae;gtk
+# only when both infynitae-portal advertises FileChooser and infynitae-files is executable.
+fc_env() {
+    (
+        export HOME="$TMP/home4" XDG_RUNTIME_DIR="$TMP/run4" FILE_PICKER="$1"
+        unset INFYNITAE_PORTAL_HAS_FILECHOOSER
+        mkdir -p "$HOME" "$XDG_RUNTIME_DIR"
+        set +eu
+        . "$ENV_SCRIPT" >/dev/null 2>&1
+    )
+}
+printf 'infynitae-screencast\norg.freedesktop.impl.portal.FileChooser\n' > "$TMP/home4/.local/bin/infynitae-portal"
+printf '#!/bin/sh\nexit 0\n' > "$TMP/home4/.local/bin/infynitae-files"
+chmod +x "$TMP/home4/.local/bin/infynitae-files"
+fc_env gtk
+route="FILE_PICKER=gtk" check_route 'org.freedesktop.impl.portal.FileChooser=gtk'
+if grep -q 'org.freedesktop.impl.portal.FileChooser;' "$pfile"; then
+    echo "FAIL portal routing (FILE_PICKER=gtk): unexpected FileChooser in infynitae.portal"
+    exit 1
+fi
+fc_env infynitae
+route="FILE_PICKER=infynitae" check_route 'org.freedesktop.impl.portal.FileChooser=infynitae;gtk' \
+    'org.freedesktop.impl.portal.FileChooser;'
+fc_env auto
+route="FILE_PICKER=auto" check_route 'org.freedesktop.impl.portal.FileChooser=infynitae;gtk' \
+    'org.freedesktop.impl.portal.FileChooser;'
+rm -f "$TMP/home4/.local/bin/infynitae-files"
+fc_env infynitae
+route="FILE_PICKER=infynitae without binary" check_route 'org.freedesktop.impl.portal.FileChooser=gtk'
+rm -f "$TMP/home4/.local/bin/infynitae-portal"
+echo "ok portal routing: FILE_PICKER switch and binary probe"

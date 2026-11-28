@@ -1,0 +1,452 @@
+#!/bin/sh
+# tools/test-portal-file-chooser: D-Bus integration test for live/portal/file-chooser.c on a
+# private dbus-run-session with a stand-in HOME, XDG_RUNTIME_DIR, and fake infynitae-files stub.
+# Checks: AccessDenied for non-portal callers; OpenFile, SaveFile, and SaveFiles JSON forwarding
+# and reply conversion (uris, writable, choices, current_filter, raw ay paths); cancel (1) without
+# fallback; Request.Close() terminating the child with SIGTERM and returning 2; and runtime
+# fallback to org.freedesktop.impl.portal.desktop.gtk on crash, invalid JSON, or missing binary.
+set -eu
+REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
+TMP=$(mktemp -d "/tmp/infynitae-test-portal-fc.XXXXXX")
+trap 'rm -rf "$TMP"' EXIT INT TERM
+P="$REPO_DIR/live/portal"
+
+cc -O1 -Wall -o "$TMP/portal" "$P/infynitae-portal.c" "$P/remote-desktop.c" "$P/settings.c" \
+    "$P/screencast.c" "$P/screenshot.c" "$P/file-chooser.c" \
+    "$P/wlr-virtual-pointer-protocol.c" "$P/virtual-keyboard-protocol.c" \
+    "$P/xdg-output-protocol.c" "$P/ext-image-copy-capture-v1-protocol.c" \
+    "$P/ext-image-capture-source-v1-protocol.c" \
+    "$P/ext-foreign-toplevel-list-v1-protocol.c" "$P/linux-dmabuf-v1-protocol.c" \
+    $(pkg-config --cflags --libs gio-2.0 gio-unix-2.0 wayland-client xkbcommon libpipewire-0.3 gbm libdrm)
+
+if ! command -v dbus-run-session >/dev/null 2>&1; then
+    echo "skip: no dbus-run-session"
+    exit 0
+fi
+
+cat > "$TMP/driver.c" <<'EOF'
+#include <gio/gio.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+
+#define DEST "org.freedesktop.impl.portal.desktop.infynitae"
+#define OBJ  "/org/freedesktop/portal/desktop"
+#define IFACE "org.freedesktop.impl.portal.FileChooser"
+#define REQ_IFACE "org.freedesktop.impl.portal.Request"
+#define GTK_DEST "org.freedesktop.impl.portal.desktop.gtk"
+
+static const gchar gtk_xml[] =
+  "<node>"
+  "  <interface name='org.freedesktop.impl.portal.FileChooser'>"
+  "    <method name='OpenFile'>"
+  "      <arg type='o' name='handle' direction='in'/>"
+  "      <arg type='s' name='app_id' direction='in'/>"
+  "      <arg type='s' name='parent_window' direction='in'/>"
+  "      <arg type='s' name='title' direction='in'/>"
+  "      <arg type='a{sv}' name='options' direction='in'/>"
+  "      <arg type='u' name='response' direction='out'/>"
+  "      <arg type='a{sv}' name='results' direction='out'/>"
+  "    </method>"
+  "    <method name='SaveFile'>"
+  "      <arg type='o' name='handle' direction='in'/>"
+  "      <arg type='s' name='app_id' direction='in'/>"
+  "      <arg type='s' name='parent_window' direction='in'/>"
+  "      <arg type='s' name='title' direction='in'/>"
+  "      <arg type='a{sv}' name='options' direction='in'/>"
+  "      <arg type='u' name='response' direction='out'/>"
+  "      <arg type='a{sv}' name='results' direction='out'/>"
+  "    </method>"
+  "    <method name='SaveFiles'>"
+  "      <arg type='o' name='handle' direction='in'/>"
+  "      <arg type='s' name='app_id' direction='in'/>"
+  "      <arg type='s' name='parent_window' direction='in'/>"
+  "      <arg type='s' name='title' direction='in'/>"
+  "      <arg type='a{sv}' name='options' direction='in'/>"
+  "      <arg type='u' name='response' direction='out'/>"
+  "      <arg type='a{sv}' name='results' direction='out'/>"
+  "    </method>"
+  "  </interface>"
+  "</node>";
+
+static int gtk_calls = 0;
+
+static void gtk_method(GDBusConnection *c, const gchar *sender, const gchar *path,
+                       const gchar *iface, const gchar *method, GVariant *params,
+                       GDBusMethodInvocation *inv, gpointer data) {
+    (void)c; (void)sender; (void)path; (void)iface; (void)params; (void)data;
+    gtk_calls++;
+    GVariantBuilder res, uris;
+    g_variant_builder_init(&res, G_VARIANT_TYPE_VARDICT);
+    g_variant_builder_init(&uris, G_VARIANT_TYPE_STRING_ARRAY);
+    char *u = g_strdup_printf("file:///gtk-fallback/%s/%d", method, gtk_calls);
+    g_variant_builder_add(&uris, "s", u);
+    g_free(u);
+    g_variant_builder_add(&res, "{sv}", "uris", g_variant_builder_end(&uris));
+    g_dbus_method_invocation_return_value(inv, g_variant_new("(ua{sv})", 0u, &res));
+}
+
+static const GDBusInterfaceVTable gtk_vtable = { gtk_method, NULL, NULL, { 0 } };
+
+typedef struct {
+    GMainLoop *loop;
+    GVariant *reply;
+    GError *err;
+} AsyncCall;
+
+static void on_call_done(GObject *src, GAsyncResult *res, gpointer data) {
+    AsyncCall *ac = data;
+    ac->reply = g_dbus_connection_call_finish(G_DBUS_CONNECTION(src), res, &ac->err);
+    g_main_loop_quit(ac->loop);
+}
+
+static GVariant *call_on_loop(GDBusConnection *c, const char *method, GVariant *params, GError **err) {
+    AsyncCall ac = { g_main_loop_new(NULL, FALSE), NULL, NULL };
+    g_dbus_connection_call(c, DEST, OBJ, IFACE, method, params, G_VARIANT_TYPE("(ua{sv})"),
+                           G_DBUS_CALL_FLAGS_NONE, 10000, NULL, on_call_done, &ac);
+    g_main_loop_run(ac.loop);
+    g_main_loop_unref(ac.loop);
+    if (err) *err = ac.err; else g_clear_error(&ac.err);
+    return ac.reply;
+}
+
+typedef struct {
+    GDBusConnection *conn;
+    const char *handle;
+    const char *ready_file;
+    guint src_id;
+} CloseCtx;
+
+static gboolean poll_and_close(gpointer data) {
+    CloseCtx *ctx = data;
+    if (!g_file_test(ctx->ready_file, G_FILE_TEST_EXISTS))
+        return G_SOURCE_CONTINUE;
+    ctx->src_id = 0;
+    g_dbus_connection_call(ctx->conn, DEST, ctx->handle, REQ_IFACE, "Close",
+                           NULL, NULL, G_DBUS_CALL_FLAGS_NONE, 5000, NULL, NULL, NULL);
+    return G_SOURCE_REMOVE;
+}
+
+static void fail(const char *msg) {
+    fprintf(stderr, "FAIL %s\n", msg);
+    exit(1);
+}
+
+static void write_stub(const char *path, const char *body) {
+    GError *e = NULL;
+    if (!g_file_set_contents(path, body, -1, &e))
+        fail(e ? e->message : "write_stub");
+    chmod(path, 0755);
+}
+
+int main(int argc, char **argv) {
+    if (argc < 3) fail("usage: driver <stub_bin> <tmp_dir>");
+    const char *stub_bin = argv[1];
+    const char *tmp_dir = argv[2];
+    GError *err = NULL;
+    GDBusConnection *conn = g_bus_get_sync(G_BUS_TYPE_SESSION, NULL, &err);
+    if (!conn) fail("no session bus");
+
+    /* Wait for infynitae-portal to expose FileChooser. */
+    GVariant *ver = NULL;
+    for (int i = 0; i < 60 && !ver; i++) {
+        g_clear_error(&err);
+        ver = g_dbus_connection_call_sync(conn, DEST, OBJ, "org.freedesktop.DBus.Properties", "Get",
+                                          g_variant_new("(ss)", IFACE, "version"),
+                                          G_VARIANT_TYPE("(v)"), G_DBUS_CALL_FLAGS_NONE, 1000, NULL, &err);
+        if (!ver) g_usleep(50000);
+    }
+    if (!ver) fail("FileChooser version property not available");
+    GVariant *vinner = NULL;
+    g_variant_get(ver, "(v)", &vinner);
+    if (g_variant_get_uint32(vinner) != 4) fail("FileChooser version != 4");
+    g_variant_unref(vinner);
+    g_variant_unref(ver);
+    printf("ok   FileChooser version 4 registered\n");
+
+    /* 1. Caller other than org.freedesktop.portal.Desktop must get AccessDenied. */
+    {
+        GVariantBuilder empty;
+        g_variant_builder_init(&empty, G_VARIANT_TYPE_VARDICT);
+        GVariant *r = g_dbus_connection_call_sync(
+            conn, DEST, OBJ, IFACE, "OpenFile",
+            g_variant_new("(osssa{sv})", "/r/unauth", "evil.app", "", "Title", &empty),
+            G_VARIANT_TYPE("(ua{sv})"), G_DBUS_CALL_FLAGS_NONE, 5000, NULL, &err);
+        if (r) fail("unauthorized OpenFile should have failed");
+        if (!err || !strstr(err->message, "AccessDenied")) fail("expected AccessDenied");
+        g_clear_error(&err);
+        printf("ok   direct caller without org.freedesktop.portal.Desktop is refused\n");
+    }
+
+    /* Own org.freedesktop.portal.Desktop (acting as xdg-desktop-portal) and fake GTK fallback. */
+    GVariant *req_portal = g_dbus_connection_call_sync(
+        conn, "org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus",
+        "RequestName", g_variant_new("(su)", "org.freedesktop.portal.Desktop", 0u),
+        G_VARIANT_TYPE("(u)"), G_DBUS_CALL_FLAGS_NONE, 5000, NULL, &err);
+    if (!req_portal) fail("could not own org.freedesktop.portal.Desktop");
+    g_variant_unref(req_portal);
+
+    GDBusNodeInfo *gtk_info = g_dbus_node_info_new_for_xml(gtk_xml, NULL);
+    g_dbus_connection_register_object(conn, OBJ, gtk_info->interfaces[0], &gtk_vtable, NULL, NULL, &err);
+    GVariant *req_gtk = g_dbus_connection_call_sync(
+        conn, "org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus",
+        "RequestName", g_variant_new("(su)", GTK_DEST, 0u),
+        G_VARIANT_TYPE("(u)"), G_DBUS_CALL_FLAGS_NONE, 5000, NULL, &err);
+    if (!req_gtk) fail("could not own fake GTK portal");
+    g_variant_unref(req_gtk);
+
+    /* 2. OpenFile with options (multiple, directory, filters, choices, current_folder raw bytes). */
+    char *seen_json = g_build_filename(tmp_dir, "seen.json", NULL);
+    char *stub_open = g_strdup_printf(
+        "#!/bin/sh\n"
+        "cat > '%s'\n"
+        "printf '{\"response\":0,\"uris\":[\"file:///tmp/a.png\",\"file:///tmp/b.png\"],"
+        "\"writable\":true,\"choices\":[[\"enc\",\"utf8\"]],"
+        "\"current_filter\":{\"label\":\"Images\",\"patterns\":[{\"kind\":0,\"pattern\":\"*.png\"}]}}\\n'\n",
+        seen_json);
+    write_stub(stub_bin, stub_open);
+    g_free(stub_open);
+
+    {
+        GVariantBuilder opts;
+        g_variant_builder_init(&opts, G_VARIANT_TYPE_VARDICT);
+        g_variant_builder_add(&opts, "{sv}", "multiple", g_variant_new_boolean(TRUE));
+        g_variant_builder_add(&opts, "{sv}", "directory", g_variant_new_boolean(FALSE));
+        g_variant_builder_add(&opts, "{sv}", "accept_label", g_variant_new_string("_Pick"));
+        const guchar folder[] = "/tmp/my\xff" "dir";
+        g_variant_builder_add(&opts, "{sv}", "current_folder",
+                              g_variant_new_fixed_array(G_VARIANT_TYPE_BYTE, folder, sizeof(folder), 1));
+        GVariantBuilder flts, pats;
+        g_variant_builder_init(&flts, G_VARIANT_TYPE("a(sa(us))"));
+        g_variant_builder_init(&pats, G_VARIANT_TYPE("a(us)"));
+        g_variant_builder_add(&pats, "(us)", 0u, "*.png");
+        g_variant_builder_add(&flts, "(sa(us))", "Images", &pats);
+        g_variant_builder_add(&opts, "{sv}", "filters", g_variant_builder_end(&flts));
+        GVariantBuilder chs, copts;
+        g_variant_builder_init(&chs, G_VARIANT_TYPE("a(ssa(ss)s)"));
+        g_variant_builder_init(&copts, G_VARIANT_TYPE("a(ss)"));
+        g_variant_builder_add(&copts, "(ss)", "utf8", "UTF-8");
+        g_variant_builder_add(&chs, "(ssa(ss)s)", "enc", "Encoding", &copts, "utf8");
+        g_variant_builder_add(&opts, "{sv}", "choices", g_variant_builder_end(&chs));
+
+        GVariant *r = call_on_loop(conn, "OpenFile",
+            g_variant_new("(osssa{sv})", "/r/open1", "org.test.App", "wayland:tok", "Pick Image", &opts), &err);
+        if (!r) fail(err ? err->message : "OpenFile failed");
+        guint32 code = 99;
+        GVariant *res = NULL;
+        g_variant_get(r, "(u@a{sv})", &code, &res);
+        if (code != 0) fail("OpenFile response != 0");
+        const gchar **uris = NULL;
+        gboolean writable = FALSE;
+        if (!g_variant_lookup(res, "uris", "^a&s", &uris) || !uris[0] || !uris[1] ||
+            strcmp(uris[0], "file:///tmp/a.png") != 0 || strcmp(uris[1], "file:///tmp/b.png") != 0)
+            fail("OpenFile uris mismatch");
+        g_free(uris);
+        if (!g_variant_lookup(res, "writable", "b", &writable) || !writable)
+            fail("OpenFile writable missing/false");
+        GVariant *cf = g_variant_lookup_value(res, "current_filter", G_VARIANT_TYPE("(sa(us))"));
+        if (!cf) fail("OpenFile current_filter missing");
+        g_variant_unref(cf);
+        GVariant *ch = g_variant_lookup_value(res, "choices", G_VARIANT_TYPE("a(ss)"));
+        if (!ch) fail("OpenFile choices missing");
+        g_variant_unref(ch);
+        g_variant_unref(res);
+        g_variant_unref(r);
+
+        gchar *raw_json = NULL;
+        if (!g_file_get_contents(seen_json, &raw_json, NULL, NULL) ||
+            !strstr(raw_json, "\"method\":\"OpenFile\"") ||
+            !strstr(raw_json, "\"parent_window\":\"wayland:tok\"") ||
+            !strstr(raw_json, "\"current_folder_b64\"") ||
+            !strstr(raw_json, "\"multiple\":true"))
+            fail("OpenFile stdin JSON missing expected fields");
+        g_free(raw_json);
+        if (gtk_calls != 0) fail("GTK fallback ran unexpectedly on OpenFile");
+        printf("ok   OpenFile forwards options and returns uris, writable, choices, current_filter\n");
+    }
+
+    /* 3. SaveFile with current_name and current_folder. */
+    char *stub_save = g_strdup_printf(
+        "#!/bin/sh\n"
+        "cat > '%s'\n"
+        "printf '{\"response\":0,\"uris\":[\"file:///tmp/out.txt\"]}\\n'\n",
+        seen_json);
+    write_stub(stub_bin, stub_save);
+    g_free(stub_save);
+    {
+        GVariantBuilder opts;
+        g_variant_builder_init(&opts, G_VARIANT_TYPE_VARDICT);
+        g_variant_builder_add(&opts, "{sv}", "current_name", g_variant_new_string("out.txt"));
+        const guchar folder[] = "/tmp";
+        g_variant_builder_add(&opts, "{sv}", "current_folder",
+                              g_variant_new_fixed_array(G_VARIANT_TYPE_BYTE, folder, sizeof(folder), 1));
+        GVariant *r = call_on_loop(conn, "SaveFile",
+            g_variant_new("(osssa{sv})", "/r/save1", "org.test.App", "", "Save File", &opts), &err);
+        if (!r) fail("SaveFile failed");
+        guint32 code = 99;
+        GVariant *res = NULL;
+        g_variant_get(r, "(u@a{sv})", &code, &res);
+        const gchar **uris = NULL;
+        if (code != 0 || !g_variant_lookup(res, "uris", "^a&s", &uris) || !uris[0] ||
+            strcmp(uris[0], "file:///tmp/out.txt") != 0)
+            fail("SaveFile reply mismatch");
+        g_free(uris);
+        g_variant_unref(res);
+        g_variant_unref(r);
+
+        gchar *raw_json = NULL;
+        if (!g_file_get_contents(seen_json, &raw_json, NULL, NULL) ||
+            !strstr(raw_json, "\"method\":\"SaveFile\"") ||
+            !strstr(raw_json, "\"current_name\":\"out.txt\""))
+            fail("SaveFile stdin JSON mismatch");
+        g_free(raw_json);
+        printf("ok   SaveFile forwards current_name/current_folder and returns URI\n");
+    }
+
+    /* 3b. SaveFiles with files (aay) and current_folder. */
+    char *stub_save_many = g_strdup_printf(
+        "#!/bin/sh\n"
+        "cat > '%s'\n"
+        "printf '{\"response\":0,\"uris\":[\"file:///tmp/one.txt\",\"file:///tmp/two.txt\"]}\\n'\n",
+        seen_json);
+    write_stub(stub_bin, stub_save_many);
+    g_free(stub_save_many);
+    {
+        GVariantBuilder opts, files_b;
+        g_variant_builder_init(&opts, G_VARIANT_TYPE_VARDICT);
+        g_variant_builder_init(&files_b, G_VARIANT_TYPE("aay"));
+        const guchar f1[] = "one.txt";
+        const guchar f2[] = "two.txt";
+        g_variant_builder_add_value(&files_b, g_variant_new_fixed_array(G_VARIANT_TYPE_BYTE, f1, sizeof(f1), 1));
+        g_variant_builder_add_value(&files_b, g_variant_new_fixed_array(G_VARIANT_TYPE_BYTE, f2, sizeof(f2), 1));
+        g_variant_builder_add(&opts, "{sv}", "files", g_variant_builder_end(&files_b));
+        GVariant *r = call_on_loop(conn, "SaveFiles",
+            g_variant_new("(osssa{sv})", "/r/savefiles1", "org.test.App", "", "Save Files", &opts), &err);
+        if (!r) fail("SaveFiles failed");
+        guint32 code = 99;
+        GVariant *res = NULL;
+        g_variant_get(r, "(u@a{sv})", &code, &res);
+        const gchar **uris = NULL;
+        if (code != 0 || !g_variant_lookup(res, "uris", "^a&s", &uris) || !uris[0] || !uris[1] ||
+            strcmp(uris[0], "file:///tmp/one.txt") != 0 || strcmp(uris[1], "file:///tmp/two.txt") != 0)
+            fail("SaveFiles reply mismatch");
+        g_free(uris);
+        g_variant_unref(res);
+        g_variant_unref(r);
+        gchar *raw_json = NULL;
+        if (!g_file_get_contents(seen_json, &raw_json, NULL, NULL) ||
+            !strstr(raw_json, "\"method\":\"SaveFiles\"") ||
+            !strstr(raw_json, "\"files_b64\":["))
+            fail("SaveFiles stdin JSON mismatch");
+        g_free(raw_json);
+        printf("ok   SaveFiles forwards files_b64 and returns URIs\n");
+    }
+
+    /* 4. User cancel (response 1) must NOT trigger GTK fallback. */
+    write_stub(stub_bin, "#!/bin/sh\ncat >/dev/null\nprintf '{\"response\":1,\"uris\":[]}\\n'\n");
+    {
+        GVariantBuilder opts;
+        g_variant_builder_init(&opts, G_VARIANT_TYPE_VARDICT);
+        GVariant *r = call_on_loop(conn, "OpenFile",
+            g_variant_new("(osssa{sv})", "/r/cancel1", "org.test.App", "", "Open", &opts), &err);
+        if (!r) fail("cancel call failed");
+        guint32 code = 99;
+        GVariant *res = NULL;
+        g_variant_get(r, "(u@a{sv})", &code, &res);
+        g_variant_unref(res);
+        g_variant_unref(r);
+        if (code != 1) fail("cancel response != 1");
+        if (gtk_calls != 0) fail("cancel triggered GTK fallback");
+        printf("ok   cancel returns 1 without triggering GTK fallback\n");
+    }
+
+    /* 5. Request.Close() terminates child with SIGTERM and returns response 2. */
+    char *ready_file = g_build_filename(tmp_dir, "stub.ready", NULL);
+    char *term_file = g_build_filename(tmp_dir, "stub.sigterm", NULL);
+    char *stub_wait = g_strdup_printf(
+        "#!/bin/sh\n"
+        "trap 'touch \"%s\"; exit 0' TERM\n"
+        "touch \"%s\"\n"
+        "sleep 30 &\n"
+        "wait $!\n",
+        term_file, ready_file);
+    write_stub(stub_bin, stub_wait);
+    g_free(stub_wait);
+    {
+        GVariantBuilder opts;
+        g_variant_builder_init(&opts, G_VARIANT_TYPE_VARDICT);
+        AsyncCall ac = { g_main_loop_new(NULL, FALSE), NULL, NULL };
+        CloseCtx ctx = { conn, "/r/close1", ready_file, 0 };
+        ctx.src_id = g_timeout_add(30, poll_and_close, &ctx);
+        g_dbus_connection_call(conn, DEST, OBJ, IFACE, "OpenFile",
+            g_variant_new("(osssa{sv})", "/r/close1", "org.test.App", "", "Open", &opts),
+            G_VARIANT_TYPE("(ua{sv})"), G_DBUS_CALL_FLAGS_NONE, 10000, NULL, on_call_done, &ac);
+        g_main_loop_run(ac.loop);
+        if (ctx.src_id) g_source_remove(ctx.src_id);
+        g_main_loop_unref(ac.loop);
+        if (!ac.reply) fail("Request.Close OpenFile returned error");
+        guint32 code = 99;
+        GVariant *res = NULL;
+        g_variant_get(ac.reply, "(u@a{sv})", &code, &res);
+        g_variant_unref(res);
+        g_variant_unref(ac.reply);
+        if (code != 2) fail("Request.Close response != 2");
+        for (int i = 0; i < 40 && !g_file_test(term_file, G_FILE_TEST_EXISTS); i++)
+            g_usleep(25000);
+        if (!g_file_test(term_file, G_FILE_TEST_EXISTS)) fail("stub did not receive SIGTERM");
+        if (gtk_calls != 0) fail("Request.Close triggered GTK fallback");
+        printf("ok   Request.Close terminates picker with SIGTERM and returns 2\n");
+    }
+
+    /* 6. Runtime GTK fallback on non-zero exit, invalid JSON, and missing binary. */
+    const char *cases[3][2] = {
+        { "non-zero exit", "#!/bin/sh\nexit 1\n" },
+        { "invalid JSON",  "#!/bin/sh\necho 'not-json'\n" },
+        { "missing binary", NULL },
+    };
+    for (int i = 0; i < 3; i++) {
+        if (cases[i][1]) write_stub(stub_bin, cases[i][1]);
+        else remove(stub_bin);
+
+        GVariantBuilder opts;
+        g_variant_builder_init(&opts, G_VARIANT_TYPE_VARDICT);
+        char *h = g_strdup_printf("/r/fb%d", i);
+        GVariant *r = call_on_loop(conn, "OpenFile",
+            g_variant_new("(osssa{sv})", h, "org.test.App", "", "Open", &opts), &err);
+        g_free(h);
+        if (!r) fail("fallback call returned error");
+        guint32 code = 99;
+        GVariant *res = NULL;
+        g_variant_get(r, "(u@a{sv})", &code, &res);
+        const gchar **uris = NULL;
+        if (code != 0 || !g_variant_lookup(res, "uris", "^a&s", &uris) || !uris[0] ||
+            !g_str_has_prefix(uris[0], "file:///gtk-fallback/OpenFile/"))
+            fail("fallback did not return GTK portal reply");
+        g_free(uris);
+        g_variant_unref(res);
+        g_variant_unref(r);
+        printf("ok   GTK fallback works on %s\n", cases[i][0]);
+    }
+
+    g_free(seen_json);
+    g_free(ready_file);
+    g_free(term_file);
+    g_dbus_node_info_unref(gtk_info);
+    g_object_unref(conn);
+    return 0;
+}
+EOF
+
+cc -O1 -Wall -o "$TMP/driver" "$TMP/driver.c" $(pkg-config --cflags --libs gio-2.0)
+
+mkdir -p "$TMP/home/.local/bin" "$TMP/run"
+cat > "$TMP/bus.sh" <<'BUS'
+set -eu
+env -u WAYLAND_DISPLAY -u DISPLAY HOME="$1" XDG_RUNTIME_DIR="$2" "$3" > "$1/portal.log" 2>&1 &
+pid=$!
+trap 'kill "$pid" 2>/dev/null || true' EXIT
+"$4" "$1/.local/bin/infynitae-files" "$5"
+BUS
+
+dbus-run-session -- sh "$TMP/bus.sh" "$TMP/home" "$TMP/run" "$TMP/portal" "$TMP/driver" "$TMP"

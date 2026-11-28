@@ -8,6 +8,7 @@ updates:
       - "/"
       - "/live/edge-apps"
       - "/live/shot-rs"
+      - "/live/files"
       - "/live/sandbox-socket"
     schedule:
       interval: weekly
