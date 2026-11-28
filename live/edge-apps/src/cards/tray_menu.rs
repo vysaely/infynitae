@@ -119,55 +119,58 @@ type Layout = (
     u32,
     (
         i32,
-        HashMap<String, zbus::zvariant::OwnedValue>,
-        Vec<zbus::zvariant::OwnedValue>,
+        HashMap<String, zbus::OwnedVariant>,
+        Vec<zbus::OwnedVariant>,
     ),
 );
 type Item = (
     i32,
-    HashMap<String, zbus::zvariant::OwnedValue>,
-    Vec<zbus::zvariant::OwnedValue>,
+    HashMap<String, zbus::OwnedVariant>,
+    Vec<zbus::OwnedVariant>,
 );
 
-fn fetch_menu(conn: &zbus::blocking::Connection, bus: &str, path: &str) -> Vec<MenuEntry> {
-    let Ok(proxy) = zbus::blocking::Proxy::new(conn, bus, path, "com.canonical.dbusmenu") else {
-        return Vec::new();
-    };
-    let _ = proxy.call::<&str, (i32,), bool>("AboutToShow", &(0,));
-    let props = ["label", "visible", "enabled", "type"];
-    let Ok((_, (_, _, children))) =
-        proxy.call::<_, _, Layout>("GetLayout", &(0i32, 1i32, &props[..]))
-    else {
-        return Vec::new();
-    };
-    let mut out = Vec::new();
-    for child in children {
-        let Ok((id, p, _)) = Item::try_from(child) else {
-            continue;
+fn fetch_menu(conn: &zbus::Connection, bus: &str, path: &str) -> Vec<MenuEntry> {
+    zbus::block_on(async {
+        let Ok(proxy) = zbus::Proxy::new(conn, bus, path, "com.canonical.dbusmenu").await else {
+            return Vec::new();
         };
-        let text = |k: &str| {
-            p.get(k)
-                .and_then(|v| <&str>::try_from(v).ok())
-                .unwrap_or("")
-                .to_string()
+        let _ = proxy.call::<&str, (i32,), bool>("AboutToShow", &(0,)).await;
+        let props = ["label", "visible", "enabled", "type"];
+        let Ok((_, (_, _, children))) = proxy
+            .call::<_, _, Layout>("GetLayout", &(0i32, 1i32, &props[..]))
+            .await
+        else {
+            return Vec::new();
         };
-        let flag = |k: &str| {
-            p.get(k)
-                .and_then(|v| bool::try_from(v).ok())
-                .unwrap_or(true)
-        };
-        let separator = text("type") == "separator";
-        let label = clean_label(&text("label"));
-        if flag("visible") && (separator || !label.is_empty()) {
-            out.push(MenuEntry {
-                id,
-                label,
-                enabled: flag("enabled"),
-                separator,
-            });
+        let mut out = Vec::new();
+        for child in children {
+            let Ok((id, p, _)) = Item::try_from(child) else {
+                continue;
+            };
+            let text = |k: &str| {
+                p.get(k)
+                    .and_then(|v| <&str>::try_from(v).ok())
+                    .unwrap_or("")
+                    .to_string()
+            };
+            let flag = |k: &str| {
+                p.get(k)
+                    .and_then(|v| bool::try_from(v).ok())
+                    .unwrap_or(true)
+            };
+            let separator = text("type") == "separator";
+            let label = clean_label(&text("label"));
+            if flag("visible") && (separator || !label.is_empty()) {
+                out.push(MenuEntry {
+                    id,
+                    label,
+                    enabled: flag("enabled"),
+                    separator,
+                });
+            }
         }
-    }
-    out
+        out
+    })
 }
 
 /// Every tray app's menu, read over D-Bus off the UI thread (the fixture's `traymenu` in a render).

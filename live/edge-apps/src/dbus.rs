@@ -1,16 +1,11 @@
-//! Session D-Bus helpers that avoid `zbus`'s `blocking::unblock` thread pool.
-//!
-//! `zbus` on `async-io` runs `UnixStream::connect_addr` inside `blocking::unblock`, spawning a
-//! `blocking-1` thread that never exits and wakes every 500 ms (`blocking` 1.7.0). Connecting the
-//! `UnixStream` directly and handing it to `Builder::async_io_unix_stream` keeps `async-io`'s
-//! event-driven reactor with zero idle wakeups and no extra thread pool.
+//! Session D-Bus helpers: one cached session connection for card fetches, and pre-connected
+//! Unix sockets handed to `Builder::unix_stream` with `guid=` verification.
 
 use std::os::unix::net::{SocketAddr, UnixStream};
 use std::sync::{Arc, Mutex};
 use zbus::address::transport::{Transport, UnixSocket};
-use zbus::blocking::connection::Builder;
-use zbus::blocking::Connection;
-use zbus::Address;
+use zbus::connection::Builder;
+use zbus::{Address, Connection};
 
 /// Cache of one shared session bus connection for card data fetches.
 struct SessionCache(Option<(String, Connection)>);
@@ -23,7 +18,7 @@ impl SessionCache {
                 return Ok(conn.clone());
             }
         }
-        let conn = build_on(addr, Ok)?;
+        let conn = build_on(addr, |b| b)?;
         self.0 = Some((key, conn.clone()));
         Ok(conn)
     }
@@ -38,32 +33,32 @@ pub fn session() -> zbus::Result<Connection> {
     cache.get_or_connect(&addr)
 }
 
-/// Returns a `Builder` for `addr`, pre-connecting Unix sockets without `blocking::unblock`.
+/// Returns a `Builder` for `addr`, pre-connecting Unix sockets on the calling thread.
 pub fn builder_for(addr: &Address) -> zbus::Result<Builder<'static>> {
     let Transport::Unix(unix) = addr.transport() else {
-        return Builder::address(addr.clone());
+        return Ok(Builder::address(addr.clone()));
     };
     let sock_addr = unix_socket_addr(unix.path())?;
     let stream = UnixStream::connect_addr(&sock_addr)
-        .map_err(|e| zbus::Error::Connection(Arc::new(e), addr.clone()))?;
-    Ok(Builder::async_io_unix_stream(stream))
+        .map_err(|e| zbus::Error::Connection(Arc::new(e), Box::new(addr.clone())))?;
+    Ok(Builder::unix_stream(stream))
 }
 
 /// Builds a connection to `addr`, applying `configure` and verifying any `guid=` in `addr`.
 pub fn build_on<F>(addr: &Address, configure: F) -> zbus::Result<Connection>
 where
-    F: FnOnce(Builder<'static>) -> zbus::Result<Builder<'static>>,
+    F: FnOnce(Builder<'static>) -> Builder<'static>,
 {
-    let builder = builder_for(addr)?;
-    let conn = configure(builder)?.build()?;
+    let builder = configure(builder_for(addr)?);
+    let conn = zbus::block_on(builder.build())?;
     verify_guid(&conn, addr)?;
     Ok(conn)
 }
 
-/// Builds a session bus connection, applying `configure` without starting `blocking-1`.
+/// Builds a session bus connection, applying `configure`.
 pub fn build_session<F>(configure: F) -> zbus::Result<Connection>
 where
-    F: FnOnce(Builder<'static>) -> zbus::Result<Builder<'static>>,
+    F: FnOnce(Builder<'static>) -> Builder<'static>,
 {
     let addr = Address::session()?;
     build_on(&addr, configure)
@@ -71,7 +66,7 @@ where
 
 fn verify_guid(conn: &Connection, addr: &Address) -> zbus::Result<()> {
     if let Some(expected) = addr.guid() {
-        if conn.server_guid() != expected.as_str() {
+        if conn.server_guid().as_str() != expected.as_str() {
             return Err(zbus::Error::Handshake(format!(
                 "Server GUID mismatch: expected {expected}, got {}",
                 conn.server_guid()
@@ -196,7 +191,7 @@ mod tests {
         let bad_addr =
             Address::try_from(format!("{path_part},guid={wrong_guid}").as_str()).unwrap();
         assert!(matches!(
-            build_on(&bad_addr, Ok),
+            build_on(&bad_addr, |b| b),
             Err(zbus::Error::Handshake(_))
         ));
 

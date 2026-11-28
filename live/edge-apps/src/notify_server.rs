@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 use zbus::fdo::RequestNameReply;
-use zbus::zvariant::{OwnedValue, Value};
+use zbus::{OwnedVariant, Variant};
 
 pub const NAME: &str = "org.freedesktop.Notifications";
 pub const PATH: &str = "/org/freedesktop/Notifications";
@@ -28,29 +28,29 @@ struct Server {
 
 /// A whole number from a hint of any integer type (senders differ: urgency is a byte by the spec,
 /// some send an int).
-fn int(v: &Value) -> Option<i64> {
+fn int(v: &Variant) -> Option<i64> {
     match v {
-        Value::U8(x) => Some(*x as i64),
-        Value::I16(x) => Some(*x as i64),
-        Value::U16(x) => Some(*x as i64),
-        Value::I32(x) => Some(*x as i64),
-        Value::U32(x) => Some(*x as i64),
-        Value::I64(x) => Some(*x),
-        Value::U64(x) => i64::try_from(*x).ok(),
+        Variant::U8(x) => Some(*x as i64),
+        Variant::I16(x) => Some(*x as i64),
+        Variant::U16(x) => Some(*x as i64),
+        Variant::I32(x) => Some(*x as i64),
+        Variant::U32(x) => Some(*x as i64),
+        Variant::I64(x) => Some(*x),
+        Variant::U64(x) => i64::try_from(*x).ok(),
         _ => None,
     }
 }
 
-fn text(v: &Value) -> Option<String> {
+fn text(v: &Variant) -> Option<String> {
     match v {
-        Value::Str(s) => Some(s.to_string()),
+        Variant::Str(s) => Some(s.to_string()),
         _ => None,
     }
 }
 
-fn flag(v: &Value) -> bool {
+fn flag(v: &Variant) -> bool {
     match v {
-        Value::Bool(b) => *b,
+        Variant::Bool(b) => *b,
         other => int(other).is_some_and(|n| n != 0),
     }
 }
@@ -63,7 +63,7 @@ pub fn note_from(
     summary: &str,
     body: &str,
     actions: &[String],
-    hints: &HashMap<String, Value>,
+    hints: &HashMap<String, Variant>,
     expire_timeout: i32,
     time: String,
 ) -> Note {
@@ -163,12 +163,12 @@ impl Server {
         summary: String,
         body: String,
         actions: Vec<String>,
-        hints: HashMap<String, OwnedValue>,
+        hints: HashMap<String, OwnedVariant>,
         expire_timeout: i32,
     ) -> u32 {
-        let hints: HashMap<String, Value> = hints
+        let hints: HashMap<String, Variant> = hints
             .iter()
-            .filter_map(|(k, v)| v.try_clone().ok().map(|v| (k.clone(), Value::from(v))))
+            .filter_map(|(k, v)| v.try_clone().ok().map(|v| (k.clone(), Variant::from(v))))
             .collect();
         let sync = [
             "x-canonical-private-synchronous",
@@ -211,7 +211,7 @@ impl Server {
 /// Serves org.freedesktop.Notifications on the session bus; the connection it returns keeps it
 /// served (and sends the signals). An error when the name is held by another daemon or there is
 /// no session bus: the edge then does not serve.
-pub fn start(tx: Sender<Incoming>) -> Result<zbus::blocking::Connection, String> {
+pub fn start(tx: Sender<Incoming>) -> Result<zbus::Connection, String> {
     let e = |e: zbus::Error| e.to_string();
     let server = Server {
         tx,
@@ -221,7 +221,9 @@ pub fn start(tx: Sender<Incoming>) -> Result<zbus::blocking::Connection, String>
     let conn = crate::dbus::build_session(|b| b.serve_at(PATH, server)).map_err(e)?;
     let ask = || {
         matches!(
-            conn.request_name_with_flags(NAME, zbus::fdo::RequestNameFlags::DoNotQueue.into()),
+            zbus::block_on(
+                conn.request_name_with_flags(NAME, zbus::fdo::RequestNameFlags::DO_NOT_QUEUE)
+            ),
             Ok(RequestNameReply::PrimaryOwner) | Ok(RequestNameReply::AlreadyOwner)
         )
     };
@@ -250,14 +252,16 @@ pub fn start(tx: Sender<Incoming>) -> Result<zbus::blocking::Connection, String>
 }
 
 /// The process holding the notifications name.
-fn owner_pid(conn: &zbus::blocking::Connection) -> Option<u32> {
-    let dbus = zbus::blocking::fdo::DBusProxy::new(conn).ok()?;
-    let name = zbus::names::BusName::try_from(NAME).ok()?;
-    dbus.get_connection_unix_process_id(name).ok()
+fn owner_pid(conn: &zbus::Connection) -> Option<u32> {
+    zbus::block_on(async {
+        let dbus = zbus::fdo::DBusProxy::new(conn).await.ok()?;
+        let name = zbus::names::BusName::try_from(NAME).ok()?;
+        dbus.get_connection_unix_process_id(name).await.ok()
+    })
 }
 
 /// Its program's name (/proc/PID/comm).
-fn owner_program(conn: &zbus::blocking::Connection) -> Option<String> {
+fn owner_program(conn: &zbus::Connection) -> Option<String> {
     let pid = owner_pid(conn)?;
     std::fs::read_to_string(format!("/proc/{pid}/comm"))
         .ok()
@@ -265,35 +269,43 @@ fn owner_program(conn: &zbus::blocking::Connection) -> Option<String> {
 }
 
 /// Sends what the edge decided as the spec's signals.
-pub fn send(conn: &zbus::blocking::Connection, out: Vec<Outgoing>) {
-    for o in out {
-        let res = match o {
-            Outgoing::Action(id, key) => conn.emit_signal(
-                None::<zbus::names::BusName>,
-                PATH,
-                NAME,
-                "ActionInvoked",
-                &(id, key),
-            ),
-            Outgoing::Closed(id, reason) => conn.emit_signal(
-                None::<zbus::names::BusName>,
-                PATH,
-                NAME,
-                "NotificationClosed",
-                &(id, reason),
-            ),
-        };
-        if let Err(e) = res {
-            eprintln!("infynitae-edge-apps: notifications: signal: {e}");
+pub fn send(conn: &zbus::Connection, out: Vec<Outgoing>) {
+    zbus::block_on(async {
+        for o in out {
+            let res = match o {
+                Outgoing::Action(id, key) => {
+                    conn.emit_signal(
+                        None::<zbus::names::BusName>,
+                        PATH,
+                        NAME,
+                        "ActionInvoked",
+                        &(id, key),
+                    )
+                    .await
+                }
+                Outgoing::Closed(id, reason) => {
+                    conn.emit_signal(
+                        None::<zbus::names::BusName>,
+                        PATH,
+                        NAME,
+                        "NotificationClosed",
+                        &(id, reason),
+                    )
+                    .await
+                }
+            };
+            if let Err(e) = res {
+                eprintln!("infynitae-edge-apps: notifications: signal: {e}");
+            }
         }
-    }
+    });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn hints(pairs: &[(&str, Value<'static>)]) -> HashMap<String, Value<'static>> {
+    fn hints(pairs: &[(&str, Variant<'static>)]) -> HashMap<String, Variant<'static>> {
         pairs
             .iter()
             .map(|(k, v)| (k.to_string(), v.clone()))
@@ -303,8 +315,8 @@ mod tests {
     #[test]
     fn a_volume_key_notification_becomes_a_level_with_its_tag() {
         let h = hints(&[
-            ("x-canonical-private-synchronous", Value::from("volume")),
-            ("value", Value::I32(55)),
+            ("x-canonical-private-synchronous", Variant::from("volume")),
+            ("value", Variant::I32(55)),
         ]);
         let n = note_from(3, "Audio", "Volume: 55%", "", &[], &h, 1200, "12:00".into());
         assert_eq!(n.value, Some(55));
@@ -314,14 +326,17 @@ mod tests {
 
     #[test]
     fn hints_of_any_integer_type_and_the_spec_s_timeouts() {
-        let h = hints(&[("urgency", Value::U8(2)), ("transient", Value::Bool(true))]);
+        let h = hints(&[
+            ("urgency", Variant::U8(2)),
+            ("transient", Variant::Bool(true)),
+        ]);
         let n = note_from(1, "", "s", "b", &[], &h, -1, "t".into());
         assert_eq!(n.urgency, 2);
         assert!(n.transient);
         assert_eq!(n.expire, Some(None), "-1: the server's default");
         let h = hints(&[
-            ("urgency", Value::I32(0)),
-            ("desktop-entry", Value::from("firefox")),
+            ("urgency", Variant::I32(0)),
+            ("desktop-entry", Variant::from("firefox")),
         ]);
         let n = note_from(1, "", "s", "b", &[], &h, 0, "t".into());
         assert_eq!(n.urgency, 0);

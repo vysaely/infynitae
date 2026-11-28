@@ -12,14 +12,16 @@ name = "infynitae-edge-apps"
 path = "src/main.rs"
 
 [dependencies]
-cairo-rs = { version = "0.20", features = ["png"] }
-pango = "0.20"
-pangocairo = "0.20"
+cairo-rs = { version = "0.22", features = ["png"] }
+pango = "0.22"
+pangocairo = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
-smithay-client-toolkit = "0.20"
+smithay-client-toolkit = "0.21"
 signal-hook-registry = "1.4"
 libc = "0.2"
-zbus = { version = "5.19", features = ["blocking-api"] }
+# already in the locked graph through zbus and glib; polls zbus's signal stream without futures-util
+futures-core = { version = "0.3", default-features = false }
+zbus = "6"
 
 [profile.release]
 opt-level = "s"

@@ -7,9 +7,8 @@ use crate::card::{Action, Button, CommandResult, Data, Source, Window};
 use crate::paths::runtime_path;
 use crate::shell::{OutputId, Shell, ARRIVE_LIFT};
 use smithay_client_toolkit::{
-    compositor::{CompositorHandler, CompositorState, Region},
-    delegate_compositor, delegate_keyboard, delegate_layer, delegate_output, delegate_pointer,
-    delegate_registry, delegate_seat, delegate_shm, delegate_touch,
+    compositor::{CompositorHandler, CompositorState, FrameCallbackData, Region},
+    delegate_dispatch2, delegate_registry,
     output::{OutputHandler, OutputState},
     reexports::{
         calloop::{
@@ -182,9 +181,9 @@ struct App {
     /// active touch point on the notification pop-ups strip (id, start position)
     popup_touch: Option<(i32, (f64, f64))>,
     /// the session bus connection serving org.freedesktop.Notifications
-    notify_conn: Option<zbus::blocking::Connection>,
+    notify_conn: Option<zbus::Connection>,
     /// serves the tray watcher while the edge runs (`tray_watcher.rs`)
-    tray_conn: Option<zbus::blocking::Connection>,
+    tray_conn: Option<zbus::Connection>,
     /// the compositor's shell IPC socket (`$XDG_RUNTIME_DIR/infynitae/shell.sock`)
     shell_sock: Option<std::os::unix::net::UnixStream>,
     shell_buf: Vec<u8>,

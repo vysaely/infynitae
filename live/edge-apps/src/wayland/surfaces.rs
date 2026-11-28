@@ -306,7 +306,7 @@ impl OutputSurface {
         let Some(idx) = self.acquire_slot() else {
             self.clear_pending = true;
             let wl = self.layer.wl_surface();
-            wl.frame(qh, wl.clone());
+            wl.frame(qh, FrameCallbackData(wl.clone()));
             self.layer.commit();
             return;
         };
@@ -327,7 +327,7 @@ impl OutputSurface {
             wl.damage_buffer(x, y, bw, bh);
         }
         if slot.buffer.attach_to(wl).is_ok() {
-            wl.frame(qh, wl.clone());
+            wl.frame(qh, FrameCallbackData(wl.clone()));
             self.release_pending = true;
             self.mapped_closed = true;
             self.last_slot = idx;
@@ -359,7 +359,7 @@ impl OutputSurface {
         let Some(slot_idx) = self.acquire_slot() else {
             // both buffers still held: commit unchanged and draw on the callback
             let wl = self.layer.wl_surface();
-            wl.frame(qh, wl.clone());
+            wl.frame(qh, FrameCallbackData(wl.clone()));
             self.layer.commit();
             self.frame_pending = true;
             return;
@@ -410,7 +410,7 @@ impl OutputSurface {
             wl.damage_buffer(dx, dy, dw, dh);
         }
         wl.damage_buffer(new_box.0, new_box.1, new_box.2, new_box.3);
-        wl.frame(qh, wl.clone());
+        wl.frame(qh, FrameCallbackData(wl.clone()));
         self.frame_pending = true;
         self.dirty = false;
         if slot.buffer.attach_to(wl).is_ok() {
@@ -750,7 +750,7 @@ impl PopupLayer {
         let wl = self.layer.wl_surface();
         wl.damage_buffer(0, 0, bw, bh);
         if more {
-            wl.frame(qh, wl.clone());
+            wl.frame(qh, FrameCallbackData(wl.clone()));
             self.frame_pending = true;
         }
         let committed = if buffer.attach_to(wl).is_ok() {

@@ -774,14 +774,7 @@ impl ShmHandler for App {
     }
 }
 
-delegate_compositor!(App);
-delegate_output!(App);
-delegate_shm!(App);
-delegate_seat!(App);
-delegate_keyboard!(App);
-delegate_pointer!(App);
-delegate_touch!(App);
-delegate_layer!(App);
+delegate_dispatch2!(App);
 delegate_registry!(App);
 delegate_noop!(App: ignore WpViewporter);
 delegate_noop!(App: ignore WpViewport);
