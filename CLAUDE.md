@@ -35,6 +35,8 @@ history, hidden from search by `.ignore`.
   to the host session. It must stay so.
 - **No emoji or status symbols** in anything the system shows or in docs: plain words (maths and arrows are fine).
 - **Merging**: to `main` only when CI is green; commit messages end with the attribution line the session gives.
+- **Another agent works here too** (agy, see `AGENTS.md`): claim work in "Working on now" at the top of
+  `~/.claude/projects/-home-vysaely/memory/open-tasks.md` before starting, and log the result there.
 - Don't restart the owner's replay recorder (`infynitae-reload recorder`, or Super+Shift+BackSpace): it clears
   the last 20 minutes they may want to save.
 

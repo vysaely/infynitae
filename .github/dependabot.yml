@@ -19,3 +19,7 @@ updates:
     ignore:
       # vendored with local patches (patches/README.md); moved by hand
       - dependency-name: smithay
+      # a major version changes the API: done by hand, related crates together (cairo-rs,
+      # pangocairo and smithay-client-toolkit move as one), not one failing PR each
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
