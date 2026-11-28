@@ -474,6 +474,13 @@ FILE_MANAGER="auto"
     # default: auto
     # options: auto  · any command
 
+FILE_PICKER="gtk"
+    # Open and Save file dialogs through xdg-desktop-portal [reload]
+    # default: gtk
+    #   infynitae   Infynitae's own picker (falls back to gtk on error)
+    #   gtk         xdg-desktop-portal-gtk
+    #   auto        Infynitae's picker when installed, else gtk
+
 SYSTEM_MONITOR="auto"
     # Super+Shift+Escape
     # default: auto

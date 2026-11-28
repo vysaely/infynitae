@@ -123,4 +123,8 @@ got=$(sh -c 'ICON_THEME=Adwaita; . live/settings.sh >/dev/null 2>&1; echo "$ICON
 check "ICON_THEME=Adwaita stays Adwaita with Papirus installed" "$got" "Adwaita"
 rm -rf "$HOME/.local/share/icons"
 
+# 11. FILE_PICKER: default is gtk until VM-verified
+got=$(sh -c 'unset FILE_PICKER; . live/env.sh >/dev/null 2>&1; echo "$FILE_PICKER"')
+check "FILE_PICKER in env.sh defaults to gtk" "$got" "gtk"
+
 [ "$fails" = 0 ] && echo "test-config-defaults: passed" || { echo "test-config-defaults: $fails failed"; exit 1; }

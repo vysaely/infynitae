@@ -61,7 +61,7 @@ jobs:
           tar -xzf "$RUNNER_TEMP/audit.tgz" --strip-components=1 -C "$RUNNER_TEMP/audit"
       - run: |
           status=0
-          for lock in Cargo.lock live/edge-apps/Cargo.lock live/shot-rs/Cargo.lock live/sandbox-socket/Cargo.lock; do
+          for lock in Cargo.lock live/edge-apps/Cargo.lock live/shot-rs/Cargo.lock live/files/Cargo.lock live/sandbox-socket/Cargo.lock; do
             "$RUNNER_TEMP/audit/cargo-audit" audit --file "$lock" || status=1
           done
           exit $status
@@ -117,6 +117,7 @@ jobs:
       - run: sh tools/test-qt-theme
       - run: sh tools/test-portal-settings
       - run: sh tools/test-portal-screencast
+      - run: sh tools/test-portal-file-chooser
       - run: sh tools/test-env
       - run: sh tools/test-session
       - run: sh tools/test-install-lib
@@ -157,6 +158,36 @@ jobs:
         with:
           name: infynitae-shot
           path: live/shot-rs/target/debug/infynitae-shot
+
+  # File picker and manager (live/files): its own crate, built and tested like shot-rs and edge-apps.
+  files:
+    name: Files (Rust)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libglib2.0-dev libwayland-dev libxkbcommon-dev libcairo2-dev libpango1.0-dev fonts-dejavu-core
+      - name: Toolchain pinned by rust-toolchain.toml
+        run: |
+          channel=$(python3 -c 'import tomllib; print(tomllib.load(open("rust-toolchain.toml", "rb"))["toolchain"]["channel"])')
+          rustup toolchain install "$channel" --profile minimal --component rustfmt,clippy
+      - uses: Swatinem/rust-cache@v2.7.8
+        with:
+          workspaces: live/files
+      - run: cd live/files && cargo fmt -- --check
+      - run: cd live/files && cargo clippy --locked --all-targets -- -D warnings
+      - name: Unused dependencies (cargo-machete)
+        run: |
+          mkdir -p "$RUNNER_TEMP/machete"
+          curl -fsSL "$CARGO_MACHETE_URL" -o "$RUNNER_TEMP/machete.tar.gz"
+          echo "$CARGO_MACHETE_SHA256  $RUNNER_TEMP/machete.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/machete.tar.gz" --strip-components=1 -C "$RUNNER_TEMP/machete"
+          PATH="$RUNNER_TEMP/machete:$PATH" cargo machete --with-metadata live/files
+      - run: cd live/files && cargo test --locked
+      - run: cd live/files && cargo build --locked
+      - uses: actions/upload-artifact@v4
+        with:
+          name: infynitae-files
+          path: live/files/target/debug/infynitae-files
 
   # The sandbox socket (live/sandbox-socket): its own crate; its test runs a real session of the
   # workspace with the helper as built (t1_trust, ignored without INFYNITAE_SANDBOX_SOCKET).

@@ -2,6 +2,7 @@
 # Theme modules: they hold the fallback defaults and the colours derived from the theme.
 live/edge-apps/src/theme.rs:theme module of the edge from apps
 live/shot-rs/src/look.rs:theme module of the screenshot helper (reads ~/.cache/infynitae/look)
+live/files/src/look.rs:theme module of the file picker and manager (reads ~/.cache/infynitae/look)
 # Readers of the theme's settings, with their defaults for a config that gives none.
 live/edge-apps/src/config.rs:parses SURFACE_COLOR, TEXT_COLOR, ACCENT; holds their defaults
 live/polkit/infynitae-polkit.c:build_css reads the config and look file; its defaults are config/config's

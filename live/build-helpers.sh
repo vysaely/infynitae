@@ -54,7 +54,7 @@ build() {
 
 build infynitae-portal "gio-2.0 gio-unix-2.0 wayland-client xkbcommon libpipewire-0.3 gbm libdrm" \
     "$LIVE/portal/infynitae-portal.c" "$LIVE/portal/remote-desktop.c" "$LIVE/portal/settings.c" \
-    "$LIVE/portal/screencast.c" "$LIVE/portal/screenshot.c" \
+    "$LIVE/portal/screencast.c" "$LIVE/portal/screenshot.c" "$LIVE/portal/file-chooser.c" \
     "$LIVE/portal/wlr-virtual-pointer-protocol.c" "$LIVE/portal/virtual-keyboard-protocol.c" \
     "$LIVE/portal/xdg-output-protocol.c" "$LIVE/portal/ext-image-copy-capture-v1-protocol.c" \
     "$LIVE/portal/ext-image-capture-source-v1-protocol.c" \
@@ -95,6 +95,7 @@ sh "$LIVE/edge-pick" "$BIN" || FAILED="$FAILED infynitae-edge"
 build infynitae-record-stream "wayland-client" \
     "$LIVE/record/infynitae-record-stream.c" "$LIVE/record/wlr-screencopy-protocol.c" -- -pthread -lrt
 build_rust infynitae-shot "$LIVE/shot-rs"
+build_rust infynitae-files "$LIVE/files"
 # the process of an X11 window, from the X server (infynitae-xkill)
 build infynitae-xres-pid "xcb xcb-res" "$LIVE/xres/infynitae-xres-pid.c"
 # the Wayland socket of a sandboxed Windows program (live/windows-run)
