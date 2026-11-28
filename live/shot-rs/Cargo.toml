@@ -12,7 +12,7 @@ name = "infynitae-shot"
 path = "src/main.rs"
 
 [dependencies]
-cairo-rs = { version = "0.20", features = ["png"] }
+cairo-rs = { version = "0.22", features = ["png"] }
 libc = "0.2"
 pango = "0.20"
 pangocairo = "0.20"
