@@ -1354,6 +1354,16 @@ impl Probe {
         self.clipboard.sources.push(source);
     }
 
+    /// Sets the clipboard selection to nothing with `serial` (`wl_data_device.set_selection(null)`):
+    /// what the X11 bridge does when the X11 app that owned the clipboard quits.
+    pub fn clear_selection(&mut self, serial: u32) {
+        self.clipboard
+            .device
+            .as_ref()
+            .expect("device")
+            .set_selection(None, serial);
+    }
+
     /// Asks the current selection for `mime`; returns the read end of the pipe.
     pub fn paste(&mut self, mime: &str) -> std::io::PipeReader {
         let (offer, _) = self

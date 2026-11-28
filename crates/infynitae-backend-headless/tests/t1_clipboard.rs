@@ -167,6 +167,14 @@ impl S {
         self.o.drive(&mut self.ls);
     }
 
+    /// B sets the clipboard to nothing, as the X11 bridge does when the X11 app that copied quits.
+    fn b_clears(&mut self) {
+        self.focus(self.b);
+        let serial = self.o.probe.last_serial;
+        self.o.probe.clear_selection(serial);
+        self.o.drive(&mut self.ls);
+    }
+
     /// B's client quits (a new, idle second client takes its place in the harness).
     fn b_quits(&mut self) {
         let Other { conn, queue, .. } =
@@ -351,6 +359,25 @@ fn a_copy_outlives_the_app_that_made_it() {
     // and a new copy takes over from the compositor's
     s.a_copies(b"A's now");
     assert_eq!(s.a_pastes("text/plain"), b"A's now");
+}
+
+/// The X11 bridge clears the clipboard when the X11 app that copied quits (2026-11-28, VM: an xclip
+/// copy was gone the moment xclip ended; wl-clip-persist used to cover it). The compositor keeps the
+/// copy it already read and offers it: a cleared clipboard is treated like one whose app went.
+#[test]
+fn a_copy_outlives_its_app_clearing_the_clipboard() {
+    let mut s = scene();
+    s.b_copies(&MIMES, b"from an X11 app");
+    s.focus(s.a);
+    assert_eq!(s.a_pastes("text/plain"), b"from an X11 app");
+    s.b_clears();
+    s.focus(s.a);
+    assert!(
+        s.ls.probe.clipboard.selection.is_some(),
+        "A is offered the compositor's copy, not an empty clipboard: {:?}",
+        s.ls.probe.clipboard.log
+    );
+    assert_eq!(s.a_pastes("text/plain"), b"from an X11 app");
 }
 
 /// A password manager's copy (KeePassXC offers `x-kde-passwordManagerHint`) is never read by the

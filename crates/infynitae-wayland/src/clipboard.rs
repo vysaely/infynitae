@@ -343,6 +343,10 @@ pub struct Clipboard {
     reading: Vec<(String, Shared)>,
     /// Its app's source went before the reading finished: the copy is offered once read.
     orphaned: bool,
+    /// An app set the clipboard to nothing (the X11 bridge, when the X11 app that copied quits):
+    /// handled at the end of the dispatch, since Smithay clears the seat's selection only after
+    /// `new_selection` returns.
+    cleared: bool,
     /// The current selection's copy, read.
     held: Option<Contents>,
     pub history: History,
@@ -362,6 +366,7 @@ impl Default for Clipboard {
             due: None,
             reading: Vec::new(),
             orphaned: false,
+            cleared: false,
             held: None,
             history: History::default(),
             sends: Vec::new(),
@@ -415,6 +420,13 @@ impl WaylandState {
     /// A client set the clipboard (`offered`: its types) or cleared it (`None`). `private`: it
     /// was copied in a private window.
     pub(crate) fn clipboard_new_selection(&mut self, offered: Option<Vec<String>>, private: bool) {
+        // an app set the clipboard to nothing: the X11 bridge does so when the X11 app that copied
+        // quits. Kept like a copy whose app went (clipboard_orphaned): the compositor offers it.
+        if offered.is_none() && self.clipboard.persist {
+            self.clipboard.cleared = true;
+            return;
+        }
+        self.clipboard.cleared = false;
         let c = &mut self.clipboard;
         c.reading.clear();
         c.orphaned = false;
@@ -428,6 +440,10 @@ impl WaylandState {
     /// After each client dispatch: the reads of a new selection start, the pipes move, and a
     /// finished copy is kept (and offered, when its source went meanwhile).
     pub(crate) fn clipboard_turn(&mut self) {
+        // a cleared clipboard is kept like one whose app went (the copy read so far is offered)
+        if std::mem::take(&mut self.clipboard.cleared) {
+            self.clipboard_orphaned();
+        }
         if let Some(types) = self.clipboard.due.take() {
             for mime in types {
                 let pipe = rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC)
