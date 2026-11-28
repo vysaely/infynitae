@@ -515,7 +515,7 @@ fn authority_names_in_type(ty: &syn::Type, out: &mut Vec<String>, impl_ty: Optio
         syn::Type::Group(g) => authority_names_in_type(&g.elem, out, impl_ty),
         syn::Type::Array(a) => authority_names_in_type(&a.elem, out, impl_ty),
         syn::Type::Slice(s) => authority_names_in_type(&s.elem, out, impl_ty),
-        syn::Type::BareFn(f) => {
+        syn::Type::FnPtr(f) => {
             if let syn::ReturnType::Type(_, ret) = &f.output {
                 authority_names_in_type(ret, out, impl_ty);
             }
@@ -691,7 +691,7 @@ impl<'ast> Visit<'ast> for CoreVisitor<'_> {
             syn::Type::Path(p) => last_ident(&p.path),
             _ => None,
         };
-        if let (Some((_, tr, _)), Some(t)) = (&i.trait_, &self_ty) {
+        if let (Some((tr, _)), Some(t)) = (&i.trait_, &self_ty) {
             let tr = last_ident(tr).unwrap_or_default();
             if (tr == "Clone" || tr == "Copy") && self.authority_type(t) {
                 self.facts
