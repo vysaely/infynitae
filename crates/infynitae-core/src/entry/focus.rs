@@ -784,6 +784,60 @@ mod tests {
         assert_eq!(c.focus().target(), Some(w2));
     }
 
+    /// FOCUS_NEXT bound by the user without Super (a key or a mouse button): there is no Super
+    /// to let go, so every press is a tap and flips between the last two windows.
+    #[test]
+    fn focus_next_without_super_flips_at_each_press() {
+        use crate::input::bindings::BTN_MIDDLE;
+        use crate::input::keys::{ACTION_NAMES, KEY_F1, UserBindings, parse_chord};
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        let ws = map_windows(&mut c, a, 3);
+        for &w in &ws {
+            c.set_focus(&mut i, Some(w)).unwrap();
+        }
+        c.pointer = PointerState::Located {
+            output: a,
+            p: (5.0, 5.0),
+        };
+        let next = ACTION_NAMES
+            .iter()
+            .find(|(name, _)| *name == "FOCUS_NEXT")
+            .map(|(_, action)| *action);
+        c.set_key_bindings(UserBindings {
+            chords: vec![
+                (parse_chord("F1").unwrap(), next),
+                (parse_chord("CTRL+MOUSE_MIDDLE").unwrap(), next),
+            ],
+            moved: Vec::new(),
+        });
+        let ctrl = Modifiers {
+            ctrl: true,
+            ..Modifiers::default()
+        };
+        for (n, expected) in [ws[1], ws[2], ws[1], ws[2]].into_iter().enumerate() {
+            if n < 2 {
+                press(&mut c, &mut i, KEY_F1, true, false);
+                press(&mut c, &mut i, KEY_F1, false, false);
+            } else {
+                for pressed in [true, false] {
+                    c.physical_input_vec(
+                        &mut i,
+                        crate::PhysicalEvent::PointerButton {
+                            button: BTN_MIDDLE,
+                            pressed,
+                            modifiers: ctrl,
+                            time_us: 1000,
+                        },
+                    )
+                    .unwrap();
+                }
+            }
+            assert_eq!(c.focus().target(), Some(expected), "press {n}");
+            assert!(!c.focus().cycling(), "press {n} left a cycle open");
+        }
+    }
+
     /// Super+Shift+Tab over a fullscreen window (owner, 2026-11-01): the overview shows the canvas;
     /// again, and the window is back.
     #[test]
