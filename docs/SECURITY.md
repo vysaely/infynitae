@@ -73,8 +73,7 @@ this time, always, or deny.
   any other such app: it is asked every time, never remembered.
 - Only xdg-desktop-portal may call Infynitae's portal, so the app id it passes is the one the
   portal checked; another program calling it directly is refused.
-- `SCREENSHARE_ASK="false"` shares without asking (the old behaviour); `"true"` asks and also
-  always lets you pick the screen or window.
+- `SCREENSHARE_ASK="app"` (the default) asks once per app, then shares the first screen at once or lets you pick a window; `"true"` asks and always lets you pick the screen or window; `"false"` shares without asking.
 - While anything captures the screen, the edge's background apps module says "Screen capture" and
   which app (`CAPTURE_INDICATOR="edge"`, the default since 2026-11-12, the owner's choice), or a red dot
   shows in the corner of every screen (`"dot"`). The edge's line is seen only when a panel with that
@@ -212,7 +211,8 @@ root (the lock screen's PAM file, the session entry) and builds it.
 
 Session helpers that never need privilege escalation drop `NO_NEW_PRIVS` and clear inheritable
 capabilities (`CapInh: 0`) where they start (`setpriv --no-new-privs --inh-caps=-all` in
-`live/session.sh`, `live/env.sh`, `live/infynitae-reload`, and `XwaylandSupervisor::spawn`; plus
+`live/session.sh`, `live/env.sh`, `live/infynitae-reload`, `live/launch.sh` for the screenshot
+freeze overlay, and `XwaylandSupervisor::spawn`; plus
 `prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0)` directly inside compiled C helpers). Once set, the kernel
 forbids gaining privileges through SUID/SGID binaries or file capabilities across any later `exec`.
 
@@ -228,13 +228,14 @@ systemd bus, so `setpriv` + `prctl` are used in place without adding extra super
 | `infynitae-record-stream` | Yes (`prctl`) | Reads screencopy frames to stdout for `ffmpeg` |
 | `infynitae-xres-pid` | Yes (`prctl`) | Reads `_NET_WM_PID` / X-Resource client PIDs |
 | `xwayland-satellite` | Yes (`setpriv` in `XwaylandSupervisor`) | X11 bridge; forks `Xwayland` unprivileged |
-| `wl-clip-persist`, `wl-paste` | Yes (`setpriv`) | Clipboard persistence and `cliphist store` watch |
+| `wl-clip-persist`, `wl-paste` | Yes (`setpriv`) | Older-compositor fallback only (current compositor keeps the clipboard and history itself) |
 | `mako`, `swaync`, `dunst`, `fnott` | Yes (`setpriv`) | Fallback notification daemons |
 | `squeekboard` | Yes (`setpriv`) | On-screen keyboard |
 | `kbuildsycoca6`, `kbuildsycoca5` | Yes (`setpriv`) | Rebuilds KDE app cache at login |
 | `autorotate` | Yes (`setpriv`) | Reads `monitor-sensor` and calls `infynitae msg` |
 | `infynitae-polkit` | No | Invokes `polkit-agent-helper-1` / PAM authentication |
-| `infynitae-lock`, `infynitae-sleep-lock` | No (`PR_SET_DUMPABLE=0` only) | PAM invokes SGID/SUID `unix_chkpwd` for unlock |
+| `infynitae-lock`, `infynitae-sleep-lock` | No (`infynitae-lock` sets `PR_SET_DUMPABLE=0`) | PAM invokes SGID/SUID `unix_chkpwd` for unlock |
+| `infynitae-bus-watch` | No | Runs `infynitae-automount` (`pkexec`) and `infynitae-sleep-lock` (`infynitae-lock` / PAM) |
 | `infynitae-automount`, `udiskie` | No | Invokes `pkexec` (`infynitae-drive-name`) and `udisksctl` |
 | `infynitae-disk-guard` | No | Invokes `pkexec /usr/local/lib/infynitae-disk-fix` |
 | `infynitae-recorder` | No | Invokes `gpu-screen-recorder` (`gsr-kms-server` `cap_sys_admin`) |
@@ -257,12 +258,12 @@ Ours, and where a security bug would be ours to fix:
 - The polkit agent (`live/polkit`): the password dialog only; polkitd decides.
 - The password store for apps: the session starts it (gnome-keyring, or infynitae-keyring, a
   project of its own, once its switch is made) and the lock's PAM file opens it.
-- Clipboard history (above): the switch and the sensitive mark; the store is cliphist's.
+- Clipboard persistence and history (above): kept by the compositor in memory (`crates/infynitae-wayland/src/clipboard.rs`), with the password-manager hint and private-window rules.
 - The vendored Smithay with its patches and xwayland-satellite with its patch (`patches/`).
 
 Left on purpose to projects that keep them up to date, through Arch's packages: crypto libraries,
-PAM, polkitd, Xwayland, PipeWire, the kernel, bwrap (Windows and Android programs above),
-gnome-keyring, cliphist, umu and Waydroid.
+PAM, polkitd, greetd (when the login screen is turned on), Xwayland, PipeWire, the kernel, bwrap
+(Windows and Android programs above), gnome-keyring, umu and Waydroid.
 
 What needs upkeep:
 
