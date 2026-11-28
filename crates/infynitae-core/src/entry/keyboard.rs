@@ -38,6 +38,25 @@ impl Core {
         }
 
         let interaction_active = self.input.interaction.active();
+        // while Super+Tab cycles (Super held), Shift+Tab steps back in place of the overview and
+        // Escape goes back to where the cycle started (owner, 2026-11-28)
+        if self.focus.cycling()
+            && !mods_changed
+            && !interaction_active
+            && modifiers.logo
+            && !modifiers.ctrl
+            && !modifiers.alt
+            && (key == keys::KEY_TAB && modifiers.shift || key == keys::KEY_ESC && !modifiers.shift)
+        {
+            self.input.key_ownership.press(key, Owner::Compositor);
+            if key == keys::KEY_TAB {
+                self.cycle_step(true, navigation, out);
+            } else {
+                self.cycle_cancel(navigation, out);
+            }
+            out.push(Effect::KeyboardIntercept { key });
+            return;
+        }
         let matched = (!self.is_capturing_key())
             .then(|| self.resolve_key_binding(key, modifiers, interaction_active))
             .flatten()
@@ -116,21 +135,7 @@ impl Core {
     ) {
         let fx = match action {
             crate::input::keys::KeyAction::FocusNext => {
-                let (fx, attention) = self.focus_next();
-                out.extend(fx);
-                if let Some(target) = self.focus.target() {
-                    self.show_chosen(target, out);
-                }
-                // a window that asked for attention is brought into view as a focus jump does
-                // (Super+1..9), whatever FOCUS_CYCLE_NAVIGATE says (owner, 2026-10-31)
-                if (self.focus_cycle_navigate || attention)
-                    && let Some(p) = proof
-                {
-                    self.recenter(p, false, true, out);
-                }
-                // what is under the pointer now is not a crossing: the camera moved, not the hand
-                self.hover_seen = self.hovered_window();
-                self.keyed_focus = self.focus.target();
+                self.cycle_step(false, proof, out);
                 return;
             }
             // M22 cancel: no revert, owned buttons stay owned; the interaction terminates as at

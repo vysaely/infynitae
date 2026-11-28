@@ -214,11 +214,129 @@ impl Core {
         element: crate::stage::ElementId,
         out: &mut Vec<Effect>,
     ) {
-        let raised = self.raise_by_user(element);
         out.extend(
             self.focus
                 .set_focus_at(self.input.clock.now_us(), Some(element)),
         );
+        self.raise_focused(element, out);
+    }
+
+    /// Super+Tab, or Super+Shift+Tab while it cycles (`back`), as Alt+Tab on Windows (owner,
+    /// 2026-11-28): the first Tab starts a cycle over the windows in their order of use, the
+    /// minimized ones last; each Tab focuses the next one, raises it, shows it over a fullscreen
+    /// window in its way and, with FOCUS_CYCLE_NAVIGATE, centres the camera on it as Super+Space
+    /// does. A window asking for attention is the first step and is always brought into view
+    /// (owner, 2026-10-31). The order of use changes only when Super is let go
+    /// ([`Core::cycle_commit`]).
+    pub(super) fn cycle_step(
+        &mut self,
+        back: bool,
+        proof: Option<authority::Authorized>,
+        out: &mut Vec<Effect>,
+    ) {
+        let first = !self.focus.cycling();
+        let mut attention = None;
+        if first {
+            let output = self
+                .pointer_output()
+                .or_else(|| self.outputs.first().map(|o| o.id));
+            self.cycle_camera = output.and_then(|o| {
+                let camera = self.cameras.camera_for_output(o)?;
+                Some((o, camera, self.cameras.effective_value(camera)?))
+            });
+            let shown: Vec<_> = self
+                .focusable_elements()
+                .into_iter()
+                .filter(|&e| !self.is_notification(e))
+                .collect();
+            let minimized: Vec<_> = self
+                .stage
+                .mapped_elements()
+                .into_iter()
+                .filter(|&e| self.stage.is_minimized(e) && !self.is_notification(e))
+                .collect();
+            attention = self.focus.cycle_start(&shown, &minimized);
+        }
+        let stage = &self.stage;
+        let Some(fx) = self.focus.cycle_step(back, |e| {
+            stage.state(e) == Some(crate::stage::Lifecycle::Mapped)
+        }) else {
+            return;
+        };
+        out.extend(fx);
+        let Some(id) = self.focus.target() else {
+            return;
+        };
+        // a minimized window stays hidden until Super is let go: nothing to raise or show yet
+        if !self.stage.is_minimized(id) {
+            self.raise_focused(id, out);
+            self.show_chosen(id, out);
+            if (self.focus_cycle_navigate || attention == Some(id))
+                && let Some(p) = proof
+            {
+                // only the first step is a place to come back to (Super+BackSpace)
+                self.recenter(p, false, first, out);
+            }
+        }
+        // what is under the pointer now is not a crossing: the camera moved, not the hand
+        self.hover_seen = self.hovered_window();
+        self.keyed_focus = Some(id);
+    }
+
+    /// Super let go after Super+Tab: the window the cycle chose becomes the most recently used,
+    /// the others keeping their order. A minimized one comes back now, centred by the camera with
+    /// FOCUS_CYCLE_NAVIGATE.
+    pub(super) fn cycle_commit(&mut self, proof: authority::Authorized, out: &mut Vec<Effect>) {
+        self.cycle_camera = None;
+        let Some(id) = self.focus.cycle_commit() else {
+            return;
+        };
+        if self.stage.is_minimized(id) {
+            self.restore_minimized(id, out);
+            out.extend(self.reconcile_constraints());
+            if self.focus_cycle_navigate {
+                self.recenter(proof, false, true, out);
+            }
+            self.hover_seen = self.hovered_window();
+        }
+    }
+
+    /// Escape while Super+Tab cycles: the focus goes back to the window focused before its first
+    /// Tab (one closed since keeps the focus where it is), and the pointer's screen's camera to
+    /// where it was then.
+    pub(super) fn cycle_cancel(
+        &mut self,
+        proof: Option<authority::Authorized>,
+        out: &mut Vec<Effect>,
+    ) {
+        let Some(before) = self.focus.cycle_cancel() else {
+            return;
+        };
+        let camera = self.cycle_camera.take();
+        if let Some(id) = before {
+            if self.stage.mapped(id).is_none() {
+                return;
+            }
+            out.extend(self.focus.preview(Some(id)));
+            self.raise_focused(id, out);
+            self.show_chosen(id, out);
+        } else {
+            out.extend(self.focus.preview(None));
+        }
+        if let (Some(p), Some((output, camera, value))) = (proof, camera) {
+            self.cameras
+                .glide_to(p, camera, value, false, self.zoom_feel);
+            self.camera_written(output, camera, out);
+        }
+        self.hover_seen = self.hovered_window();
+        self.keyed_focus = before;
+    }
+
+    /// `element`, just focused, comes to the front; the focused window's pointer constraints are
+    /// reconciled, and what lies under the pointer may have changed, so it gets one true-position
+    /// event (M10), as after a camera write.
+    fn raise_focused(&mut self, element: crate::stage::ElementId, out: &mut Vec<Effect>) {
+        let raised = self.raise_by_user(element);
         out.extend(self.reconcile_constraints());
         if raised
             && matches!(self.pointer, pointer::PointerState::Located { .. })
@@ -626,10 +744,11 @@ mod tests {
         assert_eq!(c.focus().target(), Some(ws[0]), "Tab, Tab returns");
     }
 
-    /// Super+Tab (owner, 2026-11-01) through the key path: every press flips between the last two
-    /// windows used, whether Super is let go in between or held.
+    /// Super+Tab through the key path (owner, 2026-11-28, as Alt+Tab on Windows): a tap goes to
+    /// the window used before; held, each Tab goes one further in the order of use, wrapping
+    /// round, and the order changes only when Super is let go.
     #[test]
-    fn super_tab_flips_the_last_two_and_never_goes_further_back() {
+    fn super_tab_held_goes_through_every_window_and_commits_on_release() {
         use crate::input::keys::{KEY_LEFTMETA, KEY_TAB};
         let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
         let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
@@ -644,15 +763,17 @@ mod tests {
         super_tab(&mut c, &mut i);
         assert_eq!(c.focus().target(), Some(w3), "Tab, Tab returns");
 
-        // Super held: still only those two
+        // Super held: every window in the order of use, round again to the start
         press(&mut c, &mut i, KEY_LEFTMETA, true, true);
-        for expected in [w2, w3, w2] {
+        for expected in [w2, w1, w3, w2] {
             press(&mut c, &mut i, KEY_TAB, true, true);
             press(&mut c, &mut i, KEY_TAB, false, true);
             assert_eq!(c.focus().target(), Some(expected));
+            assert_eq!(c.focus().history(), &[w3, w2, w1], "no reorder while held");
         }
         press(&mut c, &mut i, KEY_LEFTMETA, false, false);
-        assert_eq!(c.focus().history(), &[w2, w3, w1]);
+        assert!(!c.focus().cycling());
+        assert_eq!(c.focus().history(), &[w2, w3, w1], "the chosen one first");
 
         // a window closed is dropped from the history and skipped
         let _ = c.toplevel_destroyed(w3);

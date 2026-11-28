@@ -207,11 +207,18 @@ impl Core {
                                     | KeyAction::FocusDirection(_)
                                     | KeyAction::ToggleOverview
                             )
-                        ))
+                        )
+                        // Super+Shift+Tab and Escape while Super+Tab cycles
+                        || self.focus.cycling()
+                            && matches!(key, crate::input::keys::KEY_TAB | crate::input::keys::KEY_ESC))
                     .then(authority::Authorized::mint);
                     self.keyboard_press(key, modifiers, mods_changed, time_us, navigation, out);
                 } else {
                     self.keyboard_release(key, mods_changed, time_us, out);
+                }
+                // Super let go ends a Super+Tab cycle on the window it chose
+                if self.focus.cycling() && !modifiers.logo {
+                    self.cycle_commit(authority::Authorized::mint(), out);
                 }
                 self.physical_input_activity = true;
                 Ok(())
