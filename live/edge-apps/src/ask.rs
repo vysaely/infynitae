@@ -1118,9 +1118,10 @@ fn draw_inner(cr: &Context, th: &Theme, ask: &AskState, (gx, gy, gw, gh): Rect) 
             let ry = top + (i as f64) * ROW_H;
             let is_sel = i == ask.sel;
             if is_sel {
+                let row_x = gx + PAD_X - 8.0;
                 draw::round_rect(
                     cr,
-                    gx + PAD_X - 8.0,
+                    row_x,
                     ry + 1.0,
                     (gw - 2.0 * (PAD_X - 8.0)).max(0.0),
                     ROW_H - 2.0,
@@ -1128,18 +1129,23 @@ fn draw_inner(cr: &Context, th: &Theme, ask: &AskState, (gx, gy, gw, gh): Rect) 
                 );
                 draw::set(cr, th.accent.alpha(crate::ui::CHOSEN_ALPHA));
                 let _ = cr.fill();
+                draw::round_rect(cr, row_x + 2.0, ry + 7.0, 2.5, ROW_H - 14.0, 1.25);
+                draw::set(cr, th.accent);
+                let _ = cr.fill();
             }
+            let item_t = Text {
+                size: 13.0,
+                bold: is_sel,
+                color: if is_sel { th.text } else { th.text.alpha(0.86) },
+                text: item,
+            };
+            let (_, lh) = draw::measure(cr, &item_t);
             draw::text_max(
                 cr,
                 gx + PAD_X,
-                ry + (ROW_H - 16.0) / 2.0,
+                ry + (ROW_H - lh) / 2.0,
                 (gw - 2.0 * PAD_X).max(20.0),
-                &Text {
-                    size: 13.0,
-                    bold: is_sel,
-                    color: if is_sel { th.text } else { th.text.alpha(0.86) },
-                    text: item,
-                },
+                &item_t,
             );
         }
     }

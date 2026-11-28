@@ -80,8 +80,7 @@ pub fn round_rect(cr: &Context, x: f64, y: f64, w: f64, h: f64, r: f64) {
 pub fn card(cr: &Context, t: &Theme, x: f64, y: f64, w: f64, h: f64) {
     round_rect(cr, x.round(), y.round(), w.round(), h.round(), t.corners);
     set(cr, t.card);
-    let _ = cr.fill_preserve();
-    cr.new_path();
+    let _ = cr.fill();
     round_rect(
         cr,
         x.round() + 0.5,

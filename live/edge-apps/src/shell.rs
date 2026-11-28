@@ -49,14 +49,14 @@ pub const PAD_TOP: f64 = 14.0;
 pub const PAD_BOTTOM: f64 = 12.0;
 pub const HEAD_H: f64 = 26.0;
 pub const GAP: f64 = 12.0;
-/// A card rises and fades in as the panel opens; the next one starts this much later.
-pub const ARRIVE_MS: f64 = 200.0;
-pub const ARRIVE_STAGGER_MS: f64 = 28.0;
-pub const ARRIVE_LIFT: f64 = 14.0;
+/// A card unfolds from its panel's screen edge as it opens; the next card starts this much later.
+pub const ARRIVE_MS: f64 = 170.0;
+pub const ARRIVE_STAGGER_MS: f64 = 18.0;
+pub const ARRIVE_LIFT: f64 = 8.0;
 const ARRIVE_CARDS: f64 = 8.0;
-/// Leaving animation: fade and drop when a panel closes.
-pub const LEAVE_MS: f64 = 120.0;
-pub const LEAVE_DROP: f64 = 6.0;
+/// Leaving animation: cards tuck back toward their screen edge when a panel closes.
+pub const LEAVE_MS: f64 = 105.0;
+pub const LEAVE_DROP: f64 = 5.0;
 /// Pointer dwell before opening a hover panel, and grace before closing when left.
 pub const HOVER_OPEN_MS: f64 = 120.0;
 pub const HOVER_CLOSE_MS: f64 = 250.0;

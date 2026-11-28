@@ -125,16 +125,18 @@ impl Shell {
         let above = ps.panel.side == Side::Bottom;
         let th = &self.theme;
         let mut frame = Vec::new();
+        let top = rects.iter().map(|(_, r)| r.1).fold(f64::INFINITY, f64::min);
         let bottom = rects.iter().map(|(_, r)| r.1 + r.3).fold(0.0, f64::max);
         cr.save().ok();
-        let clip_lift = if closing_p.is_some() {
+        let clip_pad = if closing_p.is_some() {
             LEAVE_DROP
         } else if self.open_ms.is_finite() {
             ARRIVE_LIFT
         } else {
             0.0
         };
-        cr.rectangle(pbox.0, pbox.1, pbox.2, pbox.3 + clip_lift);
+        let clip = clip_rect_for_side(ps.panel.side, pbox, clip_pad, w, h);
+        cr.rectangle(clip.0, clip.1, clip.2, clip.3);
         cr.clip();
         for (ci, r) in &rects {
             let pc = &ps.cards[*ci];
@@ -158,8 +160,7 @@ impl Shell {
                 },
                 sel,
             );
-            // the bottom card arrives first (about one card per 90 px up)
-            let k = ((bottom - (r.1 + r.3)) / 90.0).clamp(0.0, ARRIVE_CARDS);
+            let k = card_stagger(ps.panel.side, ps.panel.align, *r, top, bottom);
             let p = if let Some(cp) = closing_p {
                 cp
             } else if self.open_ms.is_finite() {
@@ -215,20 +216,20 @@ impl Shell {
                 frame.push((*ci, *r, hits));
                 continue;
             }
-            let lifted = p < 1.0;
-            if lifted {
-                let drop_y = if closing_p.is_some() {
-                    LEAVE_DROP
-                } else {
-                    ARRIVE_LIFT
-                };
+            let animated = p < 1.0;
+            let mut alpha = 1.0;
+            if animated {
+                let m = card_motion(ps.panel.side, ps.panel.align, *r, p, closing_p.is_some());
+                alpha = m.alpha;
                 cr.push_group();
-                cr.translate(0.0, (1.0 - p) * drop_y);
+                cr.translate(m.anchor_x + m.dx, m.anchor_y + m.dy);
+                cr.scale(m.scale, m.scale);
+                cr.translate(-m.anchor_x, -m.anchor_y);
             }
             draw_card(cr, th, pc, &cx, status, *r, &mut hits);
-            if lifted {
+            if animated {
                 let _ = cr.pop_group_to_source();
-                let _ = cr.paint_with_alpha(p);
+                let _ = cr.paint_with_alpha(alpha);
             }
             if interactive {
                 frame.push((*ci, *r, hits));
@@ -286,18 +287,14 @@ impl Shell {
                     crate::draw::set(cr, th.text.alpha(0.08));
                     let _ = cr.fill();
                 }
-                crate::draw::text_max(
-                    cr,
-                    r.0 + 12.0,
-                    r.1 + (r.3 - 17.0) / 2.0,
-                    r.2 - 24.0,
-                    &crate::draw::Text {
-                        size: 13.0,
-                        bold: false,
-                        color: th.text,
-                        text: "Edit panel",
-                    },
-                );
+                let label = crate::draw::Text {
+                    size: 13.0,
+                    bold: false,
+                    color: th.text,
+                    text: "Edit panel",
+                };
+                let (_, lh) = crate::draw::measure(cr, &label);
+                crate::draw::text_max(cr, r.0 + 12.0, r.1 + (r.3 - lh) / 2.0, r.2 - 24.0, &label);
             }
             self.frames.borrow_mut().insert(
                 output,
@@ -388,7 +385,88 @@ pub(super) fn header_title_max_w(card_w: f64, from_w: f64) -> (f64, f64) {
     (capped_from, title_w)
 }
 
+pub(super) struct CardMotion {
+    pub(super) dx: f64,
+    pub(super) dy: f64,
+    pub(super) scale: f64,
+    pub(super) anchor_x: f64,
+    pub(super) anchor_y: f64,
+    pub(super) alpha: f64,
+}
+
+/// Stagger order along the panel's own edge: the card closest to the screen edge arrives first.
+pub(super) fn card_stagger(side: Side, align: i8, r: Rect, top: f64, bottom: f64) -> f64 {
+    let dist = match side {
+        Side::Bottom => bottom - (r.1 + r.3),
+        Side::Top => r.1 - top,
+        Side::Left | Side::Right => {
+            if align > 0 {
+                bottom - (r.1 + r.3)
+            } else {
+                r.1 - top
+            }
+        }
+    };
+    (dist / 90.0).clamp(0.0, ARRIVE_CARDS)
+}
+
+/// Edge-anchored unfold for arrival (`closing == false`) and tuck-back for closing: cards travel
+/// out from their own screen edge and scale smoothly around the edge-facing anchor instead of
+/// always sliding up from below.
+pub(super) fn card_motion(side: Side, align: i8, r: Rect, p: f64, closing: bool) -> CardMotion {
+    let p = p.clamp(0.0, 1.0);
+    let travel = (1.0 - p) * if closing { LEAVE_DROP } else { ARRIVE_LIFT };
+    let bias = match align.cmp(&0) {
+        std::cmp::Ordering::Less => 0.25,
+        std::cmp::Ordering::Equal => 0.5,
+        std::cmp::Ordering::Greater => 0.75,
+    };
+    let (dx, dy, anchor_x, anchor_y) = match side {
+        Side::Bottom => (0.0, travel, r.0 + r.2 * bias, r.1 + r.3),
+        Side::Top => (0.0, -travel, r.0 + r.2 * bias, r.1),
+        Side::Left => (-travel, 0.0, r.0, r.1 + r.3 * bias),
+        Side::Right => (travel, 0.0, r.0 + r.2, r.1 + r.3 * bias),
+    };
+    let min_scale = if closing { 0.97 } else { 0.955 };
+    let scale = min_scale + (1.0 - min_scale) * p;
+    let alpha = if closing { p } else { p.powf(0.65) };
+    CardMotion {
+        dx,
+        dy,
+        scale,
+        anchor_x,
+        anchor_y,
+        alpha,
+    }
+}
+
+/// Clip rectangle around `pbox`, extended toward `side` while cards are arriving or leaving.
+pub(super) fn clip_rect_for_side(side: Side, pbox: Rect, pad: f64, w: f64, h: f64) -> Rect {
+    if pad <= 0.0 {
+        return pbox;
+    }
+    match side {
+        Side::Bottom => (pbox.0, pbox.1, pbox.2, (pbox.3 + pad).min(h - pbox.1)),
+        Side::Top => {
+            let y0 = (pbox.1 - pad).max(0.0);
+            (pbox.0, y0, pbox.2, (pbox.1 + pbox.3 - y0).max(0.0))
+        }
+        Side::Left => {
+            let x0 = (pbox.0 - pad).max(0.0);
+            (x0, pbox.1, (pbox.0 + pbox.2 - x0).max(0.0), pbox.3)
+        }
+        Side::Right => (pbox.0, pbox.1, (pbox.2 + pad).min(w - pbox.0), pbox.3),
+    }
+}
+
 pub(super) fn draw_header(cr: &cairo::Context, th: &Theme, r: Rect, title: &str, from: &str) {
+    let title_t = Text {
+        size: 15.0,
+        bold: true,
+        color: th.text,
+        text: title,
+    };
+    let title_h = draw::measure(cr, &title_t).1;
     let from_w = if from.is_empty() {
         0.0
     } else {
@@ -398,34 +476,18 @@ pub(super) fn draw_header(cr: &cairo::Context, th: &Theme, r: Rect, title: &str,
             color: th.muted,
             text: from,
         };
-        let full_w = draw::measure(cr, &from_t).0;
+        let (full_w, from_h) = draw::measure(cr, &from_t);
+        let from_y = r.1 + PAD_TOP + ((title_h - from_h) * 0.65).max(0.0);
         let (capped, _) = header_title_max_w(r.2, full_w);
         if full_w <= capped {
-            draw::text_right(cr, r.0 + r.2 - PAD_X, r.1 + PAD_TOP + 3.0, &from_t)
+            draw::text_right(cr, r.0 + r.2 - PAD_X, from_y, &from_t)
         } else {
-            draw::text_max(
-                cr,
-                r.0 + r.2 - PAD_X - capped,
-                r.1 + PAD_TOP + 3.0,
-                capped,
-                &from_t,
-            );
+            draw::text_max(cr, r.0 + r.2 - PAD_X - capped, from_y, capped, &from_t);
             capped
         }
     };
     let (_, title_w) = header_title_max_w(r.2, from_w);
-    draw::text_max(
-        cr,
-        r.0 + PAD_X,
-        r.1 + PAD_TOP,
-        title_w,
-        &Text {
-            size: 15.0,
-            bold: true,
-            color: th.text,
-            text: title,
-        },
-    );
+    draw::text_max(cr, r.0 + PAD_X, r.1 + PAD_TOP, title_w, &title_t);
 }
 
 pub(super) fn missing_layout(cr: &cairo::Context, max_w: f64, why: &str) -> pango::Layout {
@@ -577,5 +639,99 @@ mod tests {
             "card height grows to fit wrapped Missing sentence"
         );
         sh.draw(&cr, 1280.0, 800.0);
+    }
+
+    #[test]
+    fn card_motion_and_stagger_follow_each_screen_edge() {
+        let top_card = (100.0, 24.0, 360.0, 80.0);
+        let bot_card = (100.0, 224.0, 360.0, 80.0);
+        let (top, bottom) = (24.0, 304.0);
+
+        // Top panels stagger top-first and unfold downward from the top edge.
+        assert!(
+            card_stagger(Side::Top, 0, top_card, top, bottom)
+                < card_stagger(Side::Top, 0, bot_card, top, bottom)
+        );
+        let m_top = card_motion(Side::Top, 0, top_card, 0.25, false);
+        assert!(m_top.dy < 0.0 && m_top.dx == 0.0);
+        assert!((m_top.anchor_y - top_card.1).abs() < 1e-9);
+        assert!(m_top.scale > 0.95 && m_top.scale < 1.0);
+        assert!(
+            m_top.alpha > 0.25,
+            "arrival alpha ramps up faster than linear"
+        );
+
+        // Bottom panels stagger bottom-first and unfold upward from the bottom edge,
+        // biasing the anchor horizontally toward the panel's alignment.
+        assert!(
+            card_stagger(Side::Bottom, 1, bot_card, top, bottom)
+                < card_stagger(Side::Bottom, 1, top_card, top, bottom)
+        );
+        let m_bot = card_motion(Side::Bottom, 1, bot_card, 0.25, false);
+        assert!(m_bot.dy > 0.0 && m_bot.dx == 0.0);
+        assert!((m_bot.anchor_y - (bot_card.1 + bot_card.3)).abs() < 1e-9);
+        assert!(m_bot.anchor_x > bot_card.0 + bot_card.2 * 0.5);
+
+        // Left and right panels unfold horizontally from their own edges.
+        let m_left = card_motion(Side::Left, -1, top_card, 0.25, false);
+        assert!(m_left.dx < 0.0 && m_left.dy == 0.0);
+        assert!((m_left.anchor_x - top_card.0).abs() < 1e-9);
+
+        let m_right = card_motion(Side::Right, 1, bot_card, 0.25, false);
+        assert!(m_right.dx > 0.0 && m_right.dy == 0.0);
+        assert!((m_right.anchor_x - (bot_card.0 + bot_card.2)).abs() < 1e-9);
+        assert!(
+            card_stagger(Side::Right, 1, bot_card, top, bottom)
+                < card_stagger(Side::Right, 1, top_card, top, bottom)
+        );
+
+        // Closing tucks back toward the same edge with a lighter scale delta.
+        let m_close = card_motion(Side::Top, 0, top_card, 0.5, true);
+        assert!(m_close.dy < 0.0 && m_close.scale > 0.97 && m_close.scale < 1.0);
+        assert!((m_close.alpha - 0.5).abs() < 1e-9);
+
+        // Clip padding opens toward the active edge only.
+        let pbox = (100.0, 24.0, 360.0, 280.0);
+        let c_top = clip_rect_for_side(Side::Top, pbox, ARRIVE_LIFT, 1280.0, 800.0);
+        assert!((c_top.1 - (pbox.1 - ARRIVE_LIFT)).abs() < 1e-9);
+        let c_left = clip_rect_for_side(Side::Left, pbox, ARRIVE_LIFT, 1280.0, 800.0);
+        assert!((c_left.0 - (pbox.0 - ARRIVE_LIFT)).abs() < 1e-9);
+        let c_right = clip_rect_for_side(Side::Right, pbox, ARRIVE_LIFT, 1280.0, 800.0);
+        assert!((c_right.2 - (pbox.2 + ARRIVE_LIFT)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn top_panel_unfolds_from_top_without_clipping_above_pbox() {
+        let mut sh = shell("SUPER+A top right 360 calendar/clock:s");
+        let idx = sh
+            .panels
+            .iter()
+            .position(|p| p.panel.name == "control")
+            .unwrap();
+        assert!(sh.open_panel(idx, false, Instant::now()));
+        sh.open_ms = 20.0;
+        let (pbox, _) = sh.layout(idx, 1280.0, 800.0);
+
+        let mut surf = cairo::ImageSurface::create(cairo::Format::ARgb32, 1280, 800).unwrap();
+        {
+            let cr = cairo::Context::new(&surf).unwrap();
+            sh.draw(&cr, 1280.0, 800.0);
+        }
+        surf.flush();
+        let stride = surf.stride() as usize;
+        let data = surf.data().unwrap();
+        let mid_x = (pbox.0 + pbox.2 * 0.5) as usize;
+        let above_y = (pbox.1 - 2.0) as usize;
+        let below_y = (pbox.1 + pbox.3 + 2.0) as usize;
+        let above_alpha = data[above_y * stride + mid_x * 4 + 3];
+        let below_alpha = data[below_y * stride + mid_x * 4 + 3];
+        assert!(
+            above_alpha > 0,
+            "top panel card should emerge from above pbox.1 during arrival"
+        );
+        assert_eq!(
+            below_alpha, 0,
+            "top panel card must not slide up from below pbox"
+        );
     }
 }

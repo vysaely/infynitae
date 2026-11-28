@@ -38,8 +38,8 @@ const BODY_LINE: f64 = 17.0;
 const BODY_LINES: usize = 3;
 const BUTTON_H: f64 = 28.0;
 const BAR_H: f64 = 22.0;
-/// How long a pop-up takes to slide in.
-pub const ARRIVE_MS: f64 = 180.0;
+/// How long a pop-up takes to unfold from the right edge.
+pub const ARRIVE_MS: f64 = 165.0;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Note {
@@ -658,13 +658,18 @@ pub fn draw(
             }
             let lifted = t < 1.0;
             if lifted {
+                let scale = 0.955 + 0.045 * t;
+                let ax = r.0 + r.2;
+                let ay = r.1 + r.3 * 0.5;
                 cr.push_group();
-                cr.translate((1.0 - t) * 24.0, 0.0);
+                cr.translate(ax + (1.0 - t) * 12.0, ay);
+                cr.scale(scale, scale);
+                cr.translate(-ax, -ay);
             }
             draw_one(cr, th, &pop.note, r, inside(r), &inside);
             if lifted {
                 let _ = cr.pop_group_to_source();
-                let _ = cr.paint_with_alpha(t);
+                let _ = cr.paint_with_alpha(t.powf(0.65));
             }
         }
     });
@@ -714,6 +719,7 @@ fn draw_one(
         let (cx, cy) = (xr.0 + xr.2 / 2.0, xr.1 + xr.3 / 2.0);
         draw::set(cr, if lit { th.text } else { th.muted });
         cr.set_line_width(1.5);
+        cr.set_line_cap(cairo::LineCap::Round);
         cr.move_to(cx - 4.0, cy - 4.0);
         cr.line_to(cx + 4.0, cy + 4.0);
         cr.move_to(cx + 4.0, cy - 4.0);
@@ -748,32 +754,25 @@ fn draw_one(
             .find(|(kk, _)| *kk == k)
             .map(|(_, l)| l.as_str())
             .unwrap_or("");
-        draw::round_rect(
+        let lit = inside(br);
+        draw::round_rect(cr, br.0, br.1, br.2, br.3, th.small_radius());
+        draw::set(
             cr,
-            br.0 + 0.5,
-            br.1 + 0.5,
-            br.2 - 1.0,
-            br.3 - 1.0,
-            th.small_radius(),
+            th.text.alpha(if lit {
+                crate::ui::CHOSEN_ALPHA
+            } else {
+                crate::ui::LIGHT_ALPHA
+            }),
         );
-        if inside(br) {
-            draw::set(cr, th.text.alpha(0.08));
-            let _ = cr.fill_preserve();
-        }
-        draw::set(cr, th.edge);
-        cr.set_line_width(1.0);
-        let _ = cr.stroke();
-        draw::text_center(
-            cr,
-            br.0 + br.2 / 2.0,
-            br.1 + 6.0,
-            &Text {
-                size: 12.0,
-                bold: false,
-                color: th.text,
-                text: label,
-            },
-        );
+        let _ = cr.fill();
+        let lbl_t = Text {
+            size: 12.0,
+            bold: false,
+            color: th.text,
+            text: label,
+        };
+        let (_, lh) = draw::measure(cr, &lbl_t);
+        draw::text_center(cr, br.0 + br.2 / 2.0, br.1 + (br.3 - lh) / 2.0, &lbl_t);
     }
 }
 
@@ -816,18 +815,33 @@ pub fn draw_osd(cr: &Context, th: &Theme, osd: &Osd, w: f64, h: f64) {
         draw::card(cr, th, r.0, r.1, r.2, r.3);
         let tx = r.0 + PAD_X;
         let tw = (r.2 - 2.0 * PAD_X).max(0.0);
-        draw::text_max(
-            cr,
-            tx,
-            r.1 + 13.0,
-            tw,
-            &Text {
-                size: draw::SIZE_BODY,
-                bold: true,
-                color: th.text,
-                text: &osd.label,
-            },
-        );
+        let label_t = Text {
+            size: draw::SIZE_BODY,
+            bold: true,
+            color: th.text,
+            text: &osd.label,
+        };
+        let (_, lh) = draw::measure(cr, &label_t);
+        let pct_w = if osd.muted {
+            0.0
+        } else {
+            let pct = format!("{}%", osd.value);
+            let pct_t = Text {
+                size: draw::SIZE_SMALL,
+                bold: false,
+                color: th.muted,
+                text: &pct,
+            };
+            let (pw, ph) = draw::measure(cr, &pct_t);
+            draw::text_right(
+                cr,
+                tx + tw,
+                r.1 + 13.0 + ((lh - ph) * 0.65).max(0.0),
+                &pct_t,
+            );
+            pw + 8.0
+        };
+        draw::text_max(cr, tx, r.1 + 13.0, (tw - pct_w).max(20.0), &label_t);
         draw_value_bar(
             cr,
             th,
@@ -1081,6 +1095,29 @@ mod tests {
         // When muted, both sides of the bar match the track colour.
         assert_eq!(at(&px_muted, 40, 39), at(&px_muted, 180, 39));
         assert_ne!(at(&px_on, 40, 39), at(&px_muted, 40, 39));
+
+        // Unmuted OSD renders right-aligned percentage text; muted OSD leaves that area clear.
+        let count_bright = |buf: &[u8]| -> usize {
+            let mut n = 0;
+            for y in 12..30 {
+                for x in 175..(OSD_W as usize - 16) {
+                    let px = at(buf, x, y);
+                    if px[2] > 80 || px[1] > 80 || px[0] > 80 {
+                        n += 1;
+                    }
+                }
+            }
+            n
+        };
+        assert!(
+            count_bright(&px_on) > 10,
+            "unmuted OSD should draw percentage text on the right"
+        );
+        assert_eq!(
+            count_bright(&px_muted),
+            0,
+            "muted OSD should not draw a percentage readout"
+        );
     }
 
     #[test]
